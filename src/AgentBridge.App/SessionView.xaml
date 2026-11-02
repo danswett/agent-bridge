@@ -239,14 +239,14 @@
                         <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Reasoning, Mode=OneWay}" />
                     </Expander>
 
-                    <!-- What it is doing now: the tool glyph, then the call in mono, one weight (#215). -->
+                    <!-- What it is doing now: the tool glyph, then the call in inline mono on a meta line, one weight (ui.md §4.2, #215). -->
                     <Grid ColumnSpacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="16" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
-                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" AutomationProperties.AutomationId="CurrentTool">
+                        <local:StatusGlyphView Margin="0,2,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
+                        <TextBlock Grid.Column="1" Style="{StaticResource InlineMonoMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" AutomationProperties.AutomationId="CurrentTool">
                             <Run Text="{x:Bind Card.ToolName, Mode=OneWay}" Foreground="{ThemeResource AbText}" /><Run Text=" " /><Run Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                         </TextBlock>
                     </Grid>
@@ -332,7 +332,7 @@
                                                 <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
+                                            <TextBlock VerticalAlignment="Center" Style="{StaticResource InlineMonoMeta}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
                                             <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
                                             <Button Grid.Column="2" Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
                                         </Grid>

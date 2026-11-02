@@ -82,6 +82,7 @@ static partial class SelfTest
             Check(navIcons.Count >= 3 && navIcons.All(i => Find<Microsoft.UI.Xaml.Shapes.Path>(i).FirstOrDefault()?.Stroke is SolidColorBrush { Color.A: > 0 }),
                 $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
+            await CheckInlineMono(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);

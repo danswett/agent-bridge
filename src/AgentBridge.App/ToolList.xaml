@@ -5,8 +5,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
-    <!-- A session's tool calls, newest first (session.get): a glyph per call, the call in the mono at
-         the surrounding weight (#215), wrapped rather than cut, so the file a call names at its end is
+    <!-- A session's tool calls, newest first (session.get): a glyph per call, the call in inline mono
+         on a meta line (ui.md §4.2, #215), wrapped rather than cut, so the file a call names at its end is
          never the part left out, and when, in tabular figures. The inspector's Tools, and the Tools tab. -->
     <StackPanel Spacing="6" AutomationProperties.AutomationId="ToolList">
         <TextBlock
@@ -28,12 +28,12 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <!-- On the call's first line (code is 12/18: the 12 px glyph 3 px down), however many it wraps to. -->
-                        <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Glyph}" Label="{x:Bind Status}" />
-                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" TextWrapping="Wrap" ToolTipService.ToolTip="{x:Bind Summary}">
+                        <!-- On the call's first line (a meta line is 16: the 12 px glyph 2 px down), however many it wraps to. -->
+                        <local:StatusGlyphView Margin="0,2,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Glyph}" Label="{x:Bind Status}" />
+                        <TextBlock Grid.Column="1" Style="{StaticResource InlineMonoMeta}" TextWrapping="Wrap" ToolTipService.ToolTip="{x:Bind Summary}">
                             <Run Text="{x:Bind Name}" /><Run Text=" " /><Run Text="{x:Bind Summary}" Foreground="{ThemeResource AbText2}" />
                         </TextBlock>
-                        <TextBlock Grid.Column="2" Style="{StaticResource AbTypeMeta}" LineHeight="18" Foreground="{ThemeResource AbText2}" Text="{x:Bind When}" />
+                        <TextBlock Grid.Column="2" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind When}" />
                     </Grid>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
