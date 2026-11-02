@@ -107,7 +107,7 @@ public static class HaPayloads
     }
 
     public static string CapState(string text) =>
-        text.Length > HaContract.StateMaxChars ? text[..(HaContract.StateMaxChars - 3)] + "..." : text;
+        text.Length > HaContract.StateMaxChars ? SafeCut(text, HaContract.StateMaxChars - 3) + "..." : text;
 
     // The main agent's own response and reasoning (docs/design/subagents.md §5, §7): own's for a
     // field source attributes to a sub-agent, else the top-level text, else own's when the host
@@ -154,9 +154,49 @@ public static class HaPayloads
         // Add-DaemonAnswerStamp: the reply-card publish last used, on every update, so a card
         // that sent it can tell it was.
         if (!string.IsNullOrWhiteSpace(answerConsumedAt)) { detail["answer_consumed_at"] = answerConsumedAt; }
+        FitCard(detail);
         AddSubagents(detail, full);
         return detail;
     }
+
+    static int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+
+    // Home Assistant keeps no more than 16 KiB of a state's attributes, and agent-ha-bridge's own
+    // layout can pass that: the reply goes in both response (to 6000 characters) and, its first
+    // line whole, in the trail, and JSON escaping can double either (found in review, #175, once
+    // the connector read sessions before the protocol budget). Only a card over the budget is
+    // touched, so any other is exactly the daemon's. First the trail's long lines, cut as the
+    // activity state is, since response already shows them; then the reasoning expander; then
+    // the shown text itself, its start kept with the truncation note, as the daemon cuts it.
+    internal static void FitCard(JsonObject detail)
+    {
+        if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        if (detail["history"] is JsonArray history)
+        {
+            detail["history"] = new JsonArray([.. history.Select(h => (JsonNode)CapState(h!.GetValue<string>()))]);
+            if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        }
+        foreach (var (key, note) in new[] { ("reasoning", "\u2026"), ("response", TruncatedNote) })
+        {
+            if (detail[key]?.GetValue<string>() is not { } text) { continue; }
+            var body = text.EndsWith(note, StringComparison.Ordinal) ? text[..^note.Length] : text;
+            string Cut(int n) => SafeCut(body, n).TrimEnd() + note;
+            // The longest start that fits, found by halving.
+            int lo = 0, hi = body.Length;
+            while (lo < hi)
+            {
+                var mid = (lo + hi + 1) / 2;
+                detail[key] = Cut(mid);
+                if (Bytes(detail) <= ActivityAttributesBudget) { lo = mid; } else { hi = mid - 1; }
+            }
+            detail[key] = Cut(lo);
+            if (Bytes(detail) <= ActivityAttributesBudget) { return; }
+        }
+    }
+
+    // The first n characters, never half a surrogate pair.
+    static string SafeCut(string text, int n) =>
+        n >= text.Length ? text : text[..(n > 0 && char.IsHighSurrogate(text[n - 1]) ? n - 1 : n)];
 
     // An addition to agent-ha-bridge's attributes, only on a session that has sub-agents: what
     // its delegates are doing, so the main agent's text can stay its own. subagents_more counts

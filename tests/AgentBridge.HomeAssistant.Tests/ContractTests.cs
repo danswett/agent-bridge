@@ -290,6 +290,41 @@ public class ContractTests
         Assert.True(System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(detail)) < 16 * 1024);
     }
 
+    // Found in review: read before the protocol budget, a reply's first line goes whole into the
+    // trail beside up to 6000 characters of it in response, and JSON escaping doubles quotes. The
+    // whole payload stays inside Home Assistant's limit, the trail giving way first and the reply
+    // keeping its start; an ordinary card is untouched.
+    [Fact]
+    public void The_whole_activity_payload_stays_inside_home_assistants_limit_for_the_longest_replies()
+    {
+        int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
+        JsonObject Detail(string reply, string? reasoning = null, AgentKind agent = AgentKind.Copilot) => HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: reply) with { Agent = agent, Activity = new Activity { Response = reply, Reasoning = reasoning } },
+            Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+
+        var line = "Start of the answer " + new string('a', 16 * 1024);
+        var detail = Detail(line);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(line[..(HaPayloads.ResponseMaxChars)] + HaPayloads.TruncatedNote, detail["response"]!.GetValue<string>());
+        Assert.Equal(HaPayloads.CapState(line), detail["history"]!.AsArray()[^1]!.GetValue<string>());
+
+        var quotes = new string('"', 6000);
+        detail = Detail(quotes);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        Assert.Equal(quotes, detail["response"]!.GetValue<string>());
+
+        // Even when the shown text alone is too much for it (control characters escape to six
+        // bytes each): its start, and the note.
+        var escaped = new string('\u0001', 6000);
+        detail = Detail(escaped);
+        Assert.True(Bytes(detail) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(detail)} bytes");
+        var shown = detail["response"]!.GetValue<string>();
+        Assert.EndsWith(HaPayloads.TruncatedNote, shown, StringComparison.Ordinal);
+        Assert.InRange(shown.Length - HaPayloads.TruncatedNote.Length, 1000, 2600);
+
+        Assert.Equal("Done.\nMore", Detail("Done.\nMore")["response"]!.GetValue<string>());
+    }
+
     // Found in review: a 6000-character reply is in both response and history, and five delegates at
     // their limits on top of it came to over 17 KiB. They make way for the card's text, never the
     // other way round, and are still counted when none fit.

@@ -208,7 +208,13 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   16 KiB stays (found in review). Home Assistant's limits are the connector's own: the card
   text and trail are capped as above, the delegates budgeted below, and the question is still
   the budgeted form's. That is the one the host answers, and a question cut to fit is
-  answered at the machine there and here alike. Should a reply be gone all the same
+  answered at the machine there and here alike. The whole activity payload is held to 15 KiB
+  as well (`HaPayloads.FitCard`), since agent-ha-bridge's layout can pass Home Assistant's
+  16 KiB: the reply goes in `response` and, its first line whole, in the trail, and JSON
+  escaping can double either. Only a card over that is touched, so any other is the daemon's
+  exactly. The trail's lines are cut first, as the activity state is (255 characters), then
+  the reasoning expander, then the shown text, its start kept with the truncation note.
+  Delegates are fitted after that, into whatever room is left. Should a reply be gone all the same
   (`own.responseTruncated` with no `own.response`), the card says the reply is too long to
   show here, never blank and never the delegate's. The delegates themselves go in two **additions** to the
   activity attributes, present only while the session has any, so a session without
