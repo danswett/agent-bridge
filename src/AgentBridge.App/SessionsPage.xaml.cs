@@ -89,6 +89,15 @@ public sealed partial class SessionsPage : UserControl
         // (MainViewModel.Selected).
         if (viewModel.Selected is not null) { DispatcherQueue.TryEnqueue(SyncList); }
     }
+    // A row put aside for reuse stays loaded in the list's recycle queue, still holding its old
+    // session: it lets go of it there, rather than listening to a session no longer listed, and
+    // listens again once it is given one.
+    void OnRowRecycled(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
+        if (args.InRecycleQueue) { row.Detach(); }
+        else if (row.IsLoaded) { row.Attach(); }
+    }
     // Alt+Up and Alt+Down on a row move it within its group (#164).
     void OnListKey(object sender, KeyRoutedEventArgs e)
     {
@@ -130,18 +139,35 @@ public sealed partial class SessionsPage : UserControl
         try
         {
             MachineTabs.Items.Clear();
+            foreach (var old in named) { old.PropertyChanged -= OnChoiceNamed; }
+            named.Clear();
             foreach (var choice in viewModel.Machines)
             {
-                var item = new SelectorBarItem { Text = choice.Short, Tag = choice };
-                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, choice.Label);
-                ToolTipService.SetToolTip(item, choice.Label);
+                var item = new SelectorBarItem { Tag = choice };
+                NameTab(item, choice);
                 MachineTabs.Items.Add(item);
+                // A machine is named once its host says its name, after its tab is made.
+                choice.PropertyChanged += OnChoiceNamed;
+                named.Add(choice);
             }
         }
         finally { syncing = false; }
         SyncMachineTab();
     }
 
+    readonly List<MachineChoice> named = [];
+
+    static void NameTab(SelectorBarItem item, MachineChoice choice)
+    {
+        item.Text = choice.Short;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, choice.Label);
+        ToolTipService.SetToolTip(item, choice.Label);
+    }
+
+    void OnChoiceNamed(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is MachineChoice choice && MachineTabs.Items.FirstOrDefault(i => i.Tag == choice) is { } item) { NameTab(item, choice); }
+    }
     void SyncMachineTab()
     {
         if (viewModel is null) { return; }
