@@ -781,7 +781,10 @@ public sealed class HaAuthGuard
             if (version < RecordVersion) { Migrate(read, root); }
             return Valid(read) ? read : null;
         }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) { return null; }
+        // Whatever reading or migrating it throws (a key given twice, a count that overflows when
+        // migrated, a type where another was expected), it is not a record: set aside, never thrown
+        // to the host's start or ha status.
+        catch (Exception) { return null; }
     }
 
     // A record of version 1, brought up to this one. A token refused at all is stopped, since how

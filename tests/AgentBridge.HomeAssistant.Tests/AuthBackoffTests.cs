@@ -405,6 +405,9 @@ public sealed class AuthBackoffTests : IDisposable
     [InlineData("""{ "strikes": -100, "servers": {} }""")]
     [InlineData("""{ "servers": null }""")]
     [InlineData("""{}""")]
+    [InlineData("""{ "version": 1, "version": 1, "servers": {} }""")]
+    [InlineData("""{ "version": 2, "strikes": 0, "strikeAt": null, "refusals": 0, "probeBy": null, "probeUntil": null, "lost": null, "servers": {}, "servers": {} }""")]
+    [InlineData("""{ "version": 1, "servers": { "0123456789abcdef": { "strikes": 2147483647, "credentials": {} }, "fedcba9876543210": { "strikes": 5, "credentials": {} } } }""")]
     [InlineData("""{ "version": "two", "servers": {} }""")]
     [InlineData("""{ "version": 1, "servers": { "0123456789abcdef": { "credentials": { "fedcba9876543210": { "accepted": true } } } } }""")]
     [InlineData("""{ "version": 2, "strikes": 0, "strikeAt": null, "refusals": 0, "probeBy": null, "probeUntil": null, "lost": null, "servers": { "0123456789abcdef": { "bannedSince": null, "banLooks": 0, "banCheckAt": null, "touched": null, "credentials": { "fedcba9876543210": {} } } } }""")]
@@ -413,6 +416,7 @@ public sealed class AuthBackoffTests : IDisposable
         Directory.CreateDirectory(folder);
         File.WriteAllText(Record, record);
         var ha = new Answering(time);
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time)))).Kind);
 
         await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromHours(1));
 
