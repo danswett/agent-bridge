@@ -264,6 +264,29 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Kind);
     }
 
+    // A second loss is a loss of its own: an answer to a request let go between the two does not
+    // make the token accepted.
+    [Fact]
+    public async Task An_answer_to_a_request_let_go_between_two_losses_does_not_accept_the_token()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        var token = guard.Credential(Url, Token);
+        using (var l = await guard.EnterAsync(guard.Credential(Url, "other-token-not-a-secret"))) { l.Answered(HttpStatusCode.OK); }
+        File.WriteAllBytes(Record, new byte[64]);
+        Assert.NotNull(guard.Refused(token));
+        Assert.True(guard.Forget(token));
+
+        var between = await guard.EnterAsync(token);
+        time.Advance(TimeSpan.FromMinutes(1));
+        File.WriteAllBytes(Record, new byte[64]);
+        Assert.NotNull(guard.Refused(guard.Credential(Url, "third-token-not-a-secret")));
+        between.Answered(HttpStatusCode.OK);
+        between.Dispose();
+
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time)))).Kind);
+    }
+
     // Nor when the corrupt record cannot even be set aside: what this process knew before is gone
     // with it, accepted tokens included.
     [Fact]

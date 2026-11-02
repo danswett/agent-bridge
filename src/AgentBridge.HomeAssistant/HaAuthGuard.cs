@@ -684,6 +684,12 @@ public sealed class HaAuthGuard
                 Unavailable(error);
                 return;
             }
+            if (pending.Contains(markLost))
+            {
+                // The loss is on record: another one later is a loss of its own, with its own time.
+                lostAt = null;
+                lostSaid = false;
+            }
             pending.Clear();
             Available();
         }
