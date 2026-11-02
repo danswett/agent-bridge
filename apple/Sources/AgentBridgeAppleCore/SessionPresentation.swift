@@ -2,6 +2,17 @@ import Foundation
 
 /// Shared presentation rules; none of these helpers reads a host or changes a session.
 public enum SessionPresentation {
+    public static func backgroundSummary(session: BridgeSession) -> String? {
+        var parts: [String] = []
+        if session.backgroundAgents > 0 {
+            parts.append("\(session.backgroundAgents) background \(session.backgroundAgents == 1 ? "agent" : "agents")")
+        }
+        if session.backgroundShells > 0 {
+            parts.append("\(session.backgroundShells) background \(session.backgroundShells == 1 ? "command" : "commands")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     public struct Detail: Identifiable, Sendable, Equatable {
         public var id: String {
             label
