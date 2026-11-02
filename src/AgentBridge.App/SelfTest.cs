@@ -341,7 +341,9 @@ static partial class SelfTest
         await Task.Delay(300);
 
         var scale = window.RootElement.XamlRoot.RasterizationScale;
-        var (w, h) = WindowPlacement.Smallest(scale);
+        // Capped to the work area as the window's own minimum is, on a screen too short for 600 px.
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(window.AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+        var (w, h) = WindowPlacement.Smallest(new Display(new PixelRect(area.X, area.Y, area.Width, area.Height), scale));
         check(window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { PreferredMinimumWidth: var mw, PreferredMinimumHeight: var mh } && mw == w && mh == h,
             $"lets the window be resized down to 360×600 and no smaller ({w}×{h} px at {scale:0.##}×)");
         check(main.Machines.Count > 0, "keeps the machine picker's choices");
