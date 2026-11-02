@@ -18,86 +18,160 @@
   <title>Agent Bridge</title>
 </head>
 <body>
-  <a class="skip" href="#sessions">Skip to sessions</a>
-  <header class="topbar">
-    <h1>Agent Bridge</h1>
-    <p id="conn" class="pill" role="status" aria-live="polite">Starting…</p>
-  </header>
-
-  <main id="main">
-    <div id="update-banner" class="banner" role="status" hidden>
-      <span>A new version of the app is ready.</span>
-      <button type="button" id="reload" class="button">Reload</button>
-    </div>
-    <div id="demo-banner" class="banner demo" hidden>
-      <span>Demo: sample sessions, no machine connected.</span>
-      <a class="button secondary" href="./">Leave demo</a>
-    </div>
-    <div id="replaced-banner" class="banner" role="alert" hidden>
-      <span>This app is open in another window or tab.</span>
-      <button type="button" id="use-here" class="button">Use here</button>
-    </div>
-
-    <section id="signin" class="panel" aria-labelledby="signin-h" hidden>
-      <h2 id="signin-h">Sign in</h2>
-      <p>Agent Bridge shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
-      <p id="signin-error" class="note warn" role="alert" hidden></p>
-      <div class="row">
-        <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
-        <a class="button secondary" href="?demo=1">Try the demo</a>
+  <a class="skip" href="#main">Skip to content</a>
+  <!-- The shell (docs/design/ui.md §7, PWA): on a desktop, the Windows layout with a 56 px web
+       app bar and a rail; on a phone, a title row per page and a bottom navigation bar. One nav
+       serves as both. Each page is a route (#/sessions, #/machines, #/launch, #/usage,
+       #/settings), so the browser's own back goes between them. -->
+  <div class="shell">
+    <header class="appbar" id="appbar">
+      <a class="brand" href="#/sessions" aria-label="Agent Bridge: sessions">
+        <svg class="mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-mark"/></svg>
+        <span class="brand-name">Agent Bridge</span>
+      </a>
+      <div class="search" role="search" hidden>
+        <svg class="ab-icon ab-icon-16 search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
+        <input type="search" id="search" class="search-input" placeholder="Search" aria-label="Search sessions" aria-keyshortcuts="Control+K Meta+K" autocomplete="off" spellcheck="false">
+        <button type="button" id="search-close" class="icon-button search-close" aria-label="Close search" title="Close search">
+          <svg class="ab-icon ab-icon-20 back-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-back"/></svg>
+        </button>
       </div>
-      <div id="code-box" hidden>
-        <p>Open <a id="verify" target="_blank" rel="noopener noreferrer">github.com/login/device</a> and enter this code:</p>
-        <p class="code" id="code" aria-live="polite"></p>
-        <p class="note" role="status">Waiting for GitHub…</p>
+      <div class="appbar-end">
+        <p id="conn" class="pill" role="status" aria-live="polite">Starting…</p>
+        <a id="online" class="online" href="#/machines" hidden><span class="online-dot" aria-hidden="true"></span><span class="online-text"></span></a>
+        <a id="avatar" class="avatar" href="#/settings" hidden></a>
       </div>
-    </section>
+    </header>
 
-    <section id="machines" class="panel machines-panel" aria-labelledby="machines-h" hidden>
-      <h2 id="machines-h"><button type="button" class="usage-toggle machines-toggle" aria-expanded="true" aria-controls="machines-body"><span class="usage-chevron" aria-hidden="true"></span>Machines</button></h2>
-      <p class="usage-summary machines-summary" hidden></p>
-      <div id="machines-body" class="machines-body">
-        <ul id="machine-list" class="machines"></ul>
-        <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+    <nav id="nav" class="nav" aria-label="Agent Bridge" hidden>
+      <a class="nav-item" href="#/sessions" data-nav="sessions" title="Sessions">
+        <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-sessions"/></svg>
+        <span class="nav-label">Sessions</span>
+      </a>
+      <a class="nav-item" href="#/machines" data-nav="machines" title="Machines">
+        <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-machine"/></svg>
+        <span class="nav-label">Machines</span>
+      </a>
+      <a class="nav-item" href="#/launch" data-nav="launch" title="Launch">
+        <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-launch"/></svg>
+        <span class="nav-label">Launch</span>
+      </a>
+      <a class="nav-item" href="#/usage" data-nav="usage" title="Usage">
+        <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-usage"/></svg>
+        <span class="nav-label">Usage</span>
+      </a>
+      <a class="nav-item nav-foot" href="#/settings" data-nav="settings" title="Settings">
+        <svg class="ab-icon nav-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-settings"/></svg>
+        <span class="nav-label">Settings</span>
+      </a>
+    </nav>
+
+    <main id="main" class="content" tabindex="-1">
+      <div id="update-banner" class="banner" role="status" hidden>
+        <span>A new version of the app is ready.</span>
+        <button type="button" id="reload" class="button">Reload</button>
       </div>
-    </section>
-
-    <section id="sessions" class="sessions" aria-labelledby="sessions-h" tabindex="-1" hidden>
-      <div class="sessions-head">
-        <h2 id="sessions-h">Sessions</h2>
-        <span id="session-count" class="count"></span>
-        <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
+      <div id="demo-banner" class="banner demo" hidden>
+        <span>Demo: sample sessions, no machine connected.</span>
+        <a class="button secondary" href="./">Leave demo</a>
       </div>
-      <p id="host-state" class="note" role="status" aria-live="polite"></p>
-      <div id="session-list" class="session-list"></div>
-      <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
-    </section>
-
-    <section id="launch" class="panel launch" aria-labelledby="launch-h" hidden>
-      <h2 id="launch-h"><button type="button" class="usage-toggle launch-toggle" aria-expanded="false" aria-controls="launch-body"><span class="usage-chevron" aria-hidden="true"></span><span class="launch-title">Start a session</span></button></h2>
-      <div id="launch-body" class="launch-body" hidden></div>
-    </section>
-
-    <section id="usage" class="panel usage" aria-labelledby="usage-h" hidden>
-      <h2 id="usage-h"><button type="button" class="usage-toggle" aria-expanded="true" aria-controls="usage-body"><span class="usage-chevron" aria-hidden="true"></span>Agent usage</button></h2>
-      <p class="usage-summary"></p>
-      <div id="usage-body" class="usage-body"></div>
-    </section>
-
-    <section id="notify" class="panel notify" aria-labelledby="notify-h" hidden>
-      <h2 id="notify-h">Notifications</h2>
-      <p id="notify-note" class="note"></p>
-      <p id="notify-error" class="note warn" role="alert" hidden></p>
-      <div class="row">
-        <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
+      <div id="replaced-banner" class="banner" role="alert" hidden>
+        <span>This app is open in another window or tab.</span>
+        <button type="button" id="use-here" class="button">Use here</button>
       </div>
-    </section>
 
-    <footer id="account" class="account" hidden>
-      <p>Signed in as <b id="login"></b> · this device <code id="me"></code></p>
-      <button type="button" id="signout" class="button secondary">Sign out</button>
-    </footer>
-  </main>
+      <section id="signin" class="panel page" aria-labelledby="signin-h" hidden>
+        <h2 id="signin-h" class="page-title">Sign in</h2>
+        <p>Agent Bridge shows the agent sessions on your machines. Sign in with the GitHub account your machines use.</p>
+        <p id="signin-error" class="note warn" role="alert" hidden></p>
+        <div class="row">
+          <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
+          <a class="button secondary" href="?demo=1">Try the demo</a>
+        </div>
+        <div id="code-box" hidden>
+          <p>Open <a id="verify" target="_blank" rel="noopener noreferrer">github.com/login/device</a> and enter this code:</p>
+          <p class="code" id="code" aria-live="polite"></p>
+          <p class="note" role="status">Waiting for GitHub…</p>
+        </div>
+      </section>
+
+      <div class="route route-sessions" data-route="sessions" hidden>
+        <section id="sessions" class="sessions" aria-labelledby="sessions-h" tabindex="-1" hidden>
+          <div class="sessions-head">
+            <h2 id="sessions-h" class="page-title">Sessions</h2>
+            <span id="session-count" class="count"></span>
+            <select id="session-sort" class="sort" aria-label="Sort sessions" title="Sort sessions"></select>
+            <div class="head-actions">
+              <button type="button" class="icon-button search-open" aria-label="Search sessions" title="Search sessions">
+                <svg class="ab-icon ab-icon-24" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-search"/></svg>
+              </button>
+              <a class="button new-session" href="#/launch" data-attention-for="launch" aria-label="New session" title="New session">
+                <svg class="ab-icon ab-icon-20" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><use href="design/sprite.svg#icon-plus"/></svg>
+                <span class="new-label">New</span>
+              </a>
+            </div>
+          </div>
+          <div id="machine-tabs" class="machine-tabs" role="tablist" aria-label="Machines" hidden></div>
+          <p id="host-state" class="note" role="status" aria-live="polite"></p>
+          <div id="session-list" class="session-list"></div>
+          <p id="sessions-empty" class="note empty" hidden>No live sessions on this machine.</p>
+          <a id="usage-line" class="usage-line" href="#/usage" hidden><span class="usage-summary"></span></a>
+        </section>
+      </div>
+
+      <div class="route page" data-route="machines" hidden>
+        <section id="machines" class="machines-page" aria-labelledby="machines-h">
+          <h2 id="machines-h" class="page-title">Machines</h2>
+          <ul id="machine-list" class="machines"></ul>
+          <p id="machines-empty" class="note" hidden>No machines online. Start Agent Bridge on a machine signed in to the same GitHub account.</p>
+        </section>
+      </div>
+
+      <div class="route page" data-route="launch" hidden>
+        <section id="launch" class="launch" aria-labelledby="launch-h" hidden>
+          <h2 id="launch-h" class="page-title launch-title">Start a session</h2>
+          <div id="launch-body" class="launch-body"></div>
+        </section>
+        <section id="launch-none" class="launch-none" aria-labelledby="launch-none-h">
+          <h2 id="launch-none-h" class="page-title">Start a session</h2>
+          <p class="note">No machine shown here can start a session.</p>
+        </section>
+      </div>
+
+      <div class="route page" data-route="usage" hidden>
+        <section id="usage" class="usage" aria-labelledby="usage-h" hidden>
+          <h2 id="usage-h" class="page-title">Agent usage</h2>
+          <div id="usage-body" class="usage-body"></div>
+        </section>
+        <section id="usage-none" class="usage-none" aria-labelledby="usage-none-h">
+          <h2 id="usage-none-h" class="page-title">Agent usage</h2>
+          <p class="note">No machine shown here reports usage.</p>
+        </section>
+      </div>
+
+      <div class="route page" data-route="settings" hidden>
+        <h2 class="page-title">Settings</h2>
+        <section id="notify" class="panel notify" aria-labelledby="notify-h" hidden>
+          <h3 id="notify-h">Notifications</h3>
+          <p id="notify-note" class="note"></p>
+          <p id="notify-error" class="note warn" role="alert" hidden></p>
+          <div class="row">
+            <button type="button" id="notify-toggle" class="button" aria-pressed="false">Turn on notifications</button>
+          </div>
+        </section>
+        <section id="demo-settings" class="panel account" aria-labelledby="demo-settings-h" hidden>
+          <h3 id="demo-settings-h">Demo</h3>
+          <p>Sample sessions on simulated machines. Nothing here reaches a real machine.</p>
+          <div class="row"><a class="button secondary" href="./">Leave demo</a></div>
+        </section>
+        <section id="account" class="panel account" aria-labelledby="account-h" hidden>
+          <h3 id="account-h">Account</h3>
+          <p>Signed in as <b id="login"></b> · this device <code id="me"></code></p>
+          <div class="row"><button type="button" id="signout" class="button secondary">Sign out</button></div>
+        </section>
+      </div>
+    </main>
+  </div>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

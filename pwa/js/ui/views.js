@@ -66,11 +66,36 @@ export class SessionListView {
     this.render();
   }
 
+  // What search narrows the list to (the app bar's search, ui.md §7): a session whose title,
+  // repository, branch, folder, agent or machine has it. While it narrows, rows don't move: a
+  // move among the rows shown would also pass rows hidden between them.
+  setFilter(query) {
+    const q = String(query ?? '').trim().toLowerCase();
+    if (q === this.filter) { return; }
+    this.filter = q;
+    this.render();
+  }
+
+  filter = '';
+
+  #matches(hostId, s) {
+    if (!this.filter) { return true; }
+    const m = this.machine(hostId);
+    return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter));
+  }
+
+  get moving() { return !this.filter && this.order.sort === 'yours'; }
+
   render() {
     const entries = this.sessions.list();
     const sort = this.order.sort;
-    const { pinned, sessions, ended } = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
+    const arranged = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
+    const keep = (e) => this.#matches(e.hostId, e.session);
+    const pinned = arranged.pinned.filter(keep);
+    const sessions = arranged.sessions.filter(keep);
+    const ended = arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
+    this.container.dataset.filtered = this.filter ? 'true' : 'false';
     this.onSorted?.();
     const live = new Set();
     // Moving a card takes focus out of it, and a card being answered moves when its
@@ -124,6 +149,7 @@ export class SessionListView {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
+    this.shownCount = pinned.length + sessions.length;
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
@@ -162,7 +188,7 @@ export class SessionListView {
 
   // Moves a row and keeps the move in view and in focus.
   #move(card, delta) {
-    if (!this.order.move(this.#keyOf(card), delta)) { return false; }
+    if (this.filter || !this.order.move(this.#keyOf(card), delta)) { return false; }
     this.render();
     card.els.fold.focus({ preventScroll: true });
     card.element.scrollIntoView({ block: 'nearest' });
@@ -183,8 +209,8 @@ export class SessionListView {
     const key = this.#keyOf(card);
     const pinned = this.order.isPinned(key);
     this.#menu.show(card.element, [
-      { label: 'Move up', disabled: !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
-      { label: 'Move down', disabled: !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
+      { label: 'Move up', disabled: !!this.filter || !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
+      { label: 'Move down', disabled: !!this.filter || !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
       { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
     ], { back: card.els.fold, label: `${card.session.title || 'Session'}: actions` });
   }
@@ -270,7 +296,7 @@ export class SessionListView {
   // go, and Escape puts it back.
   #drag(e) {
     const card = this.#cardOf(e.target);
-    if (!card || e.button !== 0 || e.pointerType === 'touch' || this.order.sort !== 'yours') { return; }
+    if (!card || e.button !== 0 || e.pointerType === 'touch' || !this.moving) { return; }
     e.preventDefault();
     const el = card.element;
     el.classList.add('dragging');
@@ -333,44 +359,54 @@ export class SessionListView {
   }
 }
 
-// The Machines panel folds to one line, as the usage panel does: with several machines the
-// list pushes the sessions below the fold on a phone. Open unless folded, kept across reloads.
-const MACHINES_OPEN = 'agent-bridge.app.machines.open';
+// The machine tabs above the sessions (ui.md §6.1, Windows and the PWA: SelectorBar-style text
+// tabs): All, once more than one machine is online, then each online machine, and a machine
+// still chosen while it is away. Hidden when there is nothing to choose between. Arrow keys,
+// Home and End move between them, choosing as they go, as a SelectorBar does.
+const tabsDrawnAs = new WeakMap();
 
-export class MachinesFold {
-  #count = 0;
-  #viewing = null;
-
-  constructor(section, { storage = globalThis.localStorage } = {}) {
-    Object.assign(this, { section, storage });
-    this.toggle = section.querySelector('.machines-toggle');
-    this.summary = section.querySelector('.machines-summary');
-    this.body = section.querySelector('.machines-body');
-    let saved = null;
-    try { saved = storage?.getItem(MACHINES_OPEN) ?? null; } catch { /* a nicety */ }
-    this.open = saved !== '0';
-    this.toggle.addEventListener('click', () => {
-      this.open = !this.open;
-      try { this.storage?.setItem(MACHINES_OPEN, this.open ? '1' : '0'); } catch { /* a nicety */ }
-      this.render();
+export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null }) {
+  const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
+  const all = current === ALL;
+  const tabs = [
+    ...(hosts.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
+    ...hosts.map((d) => ({ id: d.id, name: d.name, label: d.name })),
+    ...(current && !all && !hosts.some((d) => d.id === current) ? [{ id: current, name: nameOf(current) ?? 'This machine', label: nameOf(current) ?? 'This machine', away: true }] : []),
+  ];
+  const chosen = (t) => t.id === current || (all && hosts.length === 1 && t.id === hosts[0].id);
+  // One machine and it is the one shown: there is nothing to choose.
+  const show = tabs.length > 1 || (tabs.length === 1 && !chosen(tabs[0]));
+  const key = JSON.stringify([show, current, tabs.map((t) => [t.id, t.name, !!t.away])]);
+  if (tabsDrawnAs.get(bar) === key) { return; }
+  tabsDrawnAs.set(bar, key);
+  bar.hidden = !show;
+  const had = bar.contains(bar.ownerDocument?.activeElement) ? bar.ownerDocument.activeElement.dataset.deviceId : null;
+  bar.replaceChildren(...tabs.map((t) => {
+    const on = chosen(t);
+    return h('button', {
+      type: 'button', role: 'tab', class: `machine-tab${t.away ? ' away' : ''}`,
+      'aria-selected': on ? 'true' : 'false', tabindex: on ? '0' : '-1',
+      'aria-controls': controls, 'aria-label': t.away ? `${t.label}, offline` : t.label,
+      dataset: { deviceId: t.id, deviceName: t.label },
+      // Picked again, a machine that can't be reached is tried again at once.
+      onclick: () => onSelect(t.id),
+    }, t.name);
+  }));
+  if (!bar.querySelector('[tabindex="0"]')) { bar.firstElementChild?.setAttribute('tabindex', '0'); }
+  if (had) { [...bar.children].find((b) => b.dataset.deviceId === had)?.focus(); }
+  if (!bar.dataset.keys) {
+    bar.dataset.keys = '1';
+    bar.addEventListener('keydown', (e) => {
+      const list = [...bar.querySelectorAll('[role="tab"]')];
+      const i = list.indexOf(e.target);
+      if (i < 0) { return; }
+      const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: list.length - 1 }[e.key];
+      if (to === undefined) { return; }
+      e.preventDefault();
+      const next = list[(to + list.length) % list.length];
+      next.focus();
+      next.click();
     });
-    this.render();
-  }
-
-  // count: machines listed; viewing: the name of the one whose sessions are shown, or 'all'
-  // with every machine's, if any.
-  update(count, viewing) {
-    this.#count = count;
-    this.#viewing = viewing ?? null;
-    this.render();
-  }
-
-  render() {
-    this.toggle.setAttribute('aria-expanded', String(this.open));
-    this.body.hidden = !this.open;
-    this.summary.hidden = this.open;
-    const online = this.#count === 0 ? 'No machines online' : `${this.#count} online`;
-    this.summary.textContent = this.#viewing ? `Viewing ${this.#viewing} \u00b7 ${online}` : online;
   }
 }
 
@@ -390,8 +426,8 @@ export function offlineMachines({ presence, known, me }) {
 // What each list was last drawn from.
 const drawnAs = new WeakMap();
 
-// The update block under a machine that offers updates (#51): what its app is doing, how the
-// last update ended, Check and Install, and a refused press's reason.
+// The update block inside a machine's row, under its two lines (#51, #213): what its app is
+// doing, how the last update ended, Check and Install, and a refused press's reason.
 function updateRow(updates, id, name, now) {
   const s = updates?.state(id);
   if (!s) { return { key: null, el: null }; }
@@ -404,7 +440,7 @@ function updateRow(updates, id, name, now) {
   // Not disabled when it cannot be pressed: a disabled button loses focus, and the next draw
   // could not give it back. A press then does nothing (UpdateControl, and the host's own rules).
   const button = (cls, label, aria, can, kind) => h('button', {
-    type: 'button', class: `button secondary ${cls}`, 'aria-label': aria,
+    type: 'button', class: `button secondary small ${cls}`, 'aria-label': aria,
     'aria-disabled': can ? null : 'true',
     onclick: () => { if (can) { updates.press(id, kind); } },
   }, label);
@@ -414,22 +450,62 @@ function updateRow(updates, id, name, now) {
       h('p', { class: 'machine-update-line' }, said),
       last ? h('p', { class: 'machine-update-last' }, last) : null,
       note ? h('p', { class: 'machine-error', role: 'alert' }, note) : null,
-      s.installer ? h('div', { class: 'machine-update-actions' },
+      s.installer ? h('div', { class: 'machine-actions machine-update-actions' },
         button('machine-update-check', busy ? 'Asking…' : 'Check', `Check ${name} for updates`, check, 'check'),
         s.available ? button('machine-update-install', 'Install', `Install ${s.available} on ${name} when no session there is busy`, install, 'install') : null) : null),
   };
 }
 
-export function renderMachines(list, { presence, me, current, onSelect, status = () => '', known = null, forget = null, updates = null, now = Date.now(), allStatus = '' }) {
+// A machine's second line (ui.md §6.1, #213): at most two facts, never a sentence or an id. Its
+// sessions, then its version, or in its place "View only" or "Discovery held", whose reasons the
+// machine gives in full are in the line's tooltip and said to a screen reader.
+// facts: { sessions, version, readOnly, held } (usage.js machineFacts), or null.
+function factsLine(facts) {
+  if (!facts) { return { el: h('span', { class: 'machine-status' }), key: '' }; }
+  const flag = facts.held ? ['held', 'Discovery held', `discovery held: ${facts.held}`]
+    : facts.readOnly ? ['view-only', 'View only', `view only: ${facts.readOnly}`] : null;
+  const shown = [facts.sessions, flag ? null : facts.version].filter(Boolean);
+  const detail = [facts.sessions, facts.version, facts.readOnly ? `view only: ${facts.readOnly}` : null, facts.held ? `discovery held: ${facts.held}` : null].filter(Boolean).join(' \u00b7 ');
+  const el = h('span', { class: 'machine-status', title: detail || null },
+    shown.join(' \u00b7 '),
+    flag ? [shown.length ? ' \u00b7 ' : '', h('span', { class: `machine-flag ${flag[0]}` }, flag[1], h('span', { class: 'sr-only' }, `: ${flag[2].replace(/^[^:]+: /, '')}`))] : null);
+  return { el, key: detail };
+}
+
+// One row: the icon and the trailing state on line 1 with the name, the facts on line 2, and
+// anything more (updates, Forget, an error) under them in the same text column.
+function machineRow({ id, name, select = null, selected = false, facts, state, offline = false, more = [] }) {
+  const parts = [
+    icon('machine'),
+    h('span', { class: 'machine-name' }, name),
+    h('span', { class: 'machine-state' }, state),
+    h('span', { class: 'machine-sub' }, facts),
+  ];
+  const head = select
+    ? h('button', { type: 'button', class: `machine-button${selected ? ' selected' : ''}`, 'aria-current': selected ? 'true' : null, onclick: select }, parts)
+    : h('div', { class: 'machine-row' }, parts);
+  const extra = more.filter(Boolean);
+  return h('li', { class: `machine${offline ? ' offline' : ''}${selected ? ' selected' : ''}`, dataset: { deviceId: id, deviceName: name } },
+    head, extra.length ? h('div', { class: 'machine-more' }, extra) : null);
+}
+
+export function renderMachines(list, { presence, me, current, onSelect, status = () => '', facts = null, known = null, forget = null, updates = null, now = Date.now(), allStatus = '' }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
   const offline = offlineMachines({ presence, known, me });
   const rows = new Map(hosts.map((d) => [d.id, updateRow(updates, d.id, d.name, now)]));
   const updating = hosts.filter((d) => rows.get(d.id).el);
+  // A machine's facts, from facts(id) where given, else its status line as one fact.
+  const lineOf = (id) => {
+    if (facts) { return factsLine(facts(id)); }
+    const said = status(id);
+    return { el: h('span', { class: 'machine-status' }, said), key: said };
+  };
+  const lines = new Map(hosts.map((d) => [d.id, lineOf(d.id)]));
   // Drawn again only when something in it changes. It is asked to redraw on every session
   // update of every machine shown, and a button replaced between a tap's touch and its release
   // takes no click: a tap at startup, with every machine sending its sessions, was lost.
-  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, status(d.id), rows.get(d.id).key]),
+  const key = JSON.stringify([current, allStatus, hosts.map((d) => [d.id, d.name, lines.get(d.id).key, rows.get(d.id).key]),
     // lastSeen itself, not only how it reads: Forget sends it, to tell a machine that came back.
     offline.map((k) => [k.id, k.name, k.lastSeen, ago(k.lastSeen, now), forget?.stateOf(k.id) ?? null]), !!forget]);
   if (drawnAs.get(list) === key) { return hosts.length; }
@@ -438,55 +514,40 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
   // press redraws it armed, and a keyboard's second press must land on the new one.
   const active = list.ownerDocument?.activeElement;
   const had = active && list.contains(active) ? { id: active.closest('li')?.dataset.deviceId, cls: ['machine-forget', 'machine-button', 'machine-update-check', 'machine-update-install', 'machine-check-all'].find((c) => active.classList.contains(c)) } : null;
-  const everyMachine = hosts.length > 1 ? [h('li', { class: 'machine all-machines', dataset: { deviceId: ALL, deviceName: 'All machines' } },
-    h('button', {
-      type: 'button', class: `machine-button${all ? ' selected' : ''}`,
-      'aria-current': all ? 'true' : null,
-      onclick: () => onSelect(ALL),
-    },
-    icon('machine'),
-    h('span', { class: 'machine-name' }, 'All machines'),
-    h('span', { class: 'machine-sub' }, allStatus || `Sessions from all ${hosts.length} machines together`),
-    h('span', { class: 'machine-state' }, all ? 'Viewing' : '')))] : [];
+  const everyMachine = hosts.length > 1 ? [machineRow({
+    id: ALL, name: 'All machines', select: () => onSelect(ALL), selected: all,
+    facts: h('span', { class: 'machine-status' }, allStatus || `${hosts.length} machines`),
+    state: all ? 'Viewing' : '',
+  })] : [];
   list.replaceChildren(...everyMachine, ...hosts.map((d) => {
     const selected = d.id === current || (all && hosts.length === 1);
-    const said = status(d.id);
-    return h('li', { class: 'machine', dataset: { deviceId: d.id, deviceName: d.name } },
-      h('button', {
-        type: 'button', class: `machine-button${selected ? ' selected' : ''}`,
-        'aria-current': selected ? 'true' : null,
-        onclick: () => onSelect(d.id),
-      },
-      icon('machine'),
-      h('span', { class: 'machine-name' }, d.name),
-      h('span', { class: 'machine-sub' },
-        h('span', { class: 'machine-id' }, d.id.slice(0, 8)),
-        said ? h('span', { class: 'machine-status' }, ` \u00b7 ${said}`) : null),
-      h('span', { class: 'machine-state' }, selected ? 'Viewing' : 'Online')),
-      rows.get(d.id).el);
+    return machineRow({
+      id: d.id, name: d.name, select: () => onSelect(d.id), selected,
+      facts: lines.get(d.id).el, state: selected ? 'Viewing' : 'Online', more: [rows.get(d.id).el],
+    });
   }), ...offline.map((k) => {
     const name = typeof k.name === 'string' && k.name ? k.name : 'unnamed';
     const seen = ago(k.lastSeen, now);
     const s = forget?.stateOf(k.id) ?? { armed: false, busy: false, error: null };
-    return h('li', { class: 'machine offline', dataset: { deviceId: k.id, deviceName: name } },
-      h('div', { class: 'machine-row' },
-        icon('machine'),
-        h('span', { class: 'machine-name' }, name),
-        h('span', { class: 'machine-sub' },
-          h('span', { class: 'machine-id' }, k.id.slice(0, 8)),
-          h('span', { class: 'machine-seen' }, ` \u00b7 last seen ${seen || 'a while ago'}`)),
-        forget ? h('button', {
-          type: 'button', class: `button secondary machine-forget${s.armed ? ' armed' : ''}`,
+    return machineRow({
+      id: k.id, name, offline: true,
+      facts: h('span', { class: 'machine-seen' }, `Last seen ${seen || 'a while ago'}`),
+      state: 'Offline',
+      more: [
+        forget ? h('div', { class: 'machine-actions' }, h('button', {
+          type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,
           'aria-label': s.armed ? `Forget ${name}: press again to confirm` : `Forget ${name}`,
           // Not disabled while it goes: a disabled button loses focus, and the next draw could not
           // give it back. A press meanwhile does nothing (forget.js).
           'aria-disabled': s.busy ? 'true' : null,
           onclick: () => forget.press(k.id, k.lastSeen),
-        }, s.busy ? 'Forgetting\u2026' : s.armed ? 'Press again to forget' : 'Forget') : h('span', { class: 'machine-state' }, 'Offline')),
-      s.error ? h('p', { class: 'machine-error', role: 'alert' }, s.error) : null);
-  }), ...(updating.length ? [h('li', { class: 'machine machine-updates', dataset: { deviceId: 'check-all' } },
+        }, s.busy ? 'Forgetting\u2026' : s.armed ? 'Press again to forget' : 'Forget')) : null,
+        s.error ? h('p', { class: 'machine-error', role: 'alert' }, s.error) : null,
+      ],
+    });
+  }), ...(updating.length ? [h('li', { class: 'machine-updates', dataset: { deviceId: 'check-all' } },
     h('button', {
-      type: 'button', class: 'button secondary machine-check-all',
+      type: 'button', class: 'button secondary small machine-check-all',
       onclick: () => updates.checkAll(updating.map((d) => d.id)),
     }, updating.length > 1 ? 'Check all machines for updates' : 'Check for updates'))] : []));
   if (had?.id && had.cls) {

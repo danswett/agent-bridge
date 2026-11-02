@@ -195,6 +195,17 @@ export const readOn = (entry) => (entry.readBy?.name ? `read on ${entry.readBy.n
 
 // "3 sessions · 0.1.0 (dev)", from hello's machine (and a live count when there is one), and
 // "discovery held: …" while the host's discovery is held, as agent-ha-bridge's status line said.
+// The same, as facts for a machine's row (#213): { sessions, version, readOnly, held }, each a
+// short phrase or null; the reasons are the host's own words, for a tooltip, never the row.
+export function machineFacts({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null } = {}) {
+  return {
+    sessions: Number.isInteger(sessions) && sessions >= 0 ? `${sessions} session${sessions === 1 ? '' : 's'}` : null,
+    version: hostVersion ? `${hostVersion}${dev ? ' (dev)' : ''}` : null,
+    readOnly: typeof readOnly === 'string' && readOnly ? readOnly : null,
+    held: typeof held === 'string' && held ? held : null,
+  };
+}
+
 export function machineStatus({ sessions = null, hostVersion = null, dev = false, held = null, readOnly = null } = {}) {
   const bits = [];
   if (Number.isInteger(sessions) && sessions >= 0) { bits.push(`${sessions} session${sessions === 1 ? '' : 's'}`); }

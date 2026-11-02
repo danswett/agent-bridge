@@ -14,6 +14,7 @@
 //
 // Needs: dotnet build spikes/s4-relay/src/S4.DevStack -c Release
 import { test, expect } from '@playwright/test';
+import { go } from '../nav.mjs';
 import { spawn } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -71,7 +72,7 @@ test.afterAll(async () => {
 async function signIn(page) {
   await page.goto(appUrl);
   await page.click('#signin-button');
-  await expect(page.locator('#account')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('#avatar')).toBeVisible({ timeout: 30000 });
   await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
   // Every machine is shown at first: settled once each has said what it is, so a tap on the
   // list that follows lands on the list it was aimed at.
@@ -92,9 +93,9 @@ test('a signed-in phone sees a machine\'s live sessions over an end-to-end chann
   await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
 
   await signIn(page);
-  await expect(page.locator('[data-device-name="fixture-host"] button')).toBeVisible();
-  await expect(page.locator('[data-device-name="demo-host"] button')).toBeVisible();
-  await page.click('[data-device-name="fixture-host"] button');
+  await expect(page.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
+  await expect(page.locator('#machine-tabs [data-device-name="demo-host"]')).toBeVisible();
+  await page.click('#machine-tabs [data-device-name="fixture-host"]');
   await expect(page.locator('.session')).toHaveCount(fixture.sessions.length, { timeout: 30000 });
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on fixture-host');
   await expect(page.locator('[data-device-name="fixture-host"] button')).toHaveAttribute('aria-current', 'true');
@@ -137,7 +138,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   const sockets = [];
   await context.routeWebSocket(/\/v1\/ws$/, (ws) => { ws.connectToServer(); sockets.push(ws); });
   await signIn(page);
-  await page.click('[data-device-name="demo-host"] button');
+  await page.click('#machine-tabs [data-device-name="demo-host"]');
   await expect(page.locator('#host-state')).toContainText("doesn't support Agent Bridge sessions yet", { timeout: 30000 });
   await expect(page.locator('.session')).toHaveCount(0);
   await page.close();
@@ -157,7 +158,7 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   expect(await opened.evaluate(() => localStorage.getItem('agent-bridge.app.lastHost'))).toBeNull();
   await opened.click('#signin-button');
   await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
-  await expect(opened.locator('[data-device-name="fixture-host"] button')).toBeVisible();
+  await expect(opened.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();
   // The new sign-in starts where one with nothing remembered does, at every machine, not at
   // the machine the last one chose.
   await expect(opened.locator('[data-device-id="all"] button')).toHaveAttribute('aria-current', 'true');
@@ -191,7 +192,7 @@ test('a phone answers a question through the relay, and an answer in flight when
 
   await ask('ask-1', 'q1');
   await signIn(page);
-  await page.click('[data-device-name="fixture-host"] button');
+  await page.click('#machine-tabs [data-device-name="fixture-host"]');
   const q1 = card(page, 'ask-1').locator('.question');
   await expect(q1).toHaveAttribute('data-answerable', 'true', { timeout: 30000 });
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
@@ -236,7 +237,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   const typedFor = (id) => host.typedReplies.filter((r) => r.id === id);
 
   await signIn(page);
-  await page.click('[data-device-name="fixture-host"] button');
+  await page.click('#machine-tabs [data-device-name="fixture-host"]');
   const reply = card(page, 'reply-1').locator('form.reply');
   const input = reply.getByRole('textbox', { name: 'Reply' });
   await expect(input).toBeEnabled({ timeout: 30000 });
@@ -302,8 +303,10 @@ test.describe('notifications', () => {
     await fakePush(context);
     await signIn(page);
     test.skip(await page.evaluate(() => typeof PushManager === 'undefined'), `${browserName} here has no PushManager`);
-    await page.click('[data-device-name="fixture-host"] button');
+    await page.click('#machine-tabs [data-device-name="fixture-host"]');
     await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
+    // Notifications are in Settings.
+    await go(page, 'settings');
     const toggle = page.locator('#notify-toggle');
     await expect(toggle).toHaveText('Turn on notifications');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
@@ -330,7 +333,7 @@ test.describe('notifications', () => {
 
     // Opened again later: registered again on the new channel, with the same subscription.
     await page.reload();
-    await expect(page.locator('.session').first()).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('.session').first()).toBeAttached({ timeout: 30000 });
     await expect.poll(() => host.push.length, { timeout: 15000 }).toBe(before + 2);
     expect(host.push[before + 1].data.endpoint).toBe(saved.endpoint);
 
@@ -370,7 +373,7 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
   await signIn(page);
   // One machine shown on its own (one that shows nothing), so a machine that comes online is
   // looked at in passing rather than shown.
-  await page.click('[data-device-name="demo-host"] button');
+  await page.click('#machine-tabs [data-device-name="demo-host"]');
   const usageHost = await startFixtureHost({
     base: relayUrl, name: 'usage-host', usage: copilot(40),
     sessions: [{ id: 'u-1', agent: 'copilot', title: 'One', status: 'idle', statusSince: t, updatedAt: t, activity: {} }, { id: 'u-2', agent: 'claude', title: 'Two', status: 'idle', statusSince: t, updatedAt: t, activity: {} }],
@@ -378,20 +381,20 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
   try {
     // Not viewed: a short channel tells the list what it is and the panel what it has spent.
     const row = page.locator('[data-device-name="usage-host"]');
-    await expect(row.locator('.machine-status')).toHaveText(' · 2 sessions · 0.0.0-fixture (dev)', { timeout: 30000 });
-    await expect(page.locator('#usage .usage-summary')).toHaveText('GitHub Copilot 40%');
+    await expect(row.locator('.machine-status')).toHaveText('2 sessions · 0.0.0-fixture (dev)', { timeout: 30000 });
+    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot 40%');
     await expect(page.locator('#usage .usage-account')).toHaveText('octo · enterprise');
     // A machine that offers no usage says only its version.
-    await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toHaveText(' · 0.0.0-fixture');
+    await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toHaveText('0.0.0-fixture');
     expect(usageHost.log.filter((op) => op === 'usage.get').length).toBe(1);
 
     // Viewed: the usage comes on its own channel, as it changes.
-    await row.locator('button').click();
+    await page.click('#machine-tabs [data-device-name="usage-host"]');
     await expect(page.locator('.session')).toHaveCount(2, { timeout: 30000 });
     await expect.poll(() => usageHost.log.filter((op) => op === 'usage.subscribe').length, { timeout: 15000 }).toBe(1);
     await usageHost.setUsage(copilot(91));
-    await expect(page.locator('#usage .usage-summary')).toHaveText('GitHub Copilot 91%');
-    await expect(page.locator('#usage .usage-figure')).toHaveClass(/crit/);
+    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot 91%');
+    await expect(page.locator('#usage-line .usage-figure')).toHaveClass(/crit/);
     await expect(page.locator('#usage .usage-verdict')).toHaveText('58% ahead of pace');
   } finally {
     usageHost.close();

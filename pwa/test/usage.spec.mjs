@@ -1,7 +1,8 @@
 // Agent usage and the machine status line, in demo mode: the simulated host offers usage, and
 // the tests hand it reports to send as usage.update, drawn as agent-ha-bridge's usage card
-// draws them.
+// draws them: on the Usage page, and in one line under the sessions.
 import { test, expect } from '@playwright/test';
+import { go } from './nav.mjs';
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -42,12 +43,14 @@ const report = (at) => ({
 test('each agent is a row with its windows, fullest first, read as agent-ha-bridge reads them', async ({ page }) => {
   await openDemo(page);
   await sendUsage(page, report);
+  // The line under the sessions: each agent's fullest window, in its own colour.
+  const line = page.locator('#usage-line');
+  await expect(line).toBeVisible();
+  await expect(line.locator('.usage-summary')).toHaveText('GitHub Copilot 79% · Codex 61% · Claude Code 41%');
+  await expect(line.locator('.usage-figure.warn')).toHaveText('GitHub Copilot 79%');
+  await go(page, 'usage');
   const usage = page.locator('#usage');
   await expect(usage).toBeVisible();
-
-  // The folded line: each agent's fullest window, in its own colour.
-  await expect(usage.locator('.usage-summary')).toHaveText('GitHub Copilot 79% · Codex 61% · Claude Code 41%');
-  await expect(usage.locator('.usage-figure.warn')).toHaveText('GitHub Copilot 79%');
   await expect(usage.locator('.usage-group')).toHaveCount(3);
   expect(await usage.locator('.usage-group').evaluateAll((els) => els.map((e) => e.dataset.agent))).toEqual(['copilot', 'codex', 'claude']);
 
@@ -93,10 +96,11 @@ test('an update from the host redraws the bars, and an error shows only when the
       { agent: 'claude', label: 'Claude Code', source: 'none', measuredAt: at(0), error: 'The Claude usage could not be read: the server answered 500', windows: [] },
     ],
   }));
+  await expect(page.locator('#usage-line .usage-figure.crit')).toHaveText('GitHub Copilot 93%');
+  await go(page, 'usage');
   const usage = page.locator('#usage');
   const copilot = usage.locator('.usage-group[data-agent="copilot"]');
   await expect(copilot.locator('.usage-fill')).toHaveClass(/crit/);
-  await expect(usage.locator('.usage-figure.crit')).toHaveText('GitHub Copilot 93%');
   // A failed read beside a reading taken a minute ago is noise.
   await expect(copilot.locator('.usage-error')).toHaveCount(0);
   // With no reading at all, the failure is all there is to say.
@@ -104,51 +108,52 @@ test('an update from the host redraws the bars, and an error shows only when the
   await expect(usage.locator('.usage-group[data-agent="claude"] .usage-window')).toHaveCount(0);
 });
 
-test('folding the usage panel is remembered across a reload', async ({ page }) => {
+// Usage and Machines are pages of their own (#179), not panels folded over the sessions: the
+// line under the sessions, and machines online in the app bar, are what is left of them there.
+test('the usage line under the sessions opens the Usage page, which a reload keeps, and back returns to the sessions', async ({ page }) => {
   await openDemo(page);
-  const usage = page.locator('#usage');
-  const toggle = usage.locator('.usage-toggle');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(usage.locator('.usage-group')).toHaveCount(3);
+  const line = page.locator('#usage-line');
+  await expect(line.locator('.usage-summary')).toContainText('GitHub Copilot 79%');
+  await expect(page.locator('#usage')).toBeHidden();
 
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(usage.locator('.usage-body')).toBeHidden();
-  await expect(usage.locator('.usage-summary')).toContainText('GitHub Copilot 79%');
+  await line.click();
+  const usage = page.locator('#usage');
+  await expect(usage.locator('.usage-group')).toHaveCount(3);
+  await expect(page.locator('#nav [data-nav="usage"]')).toHaveAttribute('aria-current', 'page');
 
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
-  await expect(usage.locator('.usage-toggle')).toHaveAttribute('aria-expanded', 'false');
-  await expect(usage.locator('.usage-body')).toBeHidden();
+  await expect(usage.locator('.usage-group')).toHaveCount(3);
+  await page.goBack();
+  await expect(page.locator('.session').first()).toBeVisible();
+  await expect(usage).toBeHidden();
 });
 
-test('folding the machines panel leaves one line naming the machine, and is remembered across a reload', async ({ page }) => {
+test('the app bar names how many machines are online and leads to the Machines page, which a reload keeps', async ({ page }) => {
   await openDemo(page);
+  const online = page.locator('#online');
+  await expect(online).toHaveText('1 machine');
+  await expect(online).toHaveAccessibleName('1 machine online');
   const machines = page.locator('#machines');
-  const toggle = machines.getByRole('button', { name: 'Machines' });
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await expect(machines.locator('#machine-list .machine')).toHaveCount(1);
-  await expect(machines.locator('.machines-summary')).toBeHidden();
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await expect(machines.locator('#machine-list')).toBeHidden();
-  await expect(machines.locator('.machines-summary')).toHaveText('Viewing Demo machine · 1 online');
-  // Folding the list leaves the sessions where they were.
+  await expect(machines).toBeHidden();
+  // The sessions are where they were.
   await expect(page.locator('.session').first()).toBeVisible();
+
+  await online.click();
+  await expect(machines.locator('#machine-list .machine')).toHaveCount(1);
+  await expect(machines.locator('#machine-list .machine-button')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.session').first()).toBeHidden();
 
   await page.reload();
   await page.waitForSelector('html[data-demo-ready]');
-  await expect(machines.getByRole('button', { name: 'Machines' })).toHaveAttribute('aria-expanded', 'false');
-  await expect(machines.locator('#machine-list')).toBeHidden();
-
-  await machines.getByRole('button', { name: 'Machines' }).click();
   await expect(machines.locator('#machine-list .machine')).toHaveCount(1);
-  await expect(machines.locator('.machines-summary')).toBeHidden();
+  await go(page, 'sessions');
+  await expect(page.locator('.session').first()).toBeVisible();
 });
 
 test('a reading kept from a machine that has gone shows with its age and the machine that read it, after a reload too', async ({ page }) => {
   await openDemo(page, '&machines=2&keep=1');
+  await go(page, 'usage');
   const usage = page.locator('#usage');
   // Laptop is the only machine signed in to a second Claude account, read three hours ago.
   await page.evaluate(() => {
@@ -179,24 +184,30 @@ test('a reading kept from a machine that has gone shows with its age and the mac
 test('a machine that does not offer usage shows no usage panel', async ({ page }) => {
   await openDemo(page, '&usage=0');
   await expect(page.locator('.session').first()).toBeVisible();
+  await expect(page.locator('#usage-line')).toBeHidden();
+  await go(page, 'usage');
   await expect(page.locator('#usage')).toBeHidden();
+  await expect(page.locator('.usage-none')).toBeVisible();
   expect(await page.evaluate(() => window.agentBridgeDemo.calls.filter((c) => c.startsWith('usage.')))).toEqual([]);
 });
 
 test('the machine line says how many sessions are live, the version and that it is a dev build', async ({ page }) => {
   await openDemo(page);
   const status = page.locator('.machine .machine-status');
-  await expect(status).toHaveText(' · 4 sessions · 0.1.0 (dev)');
+  await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
   await page.evaluate(() => window.agentBridgeDemo.remove('019a1b2c-codex-example'));
-  await expect(status).toHaveText(' · 3 sessions · 0.1.0 (dev)');
+  await expect(status).toHaveText('3 sessions · 0.1.0 (dev)');
 });
 
 test('the machine line says what holds its discovery until it clears, as the HA status line did', async ({ page }) => {
   await openDemo(page);
   const status = page.locator('.machine .machine-status');
   await page.evaluate(() => window.agentBridgeDemo.hold({ reason: 'an unrecognised copilot process (pid 4120)', agents: ['copilot'] }));
-  await expect(status).toHaveText(' · 4 sessions · 0.1.0 (dev) · discovery held: an unrecognised copilot process (pid 4120)');
+  // A short fact on the row (#213), in the needs colour; the reason in its tooltip and to a screen reader.
+  await expect(status).toHaveText('4 sessions · Discovery held: an unrecognised copilot process (pid 4120)');
+  await expect(status.locator('.machine-flag.held .sr-only')).toHaveText(': an unrecognised copilot process (pid 4120)');
+  await expect(status).toHaveAttribute('title', '4 sessions · 0.1.0 (dev) · discovery held: an unrecognised copilot process (pid 4120)');
   await page.evaluate(() => window.agentBridgeDemo.hold(null));
-  await expect(status).toHaveText(' · 4 sessions · 0.1.0 (dev)');
+  await expect(status).toHaveText('4 sessions · 0.1.0 (dev)');
 });
 

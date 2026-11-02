@@ -310,6 +310,22 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   - iOS: a capsule field over the keyboard.
   - Android: a filled field on `surfaceContainer`.
 
+### 6.6 Machines
+
+A page of its own on every client (the PWA's `#/machines`, the app's Machines). One row per
+machine, online ones first, then the account's offline machines (#213):
+
+- **Line 1:** the machine icon, the name, and the trailing state ("Viewing", "Online",
+  "Offline"). The icon and the state align with line 1, as a session row's glyph does (§5.1).
+- **Line 2:** at most two facts: how many sessions, and the version (with "(dev)" for a build
+  from a working copy). A read-only machine says "View only", and a machine whose discovery is
+  held says "Discovery held", in the version's place. The host's reason is never on the row: it
+  is the line's tooltip and its accessible description. No device id on the row.
+- **Inside the row, under its two lines, in its text column:** the machine's updates (what its
+  app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
+  Every action is the same small secondary button. Check for updates, for every machine at once,
+  sits under the rows in the same column.
+
 ## 7. Platform shells
 
 **Windows (WinUI 3):**
@@ -347,9 +363,19 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Desktop:** the Windows layout with a 56 px web app bar in place of the title bar (mark,
   name, search, machines online, account).
 - **Phone:**
-  - a 24/32 title row with Search and New;
+  - a 24/32 title row with Search and New, and the sort menu between them;
   - machine tabs;
-  - a bottom navigation bar with a Bridge indicator.
+  - a bottom navigation bar (Sessions, Machines, Usage, Settings) with a Bridge indicator. New
+    is the way to Launch.
+  - The app bar comes back only as a strip while the connection has news (connecting,
+    reconnecting, paused, an error), and as the search row while searching.
+- **Pages are routes** in the address's hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`,
+  `#/settings`): a reload stays on the page, and the browser's own back goes between them.
+- **Search** narrows the sessions list to the sessions whose title, repository, branch, folder,
+  agent or machine has it. Rows don't move while it narrows the list.
+- **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on
+  the way to Launch (the rail's Launch, the phone's New).
+- **Under the sessions,** one line of each agent's fullest usage leads to Usage.
 - **Platform layer (#168):** detection only for shortcut hints, safe areas and back
   navigation.
 

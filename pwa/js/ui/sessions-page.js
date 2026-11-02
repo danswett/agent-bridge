@@ -10,7 +10,7 @@
 //   * a machine that can't be reached says so in a line of its own, and the others go on;
 //   * the launch panel asks which machine to launch on, starting from the one last used.
 import { h } from './dom.js';
-import { SessionListView, renderMachines } from './views.js';
+import { SessionListView, renderMachines, renderMachineTabs } from './views.js';
 import { LaunchPanel } from './launch-view.js';
 import { AnswerService } from '../answer-service.js';
 import { ReplyService } from '../reply-service.js';
@@ -61,8 +61,10 @@ export class SessionsPage {
   // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
-  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, updates = null, storage = globalThis.localStorage, onRendered = () => {} }) {
-    Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, trust, status, forget, updates, storage, onRendered });
+  // shell: the pages and app bar (./shell.js), or null: where a session shown goes, and where
+  // machines online and a waiting folder-trust question are said.
+  constructor({ $, hosts, connection, me = null, shell = null, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', facts = null, forget = null, updates = null, storage = globalThis.localStorage, onRendered = () => {} }) {
+    Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, status, facts, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
     this.answers = new AnswerService({ current, ...timing });
@@ -77,6 +79,7 @@ export class SessionsPage {
       // At the press, not when it is sent: one resent after its machine comes back must not
       // take the picker from a machine picked since.
       launched: (hostId) => this.#rememberLaunch(hostId),
+      waiting: (on) => this.shell?.setAttention('launch', on),
     });
     this.order = new SessionOrder({ storage });
     this.view = new SessionListView($('session-list'), hosts.sessions, {
@@ -98,6 +101,14 @@ export class SessionsPage {
       this.launchPanel.reopened(id);
     });
     hosts.onChange(() => this.refresh());
+    if (shell) {
+      // Search narrows the sessions list; the launch page's panel is open while it shows, and
+      // asks its machine again each time it opens.
+      shell.onSearch((q) => this.view.setFilter(q));
+      shell.onRoute(({ route }) => this.launchPanel.setOpen(route === 'launch'));
+      this.launchPanel.setOpen(shell.route === 'launch');
+      this.view.setFilter(shell.query);
+    }
   }
 
   // Every machine shown, more than one of them: the cards say which machine each is on.
@@ -115,10 +126,12 @@ export class SessionsPage {
     };
   }
 
-  // A session's card, once it has arrived: unfolded and scrolled to. False until then.
+  // A session's card, once it has arrived: on the sessions page, unfolded and scrolled to. False
+  // until then.
   showSession(id, hostId = null) {
     const card = this.view.card(hostId, id);
     if (!card) { return false; }
+    if (this.shell && this.shell.route !== 'sessions') { this.shell.go('sessions'); }
     if (card.folded) { card.setFolded(false); }
     const el = card.element;
     el.classList.add('linked');
@@ -171,7 +184,11 @@ export class SessionsPage {
     }
     this.view.refreshMachines();
     this.$('sessions').hidden = hosts.selection === null;
-    this.$('sessions-h').textContent = this.#heading();
+    // The page is Sessions; which machines it shows is said to a screen reader in the heading,
+    // and to the eye by the machine tabs.
+    const heading = this.#heading();
+    const on = heading.replace(/^Sessions/, '');
+    this.$('sessions-h').replaceChildren('Sessions', ...(on ? [h('span', { class: 'sr-only' }, on)] : []));
     this.#drawNotes(links);
     this.#drawLaunch();
     this.drawMachines();
@@ -214,6 +231,14 @@ export class SessionsPage {
       ? links.some(synced) && links.every((l) => synced(l) || l.phase === 'unsupported')
       : hosts.all && this.connection.ready;
     const empty = $('sessions-empty');
+    const query = this.view.filter;
+    if (query && n > 0) {
+      // Search finds nothing among sessions that are there.
+      empty.hidden = this.view.shownCount !== 0;
+      empty.textContent = 'No sessions match your search.';
+      this.onRendered(n);
+      return;
+    }
     empty.hidden = n !== 0 || !settled;
     empty.textContent = hosts.all && links.length !== 1
       ? links.length ? 'No live sessions on any of your machines.' : 'No live sessions: none of your machines is online.'
@@ -275,23 +300,26 @@ export class SessionsPage {
   drawMachines() {
     const { hosts, connection, $ } = this;
     const presence = connection.presence;
+    // A machine picked on the Machines page shows its sessions.
     const n = renderMachines($('machine-list'), {
       presence, me: this.me, current: hosts.selection,
-      onSelect: (id) => { hosts.select(id); $('sessions').focus(); },
+      onSelect: (id) => { hosts.select(id); this.shell?.go('sessions'); $('sessions').focus(); },
       status: (id) => this.status(id),
+      facts: this.facts,
       known: connection.known ?? null,
       forget: this.forget,
       updates: this.updates,
       allStatus: hosts.all ? plural(hosts.sessions.size, 'session', 'sessions') : '',
     });
     $('machines-empty').hidden = n !== 0 || !connection.ready;
-    // The machine whose sessions are on screen stays named after it drops out of presence,
-    // as the sessions heading keeps it: the host session holds on to its metadata.
-    const ids = hosts.shownIds();
-    const viewing = hosts.selection === null ? null
-      : hosts.all ? (ids.length > 1 ? 'all' : ids.length ? hosts.nameOf(ids[0]) : null)
-        : hosts.nameOf(hosts.targetId);
-    this.machinesFold.update(n, viewing);
+    // The machine tabs above the sessions: picking one there keeps focus on the tabs. The machine
+    // chosen stays named after it drops out of presence: the host session holds on to its metadata.
+    renderMachineTabs($('machine-tabs'), {
+      presence, me: this.me, current: hosts.selection, controls: 'session-list',
+      nameOf: (id) => hosts.nameOf(id),
+      onSelect: (id) => hosts.select(id),
+    });
+    this.shell?.setOnline(n);
   }
 
   #rememberLaunch(hostId) {

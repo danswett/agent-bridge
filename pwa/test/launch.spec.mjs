@@ -2,6 +2,7 @@
 // a real one does (session.launch): it refuses what it does not offer, in its words, and a
 // started session arrives as any other, with the panel jumping to its card.
 import { test, expect } from '@playwright/test';
+import { go } from './nav.mjs';
 
 const RESUMABLE = '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -22,8 +23,14 @@ async function openDemo(page, query = '') {
   await page.waitForSelector('html[data-demo-ready]');
 }
 
+// The Launch page (#179): from the rail, or New on a phone, its title saying what it is for.
+async function openTitled(page, title) {
+  await go(page, 'launch');
+  await expect(panel(page).locator('.launch-title')).toHaveText(title);
+}
+
 async function openPanel(page) {
-  await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+  await openTitled(page, 'Start a session on Demo machine');
   await expect(field(page, 'agent')).toBeVisible();
 }
 
@@ -137,7 +144,7 @@ test.describe('on a phone', () => {
 
   test('a machine that cannot launch shows no Launch at all', async ({ page }) => {
     await openDemo(page, '&launch=0');
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
     expect(await page.evaluate(() => window.agentBridgeDemo.calls)).not.toContain('launch.options');
   });
 });
@@ -282,6 +289,8 @@ test.describe('a folder-trust question', () => {
     await card(page).getByRole('button', { name: 'Trust' }).tap();
     await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
     await expect(field(page, 'prompt')).toHaveValue('Add pagination.');
+    // The started session was shown on the sessions page: back to Launch.
+    await go(page, 'launch');
 
     // Unconfirmed, and the message changed since: the change stays.
     const next = { ...QUESTION, id: '7f2e1b5a-4d3c-4e0f-9a8b-6c5d4e3f2a1b' };
@@ -313,7 +322,7 @@ test.describe('a folder-trust question', () => {
 
   test('a launch trusted just as another machine is picked still clears the message it sent', async ({ page }) => {
     await openDemo(page, '&machines=2');
-    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await openTitled(page, 'Start a session on Demo machine');
     await expect(field(page, 'agent')).toBeVisible();
     await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
     await field(page, 'agent').selectOption('codex');
@@ -466,7 +475,7 @@ test.describe('a folder-trust question', () => {
 
   test('a question a launch met is superseded only by its own machine\'s list, never another\'s', async ({ page }) => {
     await openDemo(page, '&machines=2');
-    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await openTitled(page, 'Start a session on Demo machine');
     await expect(field(page, 'agent')).toBeVisible();
     // This machine's list can no longer be read: nothing from it says the question has gone.
     await page.evaluate(() => { window.agentBridgeDemo.client.launchOptions = () => Promise.reject(new Error('the channel closed')); });
@@ -488,7 +497,7 @@ test.describe('a folder-trust question', () => {
   });
   test('a launch that finished while another machine was picked is superseded by its machine\'s next list', async ({ page }) => {
     await openDemo(page, '&machines=2');
-    await panel(page).getByRole('button', { name: 'Start a session on Demo machine' }).click();
+    await openTitled(page, 'Start a session on Demo machine');
     await expect(field(page, 'agent')).toBeVisible();
     await script(page, { outcome: 'unconfirmed', reason: 'Codex started, and is asking whether to trust agent-bridge. A person can answer that here or at the machine; the session appears here once they do', trust: QUESTION });
     await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
@@ -512,25 +521,25 @@ test.describe('a folder-trust question', () => {
   test('a machine shown only for its questions, with none, is asked again when it reconnects', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1');
     await page.waitForSelector('html[data-demo-ready]');
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
     // A question begins there after its list was read; the channel to it drops and comes back.
     await ask(page, QUESTION);
     await page.evaluate(() => window.agentBridgeDemo.host.disconnect());
-    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await openTitled(page, 'Waiting on Demo machine');
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
   });
 
   test('a machine shown only for its questions, with none, is asked again on an update once a while has passed', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1');
     await page.waitForSelector('html[data-demo-ready]');
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
     await ask(page, QUESTION);
     // Within the while, an update asks nothing.
     await page.evaluate(() => window.agentBridgeDemo.retarget());
     await page.waitForTimeout(300);
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
     await page.evaluate(() => { window.agentBridgeDemo.launchPanel.constructor.recheckMs = 0; window.agentBridgeDemo.retarget(); });
-    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await openTitled(page, 'Waiting on Demo machine');
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
   });
   test('with every machine shown and none taking launches, the machine picker stays to reach another machine\'s question', async ({ page }) => {
@@ -544,7 +553,7 @@ test.describe('a folder-trust question', () => {
       window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
     });
     await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
-    await panel(page).locator('.launch-toggle').click();
+    await go(page, 'launch');
     await field(page, 'machine').selectOption('demo-shadow');
     await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
     await expect(card(page).locator('.trust-folder')).toHaveText('C:\\Users\\demo\\untrusted\\web');
@@ -558,7 +567,7 @@ test.describe('a folder-trust question', () => {
       d.launchPanel.setTarget(null);
       d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why, load: () => Promise.reject(new Error('the channel closed')) });
     }, reason);
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
 
     // The same machine again, as a reconnect hands it in: its question is asked for once more.
     await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
@@ -579,7 +588,7 @@ test.describe('a folder-trust question', () => {
     const reason = 'agent-ha-bridge is running for this user (AgentBridgeDaemon)';
     await ask(page, { ...QUESTION, answerable: false, atMachine: `Answer at the machine: ${reason}.` });
     await page.evaluate((why) => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), transfers: null, trust: null, inspectOnly: true, readOnly: why }); }, reason);
-    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    await openTitled(page, 'Waiting on Demo machine');
     await expect(card(page).locator('.trust-at-machine')).toHaveText(`Answer at the machine: ${reason}.`);
 
     // agent-ha-bridge stopped: the machine answers again, and says the question can be answered.
@@ -604,12 +613,15 @@ test.describe('a folder-trust question', () => {
     await page.addInitScript(() => { window.__cspViolations = []; });
     await page.goto('?demo=1&static=1&ahb=1');
     await page.waitForSelector('html[data-demo-ready]');
-    await expect(panel(page)).toBeHidden();
+    await expect(panel(page)).toHaveJSProperty('hidden', true);
     const atMachine = 'Answer at the machine: agent-ha-bridge is running for this user (AgentBridgeDaemon).';
     await ask(page, { ...QUESTION, answerable: false, atMachine });
     await page.evaluate(() => window.agentBridgeDemo.retarget());
     await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
-    await panel(page).getByRole('button', { name: 'Waiting on Demo machine' }).click();
+    // Away from the Launch page, its way in carries a needs dot while the question waits.
+    await expect(page.locator('#nav [data-nav="launch"]')).toHaveClass(/attention/);
+    await expect(page.locator('.new-session')).toHaveClass(/attention/);
+    await openTitled(page, 'Waiting on Demo machine');
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
     await expect(card(page).locator('.trust-at-machine')).toHaveText(atMachine);
     await expect(card(page).getByRole('button')).toHaveCount(0);

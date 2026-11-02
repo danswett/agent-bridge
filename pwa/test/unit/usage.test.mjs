@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -270,4 +270,12 @@ test('a machine whose discovery is held says so on its status line, as agent-ha-
 test('a machine that takes nothing from the phone says so on its status line, and why', () => {
   assert.equal(machineStatus({ sessions: 2, hostVersion: '0.1.0', readOnly: 'agent-ha-bridge is running for this user' }),
     '2 sessions \u00b7 0.1.0 \u00b7 read-only: agent-ha-bridge is running for this user');
+});
+
+test('a machine\'s row facts are short phrases, with the read-only and held reasons apart for its tooltip (#213)', () => {
+  assert.deepEqual(machineFacts({ sessions: 4, hostVersion: '0.1.0', dev: true, readOnly: 'agent-ha-bridge is running for this user' }),
+    { sessions: '4 sessions', version: '0.1.0 (dev)', readOnly: 'agent-ha-bridge is running for this user', held: null });
+  assert.deepEqual(machineFacts({ sessions: 1, hostVersion: '0.2.0', held: 'an unrecognised copilot process' }),
+    { sessions: '1 session', version: '0.2.0', readOnly: null, held: 'an unrecognised copilot process' });
+  assert.deepEqual(machineFacts({}), { sessions: null, version: null, readOnly: null, held: null });
 });
