@@ -10,8 +10,8 @@
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
 import {
-  Limits, answerRequest, buildAnswer, checkAnswer, draftText, initialState, isRecommended,
-  optionTone, orderOptions, problemField, tapToAnswer, utf8Bytes,
+  Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
+  tapToAnswer, utf8Bytes,
 } from '../answers.js';
 
 const TYPE_LABEL = { choice: 'Choose one', multi: 'Choose any', boolean: 'Yes or no', text: 'Text answer', number: 'Number' };
@@ -171,6 +171,22 @@ export function describeAnswer(entry, machineName) {
 
 // After busy, Send comes back after this long: long enough not to collide again at once.
 export const BUSY_PAUSE_MS = 2000;
+
+// What an answer's progress allows. Busy and refused were not typed: the person may answer
+// again (after busy, in a moment: pause). Every other state holds the controls: on its way, or
+// final. Unconfirmed is final and is never resent, from here or automatically. The card's form
+// and the Needs you lane (#165) both follow this.
+export function answerControls(entry) {
+  const again = !entry || (entry.state === 'done' && ['busy', 'refused'].includes(entry.outcome));
+  const pause = entry?.state === 'done' && entry.outcome === 'busy';
+  return { again, pause };
+}
+
+// An answer's progress or outcome as one word, for data-answer: an unknown outcome is unconfirmed.
+export function answerState(entry) {
+  if (!entry) { return 'none'; }
+  return entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state;
+}
 
 const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
 const capitalise = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -426,14 +442,9 @@ export class QuestionPanel {
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
     const q = this.q;
-    const { answer, problems } = buildAnswer(q, this.state);
-    if (problems.length) { this.#fail(problems[0].message, problems[0].field); return; }
     const { service, hostId, sessionId } = this.answering;
-    // Checked as the request will be sent: a stand-in request id is the same length as the
-    // UUID the service gives it, so the 16 KiB check counts the same bytes.
-    const data = answerRequest({ sessionId, questionId: q.id, request: '00000000-0000-4000-8000-000000000000', answer });
-    const problem = checkAnswer(q, data);
-    if (problem) { this.#fail(problem, problemField(q, problem) ?? (q.fields.length === 0 ? '' : null)); return; }
+    const { answer, problem, field } = prepareAnswer(q, this.state, sessionId);
+    if (problem) { this.#fail(problem, field); return; }
     this.#clearError();
     tapped?.setAttribute('aria-pressed', 'true');
     service.submit({ hostId, sessionId, questionId: q.id, answer });
@@ -448,12 +459,8 @@ export class QuestionPanel {
     const e = this.els;
     clearTimeout(this.#busyTimer);
     const shown = entry ? describeAnswer(entry, this.machineName) : { text: '', tone: '' };
-    // Busy and refused were not typed: the person may answer again (after busy, in a
-    // moment). Every other state holds the form: on its way, or final. Unconfirmed is final
-    // and is never resent, from here or automatically.
-    const again = !entry || (entry.state === 'done' && ['busy', 'refused'].includes(entry.outcome));
-    const pause = entry?.state === 'done' && entry.outcome === 'busy';
-    this.element.dataset.answer = entry ? (entry.state === 'done' ? (OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed') : entry.state) : 'none';
+    const { again, pause } = answerControls(entry);
+    this.element.dataset.answer = answerState(entry);
     e.status.textContent = shown.text;
     e.status.className = `answer-status${shown.tone ? ` ${shown.tone}` : ''}`;
     e.status.hidden = !shown.text;

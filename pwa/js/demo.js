@@ -235,7 +235,7 @@ export class DemoHost {
         return undefined;
       }
       case 'session.answer':
-        return this.#answer(data, reply);
+        return this.#answer(data, reply, (error) => t.deliver({ re: id, ok: false, error }));
       case 'session.reply':
         if (!this.capabilities.includes('sessions.reply')) { break; }
         return this.#reply(data, reply);
@@ -592,7 +592,7 @@ export class DemoHost {
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session did not record the reply within 60 seconds' : 'from a newer host') };
   }
 
-  #answer(data, reply) {
+  #answer(data, reply, fail) {
     this.answerLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     // A repeat, even of one still being delivered, gets the first one's outcome.
@@ -600,6 +600,8 @@ export class DemoHost {
     if (known) { known.result.then(reply); return; }
     const step = this.#script.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
+    // error: the host fails the op itself, with nothing typed, so the same request can go again.
+    if (scripted.error) { this.#after(() => null).then(() => fail(scripted.error)); return; }
     const result = this.#after(() => this.#decide(data, scripted));
     this.answers.set(request, { result });
     // drop: the host did the work, but its response never reached the phone.

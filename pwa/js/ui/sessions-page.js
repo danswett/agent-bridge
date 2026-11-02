@@ -22,6 +22,8 @@ import { Capabilities } from '../protocol.js';
 import { AttachmentLimits } from '../attachments.js';
 import { maxPlain } from '../blobs.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
+import { NeedsYouLane } from './needs-you-view.js';
+import { AppBadge } from '../needs-you.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -61,7 +63,7 @@ export class SessionsPage {
   // trust(hostId): how a folder-trust question on that machine is answered from here, or null.
   // status(id): a machine's status line. forget: a ForgetControl for offline machines, or null.
   // updates: an UpdateControl for the machines that offer updates (#51), or null.
-  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, updates = null, storage = globalThis.localStorage, onRendered = () => {} }) {
+  constructor({ $, hosts, connection, me = null, machinesFold, blobs = () => null, relayMax = () => 0, retryMs = 0, transfers = () => null, trust = () => null, status = () => '', forget = null, updates = null, storage = globalThis.localStorage, badge = new AppBadge(), onRendered = () => {} }) {
     Object.assign(this, { $, hosts, connection, me, machinesFold, relayMax, transfers, trust, status, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
@@ -91,6 +93,14 @@ export class SessionsPage {
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
     });
     this.view.onRender = (n) => this.#drawCount(n);
+    // Needs you · N (#165): above the list, and apart from it. Its count is the app's badge.
+    this.lane = new NeedsYouLane($('needs-you'), hosts.sessions, {
+      answering: (hostId) => this.answering(hostId),
+      machine: (hostId) => ({ name: hosts.nameOf(hostId) ?? 'another machine' }),
+      labelled: () => this.#several(),
+      open: (hostId, id) => this.showSession(id, hostId),
+      badge,
+    });
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -169,6 +179,8 @@ export class SessionsPage {
       const caps = `${link.capabilities.join(' ')}:${link.machine?.readOnly ?? ''}`;
       if (this.#shownCaps.get(link.id) !== caps) { this.#shownCaps.set(link.id, caps); this.view.refreshQuestions(link.id); }
     }
+    // What a machine takes may have changed, and machine names with it: the lane says so too.
+    this.lane.render();
     this.view.refreshMachines();
     this.$('sessions').hidden = hosts.selection === null;
     this.$('sessions-h').textContent = this.#heading();
