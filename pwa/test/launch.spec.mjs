@@ -621,6 +621,10 @@ test.describe('a folder-trust question', () => {
     // Away from the Launch page, its way in carries a needs dot while the question waits.
     await expect(page.locator('#nav [data-nav="launch"]')).toHaveClass(/attention/);
     await expect(page.locator('.new-session')).toHaveClass(/attention/);
+    // And to a screen reader, in each way's name: the dot is only drawn.
+    // (The rail's Launch is a desktop's; on a phone New is the way, and the rail's is hidden.)
+    await expect(page.locator('#nav [data-nav="launch"]')).toHaveAttribute('aria-label', 'Launch, a question is waiting');
+    await expect(page.locator('.new-session')).toHaveAccessibleName('New session, a question is waiting');
     await openTitled(page, 'Waiting on Demo machine');
     await expect(card(page).locator('.trust-folder')).toHaveText(LONG);
     await expect(card(page).locator('.trust-at-machine')).toHaveText(atMachine);

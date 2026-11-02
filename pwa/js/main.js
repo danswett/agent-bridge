@@ -554,7 +554,8 @@ function begin(account) {
   connection.on('state', ({ state }) => {
     $('replaced-banner').hidden = state !== 'replaced';
     switch (state) {
-      case 'connecting': return setPill('Connecting…');
+      // News, as reconnecting is: the strip shows on a phone, in plain words.
+  case 'connecting': return setPill('Connecting…', 'busy');
       case 'connected': page.refresh(); return setPill('Connected', 'ok');
       case 'reconnecting': page.refresh(); return setPill('Reconnecting…', 'warn');
       case 'replaced': return setPill('Paused', 'warn');
@@ -614,6 +615,8 @@ registerServiceWorker();
   console.error(e);
   setPill('Error', 'bad');
   shell.setSignedIn(true);
+  // Said where it can be seen: on Sessions, whatever page the address named.
+  shell.go('sessions', { replace: true });
   setHostState(e.message);
   $('sessions').hidden = false;
 });

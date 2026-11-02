@@ -81,7 +81,7 @@ a { color: var(--ab-bridge); }
   padding: max(var(--ab-space-2), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) var(--ab-space-2) max(var(--ab-space-4), env(safe-area-inset-left));
   background: var(--ab-shell);
 }
-body[data-conn="warn"] .appbar, body[data-conn="bad"] .appbar, body.searching .appbar { display: flex; }
+body[data-conn="busy"] .appbar, body[data-conn="warn"] .appbar, body[data-conn="bad"] .appbar, body.searching .appbar { display: flex; }
 .appbar .brand, .appbar .online, .appbar .avatar { display: none; }
 body.searching .appbar .appbar-end { display: none; }
 body:not(.searching) .appbar .search { display: none; }
@@ -156,7 +156,7 @@ body:not(.searching) .appbar .search { display: none; }
   padding: max(var(--ab-space-4), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-6)) max(var(--ab-space-4), env(safe-area-inset-left));
 }
 body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), env(safe-area-inset-bottom)); }
-body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); }
+body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); }
 .page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; }
 .page > .page-title, .page > section > .page-title { margin-bottom: var(--ab-space-4); }
 /* What a page shows when its panel has nothing: shown only while the panel is hidden. */
@@ -375,7 +375,7 @@ body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching 
 }
 .machine-tabs::-webkit-scrollbar { display: none; }
 .machine-tab {
-  position: relative; flex: none; min-height: var(--tap); padding: 0 2px;
+  position: relative; flex: none; min-height: var(--tap); min-width: var(--tap); padding: 0 2px; text-align: center;
   font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
   background: none; border: 0; cursor: pointer; white-space: nowrap;
 }
@@ -386,7 +386,7 @@ body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching 
 }
 .machine-tab.away { font-style: italic; }
 @media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
-@media (min-width: 760px) { .machine-tab { min-height: 36px; } }
+@media (min-width: 760px) { .machine-tab { min-height: 36px; min-width: 32px; } }
 .session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
 
 /* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,

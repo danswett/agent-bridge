@@ -133,6 +133,38 @@ test('Skip to content skips to the page it is on, and leaves the address alone',
   expect(await page.evaluate(() => location.hash)).toBe('#/machines');
 });
 
+test('a search that matches only an ended session shows it in Ended, and does not say nothing matches', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), CODEX);
+  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('flaky');
+  await expect(page.locator('.session')).toHaveCount(0);
+  await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
+  await expect(page.locator('#sessions-empty')).toBeHidden();
+});
+
+test('a link that leaves its page takes focus to the new page, not to the document', async ({ page }) => {
+  await openDemo(page);
+  await page.locator('.new-session').focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => route(page)).toBe('launch');
+  expect(await page.evaluate(() => document.getElementById('main').contains(document.activeElement))).toBe(true);
+  // The rail keeps focus: it is still there.
+  await page.locator('#nav [data-nav="usage"]').focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => route(page)).toBe('usage');
+  await expect(page.locator('#nav [data-nav="usage"]')).toBeFocused();
+});
+
+test('a startup that fails on another page says why on Sessions', async ({ page }) => {
+  await page.route('**/fixtures/sessions-list.json', (r) => r.abort());
+  await page.goto('?demo=1&static=1#/settings');
+  await expect(page.locator('#host-state')).toBeVisible();
+  await expect(page.locator('#host-state')).not.toHaveText('');
+  expect(await route(page)).toBe('sessions');
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
@@ -193,6 +225,32 @@ test.describe('on a phone', () => {
     expect(glyph.x).toBeGreaterThanOrEqual(close.x + close.width);
     expect(glyph.x).toBeGreaterThanOrEqual(box.x);
     expect(glyph.x + glyph.width).toBeLessThanOrEqual(box.x + box.width);
+  });
+
+  test('every machine tab is at least 44 px wide and tall, All included', async ({ page }) => {
+    await openDemo(page, '&machines=2');
+    for (const t of await page.locator('#machine-tabs [role="tab"]').all()) {
+      const b = await t.boundingBox();
+      expect(b.width).toBeGreaterThanOrEqual(44);
+      expect(b.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test('a new page starts at its top, not where the last one was scrolled to', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 420 });
+    await openDemo(page, '&machines=3');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
+    await page.locator('#nav [data-nav="settings"]').tap();
+    await expect.poll(() => route(page)).toBe('settings');
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  });
+
+  test('the strip shows while connecting, as it does for the other news', async ({ page }) => {
+    await openDemo(page);
+    await expect(page.locator('#appbar')).toBeHidden();
+    await page.evaluate(() => { document.body.dataset.conn = 'busy'; });
+    await expect(page.locator('#appbar')).toBeVisible();
   });
 
   test('the app bar comes back as a strip while the connection has news', async ({ page }) => {

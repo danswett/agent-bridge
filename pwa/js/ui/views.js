@@ -157,7 +157,8 @@ export class SessionListView {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
-    this.shownCount = shown;
+    // An ended session that matches is a result too: Ended shows it.
+    this.shownCount = shown + ended.length;
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
@@ -359,10 +360,10 @@ export class SessionListView {
     for (const c of this.#cards.values()) { const m = this.machine(c.hostId); c.setMachine(m.name, m.show); }
   }
 
-  // A machine's session's card; without a machine, the first card for that session.
   // Whether search is hiding a card: it exists, and is not in the list.
   hidden(card) { return !!card && !card.element.isConnected; }
 
+  // A machine's session's card; without a machine, the first card for that session.
   card(hostId, id) {
     if (hostId) { return this.#cards.get(SessionListView.key(hostId, id)) ?? null; }
     for (const c of this.#cards.values()) { if (c.id === id) { return c; } }

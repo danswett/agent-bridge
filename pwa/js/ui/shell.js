@@ -124,9 +124,15 @@ export class Shell {
   }
 
   // A needs dot on a page's way in: Launch, while a folder-trust question waits there.
+  // Said to a screen reader too, in the way's name: the dot is only drawn.
   setAttention(route, on) {
-    for (const a of this.links) { if (a.dataset.nav === route) { a.classList.toggle('attention', on); } }
-    for (const a of this.doc.querySelectorAll(`[data-attention-for="${route}"]`)) { a.classList.toggle('attention', on); }
+    const ways = [...this.links.filter((a) => a.dataset.nav === route), ...this.doc.querySelectorAll(`[data-attention-for="${route}"]`)];
+    for (const a of ways) {
+      a.classList.toggle('attention', on);
+      if (a.dataset.label === undefined) { a.dataset.label = a.getAttribute('aria-label') ?? ''; }
+      const name = a.dataset.label || a.textContent.trim();
+      if (on) { a.setAttribute('aria-label', `${name}, a question is waiting`); } else if (a.dataset.label) { a.setAttribute('aria-label', a.dataset.label); } else { a.removeAttribute('aria-label'); }
+    }
   }
 
   openSearch() {
@@ -150,7 +156,17 @@ export class Shell {
     const from = this.#current;
     this.#current = parseRoute(this.win.location.hash);
     const { route } = this.#current;
+    const focused = this.doc.activeElement;
+    const leaving = from.route !== route && this.routes.some((r) => r.dataset.route !== route && r.contains(focused));
     for (const r of this.routes) { r.hidden = !this.#signedIn || r.dataset.route !== route; }
+    if (from.route !== route) {
+      // Every page shares one scroller (the content on a desktop, the window on a phone): a new
+      // page starts at its top, not at the last one's offset.
+      if (this.els.main) { this.els.main.scrollTop = 0; }
+      this.win.scrollTo?.(0, 0);
+      // Focus that was in the page left goes to the new page's content, not to the document.
+      if (leaving) { this.els.main?.focus({ preventScroll: true }); }
+    }
     for (const a of this.links) {
       if (a.dataset.nav === route) { a.setAttribute('aria-current', 'page'); } else { a.removeAttribute('aria-current'); }
     }
