@@ -352,6 +352,130 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Contains("Stopped", guard.Describe(guard.Credential(Url, "d-not-a-secret")), StringComparison.Ordinal);
     }
 
+    // An answer to one request lets go of its own reservation only: another token's login resetting
+    // the count must not open the way for a second process's attempt while the first is out.
+    [Fact]
+    public async Task Another_tokens_answer_does_not_let_a_second_process_past_an_attempt_still_on_its_way()
+    {
+        var gate = new TaskCompletionSource();
+        var sent = 0;
+        var handler = new Waiting(async () =>
+        {
+            Interlocked.Increment(ref sent);
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var serve = new HaAuthGuard(Record, time);
+        var good = serve.Credential(Url, "good-token-not-a-secret");
+        using (var l = await serve.EnterAsync(good)) { l.Authenticated(true); }
+        using (var l = await serve.EnterAsync(serve.Credential(Url, "old-token-not-a-secret"))) { l.Authenticated(false); }
+
+        var first = Publish(new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: serve));
+        while (Volatile.Read(ref sent) == 0) { await Task.Delay(10); }
+        using (var l = await serve.EnterAsync(good)) { l.Authenticated(true); }
+        var second = Publish(new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time)));
+        await Task.Delay(500);
+        gate.SetResult();
+        await first;
+        await second;
+
+        Assert.Equal(1, sent);
+    }
+
+    // A 401 from a request let go before a ban was recorded says nothing about the ban.
+    [Fact]
+    public async Task A_late_401_does_not_clear_a_ban_recorded_after_its_request_was_let_go()
+    {
+        var guard = new HaAuthGuard(Record, time);
+        var token = guard.Credential(Url, Token);
+        using (var l = await guard.EnterAsync(token)) { l.Answered(HttpStatusCode.OK); }
+
+        using var late = await guard.EnterAsync(token);
+        using (var l = await guard.EnterAsync(token)) { l.Answered(HttpStatusCode.Forbidden); }
+        late.Answered(HttpStatusCode.Unauthorized);
+
+        Assert.StartsWith("Home Assistant has banned this machine's address", guard.Describe(token), StringComparison.Ordinal);
+    }
+
+    // A record another process wrote within one file-time tick of what was last read, looked at
+    // long after: its time says nothing changed, its contents say otherwise.
+    [Fact]
+    public async Task A_refusal_written_without_moving_the_records_time_is_still_read()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serve = Client(ha, new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(serve));
+        var stamp = DateTime.UtcNow.AddSeconds(-30);
+        File.SetLastWriteTimeUtc(Record, stamp);
+        Assert.Null(await Publish(serve));
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        var shadow = Client(ha, new HaAuthGuard(Record, time));
+        foreach (var wait in new[] { 5, 15, 0 })
+        {
+            await Publish(shadow);
+            time.Advance(TimeSpan.FromMinutes(wait));
+        }
+        File.SetLastWriteTimeUtc(Record, stamp);
+        var before = ha.Seen.Count;
+
+        Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
+        Assert.Equal(before, ha.Seen.Count);
+    }
+
+    // serve's token finds the ban; shadow run's token then has its one look. The ban is still looked
+    // at fifteen minutes on, not an hour, or a cleared ban would keep the machine off for hours.
+    [Fact]
+    public async Task A_look_with_a_new_token_during_a_ban_does_not_push_the_next_scheduled_look_back()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.Forbidden };
+        var guard = new HaAuthGuard(Record, time);
+        var serve = Client(ha, guard);
+        await Publish(serve);
+        await Publish(Client(ha, guard, "second-token-not-a-secret"));
+        Assert.Equal(2, ha.Seen.Count);
+
+        await Hammer(serve, TimeSpan.FromMinutes(16));
+
+        Assert.Equal(3, ha.Seen.Count);
+    }
+
+    // A token that used up its attempts is not the one to look for the end of a ban with.
+    [Fact]
+    public async Task A_stopped_token_stays_held_while_another_finds_the_address_banned()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        var stopped = Client(ha, guard);
+        await Hammer(stopped, TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+
+        ha.Status = HttpStatusCode.Forbidden;
+        Assert.Equal(HaAuthKind.Banned, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, guard, "second-token-not-a-secret"))).Kind);
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(stopped, TimeSpan.FromDays(1));
+
+        Assert.Equal(4, ha.Seen.Count);
+    }
+
+    // The one attempt a change earns, once the count is spent, is one: a login with yet another
+    // token resetting the count does not give it more.
+    [Fact]
+    public async Task A_replacement_token_stopped_after_its_one_attempt_stays_stopped_when_another_token_logs_in()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        var replacement = Client(ha, guard, "second-token-not-a-secret");
+        await Publish(replacement);
+        Assert.Equal(4, ha.Seen.Count);
+
+        using (var l = await guard.EnterAsync(guard.Credential(Url, "third-token-not-a-secret"))) { l.Authenticated(true); }
+        await Hammer(replacement, TimeSpan.FromDays(1));
+
+        Assert.Equal(4, ha.Seen.Count);
+    }
+
     // The record keeps a bounded number of addresses and tokens, but never by forgetting a refusal.
     [Fact]
     public async Task A_stopped_token_stays_stopped_however_many_other_tokens_and_addresses_come_after_it()

@@ -54,8 +54,6 @@ public sealed class HaAuthGuard
     readonly Action<string> log;
     readonly object gate = new();
     readonly SemaphoreSlim probe = new(1, 1);
-    // This guard, in the record's reservation of the one attempt not yet known to be accepted.
-    readonly string me = Guid.NewGuid().ToString("N");
     readonly List<HaCredential> known = [];
     State state = new();
     bool unreadableSaid;
@@ -64,8 +62,7 @@ public sealed class HaAuthGuard
     // count, which a read of the stale file must not undo (a refusal lost that way would be
     // repeated for ever).
     bool unwritable;
-    // When the record had last been written as this process last read it, and what it said.
-    DateTime readAt;
+    // What the record said when this process last read or wrote it.
     string? readText;
     // The record was read again, with whatever another process recorded: what Problem says may have
     // changed, and the app is told (Notify), not only the connector that will skip its pass.
@@ -175,15 +172,18 @@ public sealed class HaAuthGuard
             decision = Decide(credential, time.GetUtcNow());
             seen = SeenLocked();
         }
-        if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null, seen); }
+        if (decision.Gate == Gate.Clear) { return new Lease(this, credential, null, seen, null); }
         if (decision.Gate == Gate.Held) { throw Refusal(credential, decision.Kind, sent: false); }
         await probe.WaitAsync(cancellationToken);
+        string? reserved = null;
         try
         {
             // What another process, or the attempt waited on, has found meanwhile; and, for an
             // attempt still to be made, the record's reservation, so another process (serve beside
             // ha shadow or shadow run) waits for its answer too rather than sending its own at once.
             var giveUp = Environment.TickCount64 + (long)Reservation.TotalMilliseconds;
+            // The reservation is this attempt's own, and only its answer or its end lets go of it.
+            var mine = Guid.NewGuid().ToString("N");
             while (true)
             {
                 var busy = false;
@@ -194,13 +194,14 @@ public sealed class HaAuthGuard
                     {
                         decision = Decide(credential, now);
                         if (decision.Gate != Gate.Probe || path is null || unwritable) { return false; }
-                        if (s.ProbeBy is { } by && by != me && s.ProbeUntil > now && Environment.TickCount64 < giveUp)
+                        if (s.ProbeBy is not null && s.ProbeUntil > now && Environment.TickCount64 < giveUp)
                         {
                             busy = true;
                             return false;
                         }
-                        s.ProbeBy = me;
+                        s.ProbeBy = mine;
                         s.ProbeUntil = now + Reservation;
+                        reserved = mine;
                         return true;
                     });
                     seen = SeenLocked();
@@ -214,22 +215,22 @@ public sealed class HaAuthGuard
             probe.Release();
             throw;
         }
-        if (decision.Gate == Gate.Clear) { probe.Release(); return new Lease(this, credential, null, seen); }
+        if (decision.Gate == Gate.Clear) { probe.Release(); return new Lease(this, credential, null, seen, null); }
         if (decision.Gate == Gate.Held) { probe.Release(); throw Refusal(credential, decision.Kind, sent: false); }
-        return new Lease(this, credential, probe, seen);
+        return new Lease(this, credential, probe, seen, reserved);
     }
 
     // The reservation given up without an answer (a timeout, no connection): the next attempt, in
     // any process, need not wait for it to lapse.
-    void Unreserve()
+    void Unreserve(string? reservation)
     {
-        if (path is null) { return; }
-        lock (gate) { Mutate(s => Unreserved(s)); }
+        if (path is null || reservation is null) { return; }
+        lock (gate) { Mutate(s => Unreserved(s, reservation)); }
     }
 
-    bool Unreserved(State s)
+    static bool Unreserved(State s, string? reservation)
     {
-        if (s.ProbeBy != me) { return false; }
+        if (reservation is null || s.ProbeBy != reservation) { return false; }
         s.ProbeBy = null;
         s.ProbeUntil = null;
         return true;
@@ -242,15 +243,17 @@ public sealed class HaAuthGuard
         readonly HaAuthGuard guard;
         readonly HaCredential credential;
         readonly Seen seen;
+        readonly string? reservation;
         SemaphoreSlim? probe;
         bool answered;
 
-        internal Lease(HaAuthGuard guard, HaCredential credential, SemaphoreSlim? probe, Seen seen)
+        internal Lease(HaAuthGuard guard, HaCredential credential, SemaphoreSlim? probe, Seen seen, string? reservation)
         {
             this.guard = guard;
             this.credential = credential;
             this.probe = probe;
             this.seen = seen;
+            this.reservation = reservation;
         }
 
         // An HTTP answer, the WebSocket upgrade's included. The refusal to throw when it was one.
@@ -261,18 +264,18 @@ public sealed class HaAuthGuard
             {
                 case 401:
                     answered = true;
-                    return guard.Refuse(credential, HaAuthKind.Rejected, status);
+                    return guard.Refuse(credential, HaAuthKind.Rejected, status, seen, reservation);
                 // Not counted by Home Assistant, but how it answers a banned address, before it reads
                 // any token. Taken for a ban whatever the token: told apart by a second attempt, a
                 // token that had used up its attempts would never be looked at again.
                 case 403:
                     answered = true;
-                    return guard.Refuse(credential, HaAuthKind.Banned, status);
+                    return guard.Refuse(credential, HaAuthKind.Banned, status, seen, reservation);
                 // Home Assistant only gets as far as a missing entity having read the token.
                 case 404:
                 case >= 200 and < 300:
                     answered = true;
-                    guard.Accept(credential, resetsCount: false, seen);
+                    guard.Accept(credential, resetsCount: false, seen, reservation);
                     return null;
                 default:
                     return null;
@@ -286,17 +289,17 @@ public sealed class HaAuthGuard
             answered = true;
             if (ok)
             {
-                guard.Accept(credential, resetsCount: true, seen);
+                guard.Accept(credential, resetsCount: true, seen, reservation);
                 return null;
             }
-            return guard.Refuse(credential, HaAuthKind.Rejected, null);
+            return guard.Refuse(credential, HaAuthKind.Rejected, null, seen, reservation);
         }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref probe, null) is not { } held) { return; }
             // Answered, the reservation went with the answer; this only lets go of one left over.
-            try { guard.Unreserve(); }
+            try { guard.Unreserve(reservation); }
             finally { held.Release(); }
         }
     }
@@ -318,6 +321,8 @@ public sealed class HaAuthGuard
         // Nothing known of this address: a token not tried here before, the one attempt a change earns.
         if (!state.Servers.TryGetValue(credential.Server, out var server)) { return new(Gate.Probe); }
         server.Credentials.TryGetValue(credential.Id, out var c);
+        // A token's own refusals first, ban or no ban: a stopped token is not the one to look with.
+        if (c is { Rejections: > 0 } && (Stopped(c) || now < NextAttempt(c))) { return new(Gate.Held); }
         if (server.BannedSince is { } since)
         {
             // A credential not tried since the ban began (a token or address given since) has its
@@ -325,15 +330,11 @@ public sealed class HaAuthGuard
             if (c?.AttemptAt is not { } tried || tried < since || now >= server.BanCheckAt) { return new(Gate.Probe); }
             return new(Gate.Held, HaAuthKind.Banned);
         }
-        if (c is { Rejections: > 0 })
-        {
-            if (Stopped(c)) { return new(Gate.Held); }
-            return now < NextAttempt(c) ? new(Gate.Held) : new(Gate.Probe);
-        }
+        if (c is { Rejections: > 0 }) { return new(Gate.Probe); }
         return c is { Accepted: true } ? new(Gate.Clear) : new(Gate.Probe);
     }
 
-    bool Stopped(Cred c) => c.Rejections >= MaxRejections || state.Strikes >= MaxRejections;
+    bool Stopped(Cred c) => c.Stopped || c.Rejections >= MaxRejections || state.Strikes >= MaxRejections;
 
     DateTimeOffset NextAttempt(Cred c)
     {
@@ -342,7 +343,7 @@ public sealed class HaAuthGuard
         return last + Spacing[Math.Min(c.Rejections - 1, Spacing.Count - 1)];
     }
 
-    HomeAssistantAuthException Refuse(HaCredential credential, HaAuthKind kind, HttpStatusCode? status)
+    HomeAssistantAuthException Refuse(HaCredential credential, HaAuthKind kind, HttpStatusCode? status, Seen seen, string? reservation)
     {
         var now = time.GetUtcNow();
         string said;
@@ -350,27 +351,46 @@ public sealed class HaAuthGuard
         {
             Mutate(s =>
             {
-                Unreserved(s);
+                Unreserved(s, reservation);
+                // Nothing refused since this request was let go: its answer is the newest there is.
+                var newest = s.Refusals == seen.Refusals;
                 s.Refusals++;
                 var server = ServerOf(s, credential, now);
                 var c = CredOf(server, credential);
                 c.AttemptAt = now;
                 if (kind == HaAuthKind.Banned)
                 {
-                    if (server.BannedSince is null) { server.BannedSince = now; server.BanLooks = 0; }
-                    else { server.BanLooks++; }
-                    server.BanCheckAt = now + BanChecks[Math.Min(server.BanLooks, BanChecks.Count - 1)];
+                    if (server.BannedSince is null)
+                    {
+                        server.BannedSince = now;
+                        server.BanLooks = 0;
+                        server.BanCheckAt = now + BanChecks[0];
+                    }
+                    // Only a scheduled look moves the schedule on: a new token's one look, or a late
+                    // answer to a request let go before the ban, would put the next look hours off.
+                    else if (now >= server.BanCheckAt)
+                    {
+                        server.BanLooks++;
+                        server.BanCheckAt = now + BanChecks[Math.Min(server.BanLooks, BanChecks.Count - 1)];
+                    }
                 }
                 else
                 {
-                    // A 401 means Home Assistant read the token, so whatever ban there was is gone.
-                    server.BannedSince = null;
-                    server.BanCheckAt = null;
-                    server.BanLooks = 0;
+                    // A 401 means Home Assistant read the token, so a ban recorded before this request
+                    // was let go is gone; one recorded since may be the later of the two.
+                    if (newest)
+                    {
+                        server.BannedSince = null;
+                        server.BanCheckAt = null;
+                        server.BanLooks = 0;
+                    }
                     c.Rejections++;
                     c.RejectedAt = now;
                     s.Strikes++;
                     s.StrikeAt = now;
+                    // Stopped for good, not only while the count stands: a login with another token
+                    // resets the count, and must not give this one its attempts back.
+                    if (c.Rejections >= MaxRejections || s.Strikes >= MaxRejections) { c.Stopped = true; }
                 }
             });
             said = DescribeLocked(credential) ?? Message(credential, kind);
@@ -380,7 +400,7 @@ public sealed class HaAuthGuard
         return Refusal(credential, kind, sent: true, status);
     }
 
-    void Accept(HaCredential credential, bool resetsCount, Seen seen)
+    void Accept(HaCredential credential, bool resetsCount, Seen seen, string? reservation)
     {
         var now = time.GetUtcNow();
         string? was;
@@ -391,7 +411,7 @@ public sealed class HaAuthGuard
             // Most answers change nothing, and are not written: one known good, nothing pending.
             var server = state.Servers.GetValueOrDefault(credential.Server);
             var c = server?.Credentials.GetValueOrDefault(credential.Id);
-            changed = server is null || c is not { Accepted: true, Rejections: 0 } || server.BannedSince is not null
+            changed = server is null || c is not { Accepted: true, Rejections: 0, Stopped: false } || server.BannedSince is not null
                 || (resetsCount && state.Strikes > 0);
             if (!changed)
             {
@@ -401,7 +421,7 @@ public sealed class HaAuthGuard
             was = DescribeLocked(credential);
             Mutate(s =>
             {
-                Unreserved(s);
+                Unreserved(s, reservation);
                 var sv = ServerOf(s, credential, now);
                 var cr = CredOf(sv, credential);
                 cr.Accepted = true;
@@ -412,6 +432,7 @@ public sealed class HaAuthGuard
                 if (s.Refusals != seen.Refusals) { return; }
                 cr.Rejections = 0;
                 cr.RejectedAt = null;
+                cr.Stopped = false;
                 sv.BannedSince = null;
                 sv.BanCheckAt = null;
                 sv.BanLooks = 0;
@@ -546,7 +567,6 @@ public sealed class HaAuthGuard
                 var text = JsonSerializer.Serialize(state, Json);
                 File.WriteAllText(temp, text);
                 File.Move(temp, path, overwrite: true);
-                readAt = File.GetLastWriteTimeUtc(path);
                 readText = text;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -563,18 +583,16 @@ public sealed class HaAuthGuard
         if (path is not null) { state = Read(); }
     }
 
-    // Reads the record again only when it has been written since it was last read: one look at its
-    // time, cheap enough for every request.
+    // Reads the record again, for what another process has recorded since.
     void Refresh()
     {
         if (path is null || unwritable) { return; }
         try
         {
-            // File times move in coarse steps (on Windows, the clock's tick of up to 16 ms), so two
-            // writes close together can carry one time: a record written in the last moments is
-            // read whatever its time says. Read with nothing new in it, it changes nothing.
-            var written = File.GetLastWriteTimeUtc(path);
-            if (written != readAt || DateTime.UtcNow - written < TimeSpan.FromSeconds(2)) { state = Read(); }
+            // Read every time, not by its file time: those move in coarse steps (on Windows, the
+            // clock's tick of up to 16 ms), so two writes close together can carry one time. It is
+            // small, and read with nothing new in it, it changes nothing.
+            state = Read();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
@@ -585,13 +603,11 @@ public sealed class HaAuthGuard
         try
         {
             if (!File.Exists(path)) { return state.Servers.Count == 0 ? new State() : state; }
-            var written = File.GetLastWriteTimeUtc(path);
             string text;
             using (var reader = new StreamReader(new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)))
             {
                 text = reader.ReadToEnd();
             }
-            readAt = written;
             if (text == readText) { return state; }
             var read = JsonSerializer.Deserialize<State>(text, Json) ?? new State();
             readText = text;
@@ -664,6 +680,7 @@ public sealed class HaAuthGuard
     sealed class Cred
     {
         public int Rejections { get; set; }
+        public bool Stopped { get; set; }
         public DateTimeOffset? RejectedAt { get; set; }
         public bool Accepted { get; set; }
         public DateTimeOffset? AttemptAt { get; set; }
