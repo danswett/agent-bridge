@@ -322,6 +322,36 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(3, calls);
     }
 
+    // A WebSocket login resets Home Assistant's count, so the guard's count goes down as well as up:
+    // a slow login must not reset it over a refusal recorded after it began, even when the count
+    // has meanwhile come back to no more than it saw.
+    [Fact]
+    public async Task A_slow_login_does_not_reset_the_count_over_a_refusal_recorded_after_it_began()
+    {
+        var guard = new HaAuthGuard(Record, time);
+        var good = guard.Credential(Url, Token);
+        using (var l = await guard.EnterAsync(good)) { l.Authenticated(true); }
+        async Task Refused(string token)
+        {
+            using var l = await guard.EnterAsync(guard.Credential(Url, token));
+            l.Authenticated(false);
+        }
+        await Refused("a-not-a-secret");
+        await Refused("b-not-a-secret");
+        await Refused("c-not-a-secret");
+
+        var slow = await guard.EnterAsync(good);
+        using (var l = await guard.EnterAsync(good)) { l.Authenticated(true); }
+        await Refused("d-not-a-secret");
+        slow.Authenticated(true);
+        slow.Dispose();
+        await Refused("e-not-a-secret");
+        await Refused("f-not-a-secret");
+
+        // d, e and f are three refusals since the last login that could have reset the count.
+        Assert.Contains("Stopped", guard.Describe(guard.Credential(Url, "d-not-a-secret")), StringComparison.Ordinal);
+    }
+
     // The record keeps a bounded number of addresses and tokens, but never by forgetting a refusal.
     [Fact]
     public async Task A_stopped_token_stays_stopped_however_many_other_tokens_and_addresses_come_after_it()
