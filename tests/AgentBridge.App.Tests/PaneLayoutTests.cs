@@ -218,6 +218,16 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.Equal("Read the logs asks", Card("asking").AsksText);
         Assert.Equal("A delegate asks", Card("unlisted").AsksText);
     }
+    [Fact]
+    public async Task A_question_whose_asker_only_waiting_on_names_is_headed_with_that_delegate_as_needs_you_says()
+    {
+        var subagents = new[] { new Subagent { Id = "a1", Kind = SubagentKind.Task, Name = "Read the logs", Status = SubagentStatus.Waiting } };
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice(options: ["yes", "no"]), updated: Make.T0.AddMinutes(2)) with { Subagents = subagents, WaitingOn = "a1" });
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
+
+        Assert.Equal("Read the logs asks", TestUi.Read(() => Card("asking").AsksText));
+        Assert.Equal("Read the logs", TestUi.Read(() => main.NeedsYou.Single(e => e.Card.Id == "asking").Card.Session is var s ? NeedsYouEntry.DelegateOf(s) : null));
+    }
 
     [Fact]
     public void A_row_is_read_aloud_with_its_glyphs_name_and_new_activity_while_unread()

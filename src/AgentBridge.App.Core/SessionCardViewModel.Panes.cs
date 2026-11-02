@@ -84,10 +84,10 @@ public sealed partial class SessionCardViewModel
     }
 
     // Who asks the question in the conversation (§6.4): the main agent, or the delegate the
-    // question names (S1's Question.agent), "A delegate" when the list left it out (§2.2 rule 2).
-    public string AsksText => session.Question?.Agent is { Length: > 0 } agent
-        ? $"{(session.Subagents?.FirstOrDefault(s => s.Id == agent)?.Name is { Length: > 0 } name ? name : "A delegate")} asks"
-        : "Main agent asks";
+    // question names (S1's Question.agent, or the session's waitingOn), "A delegate" when the list
+    // left it out (§2.2 rule 2). Needs you's own rule, so opening a question never changes who it
+    // says asked.
+    public string AsksText => NeedsYouEntry.DelegateOf(session) is { } name ? $"{name} asks" : "Main agent asks";
 
     // Until U8 (#176) lists delegates, the Delegates tab has only the counts the host reports.
     public bool HasDelegates => session.Activity.Background is { } b && (b.Agents > 0 || b.Shells > 0);
