@@ -235,7 +235,8 @@ static partial class SelfTest
             await Task.Delay(700);
             Check(Fits(window, "LaunchPane"), "fits the Launch page's column in a wide window");
             var before = main.AllCards.Count();
-            launch.Prompt = "Summarize the open pull requests.";
+            const string launchedPrompt = "Summarize the open pull requests.";
+            launch.Prompt = launchedPrompt;
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launch.png"));
             if (ById<Button>(window.RootElement, "LaunchButton") is { } go)
             {
@@ -246,6 +247,8 @@ static partial class SelfTest
             }
             else { Check(false, "finds the Launch button"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".launched.png"));
+            await CheckYourMessages(window, main, Check, outFile, launchedPrompt);
+            Resize(window, 1000, 900);
 
             // Codex on the other machine starts only on a first message: nothing is sent without one.
             // The new session opened on the Sessions page: back to Launch, which fetches its choices.
