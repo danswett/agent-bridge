@@ -120,6 +120,25 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(5, ha.Seen.Count);
     }
 
+    // The record keeps a few addresses, dropping the oldest; never the one a refusal is being
+    // recorded on.
+    [Fact]
+    public async Task A_full_record_still_keeps_the_refusals_of_a_new_address()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        for (var i = 0; i < 8; i++)
+        {
+            Assert.Null(await Publish(new HomeAssistantClient(new Uri($"http://ha{i}.test:8123"), Token, new HttpClient(ha), auth: guard)));
+            time.Advance(TimeSpan.FromMinutes(1));
+        }
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(Client(ha, guard), TimeSpan.FromDays(1));
+
+        Assert.Equal(8 + HaAuthGuard.MaxRejections, ha.Seen.Count);
+    }
+
     // A record that cannot be written must not forget a refusal when it is read again, or the token
     // would be tried every five minutes for ever.
     [Fact]
@@ -224,6 +243,32 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1, seen);
         Assert.All(outcomes, e => Assert.IsType<HomeAssistantAuthException>(e));
         Assert.Single(outcomes, e => ((HomeAssistantAuthException)e!).Sent);
+    }
+
+    // serve, ha shadow and shadow run are separate processes with a guard each, on one record.
+    [Fact]
+    public async Task Two_processes_with_a_token_not_yet_accepted_send_one_attempt_between_them()
+    {
+        var gate = new TaskCompletionSource();
+        var seen = 0;
+        var handler = new Waiting(async () =>
+        {
+            Interlocked.Increment(ref seen);
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var serve = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time));
+        var shadow = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time));
+
+        var first = Publish(serve);
+        while (Volatile.Read(ref seen) == 0) { await Task.Delay(10); }
+        var second = Publish(shadow);
+        await Task.Delay(500);
+        gate.SetResult();
+
+        Assert.True(Assert.IsType<HomeAssistantAuthException>(await first).Sent);
+        Assert.False(Assert.IsType<HomeAssistantAuthException>(await second).Sent);
+        Assert.Equal(1, seen);
     }
 
     sealed class Waiting(Func<Task<HttpStatusCode>> answer) : HttpMessageHandler

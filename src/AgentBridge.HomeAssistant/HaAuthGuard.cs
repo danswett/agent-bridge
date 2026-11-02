@@ -43,6 +43,9 @@ public sealed class HaAuthGuard
     public static readonly IReadOnlyList<TimeSpan> BanChecks = [TimeSpan.FromMinutes(15), TimeSpan.FromHours(1), TimeSpan.FromHours(4)];
     public const string BanHelp = "docs/ha-connector.md, Troubleshooting";
     const int MaxServers = 8;
+    // How long another process's attempt is waited for before its reservation counts as abandoned:
+    // longer than any request the host makes takes to time out.
+    static readonly TimeSpan Reservation = TimeSpan.FromSeconds(45);
     const int MaxCredentials = 16;
 
     readonly string? path;
@@ -50,6 +53,8 @@ public sealed class HaAuthGuard
     readonly Action<string> log;
     readonly object gate = new();
     readonly SemaphoreSlim probe = new(1, 1);
+    // This guard, in the record's reservation of the one attempt not yet known to be accepted.
+    readonly string me = Guid.NewGuid().ToString("N");
     readonly List<HaCredential> known = [];
     State state = new();
     bool unreadableSaid;
@@ -134,11 +139,32 @@ public sealed class HaAuthGuard
         await probe.WaitAsync(cancellationToken);
         try
         {
-            // What another process, or the attempt waited on, has found meanwhile.
-            lock (gate)
+            // What another process, or the attempt waited on, has found meanwhile; and, for an
+            // attempt still to be made, the record's reservation, so another process (serve beside
+            // ha shadow or shadow run) waits for its answer too rather than sending its own at once.
+            var giveUp = Environment.TickCount64 + (long)Reservation.TotalMilliseconds;
+            while (true)
             {
-                Reload();
-                decision = Decide(credential, time.GetUtcNow());
+                var busy = false;
+                lock (gate)
+                {
+                    var now = time.GetUtcNow();
+                    Mutate(s =>
+                    {
+                        decision = Decide(credential, now);
+                        if (decision.Gate != Gate.Probe || path is null || unwritable) { return false; }
+                        if (s.ProbeBy is { } by && by != me && s.ProbeUntil > now && Environment.TickCount64 < giveUp)
+                        {
+                            busy = true;
+                            return false;
+                        }
+                        s.ProbeBy = me;
+                        s.ProbeUntil = now + Reservation;
+                        return true;
+                    });
+                }
+                if (!busy) { break; }
+                await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
             }
         }
         catch
@@ -149,6 +175,22 @@ public sealed class HaAuthGuard
         if (decision.Gate == Gate.Clear) { probe.Release(); return new Lease(this, credential, null); }
         if (decision.Gate == Gate.Held) { probe.Release(); throw Refusal(credential, decision.Kind, sent: false); }
         return new Lease(this, credential, probe);
+    }
+
+    // The reservation given up without an answer (a timeout, no connection): the next attempt, in
+    // any process, need not wait for it to lapse.
+    void Unreserve()
+    {
+        if (path is null) { return; }
+        lock (gate) { Mutate(s => Unreserved(s)); }
+    }
+
+    bool Unreserved(State s)
+    {
+        if (s.ProbeBy != me) { return false; }
+        s.ProbeBy = null;
+        s.ProbeUntil = null;
+        return true;
     }
 
     // One request's say in the guard. Disposed without an answer (a timeout, no connection), it
@@ -205,7 +247,10 @@ public sealed class HaAuthGuard
 
         public void Dispose()
         {
-            Interlocked.Exchange(ref probe, null)?.Release();
+            if (Interlocked.Exchange(ref probe, null) is not { } held) { return; }
+            // Answered, the reservation went with the answer; this only lets go of one left over.
+            try { guard.Unreserve(); }
+            finally { held.Release(); }
         }
     }
 
@@ -266,6 +311,7 @@ public sealed class HaAuthGuard
         {
             Mutate(s =>
             {
+                Unreserved(s);
                 var server = ServerOf(s, credential, now);
                 var c = CredOf(server, credential);
                 c.AttemptAt = now;
@@ -319,6 +365,7 @@ public sealed class HaAuthGuard
             was = DescribeLocked(credential);
             Mutate(s =>
             {
+                Unreserved(s);
                 var sv = ServerOf(s, credential, now);
                 var cr = CredOf(sv, credential);
                 cr.Accepted = true;
@@ -375,14 +422,29 @@ public sealed class HaAuthGuard
             (next > now ? $"the next is not before {Clock(next)}" : "the next is due") + ", to stay well short of Home Assistant's ban threshold.";
     }
 
-    string Clock(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, time.LocalTimeZone).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+    // In Pacific time, as everything this project shows, whatever the machine's own zone.
+    static string Clock(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, Pacific).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " PT";
+
+    static readonly TimeZoneInfo Pacific = FindPacific();
+
+    static TimeZoneInfo FindPacific()
+    {
+        foreach (var id in new[] { "America/Los_Angeles", "Pacific Standard Time" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException) { }
+        }
+        return TimeZoneInfo.Utc;
+    }
 
     static Server ServerOf(State s, HaCredential credential, DateTimeOffset now)
     {
         if (!s.Servers.TryGetValue(credential.Server, out var server))
         {
-            s.Servers[credential.Server] = server = new Server();
-            foreach (var old in s.Servers.OrderBy(x => x.Value.Touched ?? DateTimeOffset.MinValue).Take(Math.Max(0, s.Servers.Count - MaxServers)).Select(x => x.Key).ToList())
+            s.Servers[credential.Server] = server = new Server { Touched = now };
+            // Never the one just added, whose refusal is about to be recorded on it.
+            foreach (var old in s.Servers.Where(x => x.Key != credential.Server).OrderBy(x => x.Value.Touched ?? DateTimeOffset.MinValue)
+                .Take(Math.Max(0, s.Servers.Count - MaxServers)).Select(x => x.Key).ToList())
             {
                 s.Servers.Remove(old);
             }
@@ -407,7 +469,14 @@ public sealed class HaAuthGuard
 
     // Read, changed and written under a lock every process of this user takes, so two never count
     // over each other. Without a file, in memory.
-    void Mutate(Action<State> change)
+    void Mutate(Action<State> change) => Mutate(s =>
+    {
+        change(s);
+        return true;
+    });
+
+    // change says whether it changed anything to write.
+    void Mutate(Func<State, bool> change)
     {
         lock (gate)
         {
@@ -418,7 +487,7 @@ public sealed class HaAuthGuard
             }
             using var held = Lock();
             state = Read();
-            change(state);
+            if (!change(state)) { return; }
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -494,6 +563,9 @@ public sealed class HaAuthGuard
         // reset its count: by any token, at any address it was reached by.
         public int Strikes { get; set; }
         public DateTimeOffset? StrikeAt { get; set; }
+        // The process making the one attempt not yet known to be accepted, and until when.
+        public string? ProbeBy { get; set; }
+        public DateTimeOffset? ProbeUntil { get; set; }
         public Dictionary<string, Server> Servers { get; set; } = new(StringComparer.Ordinal);
     }
 

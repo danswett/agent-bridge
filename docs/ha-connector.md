@@ -1235,8 +1235,9 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   client's address. Once it has refused 3 times without a WebSocket login since, a change
   (`ha token set`, even with the same token, or a new `homeAssistant.baseUrl`) earns exactly one
   attempt.
-- **A token not yet accepted** goes one request at a time, so a burst of callers spends one
-  attempt, not one each. That covers a fresh start, a fresh token, and a look during a ban.
+- **A token not yet accepted** goes one request at a time, across processes too, so a burst of
+  callers spends one attempt, not one each. That covers a fresh start, a fresh token, and a look
+  during a ban.
 - **A ban** is recognised as a 403 from a token Home Assistant accepted before, or as 403 twice
   running. Nothing the host calls is otherwise answered 403: Home Assistant answers a refused or
   under-privileged token with 401. Requests from a banned address are refused before any token
