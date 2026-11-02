@@ -199,12 +199,20 @@ public sealed partial class NeedsYouEntry : Observable
         (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
         or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF));
 
-    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Rune.GetUnicodeCategory(r) switch
+    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
     {
         UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
         UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
         _ => false,
     };
+
+    // Every default-ignorable code point, drawn as nothing though it is there: variation selectors
+    // (which can make one name look like another), the combining grapheme joiner, Hangul fillers,
+    // tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point; pwa/js/needs-you.js).
+    static bool Ignorable(int c) => c is 0x00AD or 0x034F or 0x061C or 0x115F or 0x1160 or 0x17B4 or 0x17B5 or 0x3164 or 0xFEFF or 0xFFA0
+        or (>= 0x180B and <= 0x180F) or (>= 0x200B and <= 0x200F) or (>= 0x202A and <= 0x202E) or (>= 0x2060 and <= 0x206F)
+        or (>= 0xFE00 and <= 0xFE0F) or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
+        or (>= 0xE0000 and <= 0xE0FFF);
 
     // Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order it
     // runs.
