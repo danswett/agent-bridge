@@ -13,6 +13,16 @@ public enum PaneMode { One, Two, Three }
 
 public enum SessionTab { Conversation, Delegates, Tools }
 
+// What the panes did that motion shows (ui.md §5.3): a push or a pop in one column, the inspector
+// shown by its toggle, a tab chosen, or a question arriving on the session shown, which settles
+// anything still travelling at once (an approval's command never slides). Never a resize across
+// the breakpoints, a first draw, or a tab the app changed: those show at once.
+public enum PaneMotion { Push, Pop, Inspector, Tab, Settle }
+
+// Travels: whether the content slides as it fades. A session asking a question only fades in, so
+// its command never moves under the person's pointer.
+public readonly record struct PaneMove(PaneMotion Kind, bool Travels);
+
 public sealed class PaneLayoutViewModel : Observable
 {
     readonly MainViewModel main;
@@ -67,7 +77,12 @@ public sealed class PaneLayoutViewModel : Observable
         set { if (Set(ref inspectorWanted, value)) { Changed(); } }
     }
     public bool ShowInspector => mode == PaneMode.Three && inspectorWanted && Has;
-    public void ToggleInspector() => InspectorWanted = !inspectorWanted;
+    public void ToggleInspector()
+    {
+        InspectorWanted = !inspectorWanted;
+        // Shown, it slides in from the trailing edge; hidden, its column closes at once.
+        if (ShowInspector) { Moved?.Invoke(new PaneMove(PaneMotion.Inspector, true)); }
+    }
     public string InspectorToggleName => ShowInspector ? "Hide the inspector" : "Show the inspector";
 
     // The tabs: two panes and one column, where there is no inspector. Delegates while the host
@@ -76,10 +91,17 @@ public sealed class PaneLayoutViewModel : Observable
     public bool ShowDelegatesTab => main.Selected is { } c && (c.HasDelegates || c.Delegates.Listed);
     // Tools only where the machine can send a session's history (CardContext.ShowDetail).
     public bool ShowToolsTab => main.Selected?.ShowHistory == true;
+    // Set by the person choosing a tab: the new content fades in.
     public SessionTab Tab
     {
         get => tab;
-        set { if (Set(ref tab, value)) { Changed(); } }
+        set
+        {
+            var shown = Shown;
+            if (!Set(ref tab, value)) { return; }
+            Changed();
+            if (Shown != shown) { Moved?.Invoke(new PaneMove(PaneMotion.Tab, false)); }
+        }
     }
     // The tab in force: Delegates falls back to Conversation once the session has none.
     SessionTab Shown => !ShowTabs ? SessionTab.Conversation
@@ -115,7 +137,12 @@ public sealed class PaneLayoutViewModel : Observable
         if (main.Selected is not { } card) { return; }
         card.Delegates.Select(id);
         if (!card.Delegates.HasSelected) { return; }
-        if (mode == PaneMode.Three) { InspectorWanted = true; }
+        if (mode == PaneMode.Three)
+        {
+            InspectorWanted = true;
+            // Choosing a delegate brings its pane in from the trailing edge (ui.md §5.3).
+            Moved?.Invoke(new PaneMove(PaneMotion.Inspector, true));
+        }
         else { Tab = SessionTab.Delegates; }
     }
 
@@ -153,18 +180,29 @@ public sealed class PaneLayoutViewModel : Observable
     void OnOpened(SessionCardViewModel card)
     {
         if (card.Question is null || card != main.Selected) { return; }
-        Tab = SessionTab.Conversation;
+        // The app's choice, not the person's: shown at once, under the push if there is one.
+        if (Set(ref tab, SessionTab.Conversation, nameof(Tab))) { Changed(); }
         QuestionWanted?.Invoke(card);
     }
 
     // A session opened to be answered: the session pane brings its question into view.
     public event Action<SessionCardViewModel>? QuestionWanted;
+
+    // Raised once the panes show the change, for the view to animate it (PaneMotion).
+    public event Action<PaneMove>? Moved;
+
     void OnMain(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is not (nameof(MainViewModel.Selected) or "" or null)) { return; }
+        var before = watched;
         Watch(main.Selected);
         Raise(nameof(Selected));
         Changed();
+        if (mode != PaneMode.One || before == main.Selected) { return; }
+        // One column: the session pushed over the list (or another session over this one), or
+        // the list back from under it, whose Needs you lane the view never moves.
+        if (main.Selected is { } card) { Moved?.Invoke(new PaneMove(PaneMotion.Push, card.Question is null)); }
+        else { Moved?.Invoke(new PaneMove(PaneMotion.Pop, true)); }
     }
 
     void Watch(SessionCardViewModel? card)
@@ -178,6 +216,7 @@ public sealed class PaneLayoutViewModel : Observable
     void OnCard(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(SessionCardViewModel.HasDelegates) or nameof(SessionCardViewModel.ShowHistory) or "" or null) { Changed(); }
+        if (e.PropertyName is nameof(SessionCardViewModel.Question) && sender is SessionCardViewModel { Question: not null }) { Moved?.Invoke(new PaneMove(PaneMotion.Settle, false)); }
     }
 
     void OnDelegates(object? sender, PropertyChangedEventArgs e)

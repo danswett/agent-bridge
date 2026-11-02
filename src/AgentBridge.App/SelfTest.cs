@@ -572,6 +572,26 @@ static partial class SelfTest
         }
         else { check(false, "finds Back in one column"); }
 
+        // Motion (ui.md §5.3): timed by the generated resources, every entry of them; the list with
+        // none of its own transitions, which slide a row's neighbours; and a push that never holds
+        // the person back, so Back pressed while the session is still sliding in takes them back.
+        var timed = false;
+        try { timed = MotionCatalogue.Names.All(n => Motion.Catalogue[n].Duration > TimeSpan.Zero); }
+        catch (Exception e) when (e is KeyNotFoundException or FormatException) { AppLog.Write($"self-test: motion: {e.Message}"); }
+        check(timed, "times every motion in ui.md's catalogue by the generated AbMotion* resources");
+        check(page.Rows.ItemContainerTransitions is { Count: 0 }, "gives the session list no transitions of its own, so no row's neighbours slide");
+        if (main.Sessions.FirstOrDefault(c => c.Question is null) is { } plain)
+        {
+            main.Selected = plain;
+            await Until(() => Shows(Pane("SessionPane")), TimeSpan.FromSeconds(5));
+            var back = ById<Button>(page.SessionPaneView, "Back");
+            if (back is not null) { ((IInvokeProvider)new ButtonAutomationPeer(back).GetPattern(PatternInterface.Invoke)).Invoke(); }
+            var started = DateTime.UtcNow;
+            var returned = back is not null && await Until(() => main.Selected is null && Shows(Pane("ListPane")), TimeSpan.FromSeconds(5));
+            check(returned, $"goes back to the list at once when Back is pressed while the session slides in ({(DateTime.UtcNow - started).TotalMilliseconds:0} ms)");
+        }
+        else { check(false, "finds a session without a question to push"); }
+
         // The session open survives every breakpoint, both ways.
         main.Selected = card;
         var kept = true;

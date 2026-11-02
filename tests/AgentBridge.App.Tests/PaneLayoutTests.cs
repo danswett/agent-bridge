@@ -109,6 +109,77 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.True(Read(l => l.ShowList && !l.ShowSession));
     }
 
+    List<PaneMove> Moves()
+    {
+        var moves = new List<PaneMove>();
+        ui.Post(() => layout.Moved += moves.Add);
+        return moves;
+    }
+
+    [Fact]
+    public void One_column_pushes_a_chosen_session_and_pops_back_to_the_list_and_a_resize_moves_nothing()
+    {
+        Resize(1440);
+        var moves = Moves();
+        // Choosing a row beside the list is not navigation: it shows at once.
+        Select("quiet");
+        Resize(400);
+        Resize(1000);
+        Resize(400);
+        Assert.Empty(moves);
+
+        ui.Post(layout.Back);
+        Select("busy");
+        Select("quiet");
+        Assert.Equal([new(PaneMotion.Pop, true), new(PaneMotion.Push, true), new(PaneMotion.Push, true)], moves);
+    }
+
+    [Fact]
+    public async Task A_session_asking_a_question_is_pushed_without_sliding_and_a_question_arriving_mid_push_settles_it()
+    {
+        Resize(400);
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Approval(), updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
+        var moves = Moves();
+
+        Select("asking");
+        Assert.Equal([new PaneMove(PaneMotion.Push, false)], moves);
+
+        // A question arriving on the session being pushed stops its content travelling, so the
+        // approval's command never slides under the pointer.
+        ui.Post(layout.Back);
+        Select("quiet");
+        moves.Clear();
+        await host.SendAsync(Events.SessionUpsert, Make.Session("quiet", question: Make.Approval("q2"), updated: Make.T0.AddMinutes(3)));
+        await Wait.UntilAsync(() => TestUi.Read(() => moves.Contains(new PaneMove(PaneMotion.Settle, false))), "the settle");
+    }
+
+    [Fact]
+    public async Task Only_the_inspector_toggle_slides_the_inspector_in_and_only_a_tab_the_person_chose_fades()
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Approval(), updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
+        Resize(1440);
+        Select("busy");
+        var moves = Moves();
+        ui.Post(layout.ToggleInspector);
+        Assert.Empty(moves);
+        ui.Post(layout.ToggleInspector);
+        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], moves);
+
+        moves.Clear();
+        Resize(1000);
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        Assert.Equal([new PaneMove(PaneMotion.Tab, false)], moves);
+
+        // A session opened to be answered goes to its conversation at once, without a tab's fade.
+        moves.Clear();
+        ui.Post(() => main.Open("asking"));
+        Assert.True(Read(l => l.ShowConversation));
+        Assert.Empty(moves);
+    }
+
     [Fact]
     public void The_session_shown_survives_resizing_across_every_breakpoint_and_back()
     {

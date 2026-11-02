@@ -57,6 +57,12 @@ public sealed partial class MainViewModel : Observable
     }
 
     public ObservableCollection<SessionCardViewModel> Sessions { get; } = [];
+
+    // A row or a Needs you entry being added because a host just added it (ui.md §5.3, Arriving):
+    // true only while it is being inserted, so a list's handler for the insert can tell it from
+    // an item shown again (the machine picker, a reorder, a list read after connecting).
+    public bool IsArriving(object item) => arriving.Contains(item);
+    readonly HashSet<object> arriving = [];
     public UsageViewModel Usage { get; }
     public SettingsViewModel? Settings { get; }
     public Machine Local => local;
@@ -480,6 +486,9 @@ public sealed partial class MainViewModel : Observable
     void OnUpsert(Machine m, Session s)
     {
         var key = CardKey(m.Key, s.Id);
+        // A session a host adds once its machine's list has been read is news, and fades in where
+        // it lands; those of the list read after connecting are what was there all along.
+        var fresh = false;
         if (byId.TryGetValue(key, out var card)) { card.Update(s); }
         else
         {
@@ -488,8 +497,11 @@ public sealed partial class MainViewModel : Observable
             owner[card] = m;
             Hook(card);
             RefreshLabels();
+            fresh = baselined.Contains(m);
         }
-        Rearrange();
+        if (fresh) { arriving.Add(card); }
+        try { Rearrange(); }
+        finally { arriving.Remove(card); }
         if (m.Toasts is { } toasts)
         {
             // The first list after connecting is a baseline, not news.

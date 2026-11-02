@@ -36,19 +36,32 @@ public sealed partial class MainViewModel
         {
             var q = card.Session.Question!;
             current.TryGetValue(key, out var existing);
+            // Mid-update, between one question and the next, the card has no question model for a
+            // moment (SessionCardViewModel.Sync): the entry stays as it is until the new one is in,
+            // so the next question arrives once, as itself, rather than as a rebuild of a stand-in.
+            if (card.Question is null)
+            {
+                if (existing is not null) { entries.Add(existing); }
+                continue;
+            }
             // What an entry says is parsed once per message: an upsert that leaves the question's
             // words alone (most are another session's activity) parses nothing. A same-id update
             // that changes them (a budget-trimmed message restored, say) rebuilds the entry, as
             // does a change in what it offers.
             var sameWords = existing is not null && existing.QuestionId == q.Id && string.Equals(existing.Message, q.Message, StringComparison.Ordinal);
             var whole = sameWords ? existing!.Whole : NeedsYouEntry.WholeApproval(q);
+            var rebuilt = false;
             if (existing is not null && (!sameWords || existing.QuestionModel != card.Question || existing.Mode != NeedsYouEntry.ModeOf(q, card.Agent, card.Question, whole)))
             {
                 existing.Detach();
                 NeedsYou.Remove(existing);
+                rebuilt = existing.QuestionId == q.Id;
                 existing = null;
             }
             var entry = existing ?? new NeedsYouEntry(this, key, m.Key, card);
+            // A question asked since the machine's list was read: its entry's mark fades in. One
+            // rebuilt for new words, or listed on connecting, is not news.
+            if (existing is null && !rebuilt && baselined.Contains(m)) { arriving.Add(entry); }
             entry.Refresh(several ? m.Name : null, now);
             entries.Add(entry);
         }
@@ -65,6 +78,7 @@ public sealed partial class MainViewModel
             if (at < 0) { NeedsYou.Insert(i, entries[i]); }
             else { NeedsYou.Move(at, i); }
         }
+        arriving.RemoveWhere(o => o is NeedsYouEntry);
         if (had != NeedsYou.Count)
         {
             Raise(nameof(HasNeedsYou));

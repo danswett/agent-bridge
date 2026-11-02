@@ -37,6 +37,8 @@ public sealed partial class MainWindow : Window
         Launch = launch;
         this.placementFile = selfTest ? null : placementFile;
         InitializeComponent();
+        Motion.Banner(Banner);
+        Motion.Banner(DiscoveryHeld);
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"));

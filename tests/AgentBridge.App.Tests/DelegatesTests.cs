@@ -156,7 +156,11 @@ public sealed class DelegatesTests : IAsyncLifetime
         var card = Card("del");
         Assert.True(Read(l => l.ShowSessionInspector && !l.ShowDelegateInspector));
 
+        // Choosing a delegate brings the inspector's content in from the trailing edge (ui.md §5.3).
+        var moves = new List<PaneMove>();
+        ui.Post(() => layout.Moved += moves.Add);
         ui.Post(() => layout.OpenDelegate("witness"));
+        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], TestUi.Read(() => moves.ToList()));
         Assert.True(Read(l => l.ShowDelegateInspector && !l.ShowSessionInspector && !l.WantsTools));
         await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Read witness shell logic: everything it said.", "the delegate's own words");
 

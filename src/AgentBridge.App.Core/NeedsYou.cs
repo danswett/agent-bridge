@@ -91,6 +91,9 @@ public sealed partial class NeedsYouEntry : Observable
     public string ApproveLabel => question?.SentValue == "approve" ? "✓ Approve once" : "Approve once";
     public string DenyLabel => question?.SentValue == "deny" ? "✓ Deny" : "Deny";
     public bool CanAnswer => Approvable && question?.CanAnswer == true;
+    // The ring on the button that was pressed, while its answer is on its way (ui.md §5.3).
+    public bool ApproveInFlight => Approvable && question is { InFlight: true, SentValue: "approve" };
+    public bool DenyInFlight => Approvable && question is { InFlight: true, SentValue: "deny" };
     public string StatusText => Approvable ? question?.StatusText ?? "" : "";
     public Tone StatusTone => question?.StatusTone ?? Tone.None;
     public bool HasStatus => StatusText.Length > 0;
@@ -141,6 +144,8 @@ public sealed partial class NeedsYouEntry : Observable
         Raise(nameof(ShowResend));
         Raise(nameof(ApproveLabel));
         Raise(nameof(DenyLabel));
+        Raise(nameof(ApproveInFlight));
+        Raise(nameof(DenyInFlight));
     }
 
     internal void Detach()

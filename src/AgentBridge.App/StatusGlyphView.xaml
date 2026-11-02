@@ -41,6 +41,13 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
         <ContentControl x:Name="Shape" Style="{StaticResource AbGlyphIdle}" Foreground="{ThemeResource AbNeutral}" />
+        <!-- The glyph it was, fading out as the new one fades in (ui.md §5.3, Status glyph): drawn only, and after Shape, which the self-test finds first. -->
+        <ContentControl
+            x:Name="Old"
+            IsHitTestVisible="False"
+            IsTabStop="False"
+            AutomationProperties.AccessibilityView="Raw"
+            Visibility="Collapsed" />
         <ContentControl
             x:Name="Badge"
             Style="{StaticResource AbGlyphDrivenBadge}"
