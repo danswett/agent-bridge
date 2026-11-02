@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { parsePathData, formatCommands, readDesignSvg, parts } from '../lib/svg.mjs';
+import { parseXml, parsePathData, formatCommands, readDesignSvg, parts } from '../lib/svg.mjs';
 import { repoRoot } from '../generate.mjs';
 import { spriteSvg } from '../lib/emit-pwa.mjs';
 
@@ -161,4 +161,11 @@ test('a part with two token classes, its own or its group\'s, is refused, since 
   assert.throws(() => readDesignSvg(svgFile('two', '<circle class="knockout ink" cx="8" cy="8" r="5" fill="#FFFFFF"/>'), 'glyph'), /one token class, not knockout and ink/);
   assert.throws(() => readDesignSvg(svgFile('inherited', '<g class="ink"><circle class="knockout" cx="8" cy="8" r="5" fill="#FFFFFF"/></g>'), 'glyph'), /one token class, not ink and knockout/);
   assert.doesNotThrow(() => readDesignSvg(svgFile('same', '<g class="ink"><circle class="ink spin" cx="8" cy="8" r="5" fill="#FFFFFF"/></g>'), 'glyph'));
+});
+
+test('malformed XML is refused, never skipped over and repaired', () => {
+  for (const [name, body] of [['stray', '<<circle cx="8" cy="8" r="5" fill="currentColor"/>'], ['unquoted', '<circle cx=8 cy="8" r="5" fill="currentColor"/>'], ['opentag', '<circle cx="8" cy="8" r="5" fill="currentColor"']]) {
+    assert.throws(() => readDesignSvg(svgFile(name, body), 'glyph'), /cannot read the XML|text content|never closed/, name);
+  }
+  assert.throws(() => parseXml('<svg><<g/></svg>'), /cannot read the XML at 5/);
 });

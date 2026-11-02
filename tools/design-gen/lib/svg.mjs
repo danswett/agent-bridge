@@ -20,9 +20,14 @@ export const MOVING_CLASSES = ['spin', 'orbit'];
 
 export function parseXml(source, file = 'svg', { text = false } = {}) {
   const stack = [{ tag: '#root', attrs: {}, children: [] }];
-  const re = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/g;
+  // Sticky, and every character accounted for: a stray "<" or a tag the pattern cannot read is
+  // malformed XML a browser would refuse, never something to skip over and repair.
+  const re = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/([\w:.-]+)\s*>|<([\w:.-]+)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/y;
   let m;
-  while ((m = re.exec(source))) {
+  while (re.lastIndex < source.length) {
+    const at = re.lastIndex;
+    m = re.exec(source);
+    if (!m) { throw new Error(`${file}: cannot read the XML at ${at}: ${source.slice(at, at + 40)}`); }
     // XML forbids -- inside a comment, and a browser then drops the whole file, silently.
     if (m[0].startsWith('<!--') && m[0].slice(4, -3).includes('--')) { throw new Error(`${file}: a comment holds --, which XML forbids`); }
     if (m[0].startsWith('<!--') || m[0].startsWith('<?')) { continue; }
