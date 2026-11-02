@@ -463,7 +463,11 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             // Not while the card still shows the question just answered: agent-ha-bridge resets
             // the reply box when it clears the card, and a prompt typed before that is wiped,
             // leaving its Send armed to take the prompt after it (seen on VM-M, 2026-11-02).
-            if (status == "idle" && q is null && (asked || sawWork || moved || replied))
+            // A /compact can be over before the first look and leave no response behind: Copilot's
+            // left the card idle and unchanged, and the turn waited out its timeout (VM-M,
+            // 2026-11-02), so it is over after a minute idle.
+            var quietCompact = turn.Compact && now() - begun >= TimeSpan.FromMinutes(1);
+            if (status == "idle" && q is null && (asked || sawWork || moved || replied || quietCompact))
             {
                 idleSince ??= now();
                 // Idle for a while: a background shell's end, a woken agent or a question can

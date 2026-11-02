@@ -112,6 +112,7 @@ public class SoakTests
         public readonly List<JsonNode> Launches = [];
         public string? Request;
         public HashSet<string> OffResumeList = [];
+        public bool QuietCompact;
         public DateTimeOffset Now = DateTimeOffset.UnixEpoch;
         int polls;
         int unseen;
@@ -185,7 +186,9 @@ public class SoakTests
             var node = JsonNode.Parse(payload)!;
             if (topic == $"copilot/cli/{Node}/replypayload/set")
             {
-                // The reply card's words: the session takes them as its next prompt.
+                // The reply card's words: the session takes them as its next prompt. A compaction
+                // can be over before anything shows: no work, no new response.
+                if (QuietCompact && (string?)node["text"] == "/compact") { return Task.CompletedTask; }
                 Status("working");
                 return Task.CompletedTask;
             }
@@ -201,6 +204,22 @@ public class SoakTests
 
     static SoakDriver Driver(FakeHa fake, SoakOptions options, string dir) =>
         new(fake, options, Path.Combine(dir, "state"), Homes.For(dir), () => fake.Now, (d, _) => { fake.Now += d; return Task.CompletedTask; });
+
+    [Fact]
+    public async Task A_compaction_that_shows_nothing_still_ends_its_turn()
+    {
+        var dir = Directory.CreateTempSubdirectory("soak-test").FullName;
+        try
+        {
+            var fake = new FakeHa { QuietCompact = true };
+            await Driver(fake, Options("codex-basic", count: 12), dir).RunAsync(CancellationToken.None);
+            var record = Assert.Single(SoakDriver.Load(Path.Combine(dir, "state")).Episodes);
+            Assert.Empty(record.Problems);
+            Assert.Equal(4, record.Turns);
+            Assert.Equal(1, record.Compactions);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 
     [Fact]
     public async Task An_episode_waits_for_its_card_holds_its_question_for_the_samplers_answers_it_runs_its_next_prompt_and_ends_the_session()
