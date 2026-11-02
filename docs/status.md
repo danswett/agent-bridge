@@ -70,7 +70,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 
 Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work at once (decided 2026-11-01):
 - **Overall coordinator** (bridge session a6ed320ca83044c5, DEV-VM1): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
-- **UI coordinator** (bridge session f7ba0bcc0adb4319, DEV-VM1): track B (§5). It merges its own PRs under the same rule.
+- **UI coordinator**: track B (§5), which names the session currently holding it. It merges its own PRs under the same rule.
 - Cross-track needs go on #170.
 
 In flight on 2026-11-02 (overall coordinator):
@@ -114,7 +114,8 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 The design session's output is in the repository (#182). The owner **signed off ui.md on
 2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
 (track A). A UI coordinator session runs track B and merges its PRs; it keeps this section
-current. The sources:
+current. Since 2026-11-02 13:10 PT that is Copilot session 4d05d459 on a Cloud PC, which
+took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
   layout, surfaces, platform shells);
@@ -126,27 +127,37 @@ current. The sources:
   image, for reference only (ui.md stays the spec). The source is in `/design/canvas` and
   the renderer in `tools/design-mockups`.
 
-| Slice | Issue | What | State (2026-11-01, 18:30 PT) |
+| Slice | Issue | What | State (2026-11-02, 13:00 PT) |
 |---|---|---|---|
 | S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off | Merged (#187) |
 | S2 | #174 | Sub-agents: Claude and Codex sources | Track A |
 | S5 | #175 | Sub-agents: HA connector and shadow | Track A (#199) |
 | U1 | #164 | Session list keeps the person's order | **Done**: #190 (PWA), #194 (app) |
-| U2 | #165 | "Needs you" lane | In review: #202 (PWA), #203 (app) |
+| U2 | #165 | "Needs you" lane | **Done**: #202 (PWA), #203 (app); approve-once refuses bidi and invisible characters |
 | U3 | #177 | Design tokens generator; both clients switch to the colour roles | **Done**: #188 (generator, PWA), #193 (app) |
-| U4 | #178 | Status glyphs and icons replace card edges and glows | PWA done (#204); app in review (#205) |
-| U5 | #179 | PWA layout (half of #166) | Next, after U2 |
-| U6 | #180 | Windows app layout (half of #166) | Next, after U2 and U4 |
-| U7 | #168 | PWA platform layer | After U5 |
-| U8 | #176 | Delegates in both clients | After U5 and U6 (S1 has merged) |
+| U4 | #178 | Status glyphs and icons replace card edges and glows | **Done**: #204 (PWA), #205 (app); #211 fixed the clash that turned main red |
+| U5 | #179 | PWA layout (half of #166) | **Done**: #217, #218, #221. Follow-ups #249 in review (#252) |
+| U6 | #180 | Windows app layout (half of #166) | **Done**: #216, #219, #245 |
+| U7 | #168 | PWA platform layer | In review: #259 (PWA CI red on Chromium back-navigation tests; the fix is pushed) |
+| U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. App in review: #250 (closes #229, draft), whose two MEDIUM security fixes have landed; it needs 3 Copilot threads fixed and a security re-review. PWA part 2 (strip, tab, inspector) pushed to `ui/u8-pwa-delegates`, stacked on #252, with no PR yet |
+| U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. PWA in review: #261 (draft, 10 review threads open); app not started |
+| | #167 | Windows app icon (the last deliverable of #167) | Not started |
+| | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
 | | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3) |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
+| | #240 | The app crashed when high contrast was turned on or off | Fixed in #243. Setting `AppWindow.TitleBar.PreferredTheme` made WinAppSDK repaint the caption buttons off the UI thread. #248 fixed the self-test flake that followed |
 
-Track B runs as delegates, in this order:
+Track B ran as delegates, in this order:
 1. U1 then U2, and U3 then U4, as two chains in parallel;
 2. then U5 and U6, in parallel;
-3. then U7;
-4. U8, now that S1 has merged.
+3. then U7, U8 and U9, in parallel.
+
+Every PR that touches the Needs you lane, attribution or reply pre-fill gets an
+independent security review before it merges. Delegate names come from the agent, and a
+prompt-injected agent can choose them. So both clients clean each name, cap its length
+and never show it as "Main agent". The stop pre-fill names the delegate by id, not by
+name (#250, #252). The same cleaning at the host and in HA's `subagents` attribute is
+#263 (track A). #220 is separate: bidi and invisible characters in an approval's command.
 
 UI PRs merge as soon as each meets the merge rule. A backend PR that overlaps them, such as #186, rebases onto them (decided 2026-11-01, 16:05).
 
@@ -313,3 +324,6 @@ agent-ha-bridge releases from this work:
 | 11-01 | E14a (a real Codex revoke) was simulated on the VM. ChatGPT has no per-device revoke, and the owner declined "Log out of all devices" |
 | 11-02 | ARM8 migrated on Arm64. The HA connector's 30 s retry of a rejected token got its IP banned in HA. The owner cleared the ban and restarted HA (00:12), and every machine was back within 3 min. Fix tracked as #227. For any migration, reuse agent-ha-bridge's admin token rather than minting one |
 | 11-02 | Agents installed after the bridge should be detected and offered "Set up", and Settings should show each agent's state (#231, builds on #54). The backend belongs to the overall coordinator, the UI to the UI coordinator |
+| 11-02 | New layouts merge first and are checked on ULTRA afterwards (the owner's call); a broken build is reverted |
+| 11-02 | Motion (ui.md §5.3, #232) signed off. Native transitions keep their platform timing. The progress ring is the only extra looping animation. Scrolling to a question never jumps the view while the person is reading. Everything honours reduced motion |
+| 11-02 | A delegate's name is untrusted text. The clients clean it, cap its length, show "Main agent" as `Delegate "Main agent"`, keep a fixed Delegate label in the inspector, and name the delegate by id in the stop pre-fill (ui.md §6.3, §8; subagents.md §6) |
