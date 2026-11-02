@@ -18,8 +18,10 @@ namespace AgentBridge.Host.Shadow;
 //                                            a question its hook armed (Get-CopilotDecisionMarkerPath)
 // and, by ShadowWitness, <copilot>/session-state/<id>/events.jsonl, the transcript, for the
 // evidence of the daemon's known bugs; <copilot>/session-state/<id>/workspace.yaml, for the
-// title the daemon does not read; and runtime/agent-bridge-codex/<id>.json, the daemon's
-// registration of a Codex session, with the rollout it names, for the compactions it counts none of.
+// title the daemon does not read; runtime/agent-bridge-codex/<id>.json, the daemon's
+// registration of a Codex session, with the rollout it names, for the compactions it counts none of;
+// and runtime/agent-bridge-claude/<id>.json, its registration of a Claude session, for the pid it
+// counts that session live by and the transcript it names.
 // Never config.json (it holds the Home Assistant token), never the spool, and no directory is
 // ever listed.
 public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
@@ -60,6 +62,38 @@ public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
+    // A Claude session's registration by the daemon's Claude hook (runtime/agent-bridge-claude/<key>.json):
+    // the pid it counts the session live by, when it last wrote it, and the transcript it names
+    // (a <id>.jsonl, fully qualified, that exists, else null). Null when there is none or it
+    // cannot be read.
+    public ClaudeRegistration? ClaudeRegistration(string sessionId)
+    {
+        if (!Guid.TryParseExact(sessionId, "D", out _)) { return null; }
+        try
+        {
+            var registration = Path.Combine(Runtime, "agent-bridge-claude", SafeKey(sessionId) + ".json");
+            if (!File.Exists(registration) || new FileInfo(registration).Length > 64 * 1024) { return null; }
+            using var stream = new FileStream(registration, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var doc = JsonDocument.Parse(stream);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) { return null; }
+            int pid;
+            if (root.TryGetProperty("ProcessId", out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var n)) { pid = n; }
+            else if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var m)) { pid = m; }
+            else { return null; }
+            if (pid <= 0 || !root.TryGetProperty("Updated", out var u) || u.ValueKind != JsonValueKind.String
+                || !DateTimeOffset.TryParse(u.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var updated)) { return null; }
+            string? transcript = null;
+            if (root.TryGetProperty("TranscriptPath", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } path
+                && Path.IsPathFullyQualified(path) && string.Equals(Path.GetFileName(path), sessionId + ".jsonl", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+            {
+                transcript = path;
+            }
+            return new ClaudeRegistration(pid, updated, transcript);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
+
     // As Get-CopilotDecisionMarkerPath resolves it: beside a Copilot session's own state when that
     // folder exists, else in the bridge's fallback folder (Claude, Codex).
     public string Marker(string sessionId)
@@ -83,6 +117,8 @@ public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
     [GeneratedRegex("[^a-zA-Z0-9._-]")]
     private static partial Regex Unsafe();
 }
+
+public sealed record ClaudeRegistration(int ProcessId, DateTimeOffset Updated, string? TranscriptPath);
 
 public sealed partial class DaemonReader(AgentHaBridgePaths paths, TimeProvider time)
 {
