@@ -560,6 +560,58 @@ public sealed class NotifyTests : IDisposable
         Assert.StartsWith("Done: the release is cut.", done["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
+    // Found in review (#175): a change only the form before the budget shows reaches no client,
+    // so no Changed says it. The card reads that form, so it still hears of it.
+    [Fact]
+    public async Task A_change_only_the_protocol_budget_hides_from_clients_still_reaches_the_card()
+    {
+        Ask(null, response: null);
+        await using var c = Connector();
+        await Pass(c);
+        var big = sessions.Get(A)! with
+        {
+            Activity = new Activity
+            {
+                Response = new string('"', 16 * 1024), Reasoning = new string('k', 4 * 1024), TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = "Cutting the release." },
+                History = [.. Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "view", Summary = new string('s', 200), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+            },
+        };
+        sessions.Set(big);
+        await Pass(c);
+        var t = HaContract.Topics(Node);
+        Assert.Equal("Cutting the release.", ha.Retained[t.ActivityState]);
+
+        var later = big with { Activity = big.Activity with { Own = new OwnActivity { Response = "The release is cut." } } };
+        Assert.Equal(JsonSerializer.Serialize(SessionBudget.Fit(big), ProtocolJson.Options), JsonSerializer.Serialize(SessionBudget.Fit(later), ProtocolJson.Options));
+        sessions.SetUnbudgeted(later);
+        await Pass(c);
+
+        Assert.Equal("The release is cut.", ha.Retained[t.ActivityState]);
+    }
+
+    // Found in review (#175): the card read the session's two forms one after the other, so a
+    // question landing between them gave a waiting Claude with no question, pushed as blocked.
+    [Fact]
+    public async Task A_question_landing_while_the_card_reads_its_session_is_no_spurious_waiting_push()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, AgentKind.Claude, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+
+        Ask(null, AgentKind.Claude, response: "Asking.");
+        sessions.AfterRead = () => Ask(Form("q1", Release), AgentKind.Claude, response: "Asking.");
+        await Pass(c);
+        Assert.Null(sessions.AfterRead);
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.NotEqual("Waiting: Claude: scratch", pushed["title"]!.GetValue<string>());
+        Assert.Contains("Cut the release?", pushed["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_question_and_a_finished_turn_are_pushed_once_each_as_the_hooks_push_them()
     {

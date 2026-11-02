@@ -290,6 +290,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         Slug = HaContract.MachineSlug(options.MachineName);
         verbose = options.DetailedActivityFallback;
         source.Changed += OnChanged;
+        source.UnbudgetedChanged += OnUnbudgetedChanged;
     }
 
     public string Slug { get; }
@@ -326,6 +327,13 @@ public sealed partial class HaConnector : IAsyncDisposable
     void OnChanged(object? sender, SessionChange change)
     {
         lock (gate) { dirty.Add(change.Id); }
+    }
+
+    // The card reads the session before the protocol budget (CardSession), which can change while
+    // nothing a client is sent does, and so with no Changed.
+    void OnUnbudgetedChanged(object? sender, string id)
+    {
+        lock (gate) { dirty.Add(id); }
     }
 
     // One pass: whatever is due. The loop calls it every Tick; tests call it directly.
@@ -690,8 +698,11 @@ public sealed partial class HaConnector : IAsyncDisposable
     // host answers: one cut to fit is answered at the machine there, and so here.
     Session? CardSession(string id)
     {
-        if (source.Get(id) is not { } budgeted) { return null; }
-        return source.GetUnbudgeted(id) is { } whole && whole.Id == budgeted.Id ? whole with { Question = budgeted.Question } : budgeted;
+        // Both forms of the one moment: one read each could straddle a change, and a Waiting status
+        // with the question from before it reads as Claude blocked with nothing to answer, a
+        // spurious push (found in review).
+        if (source.GetForms(id) is not var (budgeted, whole)) { return null; }
+        return whole with { Question = budgeted.Question };
     }
 
     async Task SessionAsync(Session s, DateTimeOffset now, CancellationToken ct)
@@ -1156,6 +1167,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         source.Changed -= OnChanged;
+        source.UnbudgetedChanged -= OnUnbudgetedChanged;
         if (stop is not null)
         {
             await stop.CancelAsync();

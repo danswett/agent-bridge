@@ -202,11 +202,15 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   This is a deliberate difference from agent-ha-bridge, which by the owner's decision of
   2026-11-01 keeps showing the latest writer's. The shadow labels it `main-agent-only (#175)`
   ([host-shadow.md](host-shadow.md)). The connector reads each session **before** the
-  protocol's 40 KiB budget (`ISessionSource.GetUnbudgeted`), within the field limits only.
+  protocol's 40 KiB budget (`ISessionSource.GetForms`), within the field limits only.
   `SessionBudget.Fit` trims the fields older clients ignore first, `own` among them, so in a
   session over it the budgeted form can have lost the main agent's reply while a delegate's
-  16 KiB stays (found in review). Home Assistant's limits are the connector's own: the card
-  text and trail are capped as above, the delegates budgeted below, and the question is still
+  16 KiB stays (found in review). Both forms come from one read, so a card never mixes two
+  moments (a waiting Claude without its question would push as blocked). A change only
+  that form shows sends clients no upsert, since none would see anything new; the source
+  tells the connector through `UnbudgetedChanged` instead. Home Assistant's limits are the
+  connector's own: the card text and trail are capped as above, the delegates budgeted
+  below, and the question is still
   the budgeted form's. That is the one the host answers, and a question cut to fit is
   answered at the machine there and here alike. The whole activity payload is held to 15 KiB
   as well (`HaPayloads.FitCard`), since agent-ha-bridge's layout can pass Home Assistant's
