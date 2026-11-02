@@ -35,6 +35,32 @@ public sealed class UsageProbes
 
     // What the Codex probe tells the app-server it is.
     public string ClientVersion { get; init; } = "0";
+
+    // A machine-wide lease on asking one agent profile, by key, or null while another host holds it.
+    // Two hosts serving different bridge profiles do not share HostLock, so both could see no probe
+    // running and both start one: two readers and writers of the same sign-in. A probe's lease is
+    // kept until its process ends, not only until the host stops waiting for it.
+    public Func<string, IDisposable?> Lease { get; init; } = _ => new NoLease();
+
+    internal IDisposable? TryLease(AgentKind agent, string home)
+    {
+        try { return Lease(LeaseKey(agent, home)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    // One per agent home, as the agent names its own credentials by it.
+    internal static string LeaseKey(AgentKind agent, string home)
+    {
+        var full = Path.GetFullPath(home).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (OperatingSystem.IsWindows()) { full = full.ToLowerInvariant(); }
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(full)))[..16];
+        return $"{agent.ToString().ToLowerInvariant()}-{hash}";
+    }
+
+    sealed class NoLease : IDisposable
+    {
+        public void Dispose() { }
+    }
 }
 
 // How to start a probe. Environment: a null value removes the variable from what the child

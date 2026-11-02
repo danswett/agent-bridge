@@ -250,7 +250,8 @@ refresh and locking, and runs no model turn.
   session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application
-  network policy is unavailable") is a failure that backs off, not a sign-out.
+  network policy is unavailable") is a failure that backs off, not a sign-out, even when only the
+  second `account/read` meets it: the reading stands, without a key.
 
 **Pace.** A host asks about an agent every 2 minutes while a session of it is open on the
 machine, and every 15 minutes while none is: the allowance belongs to the account, and only a
@@ -266,8 +267,14 @@ other refusal is an answer and is not retried.
 An agent is asked to read its own allowance only once the newest reading is 15 minutes old (the
 idle pace), at most every 15 minutes while no session of it is open here and every 5 while one is,
 and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
-agent and profile, and none starts beside a Claude probe already running on the machine, nor
-while the machine's Claude processes cannot be listed to tell. After a
+agent home on the machine: a lease file per agent home under the product's own folder
+(`usage-probes/<agent>-<digest>.lock`), shared by hosts serving different bridge profiles, is
+taken before the host looks at what runs and kept until the probe's process ends, even after the
+host stopped waiting for it. None starts beside a Claude probe already running on the machine (one
+left by a host that has since stopped), nor while the machine's Claude processes, or any one's
+command line, cannot be read to tell. A Claude probe is recognised only by exactly its own
+options, `-p /usage --safe-mode --no-session-persistence --output-format json` after the
+executable, so a real prompt that only quotes them still holds discovery. After a
 failure or a rate-limited answer the next waits 15 minutes, then 30, 60 and at most 2 hours, until
 one works; the last reading stands meanwhile. A finished probe's reading is read at once, not at
 the next turn.

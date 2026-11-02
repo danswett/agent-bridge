@@ -39,7 +39,7 @@ public sealed class UsageProbeTests : IDisposable
         CodexControlSocket = socket ?? Path.Combine(f.Root, "no-daemon.sock"),
     };
 
-    UsageProbes Probes(ICodexDaemon? daemon = null) => new()
+    UsageProbes Probes(ICodexDaemon? daemon = null, FakeLeases? leases = null) => new()
     {
         Launcher = launcher,
         Processes = f.Processes,
@@ -47,6 +47,7 @@ public sealed class UsageProbeTests : IDisposable
         WorkingDirectory = Probe,
         Daemon = daemon ?? new FakeDaemon(null),
         ParentOf = _ => null,
+        Lease = leases is null ? _ => new FakeLeases.Held(() => { }) : leases.Take,
     };
 
     void Log(string line) { lock (log) { log.Add(line); } }
@@ -271,7 +272,46 @@ public sealed class UsageProbeTests : IDisposable
         await Settled(claude);
 
         Assert.Empty(UsageProbesStarted);
-        Assert.Contains(log, l => l.Contains("could not be listed", StringComparison.Ordinal));
+        Assert.Contains(log, l => l.Contains("could not all be read", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task No_Claude_probe_starts_beside_a_Claude_process_whose_command_line_cannot_be_read()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript(refresh: true);
+        f.Processes.Run(AgentKind.Claude, 4300, commandLine: null);
+        var claude = Claude();
+
+        await claude.CollectAsync();
+        await Settled(claude);
+
+        Assert.Empty(UsageProbesStarted);
+    }
+
+    [Fact]
+    public async Task A_host_serving_another_profile_starts_no_Claude_probe_while_the_first_ones_runs_even_past_its_timeout()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript();
+        var leases = new FakeLeases();
+        var first = new ClaudeUsageCollector(Options(), time, Probes(leases: leases), Log);
+        var second = new ClaudeUsageCollector(Options(), time, Probes(leases: leases), Log);
+
+        await first.CollectAsync();
+        await Until(() => UsageProbesStarted.Any());
+        await AdvanceUntil(time, () => first.Cycle.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(3));
+        Assert.True(first.Cycle.IsCompleted);
+        await second.CollectAsync();
+        await Settled(second);
+
+        Assert.Single(UsageProbesStarted);
+        Assert.Contains(log, l => l.Contains("another host here", StringComparison.Ordinal));
+        Assert.Equal(1, leases.Count);
+
+        // Its lease goes when the probe does, not when the host gave up waiting for it.
+        UsageProbesStarted.Single().End(0);
+        await Until(() => leases.Count == 0);
     }
 
     // ---- Codex ----
@@ -532,6 +572,40 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_host_serving_another_profile_with_the_same_Codex_home_starts_no_app_server_until_the_first_ones_has_exited()
+    {
+        var leases = new FakeLeases();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var first = new CodexUsageProbe(Options(), Probes(leases: leases), time, Log).Start();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        var second = await new CodexUsageProbe(Options(), Probes(leases: leases), time, Log).Start().Reported.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(CodexProbeKind.Skipped, second.Kind);
+        Assert.Single(launcher.Started);
+
+        // The first answers, waits out its grace and exits; only then may another start.
+        release.SetResult();
+        await RunToEnd(first);
+        await Until(() => leases.Count == 0);
+        Assert.Equal(CodexProbeKind.Reading, (await RunToEnd(new CodexUsageProbe(Options(), Probes(leases: leases), time, Log).Start())).Kind);
+        Assert.Equal(2, launcher.Started.Count);
+    }
+
+    [Fact]
+    public async Task A_slow_sign_in_service_on_the_second_account_read_keeps_the_reading_without_a_key_and_backs_off()
+    {
+        AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account()) : FakeAppServer.Error("workspace routing discovery timed out"));
+
+        var outcome = await RunToEnd(CodexProbe().Start());
+
+        Assert.Equal(CodexProbeKind.Failed, outcome.Kind);
+        Assert.Equal(23.0, outcome.Reading!.Windows[0].Percent);
+        Assert.Null(outcome.Reading.AccountKey);
+    }
+
+    [Fact]
     public async Task A_failed_or_hung_conversation_leaves_no_process_watch_running_after_the_probe()
     {
         var looks = 0;
@@ -743,6 +817,26 @@ public sealed class UsageProbeTests : IDisposable
     {
         await AdvanceUntil(time, () => task.IsCompleted, TimeSpan.FromSeconds(1), max);
         return await task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    // The machine-wide lease that hosts serving different bridge profiles share.
+    internal sealed class FakeLeases
+    {
+        readonly HashSet<string> held = [];
+
+        public int Count { get { lock (held) { return held.Count; } } }
+
+        public IDisposable? Take(string key)
+        {
+            lock (held) { if (!held.Add(key)) { return null; } }
+            return new Held(() => { lock (held) { held.Remove(key); } });
+        }
+
+        internal sealed class Held(Action release) : IDisposable
+        {
+            int done;
+            public void Dispose() { if (Interlocked.Exchange(ref done, 1) == 0) { release(); } }
+        }
     }
 
     internal sealed class FakeLauncher : IProbeLauncher

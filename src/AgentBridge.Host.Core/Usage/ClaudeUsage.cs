@@ -234,34 +234,54 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     async Task<bool> ProbeAsync()
     {
         if (probes!.Find(AgentKind.Claude) is not { } exe) { return false; }
-        // One at a time, on the machine and not only in this host: another host of this user, or
-        // this one before a restart, may have left one running. A list that could not be read
-        // cannot show there is none.
-        var observed = probes.Processes.Observe(AgentKind.Claude);
-        if (!observed.Listed)
+        // Taken before the look at the machine's processes and kept until the probe ends, so a host
+        // serving another bridge profile cannot see none running and start a second beside it.
+        if (probes.TryLease(AgentKind.Claude, options.ClaudeHome) is not { } lease)
         {
-            say("usage: Claude Code's processes could not be listed; not starting a /usage probe");
+            say("usage: another host here is already asking Claude Code for its allowance; not starting another");
             return false;
         }
-        if (observed.Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
+        var kept = false;
+        try
         {
-            say("usage: a Claude Code /usage probe is already running here; not starting another");
+            // One at a time, on the machine and not only in this host: another host of this user, or
+            // this one before a restart, may have left one running. A list that could not be read, or
+            // a Claude process whose command line could not be, cannot show there is none.
+            var observed = probes.Processes.Observe(AgentKind.Claude);
+            if (!observed.Listed || observed.Processes.Any(p => p.CommandLine is null))
+            {
+                say("usage: Claude Code's processes could not all be read; not starting a /usage probe");
+                return false;
+            }
+            if (observed.Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
+            {
+                say("usage: a Claude Code /usage probe is already running here; not starting another");
+                return false;
+            }
+            var before = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
+            var process = probes.Launcher.Start(new ProbeCommand(exe, ProbeArguments, WorkingDirectory(), Environment()));
+            if (process is null)
+            {
+                say("usage: claude could not be started to read its allowance");
+                return false;
+            }
+            if (!await EndsWithinAsync(process, options.ClaudeProbeTimeout, "Claude Code's /usage probe"))
+            {
+                kept = true;
+                _ = process.Exited.ContinueWith(_ => lease.Dispose(), TaskScheduler.Default);
+                return false;
+            }
+            int code;
+            using (process) { code = await process.Exited; }
+            var after = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
+            if (code == 0 && after is { } a && (before is not { } b || a > b)) { return true; }
+            say(code != 0 ? $"usage: Claude Code's /usage probe exited {code}" : "usage: Claude Code's /usage probe did not read the allowance afresh (rate limited, or signed out)");
             return false;
         }
-        var before = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
-        var process = probes.Launcher.Start(new ProbeCommand(exe, ProbeArguments, WorkingDirectory(), Environment()));
-        if (process is null)
+        finally
         {
-            say("usage: claude could not be started to read its allowance");
-            return false;
+            if (!kept) { lease.Dispose(); }
         }
-        if (!await EndsWithinAsync(process, options.ClaudeProbeTimeout, "Claude Code's /usage probe")) { return false; }
-        int code;
-        using (process) { code = await process.Exited; }
-        var after = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
-        if (code == 0 && after is { } a && (before is not { } b || a > b)) { return true; }
-        say(code != 0 ? $"usage: Claude Code's /usage probe exited {code}" : "usage: Claude Code's /usage probe did not read the allowance afresh (rate limited, or signed out)");
-        return false;
     }
 
     // Waits for a process the host started, at most timeout. One still running then is left to

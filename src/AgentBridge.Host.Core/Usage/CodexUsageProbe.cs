@@ -71,41 +71,86 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             reported.TrySetResult(new(CodexProbeKind.NotApplicable, Why: "codex could not be found"));
             return;
         }
-        var observed = probes.Processes.Observe(AgentKind.Codex);
-        if (!observed.Listed)
+        // Taken before the route is chosen and, on the standalone route, kept until the app-server
+        // exits: a host serving another bridge profile with this Codex home could otherwise see no
+        // Codex running and start a second reader and writer of its sign-in beside this one.
+        if (probes.TryLease(AgentKind.Codex, options.CodexHome) is not { } lease)
         {
-            reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "the codex processes could not be listed"));
+            reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "another host here is already asking Codex"));
             return;
         }
-        if (observed.Processes.Count == 0)
+        var handed = false;
+        try
         {
-            await StandaloneAsync(exe, reported, answered);
-            return;
+            var observed = probes.Processes.Observe(AgentKind.Codex);
+            if (!observed.Listed)
+            {
+                reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "the codex processes could not be listed"));
+                return;
+            }
+            if (observed.Processes.Count == 0)
+            {
+                handed = true;
+                await StandaloneAsync(exe, reported, answered, lease);
+                return;
+            }
+            // The daemon's sign-in and refresh go on whether or not this connection does.
+            answered.TrySetResult();
+            IRpcLink? daemon;
+            using (var connect = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+            {
+                daemon = await probes.Daemon.ConnectAsync(options.ControlSocket, connect.Token);
+            }
+            if (daemon is null)
+            {
+                reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "a Codex session is running here without the managed daemon"));
+                return;
+            }
+            await DaemonAsync(daemon, reported);
         }
-        // The daemon's sign-in and refresh go on whether or not this connection does.
-        answered.TrySetResult();
-        IRpcLink? daemon;
-        using (var connect = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        finally
         {
-            daemon = await probes.Daemon.ConnectAsync(options.ControlSocket, connect.Token);
+            if (!handed) { lease.Dispose(); }
         }
-        if (daemon is null)
-        {
-            reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "a Codex session is running here without the managed daemon"));
-            return;
-        }
-        await DaemonAsync(daemon, reported);
     }
 
-    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered)
+    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, IDisposable lease)
+    {
+        IProbeProcess? process = null;
+        try
+        {
+            await ConverseStandaloneAsync(exe, reported, answered, p => process = p);
+        }
+        finally
+        {
+            // The lease goes with the process, not with this host's interest in it: one given up on
+            // as hung may still be refreshing Codex's sign-in.
+            if (process is null || process.Exited.IsCompleted)
+            {
+                process?.Dispose();
+                lease.Dispose();
+            }
+            else
+            {
+                var running = process;
+                _ = running.Exited.ContinueWith(_ =>
+                {
+                    running.Dispose();
+                    lease.Dispose();
+                }, TaskScheduler.Default);
+            }
+        }
+    }
+
+    async Task ConverseStandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, Action<IProbeProcess> onStart)
     {
         var started = clock.GetUtcNow();
         var environment = ProbeEnvironment.Home("CODEX_HOME", options.CodexHome, ".codex");
         Directory.CreateDirectory(probes.WorkingDirectory);
         var process = probes.Launcher.Start(new ProbeCommand(exe, ["app-server"], probes.WorkingDirectory, environment, Stdio: true));
+        if (process is not null) { onStart(process); }
         if (process is null || process.Input is null || process.Reader is null)
         {
-            process?.Dispose();
             reported.TrySetResult(new(CodexProbeKind.Failed, Why: "codex app-server could not be started"));
             return;
         }
@@ -140,8 +185,6 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         process.CloseInput();
         var left = ceiling - clock.GetUtcNow();
         if (left > TimeSpan.Zero) { await WithinAsync(process.Exited, left); }
-        if (process.Exited.IsCompleted) { process.Dispose(); }
-        else { _ = process.Exited.ContinueWith(_ => process.Dispose(), TaskScheduler.Default); }
     }
 
     async Task DaemonAsync(IRpcLink link, TaskCompletionSource<CodexProbeOutcome> reported)
@@ -221,8 +264,11 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         if (second.Error is { } secondError)
         {
             // The usage read can still succeed on an unexpired access token after the refresh token
-            // was lost: that is the late sign-out signal the Linux run found (E13, E14).
-            return SignedOut(secondError) && !Slow(secondError) ? new(CodexProbeKind.SignedOut, reading, secondError) : new(CodexProbeKind.Reading, reading);
+            // was lost: that is the late sign-out signal the Linux run found (E13, E14). Any other
+            // error keeps the (unkeyed) reading but is still a failure, so a slow sign-in service
+            // backs off rather than being asked again at the usual pace.
+            return SignedOut(secondError) && !Slow(secondError) ? new(CodexProbeKind.SignedOut, reading, secondError)
+                : Failure(secondError) with { Reading = reading };
         }
         if (Login(second.Result) is { Kind: CodexProbeKind.SignedOut } gone) { return gone with { Reading = reading }; }
         var key = !others ? Key(Email(first.Result), Email(second.Result), limits.Result) : null;

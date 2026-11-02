@@ -642,19 +642,37 @@ public static partial class CommandLine
     };
 
     // The host's own reading of Claude's allowance (#200): `claude -p /usage --safe-mode
-    // --no-session-persistence ...`, which keeps no session and runs no hook, and which runs in the
-    // host's own empty folder, never a worktree. Recognised by those exact options, so a print-mode
-    // run with any other prompt, which does work somewhere, still counts as Claude's.
+    // --no-session-persistence --output-format json`, which keeps no session and runs no hook, and
+    // which runs in the host's own empty folder, never a worktree. Recognised only by exactly those
+    // options, so a print-mode run with any other prompt or option, which does work somewhere,
+    // still counts as Claude's.
     public static bool IsClaudeUsageProbe(string? commandLine)
     {
         if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
         var arguments = Split(commandLine);
-        var prompt = false;
-        for (var i = 1; i < arguments.Count - 1; i++)
+        // The executable, or a runtime and its script, and then the probe's options and nothing
+        // else. Nothing is searched for: macOS's ps flattens quoting, so a real prompt that only
+        // quotes these options would otherwise read as the probe, and a model run lose its hold.
+        var first = -1;
+        for (var i = 0; i < arguments.Count && first < 0; i++)
         {
-            if (arguments[i] is "-p" or "--print" && arguments[i + 1] == "/usage") { prompt = true; break; }
+            if (arguments[i].StartsWith('-')) { first = i; }
         }
-        return prompt && arguments.Contains("--safe-mode") && arguments.Contains("--no-session-persistence");
+        if (first is < 1 or > 2 || arguments.Count - first != 6) { return false; }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = first; i < arguments.Count; i++)
+        {
+            var option = arguments[i] == "--print" ? "-p" : arguments[i];
+            var ok = option switch
+            {
+                "-p" => i + 1 < arguments.Count && arguments[++i] == "/usage",
+                "--output-format" => i + 1 < arguments.Count && arguments[++i] == "json",
+                "--safe-mode" or "--no-session-persistence" => true,
+                _ => false,
+            };
+            if (!ok || !seen.Add(option)) { return false; }
+        }
+        return seen.Count == 4;
     }
 
     // Codex's global options that take the next argument as their value, before any subcommand

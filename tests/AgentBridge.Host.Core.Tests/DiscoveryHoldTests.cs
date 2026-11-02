@@ -823,11 +823,16 @@ public class DiscoveryHoldTests
 
     [Theory]
     [InlineData("claude.exe -p /usage --safe-mode --no-session-persistence --output-format json", true)]
-    [InlineData("node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js --print /usage --no-session-persistence --safe-mode", true)]
-    [InlineData("claude -p /usage --no-session-persistence", false)]
-    [InlineData("claude -p /usage --safe-mode", false)]
-    [InlineData("claude -p \"/usage and more\" --safe-mode --no-session-persistence", false)]
-    [InlineData("claude --safe-mode --no-session-persistence /usage", false)]
+    [InlineData("node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js --print /usage --no-session-persistence --safe-mode --output-format json", true)]
+    [InlineData("claude -p /usage --no-session-persistence --output-format json", false)]
+    [InlineData("claude -p /usage --safe-mode --output-format json", false)]
+    [InlineData("claude -p \"/usage and more\" --safe-mode --no-session-persistence --output-format json", false)]
+    [InlineData("claude --safe-mode --no-session-persistence --output-format json /usage", false)]
+    // macOS's ps flattens quoting: a real prompt quoting the probe's options is not the probe.
+    [InlineData("claude -p summarise -p /usage --safe-mode --no-session-persistence --output-format json", false)]
+    [InlineData("claude -p /usage --safe-mode --no-session-persistence --output-format json -- fix the build", false)]
+    [InlineData("claude --model opus -p /usage --safe-mode --no-session-persistence --output-format json", false)]
+    [InlineData("claude fix the build -p /usage --safe-mode --no-session-persistence --output-format json", false)]
     public void Claudes_usage_probe_is_known_by_its_exact_options(string commandLine, bool probe)
     {
         Assert.Equal(probe, CommandLine.IsClaudeUsageProbe(commandLine));
