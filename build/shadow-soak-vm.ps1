@@ -346,14 +346,20 @@ if ($Finish) {
 Stop-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -Filter "Name='agent-bridge-rehearsal.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 Unregister-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -Confirm:$false -ErrorAction SilentlyContinue
-# The app's host tasks -Prepare disabled, enabled and started again.
+'driver removed'
+'@ | Write-Output
+    # The app's host tasks -Prepare disabled, enabled and started again - as the VM's user, who
+    # disabled them and owns them: the record is in a folder that user can write, so as SYSTEM it
+    # would let them name any task for SYSTEM to enable and start. Only the app's names count.
+    Invoke-Guest M -AsDesktopUser -TimeoutMinutes 5 -Script @'
 $record = '__SOAK__\state\app-host-tasks.txt'
 foreach ($name in @(if (Test-Path $record) { Get-Content $record | Sort-Object -Unique })) {
-    Enable-ScheduledTask -TaskName $name | Out-Null
-    Start-ScheduledTask -TaskName $name
+    if ($name -notmatch '^AgentBridgeHost_[A-Za-z0-9_.-]+$') { "not restored: $name is not an app host task"; continue }
+    Enable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $name -ErrorAction Stop
+    "restored $name"
 }
 Remove-Item $record -ErrorAction SilentlyContinue
-'driver removed, the app host started again'
 '@.Replace('__SOAK__', $soak) | Write-Output
     foreach ($role in 'W', 'M') {
         & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown On 6>$null
