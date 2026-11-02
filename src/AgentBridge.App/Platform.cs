@@ -9,7 +9,7 @@ namespace AgentBridge.App;
 
 // The app's updates through Velopack. The host is in the same package, so this updates both.
 // Releases come from the repository's GitHub releases; a feed.txt beside the app's data (a
-// folder or URL holding releases.win.json) overrides that, for a test VM or a private channel.
+// folder or URL holding releases.<channel>.json) overrides that, for a test VM or a private channel.
 sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string profile) : IUpdater
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
@@ -41,6 +41,8 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
         source = key;
         pending = null;
         downloaded = null;
+        // No channel named: the installed package's own decides, `win` for x64 and `win-arm64` for
+        // Arm64 (build/app-channels.ps1), so a copy is only ever offered its own architecture.
         return manager = new UpdateManager(from);
     }
 

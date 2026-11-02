@@ -157,8 +157,16 @@ into one folder with one version. An app update is a host update, so they never 
   The app also stops the host itself before `ApplyUpdatesAndRestart`, and starts it on
   launch if it is not running.
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
-  off; every merge to main publishes one, below), or a folder or URL holding `releases.win.json` in
+  off; every merge to main publishes one, below), or a folder or URL holding
+  `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
   `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+* **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
+  channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
+  `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
+  Velopack's `UpdateManager` reads only that channel's feed when nothing names one, which neither
+  the app nor the host does: an x64 copy is never offered an Arm64 package, nor the reverse,
+  whichever is newer (`HostUpdatesTests`). Moving x64 to another channel name would strand every
+  installed copy on its last version, so it stays `win`.
 * **Automatic updates** (`AutoUpdater`): Settings has "Include pre-releases in updates" and
   "Install updates automatically", both per profile (`<profile>-settings.json`) and both on by
   default. The installed app checks on start and every 30 minutes, and downloads a release it
@@ -253,27 +261,36 @@ connector's Install button on a machine the dashboard drives.
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after the `product` tests (both systems) and the `app` job (build, pack, self-test)
-  pass, for pushes to `danswett/agent-bridge`'s `main` only: never a pull request or a fork. It
+* **When:** after the `product` tests (Linux, Windows x64 and Windows on Arm) and both `app`
+  jobs (x64 and Arm64: build, pack, self-test, install) pass, for pushes to
+  `danswett/agent-bridge`'s `main` only: never a pull request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
   `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
   now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so
   a slow build of an older merge must not reach the group and evict a newer one. A run whose
   commit main has moved past publishes nothing, and the newer commit's run publishes instead
   (re-run it if it failed).
-* **What:** `build/publish-prerelease.ps1` uploads the app job's folder with `vpk upload github
-  --pre` as a draft, adds `assets.win.json` and the notes, and only then publishes it, creating
-  the tag `v<version>` on the exact commit; a client never sees half a release. Assets:
+* **What:** `build/publish-prerelease.ps1` uploads the x64 app job's folder with `vpk upload github
+  --pre` as a draft, then the Arm64 job's into the same draft (`--merge`, its own channel), adds
+  each `assets.<channel>.json` and the notes, and only then publishes it, creating the tag
+  `v<version>` on the exact commit; a client never sees half a release, nor a release with one
+  architecture (the script refuses to publish without both folders). Assets, x64's exactly as on
+  the first release (`v0.1.583`, published by hand) plus the delta:
   `AgentBridgeApp-<v>-full.nupkg`, `AgentBridgeApp-<v>-delta.nupkg`,
   `AgentBridgeApp-win-Setup.exe`, `AgentBridgeApp-win-Portable.zip`, `releases.win.json`
-  (this version's packages), `RELEASES` and `assets.win.json`, as on the first release
-  (`v0.1.583`, published by hand) plus the delta.
+  (this version's packages), `RELEASES` and `assets.win.json`; and Arm64's beside them,
+  `AgentBridgeApp-<v>-win-arm64-full.nupkg`, `AgentBridgeApp-<v>-win-arm64-delta.nupkg`,
+  `AgentBridgeApp-win-arm64-Setup.exe`, `AgentBridgeApp-win-arm64-Portable.zip`,
+  `releases.win-arm64.json` and `assets.win-arm64.json`. Before anything goes up it checks that
+  each folder's app is built for its channel's machine, so an Arm64 package can never land in
+  x64's feed.
 * **Release notes:** `build/release-notes.ps1` lists the commits since the latest release, newest
   first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
   -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
   `NotesMarkdown` for an installed copy to show after it updates.
 * **Deltas:** `pack-app.ps1 -DeltaFrom` empties its releases folder, downloads the latest
-  release's full package (`vpk download github --pre`) and, if it is older, puts it there, so
+  release's full package of its own channel (`vpk download github --pre --channel <channel>`)
+  and, if it is older, puts it there, so
   `vpk pack` builds a delta from it. Another merge may publish between that pack and this one's
   publish, so under the lock the script checks the delta again: `vpk delta patch` on the latest
   release's full package must rebuild this version's full package byte for byte. If it does not
@@ -282,7 +299,9 @@ connector's Install button on a machine the dashboard drives.
   wrong delta would cost every copy a failed patch first. A copy on the previous version
   downloads only the delta rather than the ~100 MB full package; one further behind applies the
   chain of deltas, as far back as the newest ten releases Velopack's GitHub source reads, or
-  else the full package.
+  else the full package. Each architecture's delta is checked against the same channel's
+  package; the first release with Arm64 in it has no Arm64 base, so it publishes Arm64's full
+  package alone (with the warning) and x64's delta as usual.
 * **Once per version:** a version whose tag exists is skipped, so re-running a run publishes
   nothing twice. A version older than one already published is skipped (two merges close
   together, the later one's build first). A draft left by a failed attempt is deleted and the
@@ -290,9 +309,10 @@ connector's Install button on a machine the dashboard drives.
 * **Pruning:** the newest 20 pre-releases stay; older ones are deleted with their assets, and
   their tags stay. A full (non-pre-release) release, a draft, or a release not tagged
   `v<major>.<minor>.<patch>` is never touched.
-* **Pull requests** prove it without publishing: the app job runs the same script with
-  `-DryRun`, which checks the folder and its delta against the latest release as above, has vpk
-  read it into a scratch feed (`vpk upload local`),
+* **Pull requests** prove it without publishing: each app job runs the same script with
+  `-DryRun` on its own folder, which checks the folder and its delta against the latest release
+  as above, has vpk read it into a scratch feed (`vpk upload local`) that must list that
+  channel's packages and nothing else,
   and prints what it would upload, publish and prune against the real releases (in the job
   summary too), writing nothing.
 * **Release builds only.** The app job packs with `pack-app.ps1 -Release` exactly when the run
@@ -316,14 +336,26 @@ connector's Install button on a machine the dashboard drives.
   Nothing else reads it: not updates, delivery, migration or the relay.
 * A pre-release is unsigned (below).
 
-To install the latest, download `AgentBridgeApp-win-Setup.exe` from the newest pre-release at
+To install the latest, download the installer for the machine from the newest pre-release at
 <https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
-anyway). From a shell:
+anyway):
+
+| Machine | Installer |
+|---|---|
+| x64 (Intel or AMD) | `AgentBridgeApp-win-Setup.exe` |
+| Windows on Arm (Snapdragon and other Arm64) | `AgentBridgeApp-win-arm64-Setup.exe` |
+
+Settings, System, About, "System type" says which. The Arm64 installer refuses an x64 machine.
+The x64 one does install on Windows on Arm, but runs under emulation, which is untested (#222),
+and keeps updating from the x64 channel: to move such a copy to Arm64, uninstall it and install
+the Arm64 one (the host's profile in `%LOCALAPPDATA%\AgentBridge` stays). From a shell:
 
 ```powershell
+$arm = (Get-CimInstance Win32_Processor | Select-Object -First 1).Architecture -eq 12   # 12: ARM64, also from an emulated shell
+$setup = if ($arm) { 'AgentBridgeApp-win-arm64-Setup.exe' } else { 'AgentBridgeApp-win-Setup.exe' }
 $tag = gh release list -R danswett/agent-bridge -L 1 --exclude-drafts --json tagName --jq '.[0].tagName'
-gh release download $tag -R danswett/agent-bridge -p AgentBridgeApp-win-Setup.exe
-.\AgentBridgeApp-win-Setup.exe
+gh release download $tag -R danswett/agent-bridge -p $setup
+& ".\$setup"
 ```
 
 (`gh release download` without a tag takes the latest full release, and there is none yet.)
@@ -435,22 +467,31 @@ reaches the real host or its profile.
   host through the in-process relay with the host's account), toast plans and activation handling, automatic updates (`AutoUpdaterTests`: when one waits for the sessions, when it goes anyway, a read-only host beside agent-ha-bridge updating like any other, the other profiles it never stops, and the host never left down), host lifecycle with a
   fake task scheduler and launcher, the Markdown model and the demo host. Platform-neutral,
   so they run on Linux too.
-* CI (`app` job) runs `build/pack-app.ps1`: publishes the app, host, launcher, injector and hook
-  into one folder, checks for the app's `.pri`, the executables and the bundled Agent Bridge
+* CI (`app` jobs, one for x64 on `windows-latest` and one for Arm64 on `windows-11-arm`) runs
+  `build/pack-app.ps1 -Runtime <win-x64|win-arm64>`: publishes the app, host, launcher, injector
+  and hook into one folder for that architecture, checks for the app's `.pri`, the executables
+  (each built for that machine) and the bundled Agent Bridge
   Mono TTFs with their `OFL.txt` (`Assets\Fonts`; SIL Open Font License, not MIT), and packs it
-  with `vpk`, with a delta from the latest release. It then starts the published
+  with `vpk` into that architecture's channel, with a delta from the latest release. It then starts the published
   app with `--self-test`, which runs the demo, finds the cards by automation id, answers a
   question on each machine by invoking its button's automation peer, checks the generated
   design resources in every theme, draws every glyph and icon, checks the status words' colours, wrapping and the tool glyph's name and that words and glyphs follow a theme flip, sets code in the bundled
   font, narrows the list with the machine picker, launches a session from the Launch page
   and waits for its card,
   checks Codex on the other machine is not launched without a prompt, and saves a picture
-  of each page. Last, it dry-runs publishing the package (`build/publish-prerelease.ps1
+  of each page. Then it runs the `Setup.exe` it packed, silently, on the throwaway runner,
+  checks the installed copy's channel and that its executables and `Update.exe` are for that
+  machine, and runs the same self-test from the installed copy. Last, it dry-runs publishing
+  the package (`build/publish-prerelease.ps1
   -DryRun`) and uploads `Setup.exe` and the packages as an artifact, which the `publish` job
   publishes for a push to main.
+* The `product` job runs the tests on Linux, Windows x64 and Windows on Arm, including the
+  NativeAOT injector typing into a real console and the NativeAOT hook, each built for the
+  runner's own architecture.
 * `build/test-publish-prerelease.ps1` (the `product` job, on Windows): publishing and pruning,
-  refusing a dev build, and the delta base and build identity `pack-app.ps1` gives the package,
-  against stand-ins for gh, vpk and dotnet.
+  refusing a dev build, a release missing an architecture or a package in another
+  architecture's channel, x64's channel and asset names unchanged, and the delta base, channel
+  and build identity `pack-app.ps1` gives the package, against stand-ins for gh, vpk and dotnet.
 * Live checks run by the coordinator on a disposable VM (the checklist in the pull
   request).
 
@@ -460,3 +501,5 @@ To build and try it locally (nothing is installed or registered):
 pwsh build/pack-app.ps1 -Version 0.1.0 -NoPack
 out\app\publish\AgentBridge.exe --demo
 ```
+
+On Windows on Arm, `-Runtime win-arm64` builds the Arm64 copy into `out\app-arm64` instead.

@@ -1,18 +1,22 @@
-# Publishes the Windows app's Velopack release folder (build/pack-app.ps1) as a GitHub
-# pre-release, which installed copies update from, then keeps only the newest pre-releases.
-# CI's publish job runs it for every push to main; the app job runs it with -DryRun on every
-# build, which reads the repository's releases but uploads, publishes and deletes nothing.
-# docs/app-windows.md, "Releases and updates".
+# Publishes the Windows app's Velopack release folders (build/pack-app.ps1), one per architecture,
+# as one GitHub pre-release, which installed copies update from, then keeps only the newest
+# pre-releases. CI's publish job runs it for every push to main; the app jobs run it with -DryRun
+# on every build, each for its own folder, which reads the repository's releases but uploads,
+# publishes and deletes nothing. docs/app-windows.md, "Releases and updates".
 #
-#   pwsh build/publish-prerelease.ps1 -Version 0.1.600 -ReleasesDir out/app/releases `
+#   pwsh build/publish-prerelease.ps1 -Version 0.1.600 -ReleasesDir out/app/releases, out/app-arm64/releases `
 #       -Repository danswett/agent-bridge -Commit <sha> [-DryRun]
+#
+# Each folder is one Velopack channel, read from the assets.<channel>.json vpk pack wrote there:
+# x64's `win`, the channel every copy installed before Arm64 builds reads, and Arm64's
+# `win-arm64` (build/app-channels.ps1). A release carries both, so publishing needs both.
 #
 # Needs gh and vpk 1.2.161, and GH_TOKEN with contents: write unless -DryRun.
 #Requires -Version 7
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Version,
-    [Parameter(Mandatory)][string]$ReleasesDir,
+    [Parameter(Mandatory)][string[]]$ReleasesDir,
     [Parameter(Mandatory)][string]$Repository,
     [Parameter(Mandatory)][string]$Commit,
     # How many pre-releases stay. Velopack's GitHub source reads the newest ten releases' feeds,
@@ -22,12 +26,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'app-channels.ps1')
 
-$packId = 'AgentBridgeApp'
+$packId = $AppPackId
 $tag = "v$Version"
 $semver = [semver]$Version
-$ReleasesDir = [IO.Path]::GetFullPath($ReleasesDir)
-$work = Join-Path (Split-Path $ReleasesDir) 'publish-work'
+$ReleasesDir = @($ReleasesDir | ForEach-Object { [IO.Path]::GetFullPath($_) })
+$work = Join-Path (Split-Path $ReleasesDir[0]) 'publish-work'
 $mode = if ($DryRun) { 'dry run: ' } else { '' }
 
 function Invoke-Gh {
@@ -58,29 +63,58 @@ function Reset-Work {
     New-Item -ItemType Directory -Force $work | Out-Null
 }
 
-# --- The folder is what vpk pack wrote: exactly one version's packages, named as clients expect.
-$assetsFile = Join-Path $ReleasesDir 'assets.win.json'
-if (-not (Test-Path $assetsFile)) { throw "no assets.win.json in ${ReleasesDir}: not the output of vpk pack" }
-$assets = [Collections.Generic.List[object]]@(Get-Content $assetsFile -Raw | ConvertFrom-Json)
-$expected = [ordered]@{ Full = "$packId-$Version-full.nupkg"; Installer = "$packId-win-Setup.exe"; Portable = "$packId-win-Portable.zip"; Delta = "$packId-$Version-delta.nupkg" }
-foreach ($asset in $assets) {
-    if (-not $expected.Contains([string]$asset.Type) -or $asset.RelativeFileName -ne $expected[[string]$asset.Type]) {
-        throw "unexpected asset in assets.win.json: $($asset.Type) $($asset.RelativeFileName)"
+# --- Each folder is what vpk pack wrote: exactly one channel's packages of one version, named as
+# that channel's clients expect, and built for that channel's architecture.
+$builds = foreach ($dir in $ReleasesDir) {
+    $assetFiles = @(Get-ChildItem $dir -Filter 'assets.*.json' -ErrorAction SilentlyContinue)
+    if ($assetFiles.Count -eq 0) { throw "no assets.win.json or other assets.<channel>.json in ${dir}: not the output of vpk pack" }
+    if ($assetFiles.Count -gt 1) { throw "more than one channel in ${dir}: $($assetFiles.Name -join ', ')" }
+    $assetsName = $assetFiles[0].Name
+    $target = Get-AppChannelByName ($assetsName -replace '^assets\.(.+)\.json$', '$1')
+    $channel = $target.Channel
+    $assets = [Collections.Generic.List[object]]@(Get-Content $assetFiles[0].FullName -Raw | ConvertFrom-Json)
+    $expected = [ordered]@{}
+    foreach ($type in 'Full', 'Installer', 'Portable', 'Delta') { $expected[$type] = Get-AppAssetName $channel $type $Version }
+    foreach ($asset in $assets) {
+        if (-not $expected.Contains([string]$asset.Type) -or $asset.RelativeFileName -ne $expected[[string]$asset.Type]) {
+            throw "unexpected asset in ${assetsName}: $($asset.Type) $($asset.RelativeFileName)"
+        }
+        if (-not (Test-Path (Join-Path $dir $asset.RelativeFileName))) { throw "missing from ${dir}: $($asset.RelativeFileName)" }
     }
-    if (-not (Test-Path (Join-Path $ReleasesDir $asset.RelativeFileName))) { throw "missing from ${ReleasesDir}: $($asset.RelativeFileName)" }
+    foreach ($type in 'Full', 'Installer', 'Portable') {
+        if (-not ($assets | Where-Object Type -EQ $type)) { throw "$assetsName has no $type ($($expected[$type]))" }
+    }
+    [pscustomobject]@{
+        Dir = $dir; Channel = $channel; Machine = $target.Machine; Runtime = $target.Runtime
+        AssetsName = $assetsName; AssetsFile = $assetFiles[0].FullName; Assets = $assets; Expected = $expected
+        FullPath = Join-Path $dir $expected.Full; DeltaPath = Join-Path $dir $expected.Delta; Identity = $null; Size = $null
+    }
 }
-foreach ($type in 'Full', 'Installer', 'Portable') {
-    if (-not ($assets | Where-Object Type -EQ $type)) { throw "assets.win.json has no $type ($($expected[$type]))" }
+$builds = @($builds)
+$duplicate = @($builds | Group-Object Channel | Where-Object Count -GT 1)
+if ($duplicate) { throw "the $($duplicate[0].Name) channel is given twice" }
+# x64 first: its upload creates the draft the others join, and it is the one existing copies read.
+$builds = @($AppChannels.Values | ForEach-Object { $c = $_.Channel; $builds | Where-Object Channel -CEQ $c })
+if (-not $DryRun) {
+    # A release without one architecture would leave that architecture's copies a version behind,
+    # and its next delta without a base.
+    $absent = @($AppChannels.Values | Where-Object { $_.Channel -cnotin $builds.Channel } | ForEach-Object { "$($_.Channel) ($($_.Runtime))" })
+    if ($absent) { throw "a release carries every architecture; no folder for $($absent -join ', ')" }
 }
-$fullPath = Join-Path $ReleasesDir $expected.Full
-$deltaPath = Join-Path $ReleasesDir $expected.Delta
-# Only a release build may go out: installed copies take it, and a dev build's Home Assistant
-# connector refuses a real Home Assistant (G6). A pull request's dry run is a dev build, as it
-# should be, and only says so.
-$identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') $fullPath
-if ($identity -ne 'release') {
-    if (-not $DryRun) { throw "$($expected.Full) holds a $identity build of the host; only a release build (pack-app.ps1 -Release) is published" }
-    Write-Plan "the host is a $identity build; the publish path packs a release build (pack-app.ps1 -Release)"
+foreach ($b in $builds) {
+    # A channel's feed is all its installed copies read, so a package for another machine in it
+    # would be installed over every one of them.
+    $machine = Get-PackageMachine $b.FullPath
+    if ($machine -ne $b.Machine) { throw "$($b.Expected.Full) holds an app built for $machine; the $($b.Channel) channel is $($b.Machine)'s" }
+    # Only a release build may go out: installed copies take it, and a dev build's Home Assistant
+    # connector refuses a real Home Assistant (G6). A pull request's dry run is a dev build, as it
+    # should be, and only says so.
+    $identity = & (Join-Path $PSScriptRoot 'host-identity.ps1') $b.FullPath
+    if ($identity -ne 'release') {
+        if (-not $DryRun) { throw "$($b.Expected.Full) holds a $identity build of the host; only a release build (pack-app.ps1 -Release) is published" }
+        Write-Plan "the host is a $identity build in the $($b.Channel) package; the publish path packs a release build (pack-app.ps1 -Release)"
+    }
+    $b.Identity = $identity
 }
 
 # --- Whether to publish: once per version, and never a version older than one already out.
@@ -98,71 +132,84 @@ if ($published) {
     Write-Plan "$tag is older than the published v$($newer[0]); not publishing it"
 }
 
-function Test-Delta([string]$basePath) {
+function Test-Delta($b, [string]$basePath) {
     # Right only if it rebuilds this version's full package, byte for byte, from the package of
     # the release installed copies are on; vpk delta patch reproduces it exactly.
     $patched = Join-Path $work 'patched.nupkg'
     Remove-Item $patched -ErrorAction SilentlyContinue
-    & vpk delta patch --base $basePath --patch $deltaPath --output $patched | Out-Host
-    $LASTEXITCODE -eq 0 -and (Test-Path $patched) -and (Get-FileHash $patched).Hash -eq (Get-FileHash $fullPath).Hash
+    & vpk delta patch --base $basePath --patch $b.DeltaPath --output $patched | Out-Host
+    $LASTEXITCODE -eq 0 -and (Test-Path $patched) -and (Get-FileHash $patched).Hash -eq (Get-FileHash $b.FullPath).Hash
 }
 
-function Update-Delta {
+function Update-Delta($b) {
     # The app job built its delta from whatever release was latest when it packed. Another merge
     # may have published since (this runs under the publish lock, so that one is now final), and a
     # delta from an older base would fail on every copy that took it. Check it against the latest
-    # release, rebuild it from that one if it is wrong or missing, and report why when neither works.
+    # release's package of the same channel, rebuild it from that one if it is wrong or missing,
+    # and report why when neither works.
     Reset-Work
     $latest = $released | Select-Object -First 1
     if (-not $latest) { return 'there is no earlier release' }
-    $basePath = Join-Path $ReleasesDir "$packId-$latest-full.nupkg"
+    $baseName = Get-AppAssetName $b.Channel 'Full' $latest
+    $basePath = Join-Path $b.Dir $baseName
     if (-not (Test-Path $basePath)) {
-        $download = @('download', 'github', '--repoUrl', "https://github.com/$Repository", '--pre', '--channel', 'win', '-o', $work)
+        $download = @('download', 'github', '--repoUrl', "https://github.com/$Repository", '--pre', '--channel', $b.Channel, '-o', $work)
         if ($env:GH_TOKEN) { $download += @('--token', $env:GH_TOKEN) }
         & vpk @download | Out-Host
-        $basePath = Join-Path $work "$packId-$latest-full.nupkg"
-        if ($LASTEXITCODE -or -not (Test-Path $basePath)) { return "v$latest's full package could not be downloaded" }
+        $basePath = Join-Path $work $baseName
+        if ($LASTEXITCODE -or -not (Test-Path $basePath)) { return "v$latest's $($b.Channel) full package could not be downloaded" }
     }
-    if ((Test-Path $deltaPath) -and (Test-Delta $basePath)) { return "@v$latest" }
-    Write-Plan "rebuilding the delta from v$latest"
-    Remove-Item $deltaPath -ErrorAction SilentlyContinue
-    & vpk delta generate --base $basePath --new $fullPath --output $deltaPath | Out-Host
-    if ($LASTEXITCODE -or -not (Test-Path $deltaPath) -or -not (Test-Delta $basePath)) { return "no delta from v$latest rebuilds the full package" }
+    if ((Test-Path $b.DeltaPath) -and (Test-Delta $b $basePath)) { return "@v$latest" }
+    Write-Plan "rebuilding the $($b.Channel) delta from v$latest"
+    Remove-Item $b.DeltaPath -ErrorAction SilentlyContinue
+    & vpk delta generate --base $basePath --new $b.FullPath --output $b.DeltaPath | Out-Host
+    if ($LASTEXITCODE -or -not (Test-Path $b.DeltaPath) -or -not (Test-Delta $b $basePath)) { return "no delta from v$latest rebuilds the full package" }
     "@v$latest"
 }
 
 if ($publishing) {
-    $deltaResult = Update-Delta
-    $deltaEntry = $assets | Where-Object Type -EQ 'Delta'
-    if ($deltaResult -like '@*') {
-        if (-not $deltaEntry) { $assets.Add([pscustomobject]@{ RelativeFileName = $expected.Delta; Type = 'Delta' }) }
-        $size = "a $(Get-Megabyte $deltaPath) delta from $($deltaResult.Substring(1)) beside the $(Get-Megabyte $fullPath) full package"
-    } else {
-        # A wrong delta costs every installed copy a failed patch before the full download; none
-        # costs only the download.
-        if ($deltaEntry) { [void]$assets.Remove($deltaEntry) }
-        Remove-Item $deltaPath -ErrorAction SilentlyContinue
-        Write-Plan "publishing the full package alone: $deltaResult" -Warn
-        $size = "the $(Get-Megabyte $fullPath) full package only, no delta"
-    }
-    ConvertTo-Json @($assets) -Compress | Set-Content $assetsFile -NoNewline
-    if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+    foreach ($b in $builds) {
+        $deltaResult = Update-Delta $b
+        $deltaEntry = $b.Assets | Where-Object Type -EQ 'Delta'
+        if ($deltaResult -like '@*') {
+            if (-not $deltaEntry) { $b.Assets.Add([pscustomobject]@{ RelativeFileName = $b.Expected.Delta; Type = 'Delta' }) }
+            $b.Size = "a $(Get-Megabyte $b.DeltaPath) delta from $($deltaResult.Substring(1)) beside the $(Get-Megabyte $b.FullPath) full package"
+        } else {
+            # A wrong delta costs every installed copy a failed patch before the full download; none
+            # costs only the download.
+            if ($deltaEntry) { [void]$b.Assets.Remove($deltaEntry) }
+            Remove-Item $b.DeltaPath -ErrorAction SilentlyContinue
+            Write-Plan "publishing the $($b.Channel) full package alone: $deltaResult" -Warn
+            $b.Size = "the $(Get-Megabyte $b.FullPath) full package only, no delta"
+        }
+        ConvertTo-Json @($b.Assets) -Compress | Set-Content $b.AssetsFile -NoNewline
+        if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 
-    # vpk upload github sends the build's assets, a releases.win.json and RELEASES of this
-    # version alone; assets.win.json goes up too, as on the first release published by hand.
-    $uploads = @($assets.RelativeFileName) + 'releases.win.json', 'RELEASES', 'assets.win.json'
-    Write-Plan "$tag ($identity build) from ${Commit}, ${size}: $($uploads -join ', ')"
+        # vpk upload github sends the build's assets and a releases.<channel>.json of this version
+        # alone, and for x64's `win` a RELEASES too; assets.<channel>.json goes up as well, as on the
+        # first release published by hand.
+        $uploads = @($b.Assets.RelativeFileName) + "releases.$($b.Channel).json"
+        if ($b.Channel -ceq 'win') { $uploads += 'RELEASES' }
+        $uploads += $b.AssetsName
+        Write-Plan "$tag $($b.Channel) ($($b.Runtime), $($b.Identity) build) from ${Commit}, $($b.Size): $($uploads -join ', ')"
+    }
 }
 
 if ($DryRun) {
-    # vpk itself reads the folder, through the same build-assets file the GitHub upload reads,
-    # into a scratch feed beside it: the nearest a pull request can come to uploading.
-    Reset-Work
-    & vpk upload local --outputDir $ReleasesDir --channel win --path $work | Out-Host
-    if ($LASTEXITCODE) { throw 'vpk upload local failed: vpk cannot upload this folder' }
-    $feed = Get-Content (Join-Path $work 'releases.win.json') -Raw | ConvertFrom-Json
-    if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's feed has no full package of $Version" }
-    if ((Test-Path $deltaPath) -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's feed has no delta of $Version" }
+    # vpk itself reads each folder, through the same build-assets file the GitHub upload reads,
+    # into a scratch feed beside it: the nearest a pull request can come to uploading. Each
+    # channel's feed must list its own packages and nothing else: it is all its copies read.
+    foreach ($b in $builds) {
+        Reset-Work
+        & vpk upload local --outputDir $b.Dir --channel $b.Channel --path $work | Out-Host
+        if ($LASTEXITCODE) { throw "vpk upload local failed: vpk cannot upload the $($b.Channel) folder" }
+        $feed = Get-Content (Join-Path $work "releases.$($b.Channel).json") -Raw | ConvertFrom-Json
+        if (-not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Full' })) { throw "vpk's $($b.Channel) feed has no full package of $Version" }
+        if ((Test-Path $b.DeltaPath) -and -not ($feed.Assets | Where-Object { $_.Version -eq $Version -and $_.Type -eq 'Delta' })) { throw "vpk's $($b.Channel) feed has no delta of $Version" }
+        $stray = @($feed.Assets | Where-Object { $_.FileName -notin $b.Expected.Full, $b.Expected.Delta } | ForEach-Object FileName)
+        if ($stray) { throw "vpk's $($b.Channel) feed lists what is not this channel's $Version`: $($stray -join ', ')" }
+        Write-Plan "the $($b.Channel) feed lists $(@($feed.Assets.FileName) -join ', ')"
+    }
     Remove-Item $work -Recurse -Force
 }
 
@@ -175,22 +222,32 @@ if ($publishing) {
     }
     if (-not $DryRun) {
         if (-not $env:GH_TOKEN) { throw 'GH_TOKEN is needed to publish' }
-        # As a draft first: clients never see a release that is missing its notes or a file.
-        & vpk upload github --outputDir $ReleasesDir --channel win --repoUrl "https://github.com/$Repository" --token $env:GH_TOKEN --pre --releaseName "Agent Bridge $Version (pre-release)" --tag $tag --targetCommitish $Commit | Out-Host
-        if ($LASTEXITCODE) { throw 'vpk upload github failed' }
+        # As a draft first: clients never see a release that is missing its notes or a file. x64's
+        # upload creates the draft; each other channel's joins it (--merge), adding its own feed.
+        $first = $true
+        foreach ($b in $builds) {
+            $upload = @('upload', 'github', '--outputDir', $b.Dir, '--channel', $b.Channel, '--repoUrl', "https://github.com/$Repository", '--token', $env:GH_TOKEN, '--pre', '--releaseName', "Agent Bridge $Version (pre-release)", '--tag', $tag, '--targetCommitish', $Commit)
+            if (-not $first) { $upload += '--merge' }
+            & vpk @upload | Out-Host
+            if ($LASTEXITCODE) { throw "vpk upload github failed for the $($b.Channel) channel" }
+            $first = $false
+        }
         $draft = @(Get-Release | Where-Object { $_.draft -and $_.tag_name -eq $tag })
         if ($draft.Count -ne 1) { throw "expected one draft $tag after the upload, found $($draft.Count)" }
-        Invoke-Gh release upload $tag $assetsFile -R $Repository --clobber | Out-Null
+        foreach ($b in $builds) { Invoke-Gh release upload $tag $b.AssetsFile -R $Repository --clobber | Out-Null }
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
-        $hasDelta = Test-Path $deltaPath
+        $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
+        $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
         $notes = @(
             "Pre-release of the Agent Bridge Windows app and host, built from main at $Commit$run."
             ''
-            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $packId-win-Setup.exe. An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' })."
+            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
+            ''
+            "An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' }), and only ever for its own architecture."
         ) -join "`n"
         Invoke-Gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" -f "body=$notes" -F draft=false -F prerelease=true | Out-Null
     }
-    Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release"
+    Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release ($($builds.Channel -join ', '))"
 }
 
 # --- Keep the newest pre-releases. Deleting a release deletes its assets but not its tag; full

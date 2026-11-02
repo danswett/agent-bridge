@@ -23,11 +23,12 @@ env:
 jobs:
   product:
     # The product itself (src/, tests/), separate from the spikes. Windows and Linux,
-    # since nothing in it may depend on Windows.
+    # since nothing in it may depend on Windows, and Windows on Arm, which the Arm64 package
+    # runs on: the injector's console calls and the hook are tried there natively (#222).
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
     # (#129); this caps what a hang can cost.
@@ -56,7 +57,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          dotnet publish src/AgentBridge.Injector -c Release -r win-x64 -o "$env:RUNNER_TEMP/injector" --nologo
+          $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
+          dotnet publish src/AgentBridge.Injector -c Release -r $rid -o "$env:RUNNER_TEMP/injector" --nologo
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:AGENT_BRIDGE_INJECTOR = "$env:RUNNER_TEMP/injector/agent-bridge-injector.exe"
           dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
@@ -75,7 +77,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          dotnet publish src/AgentBridge.Hook -c Release -r win-x64 -o "$env:RUNNER_TEMP/hook" --nologo
+          $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
+          dotnet publish src/AgentBridge.Hook -c Release -r $rid -o "$env:RUNNER_TEMP/hook" --nologo
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:AGENT_BRIDGE_HOOK = "$env:RUNNER_TEMP/hook/agent-bridge-host-hook.exe"
           dotnet test tests/AgentBridge.Hooks.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~HookProcessTests" --logger "console;verbosity=normal"
@@ -160,7 +163,23 @@ jobs:
     # The Windows app (docs/app-windows.md): published with the host into one folder, packed
     # with Velopack, then the published copy is started in demo mode to check that it draws
     # the cards and answers one through them. Unsigned: the package is an artifact for testing.
-    runs-on: windows-latest
+    # Once per architecture, each on its own (#222): x64 in Velopack's `win` channel, which every
+    # copy installed before Arm64 builds reads, under the artifact name the publish job always
+    # took; Arm64 in `win-arm64` (build/app-channels.ps1), built and self-tested on Arm64.
+    name: app (${{ matrix.runtime }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: win-x64
+            runner: windows-latest
+            out: out/app
+            artifact: agent-bridge-windows
+          - runtime: win-arm64
+            runner: windows-11-arm
+            out: out/app-arm64
+            artifact: agent-bridge-windows-arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -178,13 +197,13 @@ jobs:
         # since a pull request from a fork gets no secrets (docs/app-windows.md, Signing).
         run: |
           ./build/release-notes.ps1 -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -Out out/app/notes.md
-          ./build/pack-app.ps1 -Version $env:APP_VERSION -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
+          ./build/pack-app.ps1 -Version $env:APP_VERSION -Runtime ${{ matrix.runtime }} -Out ${{ matrix.out }} -Release:($env:APP_RELEASE -eq 'true') -DeltaFrom "https://github.com/${{ github.repository }}" -ReleaseNotes out/app/notes.md
       - name: Only the publish path builds a release host
         # The packed host is a release build exactly when this run publishes: dev here on a pull
         # request. And the property the publish path sets does make one, on this commit.
         shell: pwsh
         run: |
-          $packed = ./build/host-identity.ps1 out/app/publish/agent-bridge-host.dll
+          $packed = ./build/host-identity.ps1 ${{ matrix.out }}/publish/agent-bridge-host.dll
           $wanted = if ($env:APP_RELEASE -eq 'true') { 'release' } else { 'dev' }
           Write-Output "packed host: $packed build (APP_RELEASE=$env:APP_RELEASE)"
           if ($packed -ne $wanted) { Write-Error "the packed host is a $packed build; this run wants a $wanted build"; exit 1 }
@@ -198,11 +217,45 @@ jobs:
         run: |
           $result = "$env:RUNNER_TEMP/selftest/result.json"
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/selftest" | Out-Null
-          $p = Start-Process out/app/publish/AgentBridge.exe -ArgumentList '--self-test', $result -PassThru
+          $p = Start-Process ${{ matrix.out }}/publish/AgentBridge.exe -ArgumentList '--self-test', $result -PassThru
           $finished = $p.WaitForExit(180000)
           Copy-Item "$env:LOCALAPPDATA/AgentBridge/app/*.log" "$env:RUNNER_TEMP/selftest" -ErrorAction SilentlyContinue
           if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the self-test did not finish'; exit 1 }
           if (Test-Path $result) { Get-Content $result } else { Write-Error 'the self-test wrote no result' }
+          exit $p.ExitCode
+      - name: The installer installs per user, into its own channel and architecture, and the installed app starts
+        # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
+        # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
+        # logon task is registered; the installed copy then runs the same self-test. The channel it
+        # recorded is the feed it will update from, for good (build/app-channels.ps1).
+        shell: pwsh
+        run: |
+          . ./build/app-channels.ps1
+          $target = Get-AppChannel '${{ matrix.runtime }}'
+          $setup = Join-Path '${{ matrix.out }}/releases' (Get-AppAssetName $target.Channel 'Installer' $env:APP_VERSION)
+          $logs = "$env:RUNNER_TEMP/selftest/installed"
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          $p = Start-Process $setup -ArgumentList '--silent', '--log', "$logs/setup.log" -PassThru
+          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id; Write-Error 'Setup did not finish'; exit 1 }
+          if ($p.ExitCode) { Get-Content "$logs/setup.log" -ErrorAction SilentlyContinue; Write-Error "Setup exited with $($p.ExitCode)"; exit 1 }
+          $root = "$env:LOCALAPPDATA/AgentBridgeApp"
+          $manifest = Get-Content "$root/current/sq.version" -Raw
+          Write-Output $manifest
+          if ($manifest -notmatch "<channel>$([regex]::Escape($target.Channel))</channel>") { Write-Error "installed into another channel than $($target.Channel)"; exit 1 }
+          # x64's Update.exe is the x86 one vpk gives a pack without --runtime, as installed copies have.
+          $expected = [ordered]@{ 'current/AgentBridge.exe' = $target.Machine; 'current/agent-bridge-host.exe' = $target.Machine; 'current/agent-bridge-injector.exe' = $target.Machine; 'current/agent-bridge-host-hook.exe' = $target.Machine; 'Update.exe' = $(if ($target.Machine -eq 'x64') { 'x86' } else { $target.Machine }) }
+          $bad = 0
+          foreach ($file in $expected.Keys) {
+            $machine = Get-PeMachine ([IO.File]::ReadAllBytes((Join-Path $root $file)))
+            Write-Output "${file}: $machine"
+            if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
+          }
+          if ($bad) { exit 1 }
+          $result = "$logs/result.json"
+          $p = Start-Process "$root/current/AgentBridge.exe" -ArgumentList '--self-test', $result -PassThru
+          $finished = $p.WaitForExit(180000)
+          if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the installed self-test did not finish'; exit 1 }
+          if (Test-Path $result) { Get-Content $result } else { Write-Error 'the installed self-test wrote no result' }
           exit $p.ExitCode
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
@@ -210,16 +263,16 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir ${{ matrix.out }}/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
       - uses: actions/upload-artifact@v4
         with:
-          name: agent-bridge-windows-${{ env.APP_VERSION }}
-          path: out/app/releases
+          name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
+          path: ${{ matrix.out }}/releases
           retention-days: 30
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: app-self-test
+          name: app-self-test-${{ matrix.runtime }}
           path: ${{ runner.temp }}/selftest
           retention-days: 7
 
@@ -248,9 +301,9 @@ jobs:
 
   publish:
     # Every push to main becomes a GitHub pre-release, which installed copies update from
-    # (docs/app-windows.md, "Releases and updates"): the app job's package, once the product's
-    # tests pass on both systems. Never a pull request and never a fork, and the only job here
-    # that can write to the repository.
+    # (docs/app-windows.md, "Releases and updates"): the app jobs' packages, x64's and Arm64's in
+    # one release, once the product's tests pass on every system. Never a pull request and never
+    # a fork, and the only job here that can write to the repository.
     needs: [publish-gate]
     if: needs.publish-gate.outputs.newest == 'true'
     runs-on: windows-latest
@@ -272,11 +325,15 @@ jobs:
         with:
           name: agent-bridge-windows-${{ env.APP_VERSION }}
           path: out/app/releases
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-bridge-windows-arm64-${{ env.APP_VERSION }}
+          path: out/app-arm64/releases
       - name: Publish the pre-release and prune old ones
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
+        run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
 
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in

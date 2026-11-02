@@ -43,6 +43,25 @@ $global:PpNextId = 1000
 $global:PpDownload = $null
 $global:PpCompare = @()
 $global:PpPackSaw = $null
+$global:PpPackArgs = $null
+$global:PpPublishRids = [Collections.Generic.List[string]]::new()
+$global:PpBuildsFor = $null
+$global:PpFeedExtra = $null
+
+# What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
+function global:Get-PpFull([string]$channel, [string]$version) {
+    "AgentBridgeApp-$version$(if ($channel -ne 'win') { "-$channel" })-full.nupkg"
+}
+
+# The smallest PE image Get-PeMachine reads: an MZ header pointing at a COFF header for the machine.
+function global:New-PpExe([string]$path, [string]$machine) {
+    $bytes = [byte[]]::new(0x48)
+    $bytes[0] = 0x4D; $bytes[1] = 0x5A
+    [BitConverter]::GetBytes([int]0x40).CopyTo($bytes, 0x3C)
+    [BitConverter]::GetBytes([uint32]0x4550).CopyTo($bytes, 0x40)
+    [BitConverter]::GetBytes([uint16]@{ x64 = 0x8664; arm64 = 0xAA64 }[$machine]).CopyTo($bytes, 0x44)
+    [IO.File]::WriteAllBytes([IO.Path]::GetFullPath($path), $bytes)
+}
 
 function global:New-PpRelease([string]$tag, [bool]$prerelease = $true, [bool]$draft = $false) {
     $global:PpNextId++
@@ -82,33 +101,40 @@ function global:vpk {
     $global:LASTEXITCODE = 0
     function Arg([string]$name) { $i = [array]::IndexOf($a, $name); if ($i -ge 0) { $a[$i + 1] } }
     if ($a[0] -eq 'upload' -and $a[1] -eq 'github') {
-        $global:PpCalls.Add("vpk upload github --tag $(Arg '--tag') --targetCommitish $(Arg '--targetCommitish') pre=$($a -contains '--pre') publish=$($a -contains '--publish')")
-        New-PpRelease (Arg '--tag') $true $true
+        $merge = $a -contains '--merge'
+        $global:PpCalls.Add("vpk upload github --channel $(Arg '--channel') --tag $(Arg '--tag') --targetCommitish $(Arg '--targetCommitish') pre=$($a -contains '--pre') publish=$($a -contains '--publish') merge=$merge")
+        # As vpk does: without --merge a release already tagged is refused; with it, joined.
+        $existing = $global:PpReleases | Where-Object tag_name -EQ (Arg '--tag')
+        if ($existing -and -not $merge) { $global:LASTEXITCODE = 1; return }
+        if (-not $existing) { New-PpRelease (Arg '--tag') $true $true }
     } elseif ($a[0] -eq 'upload' -and $a[1] -eq 'local') {
-        $global:PpCalls.Add('vpk upload local')
-        $assets = @(Get-Content (Join-Path (Arg '--outputDir') 'assets.win.json') -Raw | ConvertFrom-Json)
-        $feed = @{ Assets = @($assets | Where-Object { $_.Type -in 'Full', 'Delta' } | ForEach-Object {
-                    @{ Version = ($_.RelativeFileName -replace '^AgentBridgeApp-(.+)-(full|delta)\.nupkg$', '$1'); Type = $_.Type } }) }
-        $feed | ConvertTo-Json -Depth 4 | Set-Content (Join-Path (Arg '--path') 'releases.win.json')
+        $channel = Arg '--channel'
+        $global:PpCalls.Add("vpk upload local --channel $channel")
+        $assets = @(Get-Content (Join-Path (Arg '--outputDir') "assets.$channel.json") -Raw | ConvertFrom-Json)
+        $entries = @($assets | Where-Object { $_.Type -in 'Full', 'Delta' } | ForEach-Object {
+                @{ Version = ($_.RelativeFileName -replace '^AgentBridgeApp-(\d+\.\d+\.\d+).*-(full|delta)\.nupkg$', '$1'); Type = $_.Type; FileName = $_.RelativeFileName } })
+        if ($global:PpFeedExtra) { $entries += @{ Version = '0.1.600'; Type = 'Full'; FileName = $global:PpFeedExtra } }
+        @{ Assets = $entries } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path (Arg '--path') "releases.$channel.json")
     } elseif ($a[0] -eq 'download' -and $a[1] -eq 'github') {
-        $global:PpCalls.Add('vpk download github')
+        $global:PpCalls.Add("vpk download github --channel $(Arg '--channel')")
         if ($global:PpDownload -eq 'fail') { $global:LASTEXITCODE = 1; return }
         if ($global:PpDownload) {
             New-Item -ItemType Directory -Force (Arg '-o') | Out-Null
-            Set-Content (Join-Path (Arg '-o') "AgentBridgeApp-$($global:PpDownload)-full.nupkg") "full $($global:PpDownload)"
+            Set-Content (Join-Path (Arg '-o') (Get-PpFull (Arg '--channel') $global:PpDownload)) "full $($global:PpDownload)"
         }
     } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'generate') {
         # A stand-in delta names the two versions it lies between.
         $global:PpCalls.Add('vpk delta generate')
         $from = (Get-Content (Arg '--base')) -replace '^full ', ''
-        $to = (Split-Path (Arg '--new') -Leaf) -replace '^AgentBridgeApp-(.+)-full\.nupkg$', '$1'
+        $to = (Split-Path (Arg '--new') -Leaf) -replace '^AgentBridgeApp-(\d+\.\d+\.\d+).*-full\.nupkg$', '$1'
         Set-Content (Arg '--output') "delta $from->$to"
     } elseif ($a[0] -eq 'delta' -and $a[1] -eq 'patch') {
         # Rebuilds the new package, byte for byte, only from the base the delta was made from.
         $base = (Get-Content (Arg '--base')) -replace '^full ', ''
         if ((Get-Content (Arg '--patch')) -notmatch '^delta (.+)->(.+)$' -or $Matches[1] -ne $base) { $global:LASTEXITCODE = 1; return }
-        Copy-Item (Join-Path (Split-Path (Arg '--patch')) "AgentBridgeApp-$($Matches[2])-full.nupkg") (Arg '--output')
+        Copy-Item ((Arg '--patch') -replace '-delta\.nupkg$', '-full.nupkg') (Arg '--output')
     } elseif ($a[0] -eq 'pack') {
+        $global:PpPackArgs = $a
         $global:PpPackSaw = @(Get-ChildItem (Arg '-o') -Filter *.nupkg -ErrorAction SilentlyContinue | ForEach-Object Name)
     } else { throw "stand-in vpk: unexpected $($a -join ' ')" }
 }
@@ -117,12 +143,16 @@ function global:dotnet {
     $a = @($args)
     $global:LASTEXITCODE = 0
     $out = $a[[array]::IndexOf($a, '-o') + 1]
+    $rid = $a[[array]::IndexOf($a, '-r') + 1]
+    $global:PpPublishRids.Add($rid)
+    # Executables for the runtime asked for, unless a test stands in for a build that ignored it.
+    $machine = if ($global:PpBuildsFor) { $global:PpBuildsFor } else { @{ 'win-x64' = 'x64'; 'win-arm64' = 'arm64' }[$rid] }
     # And the bundled monospace and its licence, as the app's project copies them (Design/DesignKeys.cs).
     $fonts = [regex]::Matches((Get-Content (Join-Path $PSScriptRoot '..' 'src' 'AgentBridge.App' 'Design' 'DesignKeys.cs') -Raw), '"(Assets/Fonts/[^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '/', '\' }
     foreach ($f in @('AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png') + $fonts) {
         $path = Join-Path $out $f
         New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
-        Set-Content $path 'stand-in'
+        if ($f -like '*.exe') { New-PpExe $path $machine } else { Set-Content $path 'stand-in' }
     }
     # The host project's build carries the release metadata exactly when asked for, unless a test
     # stands in for a build cache that ignored the property.
@@ -134,54 +164,68 @@ function global:dotnet {
 
 # --- Fixtures.
 function Reset([int]$prereleases = 0) {
-    $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear()
-    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
+    $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear(); $global:PpPublishRids.Clear()
+    $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpPackArgs = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
+    $global:PpBuildsFor = $null; $global:PpFeedExtra = $null
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
 
-function New-Package([string]$path, [string]$kind) {
-    # A full package as vpk packs it, as far as host-identity.ps1 reads one: the host under lib/app.
+function New-Package([string]$path, [string]$kind, [string]$machine) {
+    # A full package as vpk packs it, as far as host-identity.ps1 and publishing read one: the
+    # host and the app's executable under lib/app.
     $stage = Join-Path $scratch 'stage'
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force (Join-Path $stage 'lib' 'app') | Out-Null
     Copy-Item $global:PpHost[$kind] (Join-Path $stage 'lib' 'app' 'agent-bridge-host.dll')
+    New-PpExe (Join-Path $stage 'lib' 'app' 'AgentBridge.exe') $machine
     [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
     Remove-Item $stage -Recurse -Force
 }
 
-function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild) {
+# x64's folder is out/app/releases, as before Arm64 builds; Arm64's is beside it.
+function Get-PpDir([string]$channel = 'win') { Join-Path $scratch $(if ($channel -eq 'win') { 'releases' } else { "releases-$channel" }) }
+
+function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string]$Channel = 'win', [string]$Machine) {
     # As vpk pack leaves it: with -DeltaFrom, a delta from that version and its full package beside.
-    $dir = Join-Path $scratch 'releases'
+    if (-not $Machine) { $Machine = if ($Channel -eq 'win') { 'x64' } else { 'arm64' } }
+    $suffix = if ($Channel -eq 'win') { '' } else { "-$Channel" }
+    $dir = Get-PpDir $Channel
     New-Item -ItemType Directory -Force $dir | Out-Null
     $assets = [Collections.Generic.List[object]]::new()
-    $assets.Add([ordered]@{ RelativeFileName = 'AgentBridgeApp-win-Setup.exe'; Type = 'Installer' })
-    $assets.Add([ordered]@{ RelativeFileName = 'AgentBridgeApp-win-Portable.zip'; Type = 'Portable' })
-    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version-full.nupkg"; Type = 'Full' })
+    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$Channel-Setup.exe"; Type = 'Installer' })
+    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$Channel-Portable.zip"; Type = 'Portable' })
+    $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version$suffix-full.nupkg"; Type = 'Full' })
     if ($DeltaFrom) {
-        $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version-delta.nupkg"; Type = 'Delta' })
-        Set-Content (Join-Path $dir "AgentBridgeApp-$DeltaFrom-full.nupkg") "full $DeltaFrom"
+        $assets.Add([ordered]@{ RelativeFileName = "AgentBridgeApp-$version$suffix-delta.nupkg"; Type = 'Delta' })
+        Set-Content (Join-Path $dir (Get-PpFull $Channel $DeltaFrom)) "full $DeltaFrom"
     }
     foreach ($a in $assets) {
         $path = Join-Path $dir $a.RelativeFileName
         if ($a.RelativeFileName -in $Skip) { continue }
         switch ($a.Type) {
-            'Full' { New-Package $path $(if ($DevBuild) { 'dev' } else { 'release' }) }
+            'Full' { New-Package $path $(if ($DevBuild) { 'dev' } else { 'release' }) $Machine }
             'Delta' { Set-Content $path "delta $DeltaFrom->$version" }
             default { Set-Content $path 'stand-in' }
         }
     }
-    ConvertTo-Json @($assets) -Compress | Set-Content (Join-Path $dir 'assets.win.json')
+    ConvertTo-Json @($assets) -Compress | Set-Content (Join-Path $dir "assets.$Channel.json")
     $dir
 }
 
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild) {
-    $dir = New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild
-    & $publishScript -Version $version -ReleasesDir $dir -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null
+# Both architectures' folders, as the publish job downloads them, unless -Only names one.
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan) {
+    $dirs = @(foreach ($channel in $Only) { New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild -Channel $channel -Machine $Machine[$channel] })
+    # -Plan: what it says it does, rather than nothing.
+    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>&1 | Out-String }
+    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null }
 }
 
-function Get-Asset { @(Get-Content (Join-Path $scratch 'releases' 'assets.win.json') -Raw | ConvertFrom-Json) }
-function Get-Delta { Get-Content (Join-Path $scratch 'releases' 'AgentBridgeApp-0.1.600-delta.nupkg') -ErrorAction SilentlyContinue }
+function Get-Asset([string]$channel = 'win') { @(Get-Content (Join-Path (Get-PpDir $channel) "assets.$channel.json") -Raw | ConvertFrom-Json) }
+function Get-Delta([string]$channel = 'win') {
+    $name = "AgentBridgeApp-0.1.600$(if ($channel -ne 'win') { "-$channel" })-delta.nupkg"
+    Get-Content (Join-Path (Get-PpDir $channel) $name) -ErrorAction SilentlyContinue
+}
 
 $failures = 0
 function Check([string]$name, [scriptblock]$body) {
@@ -191,6 +235,7 @@ function Check([string]$name, [scriptblock]$body) {
 function Assert([bool]$condition, [string]$message) { if (-not $condition) { throw $message } }
 function Uploads { @($global:PpCalls | Where-Object { $_ -like 'vpk upload github*' }) }
 function Deletes { @($global:PpCalls | Where-Object { $_ -like 'gh api -X DELETE*' }) }
+function CallIndex([string]$like) { $global:PpCalls.FindIndex({ param($c) $c -like $like }) }
 
 # --- Publishing.
 Check 'A new version goes up as a draft, then is published as a pre-release of the commit with assets.win.json beside it' {
@@ -198,13 +243,57 @@ Check 'A new version goes up as a draft, then is published as a pre-release of t
     Invoke-Publish '0.1.600' -DeltaFrom '0.1.503'
     Assert ($global:PpCalls -notcontains 'vpk delta generate') 'a delta from the latest release was rebuilt'
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
-    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
-    Assert (@(Uploads)[0] -eq "vpk upload github --tag v0.1.600 --targetCommitish $commit pre=True publish=False") "upload: $(Uploads)"
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
     Assert ([bool]($global:PpCalls | Where-Object { $_ -like 'gh release upload v0.1.600 *assets.win.json*' })) 'assets.win.json was not uploaded'
     $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Assert ($r -and -not $r.draft -and $r.prerelease) "release: $($r | ConvertTo-Json -Compress)"
     $patch = $global:PpCalls | Where-Object { $_ -like 'gh api -X PATCH*' }
     Assert ($patch -match [regex]::Escape($commit)) 'the notes do not name the commit'
+}
+
+Check 'x64 goes up exactly as before Arm64 builds: the win channel, creating the draft, under the names installed copies read' {
+    # Every copy installed so far is x64 and reads releases.win.json: its channel, file names and
+    # the upload that creates the release must not move.
+    Reset 3
+    $plan = Invoke-Publish '0.1.600' -DeltaFrom '0.1.503' -Plan
+    Assert (@(Uploads)[0] -eq "vpk upload github --channel win --tag v0.1.600 --targetCommitish $commit pre=True publish=False merge=False") "upload: $(Uploads)"
+    $x64 = 'AgentBridgeApp-win-Setup.exe, AgentBridgeApp-win-Portable.zip, AgentBridgeApp-0.1.600-full.nupkg, AgentBridgeApp-0.1.600-delta.nupkg, releases.win.json, RELEASES, assets.win.json'
+    Assert ($plan -match "v0\.1\.600 win \(win-x64, release build\) from $commit, .*: $([regex]::Escape($x64))\r?\n") "plan: $plan"
+    Assert (-not (@(Get-Asset 'win').RelativeFileName -match 'arm64')) "x64's assets: $(@(Get-Asset 'win').RelativeFileName)"
+}
+
+Check 'Arm64 joins the same draft in its own channel, and the release is published only once both are up' {
+    Reset 3
+    $plan = Invoke-Publish '0.1.600' -DeltaFrom '0.1.503' -Plan
+    Assert (@(Uploads)[1] -eq "vpk upload github --channel win-arm64 --tag v0.1.600 --targetCommitish $commit pre=True publish=False merge=True") "upload: $(Uploads)"
+    $arm64 = 'AgentBridgeApp-win-arm64-Setup.exe, AgentBridgeApp-win-arm64-Portable.zip, AgentBridgeApp-0.1.600-win-arm64-full.nupkg, AgentBridgeApp-0.1.600-win-arm64-delta.nupkg, releases.win-arm64.json, assets.win-arm64.json'
+    Assert ($plan -match "v0\.1\.600 win-arm64 \(win-arm64, release build\) from $commit, .*: $([regex]::Escape($arm64))\r?\n") "plan: $plan"
+    Assert ((Get-Delta 'win-arm64') -eq 'delta 0.1.503->0.1.600') "arm64 delta: $(Get-Delta 'win-arm64')"
+    Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
+    $published = CallIndex 'gh api -X PATCH*'
+    Assert ($published -gt (CallIndex '*--channel win-arm64*merge=True') -and $published -gt (CallIndex 'gh release upload v0.1.600 *assets.win-arm64.json*')) "calls: $($global:PpCalls -join '; ')"
+    $notes = $global:PpCalls[$published]
+    Assert ($notes -like '*AgentBridgeApp-win-Setup.exe on an x64 PC*' -and $notes -like '*AgentBridgeApp-win-arm64-Setup.exe on a Windows on Arm PC*') "notes: $notes"
+}
+
+Check 'A release without the Arm64 folder is refused before anything is uploaded' {
+    Reset 3
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -Only 'win' } catch { $threw = $_.Exception.Message -like '*no folder for win-arm64*' }
+    Assert $threw 'a release without Arm64 was not refused'
+    Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
+}
+
+Check "An Arm64 package in x64's channel is refused before anything is uploaded" {
+    Reset 3
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -Machine @{ win = 'arm64' } } catch { $threw = $_.Exception.Message -like '*built for arm64; the win channel is x64*' }
+    Assert $threw 'an Arm64 package in the win channel was not refused'
+    Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
+    Reset 3
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -DryRun -Only 'win-arm64' -Machine @{ 'win-arm64' = 'x64' } } catch { $threw = $_.Exception.Message -like '*built for x64; the win-arm64 channel is arm64*' }
+    Assert $threw 'an x64 package in the win-arm64 channel was not refused, even in a dry run'
 }
 
 Check 'A version that is already tagged is not uploaded again' {
@@ -228,7 +317,7 @@ Check 'A draft left by a failed attempt is deleted and the version uploaded agai
     $leftover = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Invoke-Publish '0.1.600'
     Assert (@(Deletes) -contains "gh api -X DELETE repos/$repo/releases/$($leftover.id)") "deletes: $(Deletes)"
-    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
     Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
 }
 
@@ -236,7 +325,7 @@ Check 'A newer draft does not stop a version being published' {
     Reset 3
     New-PpRelease 'v0.1.601' $true $true
     Invoke-Publish '0.1.600'
-    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
 }
 
 Check 'A folder without its Setup.exe is refused before anything is uploaded' {
@@ -280,7 +369,30 @@ Check 'A delta from an older release than the latest is rebuilt from the latest 
     Invoke-Publish '0.1.600' -DeltaFrom '0.1.501'
     Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "delta: $(Get-Delta)"
     Assert ([bool](Get-Asset | Where-Object Type -EQ 'Delta')) 'the delta is not in assets.win.json'
-    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+    Assert ((Get-Delta 'win-arm64') -eq 'delta 0.1.503->0.1.600') "arm64 delta: $(Get-Delta 'win-arm64')"
+    Assert ([bool](Get-Asset 'win-arm64' | Where-Object Type -EQ 'Delta')) 'the delta is not in assets.win-arm64.json'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
+}
+
+Check "Each architecture's delta base is the latest release's package of its own channel" {
+    Reset 3
+    $global:PpDownload = '0.1.503'
+    Invoke-Publish '0.1.600' -DeltaFrom '0.1.501'
+    $downloads = @($global:PpCalls | Where-Object { $_ -like 'vpk download github*' })
+    Assert (($downloads -join '; ') -eq 'vpk download github --channel win; vpk download github --channel win-arm64') "downloads: $($downloads -join '; ')"
+}
+
+Check "An Arm64 delta is left out when the latest release has no Arm64 package, and x64's is unaffected" {
+    # The first release with Arm64 in it: the one before has only x64's.
+    Reset 3
+    New-Folder '0.1.600' -DeltaFrom '0.1.503' | Out-Null
+    New-Folder '0.1.600' -Channel 'win-arm64' | Out-Null
+    $global:PpDownload = 'fail'
+    & $publishScript -Version '0.1.600' -ReleasesDir (Get-PpDir 'win'), (Get-PpDir 'win-arm64') -Repository $repo -Commit $commit 6>$null
+    Assert ((Get-Delta) -eq 'delta 0.1.503->0.1.600') "x64 delta: $(Get-Delta)"
+    Assert ($null -eq (Get-Delta 'win-arm64')) "arm64 delta: $(Get-Delta 'win-arm64')"
+    Assert (-not (Get-Asset 'win-arm64' | Where-Object Type -EQ 'Delta')) 'assets.win-arm64.json lists a delta'
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
 }
 
 Check 'A delta that cannot be rebuilt is left out and the full package published alone' {
@@ -289,7 +401,7 @@ Check 'A delta that cannot be rebuilt is left out and the full package published
     Invoke-Publish '0.1.600' -DeltaFrom '0.1.501'
     Assert ($null -eq (Get-Delta)) "delta: $(Get-Delta)"
     Assert (-not (Get-Asset | Where-Object Type -EQ 'Delta')) 'assets.win.json still lists the delta'
-    Assert (@(Uploads).Count -eq 1) "uploads: $(Uploads)"
+    Assert (@(Uploads).Count -eq 2) "uploads: $(Uploads)"
 }
 
 Check 'A package packed without a delta gets one from the latest release' {
@@ -322,14 +434,33 @@ Check 'A dry run uploads, publishes and deletes nothing, and has vpk read the fo
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
     Assert (@(Deletes).Count -eq 0) "deletes: $(Deletes)"
     Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X*' -or $_ -like 'gh release*' })) "writes: $($global:PpCalls -join '; ')"
-    Assert ($global:PpCalls -contains 'vpk upload local') 'vpk did not read the folder'
+    Assert ($global:PpCalls -contains 'vpk upload local --channel win') 'vpk did not read the x64 folder'
+    Assert ($global:PpCalls -contains 'vpk upload local --channel win-arm64') 'vpk did not read the Arm64 folder'
     Assert ($global:PpReleases.Count -eq 22) 'the releases changed'
 }
 
-# --- The delta base pack-app.ps1 gives vpk pack.
-function Invoke-Pack([string]$version) {
-    & $packScript -Version $version -Out $scratch -DeltaFrom "https://github.com/$repo" 6>$null 3>$null
+Check "A dry run fails when vpk's feed for a channel lists another channel's package" {
+    Reset 3
+    $global:PpFeedExtra = 'AgentBridgeApp-0.1.600-win-arm64-full.nupkg'
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -DryRun -Only 'win' } catch { $threw = $_.Exception.Message -like "*win feed lists what is not this channel's*win-arm64-full.nupkg*" }
+    Assert $threw 'an Arm64 package in the x64 feed was not caught'
 }
+
+Check 'Each app job dry-runs only its own folder' {
+    Reset 3
+    foreach ($channel in 'win', 'win-arm64') {
+        $global:PpCalls.Clear()
+        Invoke-Publish '0.1.600' -DryRun -Only $channel
+        Assert ((@($global:PpCalls | Where-Object { $_ -like 'vpk upload local*' }) -join '; ') -eq "vpk upload local --channel $channel") "calls: $($global:PpCalls -join '; ')"
+    }
+}
+
+# --- The delta base pack-app.ps1 gives vpk pack.
+function Invoke-Pack([string]$version, [string]$Runtime = 'win-x64') {
+    & $packScript -Version $version -Runtime $Runtime -Out $scratch -DeltaFrom "https://github.com/$repo" 6>$null 3>$null
+}
+function PackArg([string]$name) { $i = [array]::IndexOf($global:PpPackArgs, $name); if ($i -ge 0) { $global:PpPackArgs[$i + 1] } }
 
 Check 'An older release is put beside the new package for vpk to build a delta from' {
     Reset
@@ -350,6 +481,37 @@ Check 'A failed download packs the full package alone' {
     $global:PpDownload = 'fail'
     Invoke-Pack '0.1.600'
     Assert ($null -ne $global:PpPackSaw -and @($global:PpPackSaw).Count -eq 0) "vpk pack saw: $($global:PpPackSaw)"
+}
+
+Check 'An x64 pack is published for win-x64 and packed into the win channel exactly as before Arm64 builds' {
+    # No --runtime: vpk then gives x64 the Update.exe and Setup.exe installed copies already have.
+    Reset
+    $global:PpDownload = '0.1.583'
+    Invoke-Pack '0.1.600'
+    Assert (@($global:PpPublishRids | Select-Object -Unique) -join ',' -eq 'win-x64') "published for: $($global:PpPublishRids)"
+    Assert ((PackArg '-c') -ceq 'win') "channel: $(PackArg '-c')"
+    Assert ($global:PpPackArgs -notcontains '--runtime') "vpk pack $($global:PpPackArgs -join ' ')"
+    Assert ($global:PpCalls -contains 'vpk download github --channel win') "calls: $($global:PpCalls -join '; ')"
+}
+
+Check 'An Arm64 pack is published for win-arm64 and packed into its own channel, with its delta base from that channel alone' {
+    Reset
+    $global:PpDownload = '0.1.583'
+    Invoke-Pack '0.1.600' -Runtime 'win-arm64'
+    Assert (@($global:PpPublishRids | Select-Object -Unique) -join ',' -eq 'win-arm64') "published for: $($global:PpPublishRids)"
+    Assert ((PackArg '-c') -ceq 'win-arm64') "channel: $(PackArg '-c')"
+    Assert ((PackArg '--runtime') -ceq 'win-arm64') "vpk pack $($global:PpPackArgs -join ' ')"
+    Assert ($global:PpCalls -contains 'vpk download github --channel win-arm64') "calls: $($global:PpCalls -join '; ')"
+    Assert ($global:PpPackSaw -contains 'AgentBridgeApp-0.1.583-win-arm64-full.nupkg') "vpk pack saw: $($global:PpPackSaw)"
+}
+
+Check 'A pack whose executables are for another architecture than asked for stops before packing' {
+    Reset
+    $global:PpBuildsFor = 'x64'
+    $threw = $false
+    try { Invoke-Pack '0.1.600' -Runtime 'win-arm64' } catch { $threw = $_.Exception.Message -like '*not built for arm64*AgentBridge.exe (x64)*' }
+    Assert $threw 'x64 executables were packed for Arm64'
+    Assert ($null -eq $global:PpPackSaw) 'vpk pack ran'
 }
 
 Check 'A package left in the output folder by an earlier pack is not a delta base' {

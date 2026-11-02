@@ -51,7 +51,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
 | Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store. Staging, then production on approval, via `.github/workflows/relay.yml` |
 | HA connector | Stages 1–7, so a migrated machine stays on the existing HA dashboard: status, answers, replies, stop, launch, phone notifications, update buttons, upkeep and forget. Contract pinned to agent-ha-bridge v1.33.33 |
-| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas). Latest: v0.1.700 or later. Installed apps check every 30 min and install when idle |
+| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas), x64 and, since #222, native Arm64 in a channel of its own. Latest: v0.1.700 or later. Installed apps check every 30 min and install when idle |
 | Rehearsal (#39) | Done: four runs on a Hyper-V VM and Azure VMs. Verdict: **ready for a supervised migration of one real machine** ([rehearsal-2026-10.md](rehearsal-2026-10.md)) |
 
 ### Machines
@@ -241,9 +241,12 @@ agent-ha-bridge releases from this work:
 
 ## 8. Operating notes
 
-- **Install on a new machine.** Download `AgentBridgeApp-win-Setup.exe` from the newest
-  [release](https://github.com/danswett/agent-bridge/releases); they are all
-  pre-releases, so `releases/latest` does not work. Run it, then sign in from the app.
+- **Install on a new machine.** Download the installer for its architecture from the newest
+  [release](https://github.com/danswett/agent-bridge/releases): `AgentBridgeApp-win-Setup.exe`
+  on an x64 PC, `AgentBridgeApp-win-arm64-Setup.exe` on Windows on Arm (DSWETT-ARM8; Settings,
+  System, About, "System type" says which). They are all pre-releases, so `releases/latest`
+  does not work. Run it, then sign in from the app. Each copy updates only from its own
+  architecture's channel ([app-windows.md](app-windows.md#releases-and-updates-every-merge-to-main-is-a-pre-release)).
   A plain install is read-only beside agent-ha-bridge and registers no hooks.
 - **View only** (e.g. HOME), run at the machine in a normal PowerShell window, not from
   an agent session, then restart the host from the app:

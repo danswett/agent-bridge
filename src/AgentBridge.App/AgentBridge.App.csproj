@@ -15,8 +15,9 @@
          XAML, and the installed app fails at startup with nothing but 0xC000027B (S3). -->
     <EnableMsixTooling>true</EnableMsixTooling>
     <SelfContained>true</SelfContained>
+    <!-- x64 unless published for another (build/pack-app.ps1 -Runtime win-arm64). -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <Platforms>x64</Platforms>
+    <Platforms>x64;ARM64</Platforms>
     <!-- Program.Main runs Velopack's hooks and registers the toast activator before XAML. -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <Nullable>enable</Nullable>

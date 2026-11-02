@@ -1,5 +1,6 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
+using Velopack.Locators;
 using Xunit;
 
 // The host's own updater, as far as it can be tried without an installed package.
@@ -78,6 +79,34 @@ public sealed class HostUpdatesTests : IDisposable
     sealed class Queueing(Queue<(SendOrPostCallback, object?)> queued) : SynchronizationContext
     {
         public override void Post(SendOrPostCallback d, object? state) => queued.Enqueue((d, state));
+    }
+
+    // A release carrying both architectures, as build/publish-prerelease.ps1 publishes it: x64's
+    // packages in the feed copies installed before Arm64 builds read (releases.win.json), Arm64's in
+    // their own, named as vpk names them (build/app-channels.ps1). Arm64's is the newer here, so an
+    // x64 copy that took it would show.
+    [Theory]
+    [InlineData("win", "0.1.600", "0.1.601")]
+    [InlineData("win", "0.1.601", null)]
+    [InlineData("win-arm64", "0.1.600", "0.1.602")]
+    [InlineData("win-arm64", "0.1.602", null)]
+    public async Task An_installed_copy_is_offered_only_its_own_architectures_release_from_a_feed_carrying_both(string channel, string installed, string? offered)
+    {
+        var feed = Path.Combine(root, "releases");
+        Directory.CreateDirectory(feed);
+        static string Feed(string version, string file) =>
+            $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"{{file}}","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
+        File.WriteAllText(Path.Combine(feed, "releases.win.json"), Feed("0.1.601", "AgentBridgeApp-0.1.601-full.nupkg"));
+        File.WriteAllText(Path.Combine(feed, "releases.win-arm64.json"), Feed("0.1.602", "AgentBridgeApp-0.1.602-win-arm64-full.nupkg"));
+        Directory.CreateDirectory(Path.Combine(root, "app"));
+        File.WriteAllText(Path.Combine(root, "app", "feed.txt"), feed);
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", installed, packages, null, null, null, channel);
+        var updates = new VelopackHostUpdates(root, "default", () => { }, _ => { }, copy);
+
+        var found = await updates.CheckAsync(CancellationToken.None);
+
+        Assert.Equal(offered, found?.Version);
     }
 
     [Fact]
