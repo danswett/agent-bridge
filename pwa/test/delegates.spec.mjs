@@ -144,6 +144,47 @@ test('a delegate\'s task and line the budget left out of the list are kept, not 
   await expect(row.locator('.delegate-task')).toContainText('Run the full test suite on HEAD');
 });
 
+test('nothing is fetched for a delegate nobody can see: its card folded, or gone from the list', async ({ page }) => {
+  test.slow();
+  await openDemo(page);
+  const suite = delegate(page, 'demo-agent-suite');
+  await suite.locator('.delegate-summary').click();
+  await expect(suite.locator('.delegate-latest .md')).toContainText('The suite fails on HEAD');
+  // A delegate opened, then gone from the list while its words are on their way.
+  await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+  await delegate(page, 'demo-agent-witness').locator('.delegate-summary').click();
+  await expect.poll(() => fetches(page, 'demo-agent-witness')).toBe(1);
+  await page.evaluate(({ id, at }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    d.upsert({ ...s, updatedAt: at, subagents: s.subagents.filter((a) => a.id !== 'demo-agent-witness') });
+  }, { id: SESSION, at: later() });
+  await expect(delegate(page, 'demo-agent-witness')).toHaveCount(0);
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  // The card folded, with a running delegate open in it.
+  await card(page).locator('.fold').click();
+  await say(page, 'demo-agent-suite', 'Commit 7 of 10 is the first to fail.');
+  const before = await fetches(page, 'demo-agent-suite');
+  await page.waitForTimeout(11000);
+  expect(await fetches(page, 'demo-agent-suite')).toBe(before);
+  expect(await fetches(page, 'demo-agent-witness')).toBe(1);
+  // Opened again, it catches up.
+  await card(page).locator('.fold').click();
+  await expect(suite.locator('.delegate-latest .md')).toHaveText('Commit 7 of 10 is the first to fail.', { timeout: 15000 });
+});
+
+test('a fetch that brings the same words leaves what is shown alone', async ({ page }) => {
+  await openDemo(page);
+  const row = delegate(page, 'demo-agent-suite');
+  await row.locator('.delegate-summary').click();
+  await expect(row.locator('.delegate-latest .md')).toContainText('The suite fails on HEAD');
+  await row.locator('.delegate-latest .md > *').first().evaluate((el) => { el.dataset.seen = '1'; });
+  await change(page, 'demo-agent-suite', { currentTool: { id: 't9', name: 'powershell', summary: 'git bisect good', status: 'running', startedAt: later() }, line: 'Still bisecting.' });
+  await expect.poll(() => fetches(page, 'demo-agent-suite')).toBe(2);
+  await page.waitForTimeout(1000);
+  await expect(row.locator('.delegate-latest .md > [data-seen="1"]')).toHaveCount(1);
+});
+
 test('a delegate starting does not take keyboard focus from the row being read', async ({ page }) => {
   await openDemo(page);
   const summary = delegate(page, 'demo-agent-suite').locator('.delegate-summary');

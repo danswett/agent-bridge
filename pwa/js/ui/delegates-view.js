@@ -89,7 +89,9 @@ const CHANGE_MS = 2000;
 
 class DelegateRow {
   #a = null;
-  #state = { loading: false, again: false, timer: null, due: 0, key: null, loaded: false };
+  #state = { loading: false, again: false, timer: null, due: 0, key: null, loaded: false, disposed: false };
+  // The Markdown shown, so a fetch that brings the same words leaves focus and selection be.
+  #shown = null;
   // Its task and latest line, from the list or a fetch, whichever came last. A list the session
   // budget trimmed leaves them out; that is not the delegate saying nothing.
   #task = null;
@@ -160,7 +162,9 @@ class DelegateRow {
     if (this.#a) { this.els.time.textContent = delegateTime(this.#a, now); }
   }
 
+  // Gone from the list: a fetch still on its way finds it so and asks for nothing more.
   dispose() {
+    this.#state.disposed = true;
     this.#stop();
   }
 
@@ -176,12 +180,22 @@ class DelegateRow {
     if (this.#state.timer && this.#state.due <= due) { return; }
     clearTimeout(this.#state.timer);
     this.#state.due = due;
-    this.#state.timer = setTimeout(() => { this.#state.timer = null; this.#load(); }, ms);
+    this.#state.timer = setTimeout(() => this.#tick(), ms);
+  }
+
+  // Nothing is fetched for a delegate nobody can see: its card folded, the fold it is in shut,
+  // or the app in the background. It is looked at again later, and fetched once it shows.
+  #tick() {
+    this.#state.timer = null;
+    if (this.#state.disposed || !this.els.detail.open) { return; }
+    if (document.hidden || this.element.getClientRects().length === 0) { this.#schedule(POLL_MS); return; }
+    this.#load();
   }
 
   async #load() {
     const e = this.els;
     // One at a time; a fetch asked for meanwhile goes once this one is back.
+    if (this.#state.disposed) { return; }
     if (this.#state.loading) { this.#state.again = true; return; }
     if (!this.fetchDelegate) { this.#show({}); return; }
     this.#state.loading = true;
@@ -206,7 +220,7 @@ class DelegateRow {
     } finally {
       this.#state.loading = false;
     }
-    if (!e.detail.open) { return; }
+    if (this.#state.disposed || !e.detail.open) { return; }
     if (this.#state.again) {
       this.#state.again = false;
       this.#load();
@@ -222,10 +236,14 @@ class DelegateRow {
     e.status.textContent = status ?? '';
     // A failed fetch keeps what was fetched before; with nothing fetched yet, its latest line.
     if (status && this.#state.loaded) { return; }
-    e.latest.replaceChildren(renderMarkdown(response || this.#line || ''));
+    const latest = response || this.#line || '';
+    if (latest !== this.#shown) {
+      this.#shown = latest;
+      e.latest.replaceChildren(renderMarkdown(latest));
+    }
     e.latestBlock.hidden = !(response || this.#line);
     e.truncated.hidden = !(truncated && response);
-    e.reasoningText.textContent = reasoning ?? '';
+    if (e.reasoningText.textContent !== (reasoning ?? '')) { e.reasoningText.textContent = reasoning ?? ''; }
     e.reasoning.hidden = !reasoning;
   }
 }
