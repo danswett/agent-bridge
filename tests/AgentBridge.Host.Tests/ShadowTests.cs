@@ -370,6 +370,18 @@ public sealed class ShadowTests : IDisposable
             Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
             Activity = new Activity { Response = "Done: the release is cut." },
         })));
+        // The main agent's own reply dropped by the protocol budget: what the card shows is not
+        // known from the budgeted form, so nothing is labelled (found in review).
+        Assert.Null(Response("Delegate: all 40 tests pass", HostSide.From(new Session
+        {
+            Id = Id, Agent = AgentKind.Copilot, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+            Activity = new Activity
+            {
+                Response = "Delegate: all 40 tests pass",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { ResponseTruncated = true },
+            },
+        })));
     }
 
     // #175: the agents behind the host's background.agents, entry by entry, for ShadowWitness.Agents.

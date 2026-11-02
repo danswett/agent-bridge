@@ -53,11 +53,14 @@ public sealed class ShadowWitnessTests : IDisposable
         Model = model,
     };
 
-    // What the witness makes of the one difference of a kind between these two.
-    string? Known(ShadowSession daemon, ShadowSession host, string kind)
+    // What the witness makes of the one difference of a kind between these two, on the last of
+    // as many samples in a row.
+    string? Known(ShadowSession daemon, ShadowSession host, string kind, int samples = 1)
     {
         var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = daemon } }, new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = host }, SeesAgentHaBridge = true });
-        var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        var witness = new ShadowWitness(Paths);
+        IReadOnlyList<ShadowDifference> differences = [];
+        for (var i = 0; i < samples; i++) { differences = witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences); }
         return Assert.Single(differences, x => x.Kind == kind).Known;
     }
 
@@ -264,11 +267,12 @@ public sealed class ShadowWitnessTests : IDisposable
         // A list that disagrees with the host's own count explains nothing.
         Assert.Null(Known(Daemon(through, agents: ["c2"]), Host(agents: 2) with { RunningSubagents = ["a1"] }, ShadowKinds.BackgroundAgents));
 
-        // The same number on both sides is still compared agent by agent: a woken a1 (#258) where
-        // the daemon keeps a3, whose end it read past (#259), is two known bugs cancelling out...
-        Assert.Equal("agent-ha-bridge#258, agent-ha-bridge#259", Known(Daemon(through, agents: ["c2", "c3"]), Host(agents: 2) with { RunningSubagents = ["a1", "a2"] }, ShadowKinds.BackgroundAgents));
+        // The same number on both sides is still compared agent by agent (on two samples in a row,
+        // so a handoff between the reads is not): a woken a1 (#258) where the daemon keeps a3,
+        // whose end it read past (#259), is two known bugs cancelling out...
+        Assert.Equal("agent-ha-bridge#258, agent-ha-bridge#259", Known(Daemon(through, agents: ["c2", "c3"]), Host(agents: 2) with { RunningSubagents = ["a1", "a2"] }, ShadowKinds.BackgroundAgents, samples: 2));
         // ...and the host counting a3, which ended, in place of a2 is a mismatch.
-        var other = Known(Daemon(through, agents: ["c2"]), Host(agents: 1) with { RunningSubagents = ["a3"] }, ShadowKinds.BackgroundAgents);
+        var other = Known(Daemon(through, agents: ["c2"]), Host(agents: 1) with { RunningSubagents = ["a3"] }, ShadowKinds.BackgroundAgents, samples: 2);
         Assert.Null(other);
         // The same agents on both sides are no difference at all.
         var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(through, agents: ["c2"]) } },
@@ -309,8 +313,41 @@ public sealed class ShadowWitnessTests : IDisposable
             Event("subagent.started", new { toolCallId = "c5", executionMode = "background" }, agentId: "a5"));
         Assert.Empty(Explain(read, ["c4"], ["a5"]));
         read = new FileInfo(Paths.CopilotTranscript(Id)!).Length;
-        // Once the daemon has read the handoff, the same count of different agents is a mismatch.
+        // Once the daemon has read the handoff, the same count of different agents is a mismatch,
+        // reported once the same agents are apart on a second sample (a host behind for one is
+        // the next test's).
+        Assert.Empty(Explain(read, ["c4"], ["a5"]));
         Assert.Null(Assert.Single(Explain(read, ["c4"], ["a5"])).Known);
+    }
+
+    // Found in review: the host is read before the daemon, so a handoff between the two reads leaves
+    // the host listing the agent the daemon has seen end. Successive ones, each caught for a sample,
+    // are no difference; a host still on the wrong agent a sample later is.
+    [Fact]
+    public void A_handoff_the_host_has_not_read_yet_is_no_difference_however_many_follow()
+    {
+        var witness = new ShadowWitness(Paths);
+        IReadOnlyList<ShadowDifference> Explain(long offset, string[] daemonCalls, string[] hostAgents)
+        {
+            var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
+                new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
+            return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        }
+
+        var read = Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"));
+        Assert.Empty(Explain(read, ["c1"], ["a1"]));
+        for (var n = 1; n < 5; n++)
+        {
+            read = Write(
+                Event("assistant.turn_end", new { }, agentId: $"a{n}"),
+                Event("subagent.completed", new { toolCallId = $"c{n}" }),
+                Event("subagent.started", new { toolCallId = $"c{n + 1}", executionMode = "background" }, agentId: $"a{n + 1}"));
+            Assert.Empty(Explain(read, [$"c{n + 1}"], [$"a{n}"]));
+        }
+        // Still on a4 with nothing new since: the host is wrong, not behind.
+        Assert.Null(Assert.Single(Explain(read, ["c5"], ["a4"])).Known);
+        // And caught up, no difference.
+        Assert.Empty(Explain(read, ["c5"], ["a5"]));
     }
 
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start

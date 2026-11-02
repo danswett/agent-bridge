@@ -25,7 +25,11 @@ public static class HostSide
         Model = string.IsNullOrEmpty(s.Model) ? null : s.Model,
         Compactions = s.Activity.Compactions ?? 0,
         ResponseTail = ShadowHash.Tail(s.Activity.Response),
-        CardResponseTail = s.Activity.Source?.Response is null ? null : ShadowHash.Tail(HaPayloads.MainResponse(s.Activity)) ?? ShadowCompare.NoResponse,
+        // Unknown when the protocol budget dropped the main agent's own reply: the shadow reads the
+        // budgeted form, the card the whole one, so the note in its place says nothing about what
+        // the card shows (found in review).
+        CardResponseTail = s.Activity.Source?.Response is null || s.Activity.Own is { Response: null, ResponseTruncated: true } ? null
+            : ShadowHash.Tail(HaPayloads.MainResponse(s.Activity)) ?? ShadowCompare.NoResponse,
         RunningSubagents = RunningSubagents(s),
         Question = Question(s.Question),
         PermissionPending = s.Question?.Kind == QuestionKind.Approval,

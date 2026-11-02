@@ -356,7 +356,10 @@ comparing:
   `activity.response` comparison is unchanged and stays strict: the host's top-level
   `response`, still the latest writer's, against the daemon's. Only once those agree, and
   the host's `activity.source.response` names a sub-agent, is the card's difference recorded,
-  as the known difference `main-agent-only (#175)`. It is tallied, never a mismatch.
+  as the known difference `main-agent-only (#175)`. It is tallied, never a mismatch. The
+  shadow reads the budgeted session and the card the whole one, so when the protocol
+  budget has dropped the main agent's own reply, nothing is labelled: what the card shows
+  is not known from that form.
   Anything else about the response is still a mismatch (or `timing`, below), sub-agents or
   not: the daemon showing words neither side wrote last, or the main agent's words where
   the host's latest writer is a sub-agent. Reasoning is not compared ("Not compared"), so
@@ -416,7 +419,12 @@ put down to the daemon. The same number of different agents on each side is now 
 `background.agents` difference ("not the same agents"), judged by the same rule. Agents
 that started, stopped (a run's end or `subagent.failed`), completed or were woken at or past the daemon's `Offset` are left
 out of that check: the daemon a poll behind a handoff is not a disagreement, and
-successive handoffs caught a sample each would otherwise join into one long episode. A wrong
+successive handoffs caught a sample each would otherwise join into one long episode. The
+host is read first and has no read offset of its own, so a handoff between the two reads
+gives the host's side the same lag; the agents apart must therefore be the same ones on two
+samples in a row before the difference is recorded. A side stuck on the wrong agent is still
+reported, a sample later; only agents that change on every sample are not, and a single
+`shadow once` sample never reports this one. A wrong
 agent on one side is no longer hidden by another on the other. The daemon still counts every
 agent's `subagent.started` at any depth and drops none for being nested, so nesting adds no
 difference. A delegate's shells are its own on the host and the session's on the daemon,
