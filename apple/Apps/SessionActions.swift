@@ -127,7 +127,7 @@ struct SessionActions: View {
     private func questionSection(_ question: BridgeQuestion) -> some View {
         Section("Question") {
             Text(question.message).textSelection(.enabled)
-            if let reason = question.readOnlyReason(capabilities: host.capabilities, sessionAgent: session?.agent ?? "unknown") {
+            if let reason = host.readOnlyReason ?? question.readOnlyReason(capabilities: host.capabilities, sessionAgent: session?.agent ?? "unknown") {
                 Text(reason).foregroundStyle(.secondary)
             } else {
                 if question.fields.isEmpty {
@@ -159,6 +159,9 @@ struct SessionActions: View {
     private func answer() {
         do {
             guard let question, let session else { return }
+            if let reason = host.readOnlyReason {
+                throw BridgeOperationError(reason)
+            }
             let operation = try question.answer(sessionID: sessionID, currentQuestionID: loadedQuestionID,
                                                 values: values, text: question.fields.isEmpty ? answerText : nil, capabilities: host.capabilities, sessionAgent: session.agent)
             Task { await host.perform(operation, slot: slot) }

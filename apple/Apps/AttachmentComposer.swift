@@ -152,14 +152,29 @@ struct AttachmentComposer: View {
                     throw BridgeOperationError("The clipboard does not contain an image.")
                 }
                 guard !image.0.isEmpty, image.0.count <= BridgeAttachmentImage.maximumInputBytes else { throw BridgeOperationError("The clipboard image exceeds 100 MiB.") }
-                let directory = try BridgeAttachmentImage.temporaryDirectory()
-                let url = directory.appendingPathComponent("image." + image.1)
-                do { try image.0.write(to: url, options: .atomic) }
-                catch { try? FileManager.default.removeItem(at: directory); throw error }
-                start { ImportedAttachment(url: url, temporaryDirectory: directory) }
+                start { try await ClipboardImageImport.shared.write(image.0, extension: image.1) }
             } catch { self.error = error.localizedDescription }
         }
     #endif
+}
+
+/// Pasteboard access stays on the UI actor; writing up to 100 MiB must not.
+private actor ClipboardImageImport {
+    static let shared = ClipboardImageImport()
+
+    func write(_ data: Data, extension ext: String) throws -> ImportedAttachment {
+        try Task.checkCancellation()
+        let directory = try BridgeAttachmentImage.temporaryDirectory()
+        let url = directory.appendingPathComponent("image." + ext)
+        do {
+            try data.write(to: url, options: .atomic)
+            try Task.checkCancellation()
+            return ImportedAttachment(url: url, temporaryDirectory: directory)
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+    }
 }
 
 private struct ImportedAttachment: Sendable {
