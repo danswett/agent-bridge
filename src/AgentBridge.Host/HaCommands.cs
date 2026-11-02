@@ -35,8 +35,15 @@ public static class HaCommands
                     // Given again, it is a change: one fresh attempt, even if this token was refused before.
                     if (HostSettings.Load(folder).Settings.HomeAssistant.BaseUrl is { } baseUrl)
                     {
-                        var auth = new HaAuthGuard(HaAuthGuard.FileFor(folder));
-                        auth.Forget(auth.Credential(baseUrl, token.Trim()));
+                        var record = HaAuthGuard.FileFor(folder);
+                        var auth = new HaAuthGuard(record);
+                        if (!auth.Forget(auth.Credential(baseUrl, token.Trim())))
+                        {
+                            // Stored, but without the record of it the host still holds the token back.
+                            error.WriteLine($"Stored the Home Assistant token, but could not record in {record} that it was given again, so the host may still hold it back. " +
+                                "Make sure that file can be written, then run `agent-bridge-host ha token set` again.");
+                            return 1;
+                        }
                     }
                     output.WriteLine($"Stored the Home Assistant token, protected{(OperatingSystem.IsWindows() ? " (DPAPI, this Windows user)" : " (readable by you only)")}, in {folder}. Restart agent-bridge-host serve to use it.");
                     return 0;

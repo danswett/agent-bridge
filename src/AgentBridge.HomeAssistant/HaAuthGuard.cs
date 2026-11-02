@@ -76,6 +76,7 @@ public sealed class HaAuthGuard
     bool unavailable;
     readonly List<Func<State, bool>> pending = [];
     readonly Func<State, bool> markLost;
+    bool lostSaid;
     // What the record said when this process last read or wrote it.
     string? readText;
     // The record was read again, with whatever another process recorded: what Problem says may have
@@ -162,16 +163,23 @@ public sealed class HaAuthGuard
 
     // ha token set: the token was given again, which counts as a change, so it gets an attempt of
     // its own even when the same one was refused before. The address's count is kept. With the
-    // record lost, this is the person's say-so for one attempt (Granted).
-    public void Forget(HaCredential credential)
+    // record lost, this is the person's say-so for one attempt (Granted). False when it could not
+    // be recorded: kept only by this process, it would end with it (ha token set exits at once).
+    public bool Forget(HaCredential credential)
     {
         var now = time.GetUtcNow();
-        Mutate(s =>
+        bool recorded;
+        lock (gate)
         {
-            if (s.Lost is not null) { ServerOf(s, credential, now).Credentials[credential.Id] = new Cred { Granted = true }; }
-            else if (s.Servers.TryGetValue(credential.Server, out var server)) { server.Credentials.Remove(credential.Id); }
-        });
+            Mutate(s =>
+            {
+                if (s.Lost is not null) { ServerOf(s, credential, now).Credentials[credential.Id] = new Cred { Granted = true }; }
+                else if (s.Servers.TryGetValue(credential.Server, out var server)) { server.Credentials.Remove(credential.Id); }
+            });
+            recorded = path is null || !unavailable;
+        }
         Changed?.Invoke();
+        return recorded;
     }
 
     // Before a request with this credential: a lease to report how it was answered, or a
@@ -366,9 +374,11 @@ public sealed class HaAuthGuard
     // answered, never a refusal or ban recorded while it was on its way.
     // By the record's count of every refusal ever recorded, which only rises: a count that a login
     // resets could come back to where it was with a newer refusal in it.
-    internal readonly record struct Seen(long Refusals);
+    // And by when the record was last lost: an answer to a request let go before that says nothing
+    // the record can still be held to.
+    internal readonly record struct Seen(long Refusals, DateTimeOffset? Lost);
 
-    Seen SeenLocked() => new(state.Refusals);
+    Seen SeenLocked() => new(state.Refusals, state.Lost);
 
     readonly record struct Decision(Gate Gate, HaAuthKind Kind = HaAuthKind.Rejected);
 
@@ -492,6 +502,7 @@ public sealed class HaAuthGuard
             Mutate(s =>
             {
                 Unreserved(s, reservation);
+                if (s.Lost is not null && s.Lost != seen.Lost) { return; }
                 var sv = ServerOf(s, credential, now);
                 var cr = CredOf(sv, credential);
                 cr.Accepted = true;
@@ -713,16 +724,25 @@ public sealed class HaAuthGuard
             return null;
         }
         if (!pending.Contains(markLost)) { pending.Add(markLost); }
-        try { File.Move(path!, path + CorruptSuffix, overwrite: true); }
+        // Copied, not moved: the corrupt record stays where it is until the record of its loss
+        // replaces it, so a write that fails, or a process that ends, still finds it and holds.
+        try { File.Copy(path!, path + CorruptSuffix, overwrite: true); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return $"it is not a record of refusals and could not be set aside ({e.GetType().Name})";
         }
-        log($"Home Assistant's refusal record {path} was not readable as one, and has been set aside as {FileName}{CorruptSuffix}. " +
-            "Nothing is sent with a token not already accepted until `agent-bridge-host ha token set` is run or the record deleted");
-        reread = true;
-        // What this process last read stands, with the loss recorded on it (markLost, pending).
-        basis = readText is { } good ? JsonSerializer.Deserialize<State>(good, Json) ?? new State() : new State();
+        if (!lostSaid)
+        {
+            log($"Home Assistant's refusal record {path} was not readable as one, and has been set aside as {FileName}{CorruptSuffix}. " +
+                "Nothing is sent with a token not accepted since until `agent-bridge-host ha token set` is run or the record deleted");
+            reread = true;
+        }
+        // Once: until the record of the loss is written over it, it is found again on every read.
+        lostSaid = true;
+        // Nothing of what came before stands, not even what this process last read: another may
+        // have stopped a token it still knew as accepted. Only the loss (markLost, pending).
+        readText = null;
+        basis = new State();
         return null;
     }
 

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using AgentBridge.HomeAssistant;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
@@ -186,25 +186,101 @@ public sealed class AuthBackoffTests : IDisposable
 
     // On Windows a reader's open handle makes replacing the record fail. That once stopped the
     // process recording for good, and a restart then found the refusal gone and the token clear.
+    // (Elsewhere the replace succeeds at once; the refusal must survive the restart either way.)
     [Fact]
-    public async Task A_refusal_recorded_while_a_reader_has_the_record_open_is_written_once_it_closes()
+    public async Task A_refusal_recorded_while_a_reader_has_the_record_open_survives_a_restart()
     {
         var ha = new Answering(time) { Status = HttpStatusCode.OK };
-        var guard = new HaAuthGuard(Record, time);
-        var serve = Client(ha, guard);
+        var serve = Client(ha, new HaAuthGuard(Record, time));
         Assert.Null(await Publish(serve));
 
         ha.Status = HttpStatusCode.Unauthorized;
         using (new FileStream(Record, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
         {
             Assert.True(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
-            Assert.False(Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, guard, "second-token-not-a-secret"))).Sent);
         }
         Assert.NotNull(serve.Refused);
 
         var restarted = new HaAuthGuard(Record, time);
         Assert.StartsWith("Home Assistant rejected the token", restarted.Describe(restarted.Credential(Url, Token)), StringComparison.Ordinal);
+    }
+
+    // A refusal that could not be written is kept, other tokens are held meanwhile, and the next
+    // request that can write it does, so a restart still finds it.
+    [Fact]
+    public async Task A_refusal_that_could_not_be_written_is_written_once_the_record_can_be_and_survives_a_restart()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serve = Client(ha, new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(serve));
+        Directory.CreateDirectory(Record + ".tmp");
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        Assert.True(Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Sent);
+        Assert.Equal(HaAuthKind.Unrecorded, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time), "second-token-not-a-secret"))).Kind);
+        Directory.Delete(Record + ".tmp");
+        Assert.NotNull(serve.Refused);
+
+        var restarted = new HaAuthGuard(Record, time);
+        Assert.StartsWith("Home Assistant rejected the token", restarted.Describe(restarted.Credential(Url, Token)), StringComparison.Ordinal);
         Assert.Equal(2, ha.Seen.Count);
+    }
+
+    // The corrupt record stays in place until the record of its loss replaces it: a process that
+    // could not write that, and one started after it has gone, still hold every token.
+    [Fact]
+    public async Task A_corrupt_record_that_cannot_be_replaced_still_holds_tokens_after_a_restart()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        await Hammer(Client(ha, guard), TimeSpan.FromHours(1));
+        Assert.Equal(3, ha.Seen.Count);
+        File.WriteAllBytes(Record, new byte[64]);
+        Directory.CreateDirectory(Record + ".tmp");
+
+        Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time))));
+        Directory.Delete(Record + ".tmp");
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromHours(1));
+
+        Assert.Equal(3, ha.Seen.Count);
+    }
+
+    // A process that still knew a token as accepted when the record was lost does not bring that
+    // back: another process may have stopped it in the record that was lost.
+    [Fact]
+    public async Task A_lost_record_does_not_bring_back_a_token_another_process_stopped()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serve = Client(ha, new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(serve));
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromHours(1));
+        var before = ha.Seen.Count;
+        File.WriteAllBytes(Record, new byte[64]);
+
+        await Hammer(serve, TimeSpan.FromHours(1));
+
+        Assert.Equal(before, ha.Seen.Count);
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(serve)).Kind);
+    }
+
+    // A request let go before the record was lost and answered after: its answer says nothing the
+    // lost record could still be held to, so it does not make the token accepted.
+    [Fact]
+    public async Task An_answer_to_a_request_let_go_before_the_record_was_lost_does_not_accept_the_token()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        var token = guard.Credential(Url, Token);
+        using (var l = await guard.EnterAsync(guard.Credential(Url, "other-token-not-a-secret"))) { l.Answered(HttpStatusCode.OK); }
+
+        var early = await guard.EnterAsync(token);
+        File.WriteAllBytes(Record, new byte[64]);
+        Assert.NotNull(guard.Refused(guard.Credential(Url, "third-token-not-a-secret")));
+        early.Answered(HttpStatusCode.OK);
+        early.Dispose();
+
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time)))).Kind);
     }
 
     // A record cut short or zero-filled (a power cut mid-write) is no clean record: it is set
