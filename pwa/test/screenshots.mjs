@@ -6,7 +6,7 @@
 // docs/approval.png: a permission request, answered with a tap.
 // docs/all-machines.png: every machine at once, each row naming its machine.
 // docs/needs-you-light.png, needs-you-dark.png and needs-you-wide.png: Needs you (#165) on a phone and wide.
-// docs/delegates-light.png and delegates-dark.png: a card's main agent and its delegates (#176).
+// docs/delegates-light.png and delegates-dark.png: a session's main agent and its delegates (#176), wide.
 import { webkit, devices } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,7 @@ async function show(page, id) {
 try {
   for (const scheme of ['light', 'dark']) {
     const { context, page } = await open(scheme);
+    await hideBar(page);
     await page.screenshot({ path: out(`demo-${scheme}.png`), fullPage: true });
     await context.close();
     console.log(`docs/demo-${scheme}.png`);
@@ -137,11 +138,13 @@ try {
     console.log(`docs/${name}`);
   }
 
-  // The main agent and its delegates on one card (#176): the main agent's own words, then each
-  // delegate under its name, one of them opened to its own latest response.
+  // The main agent and its delegates in one session (#176, ui.md §6.3): the main agent's own
+  // words in the conversation, and beside them in the inspector each delegate under its name,
+  // one of them opened to its own latest response.
   for (const scheme of ['light', 'dark']) {
-    const { context, page } = await open(scheme, '&delegates=1');
-    const card = page.locator('.session[data-id="demo-delegates"]');
+    const { context, page } = await open(scheme, '&delegates=1', { viewport: { width: 1440, height: 1000 } });
+    await page.locator('.session[data-id="demo-delegates"] .row-main').click();
+    const card = page.locator('.session-view[data-id="demo-delegates"]');
     const suite = card.locator('.delegate[data-id="demo-agent-suite"]');
     await suite.locator('.delegate-summary').click();
     await suite.locator('.delegate-latest:not([hidden])').waitFor();
@@ -149,7 +152,7 @@ try {
     await fixTimes(page);
     await page.evaluate(() => { for (const t of document.querySelectorAll('.delegate-time')) { t.textContent = /finished/.test(t.textContent) ? 'finished 11m ago' : t.closest('[data-depth="1"]') ? '2m' : '16m'; } });
     await hideBar(page);
-    await card.locator('.frame').screenshot({ path: out(`delegates-${scheme}.png`) });
+    await card.screenshot({ path: out(`delegates-${scheme}.png`) });
     await context.close();
     console.log(`docs/delegates-${scheme}.png`);
   }

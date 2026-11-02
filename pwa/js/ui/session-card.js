@@ -28,11 +28,13 @@ import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 import { factsOf, lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
+import { DelegatesBlock } from './delegates-view.js';
+import { mainVoice } from '../attribution.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
-export const TABS = Object.freeze(['conversation', 'tools']);
+export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -64,10 +66,10 @@ export class SessionCard {
   // all. labelled: whether the row names its machine, as it does with every machine shown.
   // onSelect(card): its row was chosen. onPin(card, pinned), onBack(card): the header's Pin and
   // (on a phone) Back. layout() -> { inspector }: whether the inspector is a pane of its own now.
-  constructor(session, { hostId = null, fetchDetail, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true }) {
-    Object.assign(this, { hostId, fetchDetail, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
+  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true }) {
+    Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabT: `s${n}-tab-t` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -110,33 +112,42 @@ export class SessionCard {
     e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
     e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
 
-    // Conversation / Tools, where the inspector isn't a pane of its own.
+    // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
+    // Delegates is there only while the host lists any.
     e.tabC = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabC, 'aria-controls': this.ids.conversation, onclick: () => this.setTab('conversation') }, 'Conversation');
+    e.tabD = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabD, 'aria-controls': this.ids.delegates, hidden: true, onclick: () => this.setTab('delegates') }, 'Delegates');
     e.tabT = h('button', { type: 'button', role: 'tab', class: 'view-tab', id: this.ids.tabT, 'aria-controls': this.ids.tools, onclick: () => this.setTab('tools') }, 'Tools');
-    e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabT);
+    e.tabs = h('div', { class: 'view-tabs', role: 'tablist', 'aria-label': 'Session' }, e.tabC, e.tabD, e.tabT);
     e.tabs.addEventListener('keydown', (ev) => {
       if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') { return; }
       ev.preventDefault();
-      const next = this.#tab === 'tools' ? 'conversation' : 'tools';
+      const tabs = [['conversation', e.tabC], ['delegates', e.tabD], ['tools', e.tabT]].filter(([, el]) => !el.hidden);
+      const i = Math.max(0, tabs.findIndex(([t]) => t === this.#tab));
+      const [next, el] = tabs[(i + (ev.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
       this.setTab(next);
-      (next === 'tools' ? e.tabT : e.tabC).focus();
+      el.focus();
     });
 
     // The conversation (ui.md §6.4): one voice per line, the main agent's.
     e.userText = h('p', { class: 'plain' });
     e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), h('div', { class: 'bubble' }, e.userText));
     e.agentAge = h('time', { class: 'speaker-age' });
-    e.speaker = h('p', { class: 'speaker' }, h('span', { class: 'speaker-name' }, 'Main agent'), e.agentAge);
+    // "Main agent" where the host says whose words these are (attribution.js); a host that doesn't
+    // may have a delegate's here, so they are only the agent's, by its name.
+    e.voice = h('span', { class: 'speaker-name voice-label', hidden: true }, 'Main agent');
+    e.agentLabel = h('span', { class: 'speaker-name' });
+    e.speaker = h('p', { class: 'speaker' }, e.voice, e.agentLabel, e.agentAge);
     e.reasoningText = h('p', { class: 'plain' });
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Show reasoning'), e.reasoningText);
     e.reasoning.addEventListener('toggle', () => { e.reasoning.querySelector('summary').textContent = e.reasoning.open ? 'Hide reasoning' : 'Show reasoning'; });
     e.truncated = h('p', { class: 'note truncated', hidden: true }, 'Earlier text not shown: the response was longer than the machine sends.');
+    e.dropped = h('p', { class: 'note dropped', hidden: true }, 'The main agent\'s latest response was left out: too long to send with its delegates.');
     e.response = h('div', { class: 'md response' });
     e.toolName = h('span', { class: 'tool-name' });
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
-    e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.response, e.tool);
+    e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.tool);
     e.question = h('div', { class: 'question-slot' });
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
@@ -152,7 +163,11 @@ export class SessionCard {
     e.historyBody = h('div', { class: 'history-body' });
     e.tools = h('section', { class: 'tools-panel', id: this.ids.tools, role: 'tabpanel', 'aria-labelledby': this.ids.tabT },
       h('h3', { class: 'section-head' }, 'Tools'), e.historyBody);
-    e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.tools);
+    // Delegates (#176, ui.md §6.3): each under its own name, never in the main agent's place.
+    // Opening one fetches its own words (session.get with agent); nothing here replies to it.
+    this.delegates = new DelegatesBlock({ fetchDelegate: this.fetchDelegate ? (agent) => this.fetchDelegate(this.#s.id, agent) : null });
+    e.delegates = h('section', { class: 'delegates-panel', id: this.ids.delegates, role: 'tabpanel', 'aria-labelledby': this.ids.tabD, hidden: true }, this.delegates.element);
+    e.inspector = h('aside', { class: 'inspector', 'aria-label': 'Inspector' }, e.details, e.delegates, e.tools);
 
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.header, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
@@ -225,14 +240,25 @@ export class SessionCard {
     this.#renderQuestion(s);
     this.#renderReply(s);
     this.#renderStop(s);
-    if (this.#changed('response', s.activity.response ?? '')) {
-      e.response.replaceChildren(renderMarkdown(s.activity.response ?? ''));
+    // The main agent's own words only (ui.md §1 principle 3); a delegate's are on its own row.
+    const voice = mainVoice(s);
+    if (this.#changed('response', voice.response ?? '')) {
+      e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
     }
-    e.response.hidden = !s.activity.response;
-    e.truncated.hidden = !(s.activity.responseTruncated && s.activity.response);
-    e.reasoning.hidden = !s.activity.reasoning;
-    e.reasoningText.textContent = s.activity.reasoning ?? '';
-    e.agentBlock.hidden = !s.activity.response && !s.activity.reasoning && !t;
+    e.response.hidden = !voice.response;
+    e.truncated.hidden = !voice.responseTruncated;
+    e.dropped.hidden = !voice.responseDropped;
+    e.reasoning.hidden = !voice.reasoning;
+    e.reasoningText.textContent = voice.reasoning ?? '';
+    e.voice.hidden = !voice.attributed;
+    e.agentLabel.hidden = voice.attributed;
+    e.agentLabel.textContent = AGENT_NAME[s.agent] ?? AGENT_NAME.unknown;
+    e.agentBlock.hidden = !voice.response && !voice.responseDropped && !voice.reasoning && !t;
+    this.delegates.update(s);
+    const listed = !this.delegates.element.hidden;
+    e.delegates.hidden = !listed;
+    e.tabD.hidden = !listed;
+    if (!listed && this.#tab === 'delegates') { this.setTab('conversation'); }
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
 
@@ -327,7 +353,7 @@ export class SessionCard {
 
   // Conversation or Tools, where they are tabs; Details, from the header's button.
   setTab(tab) {
-    this.#tab = tab === 'tools' || tab === 'details' ? tab : 'conversation';
+    this.#tab = tab === 'tools' || tab === 'details' || (tab === 'delegates' && !this.els.tabD.hidden) ? tab : 'conversation';
     this.#applyTab();
     this.#revealTools();
   }
@@ -335,7 +361,7 @@ export class SessionCard {
   #applyTab() {
     const e = this.els;
     this.view.dataset.tab = this.#tab;
-    for (const [tab, el] of [['conversation', e.tabC], ['tools', e.tabT]]) {
+    for (const [tab, el] of [['conversation', e.tabC], ['delegates', e.tabD], ['tools', e.tabT]]) {
       const on = this.#tab === tab;
       el.setAttribute('aria-selected', on ? 'true' : 'false');
       el.tabIndex = on || (this.#tab === 'details' && tab === 'conversation') ? 0 : -1;
@@ -386,6 +412,7 @@ export class SessionCard {
     this.#stop = null;
     this.#menu.close(false);
     this.#dropReceipt();
+    this.delegates.dispose();
     clearTimeout(this.#history.timer);
   }
 
@@ -522,6 +549,7 @@ export class SessionCard {
     const u = ago(s.updatedAt, now);
     e.rowAge.textContent = u;
     e.agentAge.textContent = u;
+    this.delegates.refreshTimes(now);
   }
 
   #scheduleHistory() {

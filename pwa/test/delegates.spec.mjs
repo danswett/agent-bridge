@@ -1,7 +1,9 @@
-// The main agent and its delegates on a card (#176, ui.md §1 principle 3, "One voice per line"),
-// in demo mode at a phone's width: the card's response and reasoning are the main agent's own,
-// and each delegate's words are under its own name in the Delegates block, never in its place.
+// The main agent and its delegates in a session's view (#176, ui.md §1 principle 3, "One voice
+// per line"; §6.3), in demo mode at a desktop's width, where the inspector is a pane of its own:
+// the conversation's response and reasoning are the main agent's own, and each delegate's words
+// are under its own name in the Delegates block, never in its place.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const SESSION = 'demo-delegates';
 const CODEX = '019a1b2c-codex-example';
@@ -12,19 +14,20 @@ const MAIN_REASONING = 'Two independent jobs: delegate both.';
 const SUITE_LINE = 'Bisecting over the last 10 commits: 4 left to try.';
 const WITNESS_LINE = 'Check CI before saying so.';
 
-const card = (page, id = SESSION) => page.locator(`.session[data-id="${id}"]`);
+const card = (page, id = SESSION) => view(page, id);
 const delegate = (page, id) => card(page).locator(`.delegate[data-id="${id}"]`);
 const later = () => new Date(Date.now() + 1000).toISOString();
 
-test.use({ viewport: { width: 390, height: 844 } });
+test.use({ viewport: { width: 1440, height: 900 } });
 
-async function openDemo(page, query = '&delegates=1') {
+async function openDemo(page, query = '&delegates=1', id = SESSION) {
   await page.addInitScript(() => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
   await page.goto(`?demo=1&static=1${query}`);
   await page.waitForSelector('html[data-demo-ready]');
+  await open(page, id);
 }
 
 test.afterEach(async ({ page }) => {
@@ -37,7 +40,7 @@ test('the card shows the main agent\'s own words, and each delegate\'s only unde
   await expect(c.locator('.voice-label')).toHaveText('Main agent');
   await expect(c.locator('.response')).toContainText(MAIN_RESPONSE);
   await expect(c.locator('.response')).not.toContainText(SUITE_LINE);
-  await expect(c.locator('.body > .reasoning .plain')).toHaveText(MAIN_REASONING);
+  await expect(c.locator('.agent-block > .reasoning .plain')).toHaveText(MAIN_REASONING);
 
   // Each delegate's words appear once on the card, in its own row.
   await expect(c.getByText(SUITE_LINE)).toHaveCount(1);
@@ -64,8 +67,8 @@ test('the card shows the main agent\'s own words, and each delegate\'s only unde
 
   // Nothing in the block replies to, types to or stops a delegate.
   await expect(block.locator('button, textarea, input')).toHaveCount(0);
-  // And it fits a phone.
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  // And it fits beside the conversation.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
 });
 
 test('opening a delegate asks the machine for that delegate and shows its own response and reasoning', async ({ page }) => {
@@ -144,7 +147,7 @@ test('a delegate\'s task and line the budget left out of the list are kept, not 
   await expect(row.locator('.delegate-task')).toContainText('Run the full test suite on HEAD');
 });
 
-test('nothing is fetched for a delegate nobody can see: its card folded, or gone from the list', async ({ page }) => {
+test('nothing is fetched for a delegate nobody can see: its session left, or gone from the list', async ({ page }) => {
   test.slow();
   await openDemo(page);
   const suite = delegate(page, 'demo-agent-suite');
@@ -161,15 +164,16 @@ test('nothing is fetched for a delegate nobody can see: its card folded, or gone
   }, { id: SESSION, at: later() });
   await expect(delegate(page, 'demo-agent-witness')).toHaveCount(0);
   await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
-  // The card folded, with a running delegate open in it.
-  await card(page).locator('.fold').click();
+  // Another session chosen, with a running delegate open in this one.
+  await open(page, CODEX);
+  await expect(card(page)).toBeHidden();
   await say(page, 'demo-agent-suite', 'Commit 7 of 10 is the first to fail.');
   const before = await fetches(page, 'demo-agent-suite');
   await page.waitForTimeout(11000);
   expect(await fetches(page, 'demo-agent-suite')).toBe(before);
   expect(await fetches(page, 'demo-agent-witness')).toBe(1);
-  // Opened again, it catches up.
-  await card(page).locator('.fold').click();
+  // Chosen again, it catches up.
+  await open(page, SESSION);
   await expect(suite.locator('.delegate-latest .md')).toHaveText('Commit 7 of 10 is the first to fail.', { timeout: 15000 });
 });
 
@@ -215,7 +219,7 @@ test('the main agent\'s reasoning alone is labelled as its own', async ({ page }
   }, { id: SESSION, at: later() });
   const c = card(page);
   await expect(c.locator('.response')).toBeHidden();
-  await expect(c.locator('.body > .reasoning')).toBeVisible();
+  await expect(c.locator('.agent-block > .reasoning')).toBeVisible();
   await expect(c.locator('.voice-label')).toBeVisible();
 });
 
@@ -242,21 +246,103 @@ test('a main-agent response the machine left out says so, and never shows the de
     d.upsert({ ...s, updatedAt: at, activity: { ...s.activity, own: { responseTruncated: true } } });
   }, { id: SESSION, at: later() });
   const c = card(page);
-  await expect(c.locator('.body > .dropped')).toHaveText(/left out/);
+  await expect(c.locator('.agent-block > .dropped')).toHaveText(/left out/);
   await expect(c.locator('.response')).toBeHidden();
-  await expect(c.locator('.body > .reasoning')).toBeHidden();
+  await expect(c.locator('.agent-block > .reasoning')).toBeHidden();
   await expect(c.getByText(SUITE_LINE)).toHaveCount(1);
 });
 
-test('a host that sends no attribution or delegates shows its cards as before', async ({ page }) => {
-  await openDemo(page, '');
+test('a host that sends no attribution or delegates shows its sessions as before', async ({ page }) => {
+  await openDemo(page, '', CODEX);
   const codex = card(page, CODEX);
   await expect(codex.locator('.response')).toHaveText('Done. The test now waits for the socket to drain.');
   await expect(codex.locator('.voice-label')).toBeHidden();
   await expect(codex.locator('.delegates')).toBeHidden();
   // Background agents it can count but not list: status rule 8 says so, and nothing new appears.
+  await open(page, DELEGATING);
   const delegating = card(page, DELEGATING);
   await expect(delegating.locator('.status-text')).toHaveText('Delegating to 2 agents · details not reported');
   await expect(delegating.locator('.delegates')).toBeHidden();
   await expect(delegating.locator('.response')).toHaveText('Three delegates are building the slices; I\'ll review each PR as it lands.');
+});
+
+test.describe('where the inspector is not a pane of its own', () => {
+  test.use({ viewport: { width: 900, height: 800 } });
+
+  test('the delegates are a tab of their own, beside the conversation and the tools, and arrows walk all three', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const tabs = c.getByRole('tab');
+    await expect(tabs).toHaveText(['Conversation', 'Delegates', 'Tools']);
+    await expect(c.locator('.delegates')).toBeHidden();
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
+    await expect(c.locator('.delegates')).toBeVisible();
+    await expect(c.locator('.conversation')).toBeHidden();
+    await expect(c.locator('.tools-panel')).toBeHidden();
+    await expect(c.locator('.details')).toBeHidden();
+    await page.keyboard.press('ArrowRight');
+    await expect(c.getByRole('tab', { name: 'Tools' })).toBeFocused();
+    await expect(c.locator('.delegates')).toBeHidden();
+    await page.keyboard.press('ArrowRight');
+    await expect(c.getByRole('tab', { name: 'Conversation' })).toBeFocused();
+    await page.keyboard.press('ArrowLeft');
+    await expect(c.getByRole('tab', { name: 'Tools' })).toBeFocused();
+  });
+
+  test('a session whose host lists no delegates has no Delegates tab, and arrows skip it', async ({ page }) => {
+    await openDemo(page, '', CODEX);
+    const c = card(page, CODEX);
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toBeHidden();
+    await c.getByRole('tab', { name: 'Conversation' }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(c.getByRole('tab', { name: 'Tools' })).toBeFocused();
+  });
+
+  test('the Delegates tab gives way to the conversation when the last delegate leaves the list', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.getByRole('tab', { name: 'Delegates' }).click();
+    await page.evaluate(({ id, at }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, updatedAt: at, subagents: [] });
+    }, { id: SESSION, at: later() });
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toBeHidden();
+    await expect(c.getByRole('tab', { name: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
+    await expect(c.locator('.conversation')).toBeVisible();
+  });
+});
+
+test('on a phone the Delegates tab holds the block, and it fits', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  const c = card(page);
+  await c.getByRole('tab', { name: 'Delegates' }).click();
+  await expect(c.locator('.delegates')).toBeVisible();
+  await expect(delegate(page, 'demo-agent-suite').locator('.delegate-line')).toHaveText(SUITE_LINE);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+});
+
+test('at a desktop\'s width the delegates sit in the inspector, between Details and Tools, with the conversation beside them', async ({ page }) => {
+  await openDemo(page);
+  const c = card(page);
+  await expect(c.locator('.conversation')).toBeVisible();
+  await expect(c.locator('.inspector .delegates')).toBeVisible();
+  expect(await c.locator('.inspector > section:not([hidden])').evaluateAll((els) => els.map((e) => e.className))).toEqual(['details', 'delegates-panel', 'tools-panel']);
+});
+
+test('in the inspector a delegate\'s name, parent and time wrap as words, and no line starts with a separator', async ({ page }) => {
+  await openDemo(page);
+  await card(page).locator('.delegates-finished > summary').click();
+  const review = delegate(page, 'demo-agent-review');
+  await expect(review.locator('.delegate-under')).toBeVisible();
+  // "Review the witness change" fits the inspector's line: it isn't squeezed to a word a line.
+  expect((await review.locator('.delegate-name').boundingBox()).height).toBeLessThanOrEqual(24);
+  const starts = await card(page).locator('.inspector .delegate-words').evaluateAll((els) => els.flatMap((w) => {
+    const left = w.getBoundingClientRect().left;
+    return [...w.querySelectorAll('.delegate-under, .delegate-time:not(:empty)')].map((sep) => sep.getClientRects()[0].left - left);
+  }));
+  expect(starts.length).toBeGreaterThan(4);
+  for (const x of starts) { expect(x).toBeGreaterThan(2); }
 });

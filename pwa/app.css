@@ -281,7 +281,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) 336px; }
   body[data-inspector="shown"] .session-view .conversation { display: flex; }
   body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
-  body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
+  body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .delegates-panel, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
 }
 
 /* ---- shared ---- */
@@ -686,9 +686,10 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 }
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }
-.session-view[data-tab="tools"] .conversation, .session-view[data-tab="details"] .conversation { display: none; }
-.session-view[data-tab="tools"] .details { display: none; }
-.session-view[data-tab="details"] .tools-panel { display: none; }
+.session-view[data-tab="tools"] .conversation, .session-view[data-tab="details"] .conversation, .session-view[data-tab="delegates"] .conversation { display: none; }
+.session-view[data-tab="tools"] .details, .session-view[data-tab="delegates"] .details { display: none; }
+.session-view[data-tab="details"] .tools-panel, .session-view[data-tab="delegates"] .tools-panel { display: none; }
+.session-view:not([data-tab="delegates"]) .delegates-panel { display: none; }
 
 /* ---- the conversation (ui.md §6.4) ---- */
 .conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -761,9 +762,9 @@ summary {
 /* ---- Main agent and delegates (#176): one voice per line (ui.md §1) ----
    The main agent's words are labelled as its own once delegates speak in the same card; each
    delegate's line sits under its name, in meta style, never in the main agent's place. */
-.voice-label { margin: 8px 0 0; color: var(--ab-text2); font-size: .8rem; font-weight: 600; }
-.voice-label:not([hidden]) ~ .response > :first-child { margin-top: 2px; }
-.delegates { margin: 8px 0; padding-top: 4px; border-top: 1px solid var(--ab-stroke2); }
+/* In the session pane the label is the speaker line's name (§6.4), and the delegates have the
+   inspector or their own tab, so they need no rule above them. */
+.delegates-panel .delegates { margin: 0; }
 .delegates-head { margin: 6px 0 2px; color: var(--ab-text2); font-size: .8rem; font-weight: 600; }
 .delegate-list { list-style: none; margin: 0; padding: 0; }
 .delegate { min-width: 0; }
@@ -772,11 +773,17 @@ summary {
 .delegate[data-depth="3"] { padding-left: 48px; }
 .delegate .delegate-detail { margin: 0; }
 .delegate-summary { display: block; padding: 6px 0; min-width: 0; font-weight: 400; color: var(--ab-text); }
-.delegate-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* The name, "under" its parent and the time flow as text beside the glyph, so in the inspector's
+   336 px they wrap at spaces and a separator stays with the fact after it, never starting a
+   line (#214); the glyph and the chevron keep to the first line. */
+.delegate-head { display: grid; grid-template-columns: 14px minmax(0, 1fr) 16px; column-gap: 6px; align-items: start; min-width: 0; }
+.delegate-head > .glyph { margin-top: 3px; }
+.delegate-words { min-width: 0; line-height: 20px; }
 .delegate-name { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
 .delegate-time { color: var(--ab-text2); font-size: .8rem; white-space: nowrap; }
+.delegate-time:not(:empty) { margin-left: 6px; }
 .delegate-time:not(:empty)::before { content: "·"; margin-right: 6px; }
-.delegate-under { color: var(--ab-text2); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
+.delegate-under { margin-left: 6px; color: var(--ab-text2); font-size: .8rem; overflow-wrap: anywhere; }
 .delegate-under::before { content: "·"; margin-right: 6px; }
 .delegate-line { display: block; margin: 2px 0 0 20px; color: var(--ab-text2); font-size: .82rem; overflow-wrap: anywhere; }
 .delegate-body { margin: 0 0 8px 20px; padding-left: 10px; border-left: 2px solid var(--ab-stroke2); font-size: .88rem; }
@@ -786,7 +793,7 @@ summary {
 .delegates-finished { margin: 2px 0; }
 .delegates-finished > summary { font-size: .82rem; }
 /* A row opens in place; its chevron says so, pointing down into it once open. */
-.delegate-chevron { width: 16px; height: 16px; margin-left: auto; color: var(--ab-text2); transition: transform .2s ease; }
+.delegate-chevron { width: 16px; height: 16px; margin-top: 2px; color: var(--ab-text2); transition: transform .2s ease; }
 .delegate-detail[open] .delegate-chevron { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .delegate-chevron { transition: none; } }
 .delegates-more { font-size: .8rem; }
