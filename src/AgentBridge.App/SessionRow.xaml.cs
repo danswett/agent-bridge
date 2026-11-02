@@ -32,7 +32,8 @@ public sealed partial class SessionRow : UserControl
     public SessionRow()
     {
         InitializeComponent();
-        Loaded += (_, _) => { if (!parked) { Attach(); } };
+        // A parked row's generated bindings start tracking again as it loads: they stop again.
+        Loaded += (_, _) => { if (parked) { Bindings.StopTracking(); } else { Attach(); } };
         Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
     }
