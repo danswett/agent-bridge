@@ -640,6 +640,26 @@ test.describe('a folder-trust question', () => {
     await page.waitForTimeout(500);
     await expect(page.locator('#nav [data-nav="launch"]')).not.toHaveClass(/attention/);
   });
+  test('a question beginning or ending on a machine not picked lights or clears the Launch way with nothing else changing', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      window.agentBridgeDemo.launchPanel.constructor.recheckMs = 400;
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await page.waitForTimeout(600);
+    await expect(way).not.toHaveClass(/attention/);
+    // Only DEV-VM1 (shadow)'s own list changes: no update reaches this page.
+    await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
+    await expect(way).toHaveClass(/attention/, { timeout: 5000 });
+    await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-shadow']; m.launchOptions = { ...m.launchOptions, trust: [] }; });
+    await expect(way).not.toHaveClass(/attention/, { timeout: 5000 });
+  });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');

@@ -102,6 +102,11 @@ export class LaunchPanel {
   // arriving late never overwrites what was seen since.
   #probes = new Map();
   #probeSeq = 0;
+  // Those machines, as last handed in (probeOthers()): [{ hostId, load }]; and the timer that
+  // reads them again while the page is in the foreground, as a question can begin or end there
+  // with nothing else on this page changing.
+  #others = [];
+  #probeTimer = null;
   #target = null;
   #options = null;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
@@ -206,6 +211,7 @@ export class LaunchPanel {
     const offered = new Set((list ?? []).map((m) => m.hostId));
     // Nor a reading of it still on its way, which may have nothing in #asks yet.
     for (const id of new Set([...this.#asks.keys(), ...this.#probes.keys()])) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probes.delete(id); } }
+    this.#others = this.#others.filter((o) => offered.has(o.hostId) && o.hostId !== picked);
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,
@@ -250,9 +256,10 @@ export class LaunchPanel {
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
-    if (!target) { this.#asks.clear(); this.#probes.clear(); this.waiting(false); return; }
+    if (!target) { this.#asks.clear(); this.#probes.clear(); this.#stopProbes(); this.waiting(false); return; }
     // Picked: its own list says from now on, and a probe of it still on its way is stale.
     this.#probes.delete(target.hostId);
+    this.#others = this.#others.filter((o) => o.hostId !== target.hostId);
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     // One that finished while another machine was picked was not watched then: the list asked
     // for next supersedes the question it named, as it would have.
@@ -264,13 +271,33 @@ export class LaunchPanel {
     this.#draw();
   }
 
-  // Another machine shown only for its questions, not the one picked: its list is read now and
-  // then (as often as the picked one's is asked again), so the Launch way's dot says when a
-  // question waits there too, without its being picked. load() is its launch.options.
-  probe(hostId, load) {
+  // The other machines shown only for their questions, not the one picked: [{ hostId, load }],
+  // load() being its launch.options. Each list is read now and then (as often as the picked
+  // one's is asked again), on updates and on a timer while the page is in the foreground, so the
+  // Launch way's dot says when a question waits there too, or no longer does, without its being
+  // picked. Handed in again on every update; none, or no machine picked, stops the timer.
+  probeOthers(list) {
+    this.#others = this.#target ? list.filter((o) => o.hostId !== this.#target.hostId) : [];
+    for (const o of this.#others) { this.#probe(o.hostId, o.load); }
+    if (!this.#others.length) { this.#stopProbes(); return; }
+    if (this.#probeTimer) { return; }
+    this.#probeTimer = setTimeout(() => {
+      this.#probeTimer = null;
+      if (globalThis.document?.visibilityState !== 'hidden') { for (const o of this.#others) { this.#probe(o.hostId, o.load, true); } }
+      this.probeOthers(this.#others);
+    }, Math.max(LaunchPanel.recheckMs, 250));
+  }
+
+  #stopProbes() {
+    clearTimeout(this.#probeTimer);
+    this.#probeTimer = null;
+    this.#others = [];
+  }
+
+  #probe(hostId, load, due = false) {
     if (!this.#target || hostId === this.#target.hostId) { return; }
     const last = this.#probes.get(hostId);
-    if (last && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
+    if (last && !due && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
     const token = ++this.#probeSeq;
     this.#probes.set(hostId, { at: Date.now(), token });
     load().then((o) => {

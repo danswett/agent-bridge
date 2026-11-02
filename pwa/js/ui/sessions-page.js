@@ -494,7 +494,7 @@ export class SessionsPage {
     panel.setMachines(hosts.all ? can.map((l) => ({ hostId: l.id, name: hosts.nameOf(l.id) ?? l.id.slice(0, 8) })) : null, pick);
     panel.setTarget(pick ? this.launchTarget(pick) : null);
     // The others shown only for their questions: a question on one lights the Launch way too.
-    for (const l of inspect) { if (l.id !== pick && l.phase === 'open') { panel.probe(l.id, this.launchTarget(l.id).load); } }
+    panel.probeOthers(inspect.filter((l) => l.id !== pick && l.phase === 'open').map((l) => ({ hostId: l.id, load: this.launchTarget(l.id).load })));
   }
 
   #launches(l) {
