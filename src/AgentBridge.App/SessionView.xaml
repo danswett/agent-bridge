@@ -418,7 +418,7 @@
                     </StackPanel>
                 </ScrollViewer>
                 <ScrollViewer AutomationProperties.AutomationId="DelegateDetail" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateDetail), Mode=OneWay, FallbackValue=Collapsed}">
-                    <local:DelegateInspector x:Name="TabDelegate" Padding="24,8,24,24" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left" Card="{x:Bind Card, Mode=OneWay}" />
+                    <local:DelegateInspector x:Name="TabDelegate" Margin="24,8,24,24" MaxWidth="{StaticResource AbLayoutReadingMax}" HorizontalAlignment="Left" Card="{x:Bind Card, Mode=OneWay}" />
                 </ScrollViewer>
             </Grid>
 

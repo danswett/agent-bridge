@@ -225,13 +225,10 @@ public sealed partial class SessionView : UserControl
     void OnToggleInspector(object sender, RoutedEventArgs e) => layout?.ToggleInspector();
     void OnPin(object sender, RoutedEventArgs e) => Card?.Row?.TogglePin();
 
-    // A strip item: a delegate opens in the inspector, or lets go back to the session's details;
-    // "N finished" shows or hides the finished ones.
+    // A strip item (PaneLayoutViewModel.PressStripItem).
     void OnStripItem(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is not DelegateItem item || Card is not { } c) { return; }
-        if (item.IsFold || item.Selected) { c.Delegates.Press(item); }
-        else { layout?.OpenDelegate(item.Id); }
+        if (e.ClickedItem is DelegateItem item) { layout?.PressStripItem(item); }
     }
 
     void OnDelegateRow(object sender, ItemClickEventArgs e)

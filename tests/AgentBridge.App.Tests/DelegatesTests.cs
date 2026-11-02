@@ -191,6 +191,71 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_delegate_that_finishes_on_the_first_update_after_it_is_opened_is_fetched_again()
+    {
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("suite"));
+        await Wait.UntilAsync(() => Gets().Count == 1 && card.Delegates.Detail.Note == "", "the first fetch");
+
+        clock.Advance(TimeSpan.FromSeconds(3));
+        var done = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "suite" ? a with { Status = SubagentStatus.Idle, Outcome = SubagentOutcome.Done, EndedAt = Now.AddSeconds(2) } : a)],
+            UpdatedAt = Now.AddSeconds(3),
+        };
+        host.Sessions[0] = done;
+        await host.SendAsync(Events.SessionUpsert, done);
+
+        // No longer running, so no poll would ever fetch its final words.
+        await Wait.UntilAsync(() => Gets().Count == 2, "the fetch of its final words");
+    }
+
+    [Fact]
+    public async Task A_newer_line_a_fetch_brings_is_kept_until_the_list_brings_another()
+    {
+        // A delegate still thinking: no response yet, only its latest line, which changes without
+        // an update from the host.
+        host.On(Ops.SessionGet, _ => Delegating().Subagents![1] with { Line = "Fetched: a newer line." });
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("suite"));
+        await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Fetched: a newer line.", "the fetched line");
+
+        // A clock tick keeps it; an update that leaves the line as it was keeps it too.
+        ui.Post(card.RefreshTimes);
+        await host.SendAsync(Events.SessionUpsert, Delegating() with { UpdatedAt = Now.AddSeconds(1) });
+        await Wait.UntilAsync(() => card.Session.UpdatedAt == Now.AddSeconds(1), "the update");
+        Assert.Equal("Fetched: a newer line.", TestUi.Read(() => card.Delegates.Detail.Latest));
+
+        // A line the list brings later is newer still.
+        await host.SendAsync(Events.SessionUpsert, Delegating() with { UpdatedAt = Now.AddSeconds(2), Subagents = [.. Delegating().Subagents!.Select(a => a.Id == "suite" ? a with { Line = "Listed: newer still." } : a)] });
+        await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Listed: newer still.", "the listed line");
+    }
+
+    [Fact]
+    public void Pressing_the_selected_delegate_lets_it_go_but_with_the_inspector_hidden_shows_it_again()
+    {
+        Resize(1440);
+        Select("del");
+        var d = Card("del").Delegates;
+        var witness = TestUi.Read(() => d.Strip.Single(i => i.Id == "witness"));
+
+        ui.Post(() => layout.PressStripItem(witness));
+        Assert.True(Read(l => l.ShowDelegateInspector));
+        ui.Post(() => layout.PressStripItem(witness));
+        Assert.True(Read(l => l.ShowSessionInspector && !d.HasSelected));
+
+        ui.Post(() => layout.PressStripItem(witness));
+        ui.Post(layout.ToggleInspector);
+        Assert.False(Read(l => l.ShowInspector));
+        ui.Post(() => layout.PressStripItem(witness));
+        Assert.True(Read(l => l.ShowDelegateInspector && d.SelectedId == "witness"));
+    }
+
+    [Fact]
     public async Task A_delegate_that_leaves_the_list_while_open_gives_the_inspector_back_to_the_session()
     {
         Resize(1440);

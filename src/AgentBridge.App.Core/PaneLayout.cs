@@ -122,6 +122,17 @@ public sealed class PaneLayoutViewModel : Observable
     // Back from a delegate to the list, or to the session's own details.
     public void CloseDelegate() => main.Selected?.Delegates.Select(null);
 
+    // A strip item pressed: "N finished" shows or hides the finished; the delegate the inspector
+    // shows is let go, back to the session's details; any other, or the selected one while the
+    // inspector is hidden, is shown in it.
+    public void PressStripItem(DelegateItem item)
+    {
+        if (main.Selected is not { } card) { return; }
+        if (item.IsFold) { card.Delegates.Press(item); }
+        else if (item.Selected && ShowDelegateInspector) { CloseDelegate(); }
+        else { OpenDelegate(item.Id); }
+    }
+
     // The Sessions page on screen: its page shown in a window that is. The tool history is asked
     // for only then, not for a page left for another or a window hidden in the tray.
     public bool OnScreen

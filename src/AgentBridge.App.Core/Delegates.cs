@@ -171,6 +171,8 @@ public sealed class DelegatesViewModel : Observable
     // budget trimmed leaves them out, and that is not the delegate saying nothing.
     string keptTask = "";
     string keptLine = "";
+    string? listLine;
+    int lineRev;
     string? entryKey;
     int generation;
     bool loading;
@@ -246,12 +248,18 @@ public sealed class DelegatesViewModel : Observable
         selectedId = id;
         fetched = null;
         keptTask = keptLine = "";
-        entryKey = null;
+        listLine = null;
+        lineRev = 0;
         generation++;
         loading = false;
         again = false;
         due = false;
         lastLoad = DateTimeOffset.MinValue;
+        // Its entry as it is now: the first change after it is opened (it finishing, say) fetches
+        // its words again, as every later one does.
+        var entry = id is null ? null : (session.Subagents ?? []).FirstOrDefault(a => a.Id == id);
+        entryKey = entry is null ? null : Key(entry);
+        if (entry is not null) { NoteEntry(entry); }
         if (Selected is { } now) { now.Selected = true; }
         SyncDetail(ctx.Time.GetUtcNow(), loadingNote: id is not null);
         // Fetched here when its detail is already on screen (another delegate was); otherwise once
@@ -319,6 +327,7 @@ public sealed class DelegatesViewModel : Observable
             var key = Key(entry);
             if (entryKey is not null && key != entryKey) { due = true; }
             entryKey = key;
+            NoteEntry(entry);
             SyncDetail(now);
             if (due && detailOpen && now - lastLoad >= OnChange) { _ = LoadAsync(); }
         }
@@ -343,6 +352,21 @@ public sealed class DelegatesViewModel : Observable
     }
 
     static string Key(Subagent a) => $"{a.Status}|{a.Outcome}|{a.Line}|{a.EndedAt:O}";
+
+    // The selected delegate's task and latest line as its list entry has them. A new line from the
+    // list moves lineRev on, so a fetch sent before it can't put back an older one; one the same
+    // as before leaves a newer fetched line be, since a line changing alone sends no update
+    // (v1-sessions.md, Subagent). A list the budget trimmed keeps what was there.
+    void NoteEntry(Subagent entry)
+    {
+        if (entry.Line is { } line && line != listLine)
+        {
+            keptLine = line;
+            lineRev++;
+        }
+        listLine = entry.Line;
+        if (entry.Task is { } task) { keptTask = task; }
+    }
 
     // Its descendants in the session's list, in list order, each with its depth below it. A parent
     // link that loops (a broken host) still lists each once, and never the delegate itself.
@@ -470,8 +494,6 @@ public sealed class DelegatesViewModel : Observable
         rows.Add(new("Kind", entry.Kind == SubagentKind.Background ? "Background" : "Task"));
         rows.Add(new("ID", entry.Id, Mono: true));
         SyncRows(d.Properties, rows);
-        keptTask = entry.Task ?? fetched?.Task ?? keptTask;
-        keptLine = entry.Line ?? fetched?.Line ?? keptLine;
         d.Task = keptTask;
         var response = fetched?.Response;
         d.Latest = !string.IsNullOrEmpty(response) ? response : keptLine;
@@ -512,6 +534,7 @@ public sealed class DelegatesViewModel : Observable
         due = false;
         lastLoad = ctx.Time.GetUtcNow();
         var mine = generation;
+        var rev = lineRev;
         Subagent? full = null;
         string? problem = null;
         try { full = await fetch(session.Id, agent); }
@@ -525,6 +548,8 @@ public sealed class DelegatesViewModel : Observable
             else
             {
                 fetched = full;
+                if (full.Line is { } line && rev == lineRev) { keptLine = line; }
+                if (full.Task is { } task) { keptTask = task; }
                 Detail.Note = "";
             }
             SyncDetail(ctx.Time.GetUtcNow());
