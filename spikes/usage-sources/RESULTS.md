@@ -961,3 +961,214 @@ said "Logged in using ChatGPT", which confirms X-5.
 - **mitmdump changed the transport.** Codex reached the backend through the proxy and
   trusted its CA through `CODEX_CA_CERTIFICATE`. With no hold, a whole probe took 0.6 to
   6 s.
+
+## Experiments on the Windows rehearsal VM (#200)
+
+E1, E2, E4, E7, E8, E9, E12, E13(d) and E14 ran on 2026-11-01 and 2026-11-02 PT on VM-M,
+the disposable Azure rehearsal VM of `docs/rehearsal-2026-10.md` (Windows 11 24H2 Pro,
+x64), as its standard user `rehearsal`, beside the scripted shadow soak. The owner signed
+the agents in there.
+
+- **Versions:** Claude Code **2.1.316** and Codex **0.166.0** (`@openai/codex` from npm, its
+  native `codex.exe`), both signed in to the owner's accounts: Claude Pro, ChatGPT Plus.
+  Claude Code 2.1.291, the build the spike read, wasn't run. `mitmdump` 12.3.1.
+- **Traffic** went through `mitmdump` on `127.0.0.1:8899` only for the probe runs that
+  needed it. Its add-on logged method, host, path, status and time, never headers or
+  bodies, and could hold the token response or answer chosen paths with errors. Tokens
+  were compared only as in-memory hashes and never written out.
+- **No probe started a turn.** Soak sessions were kept apart from probes in time, so the
+  shadow comparison's counts saw no probe process. The soak is a separate piece of work
+  (`docs/host-shadow.md`).
+- **E3, E5, E6, E10 and E11 weren't run.** #200 doesn't need them first.
+- **The owner deferred the Linux-only E13(a)–(c) to P5.** They don't block the Windows
+  build (#200). They have since run once on Linux: see [E13 on Linux](#e13-on-linux).
+
+| # | Result | Evidence |
+|---|---|---|
+| E1 | **Pass** | Below |
+| E2 | **Pass, with the expiry simulated** and the probe's exit code not captured | Below |
+| E4 | **Failed, as expected:** Claude Code signed out | Below |
+| E7 | **Pass**, except that the windows weren't compared with `/status` | Below |
+| E8 | **Pass, with the expiry replaced by forced refreshes;** the forced race had no loser | Below |
+| E9 | **Pass, with one finding:** the daemon never acknowledges a WebSocket close | Below |
+| E12 | **Pass:** no load or parse failure | Below |
+| E13(d) | **Pass** | Below |
+| E14(a) | **Simulated on the VM, not a real server-side revoke** | Below |
+| E14(b) | **Pass** | Below |
+
+### Claude
+
+**E1, the probe with a fresh token: pass.**
+- `claude -p "/usage" --safe-mode --no-session-persistence --output-format json`, in an
+  empty directory, exited 0 in about 1.8 s. `--output-format text` also exited 0.
+- `cachedUsageUtilization.fetchedAtMs` moved.
+- **The `SessionStart` hook's file was unchanged by the probe.** The same hook fired when
+  the next soak Claude session started, which shows it was live. It was then removed, and
+  `settings.json` is byte-for-byte what it was before.
+- Nothing new under `~/.claude/projects`.
+- **No `/v1/messages`.** Every request went to one of these:
+  - `api.anthropic.com`: `/api/oauth/usage`, `/api/claude_cli/bootstrap`,
+    `/api/claude_code_penguin_mode`, `/mcp-registry/v0/servers`,
+    `/api/oauth/account/settings`, `/api/claude_code_grove`,
+    `/api/organizations/<id>/model_selector/cc`, `/api/eval/sdk-<key>` and
+    `/api/event_logging/v2/batch`;
+  - `http-intake.logs.us5.datadoghq.com`: `/api/v2/logs`.
+- **The JSON carries no `usageReport` in 2.1.316.**
+- **The owner's claude.ai reading matched the probe's:** current session 0%, weekly (all
+  models) 0%, and no other weekly rows.
+
+**E2, the probe with an expired token: pass, with the expiry simulated.**
+- The VM wasn't left idle for 75 minutes. Instead, `expiresAt` in `.credentials.json` was
+  set in the past, so the next probe had to refresh.
+- `expiresAt` advanced, and **the refresh token changed (rotation confirmed)**.
+  `.oauth_refresh.lock` came and went.
+- A one-line Haiku prompt then answered, and `claude auth status` reported
+  `loggedIn: true`.
+- The probe's exit code wasn't captured.
+
+**E4, killing the probe: failed, as expected.**
+- `mitmdump` held the token response for 10 s, and the probe was killed while it was held.
+- **The next refresh got HTTP 400**, and Claude Code cleared its credentials:
+  `claude auth status` said `loggedIn: false`. That confirms the never-kill rule.
+- **The probe still exited 0 with the cached figures**, so its exit code can't detect a
+  sign-out. `claude auth status` has to.
+- The owner signed in again; `loggedIn: true`, plan pro. No `.oauth_refresh.lock` was left
+  behind.
+
+### Codex
+
+**E7, the probe: pass,** except that the windows weren't compared with `/status`.
+- Exit 0.1 s after standard input closed.
+- No new rollout under `~/.codex/sessions`. No `/responses`. No token request, and
+  `last_refresh` didn't move.
+- `accountId` and `ordinaryUsageAllowed` are present at the top level of the
+  `account/rateLimits/read` result.
+- Every request went to `chatgpt.com/backend-api/`: `wham/usage`, `wham/accounts/check`,
+  `codex/models`, `plugins/featured`, `ps/plugins/installed`,
+  `ps/plugins/suggested/codex` and `ps/plugins/list` (dozens of pages per start).
+
+**E9, through the daemon: pass, with one finding.**
+- **Starting the daemon.** `codex app-server daemon start` failed with OS error 5 (access
+  denied) from a scheduled task, the way these runs reach the desktop user. It started
+  when created through WMI (`Win32_Process.Create`) instead. `daemon version` reports a
+  managed copy under `~/.codex/packages/app-server-daemon/current`, also 0.166.0.
+- **The socket is `~/.codex/app-server-control/app-server-control.sock`.** A WebSocket
+  client connected over it, and over `codex app-server proxy`'s stdio, sent the five
+  messages.
+- **Both paths answered every time:** 50 of 50 directly on the socket (about 0.4 s each),
+  and 5 of 5 through the proxy.
+- **The plain JSON lines got no answer in 8 s**, and the proxy then exited 0. That
+  confirms they're refused.
+- **The daemon's process ID was the same throughout**, including the two hours of E8, and
+  the soak's Codex sessions in that time weren't affected.
+- **Idle exit is unchanged.** With no clients, the daemon didn't exit within 12 minutes.
+  After the probes it was still running 14 minutes after the last one.
+- **The finding: the daemon never acknowledges a WebSocket close.** It answers every
+  request, then drops the connection when the client sends a close frame.
+  - Directly on the socket, .NET's `CloseAsync` throws at once ("the remote party closed
+    the WebSocket connection without completing the close handshake").
+  - Through the proxy, the close waited for the client's own 60 s timeout; the proxy then
+    exited 0.
+  - **#200 must treat an unacknowledged close as normal.** Once the responses are in, send
+    the close and don't wait for its echo (or abort the socket after a short timeout).
+    Through the proxy, close its standard input instead of waiting.
+
+**E8, concurrency: pass, with the expiry replaced by forced refreshes.** The forced race
+had no loser.
+- **Through the daemon, for 2 hours:** 240 probes on the control socket, one every 30 s,
+  while the soak ran two Codex TUI sessions (`codex-basic`, with a shell command and a
+  compaction, and `codex-approvals`).
+  - All 240 answered.
+  - No `refresh_token_reused` in any file under `~/.codex` written during the run.
+  - Both TUI sessions' turns all ended normally.
+  - `codex login status` said logged in at every check, every 5 minutes.
+  - The daemon's process ID didn't change.
+- **No expiry fell inside the window.** The access token lives 240 h (JWT `exp` 10 days
+  after `last_refresh`, as on Linux). Moving the clock, as the Linux run did, would have
+  corrupted the soak's timing. So every 15 minutes a probe sent `account/read` with
+  `refreshToken: true` through the daemon instead. That's 8 real refreshes by the
+  daemon's own `AuthManager`, beside the TUI sessions, and each one rotated the stored
+  token without error.
+- **The forced race:** two standalone app-servers, started in the same millisecond
+  through `mitmdump`, each sent `account/read` with `refreshToken: true`.
+  - Their token requests went out 113 ms apart, with the same stored refresh token.
+    **Both got HTTP 200.** The server accepted the second use, as it did on Linux.
+  - Every request in both probes answered, and both exited 0, 0.1 s after EOF.
+  - The later save won. The other process's rotation was simply discarded.
+  - The probes after it worked: a plain one, and a refresh with the saved token (which
+    rotated it again). `codex login status` stayed logged in.
+  - **So nothing lost, and the guarded reload wasn't exercised.** A race that the server
+    rejects with `refresh_token_reused` would need the reuse tolerance to have run out,
+    as in the Linux (c2) runs.
+
+**E12, a half-written `auth.json`: pass.**
+- Three real refreshes by the standalone probe, each with the token response held 4 s.
+- Meanwhile, 33,673 tight reads of `auth.json` all parsed, and 150 `codex login status`
+  runs all said logged in.
+- **None occurred, so nothing beyond X-3 is needed.** A failure is still possible: 0.166's
+  `FileAuthStorage.save` truncates the file and rewrites it in place rather than replacing
+  it, so a reader could in principle see it empty or half-written. Upstream main now
+  replaces it atomically.
+
+**E13(d), the Windows repeat of (b): pass.**
+- The token response was held for 50 s, and standard input was closed only after the
+  responses.
+- `account/read` waited for the held refresh; `account/rateLimits/read` answered at once.
+- The rotated token was saved, and the process exited by itself 0 s after EOF.
+
+**E14(a), revoked: simulated on the VM, not a real server-side revoke.** ChatGPT has no
+per-device revoke, and the owner chose not to sign out every device. Instead, `auth.json`
+was backed up on the VM (owner-only, never printed), only its `refresh_token` value was
+garbled, and `last_refresh` was set 9 days back. Then:
+- **Run A, as planned: no error at all.** 0.166 refreshes only within 5 minutes of the
+  access token's JWT `exp` (10 days away). It reads `last_refresh` only when `exp` can't
+  be parsed.
+- **Run B, forcing a refresh** (`account/read` with `refreshToken: true`): the token
+  request got HTTP 401. **`account/read` then answered without an error, with `account`
+  null and `workspaceRouting` null.** The rate-limit read still succeeded on the valid
+  access token.
+- **Run C, as B, with `mitmdump` also answering `wham/usage` and `wham/accounts/check`
+  with 401** (what a revoked access token would get):
+  - `account/read`: error -32603, "Your access token could not be refreshed. Please log
+    out and sign in again."
+  - `account/rateLimits/read`: error -32603, "failed to fetch codex rate limits: GET
+    https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; …"
+- `codex login status` said "Logged in using ChatGPT" throughout, which confirms X-5.
+- The backup was restored and checked, then deleted.
+- "Without a selected workspace" couldn't be run: this personal account always has
+  routing.
+
+**E14(b), reused: pass.**
+- `mitmdump` answered the token request with HTTP 400 and
+  `{"error":"refresh_token_reused"}`, and `wham/usage` and `wham/accounts/check` with 401.
+- `account/read`: error -32603, "Your access token could not be refreshed because your
+  refresh token was already used. Please log out and sign in again."
+- `account/rateLimits/read`: the same 401 error as E14(a) run C.
+- `codex login status` stayed logged in, and `auth.json` was unchanged.
+- The same caveat as E14(a): this account always has a workspace.
+
+### What this changes for #200
+
+- **Claude sign-out:** gate on `claude auth status`, as planned. E4 shows the probe exits 0
+  on cached figures after a sign-out.
+- **Codex sign-out:** treat any of these as signed out: E14's -32603 texts, a 401 from the
+  rate-limit read, or `account/read` answering with `account` null (E14(a) run B). Don't
+  trust `codex login status`.
+- **The daemon route** works on Windows. Don't wait for the close echo (E9). The host may
+  not be able to start the daemon from a scheduled task, so it should use the daemon only
+  when one is already running, which is what the spike recommends anyway.
+
+### An incident during these runs
+
+A check script run on the VM defined a function named `H`. In PowerShell `h` is a built-in
+alias for `Get-History`, and aliases win over functions, so the call went to
+`Get-History`. That printed the argument, the Claude access token, in an error message in
+the run's output. No refresh token was exposed, and nothing reached the repository.
+- The two run-command status files on the VM that held it were scrubbed. The owner let
+  the token expire, and the E4 sign-in replaced it.
+- **The fix, for every check script since:**
+  - never name a function or variable after a PowerShell alias (`h`, `r`, `%`, `?`, `gc`
+    and so on);
+  - a script that handles a credential file reads only the fields it needs (such as
+    `expiresAt`), and never echoes a parsed object, an error's text or `$_` from a parse
+    that could include the content.
