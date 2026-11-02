@@ -153,6 +153,9 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.True(details["Process"].Mono && details["Folder"].Mono && details["Branch"].Mono && details["ID"].Mono);
         Assert.False(details["Repository"].Mono || details["Model"].Mono);
         Assert.Equal(@"C:\src\agent-bridge", details["Folder"].Tip);
+        // Three panes have no Delegates tab: Details has the counts the host reports.
+        Assert.Equal("2 background agents · 1 background command", details["Background"].Value);
+        Assert.DoesNotContain("Background", Card("quiet").Details.Select(d => d.Label));
     }
 
     [Fact]
