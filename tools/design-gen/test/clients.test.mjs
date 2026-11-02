@@ -101,8 +101,16 @@ test('the Windows app bundles every font file its MonoFontFamily names, with the
 
 test('neither client sets words in the danger role itself, only in its text colour', () => {
   // Dark danger is 3.72:1 on the needs fill, where a question's errors and Deny sit (#188).
+  // A status glyph is a graphic drawn in currentColor, held to 3:1 rather than 4.5:1, so a
+  // rule that only styles glyphs (the failed glyph, #204) may take the danger role itself.
   const css = withoutComments(read('pwa/app.css'));
-  assert.deepEqual([...css.matchAll(/(?<![-\w])color:\s*var\(--ab-danger\)/g)].map((m) => m[0]), []);
+  const offenders = [];
+  for (const [, selectors, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const glyphOnly = selectors.split(',').every((s) => /^\.glyph\b/.test(s.trim()));
+    if (glyphOnly) continue;
+    for (const m of body.matchAll(/(?<![-\w])color:\s*var\(--ab-danger\)/g)) offenders.push(`${selectors.trim()} { ${m[0]} }`);
+  }
+  assert.deepEqual(offenders, []);
   const found = [];
   for (const f of appFiles()) {
     const text = read(`${appDir}/${f}`);
