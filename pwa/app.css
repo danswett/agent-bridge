@@ -85,7 +85,7 @@ body[data-conn="busy"] .appbar, body[data-conn="warn"] .appbar, body[data-conn="
 .appbar .brand, .appbar .online, .appbar .avatar { display: none; }
 body.searching .appbar .appbar-end { display: none; }
 body:not(.searching) .appbar .search { display: none; }
-.brand { display: flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-text); text-decoration: none; font-weight: 600; font-size: 14px; line-height: 20px; }
+.brand { display: flex; align-items: center; min-height: 32px; gap: var(--ab-space-2); color: var(--ab-text); text-decoration: none; font-weight: 600; font-size: 14px; line-height: 20px; }
 .mark { width: 20px; height: 20px; color: var(--ab-bridge); flex: none; }
 .appbar-end { display: flex; align-items: center; gap: var(--ab-space-3); margin-left: auto; min-width: 0; }
 .pill {
@@ -114,7 +114,7 @@ body:not(.searching) .appbar .search { display: none; }
   color: var(--ab-text); background: none; cursor: pointer;
 }
 .icon-button:hover { background: var(--ab-subtle); }
-.online { display: inline-flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-text2); text-decoration: none; font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.online { display: inline-flex; align-items: center; min-height: 32px; gap: var(--ab-space-2); color: var(--ab-text2); text-decoration: none; font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ab-bridge); }
 .online[data-online="0"] .online-dot { background: var(--ab-neutral); }
 .avatar {
@@ -171,7 +171,10 @@ body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn
     height: 100vh; height: 100dvh;
   }
   .appbar, body[data-conn] .appbar {
-    grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px) minmax(0, 1fr);
+    grid-column: 1 / -1; display: grid;
+    /* The sides keep what they hold (the connection, machines online, the account); search takes
+       what is left, up to 480, and stays centred while there is room. */
+    grid-template-columns: minmax(max-content, 1fr) minmax(160px, 480px) minmax(max-content, 1fr);
     position: static; min-height: 0; height: var(--appbar);
     padding: 0 max(var(--ab-space-4), env(safe-area-inset-right)) 0 max(var(--ab-space-4), env(safe-area-inset-left));
   }
@@ -394,6 +397,7 @@ body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn
   .machine-tab { min-height: var(--tap); min-width: var(--tap); }
   .search-input { min-height: var(--tap); }
   .appbar .avatar { width: var(--tap); height: var(--tap); }
+  .appbar .brand, .appbar .online { min-height: var(--tap); }
   .new-session { min-height: var(--tap); }
 }
 .session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }

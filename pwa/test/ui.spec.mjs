@@ -372,7 +372,7 @@ test('an upsert leaves every row where it is, and a remove takes the session to 
   await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
   await expect(card(page, CLAUDE)).toHaveCount(0);
   expect(await order(page)).toEqual([COPILOT, CODEX, DELEGATING]);
-  await expect(page.locator('#session-count')).toHaveText('3 live');
+  await expect(page.locator('#session-count')).toHaveText('3 live on Demo machine');
   await expect(page.locator('.ended-group > summary')).toHaveText('Ended \u00b7 1');
 });
 

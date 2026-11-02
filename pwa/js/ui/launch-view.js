@@ -94,6 +94,9 @@ function tuning(values, preferred) {
 }
 
 export class LaunchPanel {
+  // Which machines shown only for their questions have a folder-trust question waiting, as last
+  // seen: the Launch way keeps its dot while any does, whichever machine is picked (#217).
+  #asks = new Map();
   #target = null;
   #options = null;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
@@ -194,6 +197,9 @@ export class LaunchPanel {
       e.machine.dataset.list = key;
     }
     if (choices.length) { e.machine.value = picked; }
+    // A machine no longer offered has nothing waiting here.
+    const offered = new Set((list ?? []).map((m) => m.hostId));
+    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); } }
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,
@@ -238,7 +244,7 @@ export class LaunchPanel {
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
-    if (!target) { this.waiting(false); return; }
+    if (!target) { this.#asks.clear(); this.waiting(false); return; }
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     // One that finished while another machine was picked was not watched then: the list asked
     // for next supersedes the question it named, as it would have.
@@ -261,7 +267,8 @@ export class LaunchPanel {
     const name = this.#target?.machineName;
     const waiting = !this.#target?.inspectOnly || this.#trustQuestions().length > 0;
     this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? (waiting ? `Waiting on ${name}` : `Nothing waiting on ${name}`) : name ? `Start a session on ${name}` : 'Start a session';
-    this.waiting(!!this.#target?.inspectOnly && waiting);
+    if (this.#target) { this.#asks.set(this.#target.hostId, !!this.#target.inspectOnly && waiting); }
+    this.waiting([...this.#asks.values()].some(Boolean));
   }
 
   // launch.options again: a workspace approved, an agent installed, a session ended since.

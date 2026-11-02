@@ -287,6 +287,7 @@ test.describe('at a desktop\'s width on a touch screen', () => {
       ...await page.locator('#nav .nav-item').filter({ visible: true }).all(),
       ...await page.locator('#machine-tabs [role="tab"]').all(),
       page.locator('.new-session').filter({ visible: true }).first(),
+      page.locator('.appbar .brand'), page.locator('#online'),
     ];
     // Account shows only signed in, with a login; demo mode has none, so give it one.
     await page.evaluate(() => { const a = document.getElementById('avatar'); a.hidden = false; a.textContent = 'D'; });
@@ -299,6 +300,44 @@ test.describe('at a desktop\'s width on a touch screen', () => {
     }
     expect((await page.locator('#search').boundingBox()).height).toBeGreaterThanOrEqual(44);
   });
+});
+
+test('with one machine and no machine tabs, the page still names the machine its sessions are on', async ({ page }) => {
+  await openDemo(page);
+  await expect(page.locator('#machine-tabs')).toBeHidden();
+  await expect(page.locator('#session-count')).toBeVisible();
+  await expect(page.locator('#session-count')).toContainText('on Demo machine');
+});
+
+test('a machine tab with focus that takes the tabs away leaves focus on the sessions, not the document', async ({ page }) => {
+  await openDemo(page, '&machines=2');
+  await page.locator('#machine-tabs [data-device-id="demo-laptop"]').click();
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', false));
+  // The laptop is remembered offline; the demo machine is the only one online.
+  const demo = page.locator('#machine-tabs [data-device-id="demo"]');
+  await demo.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#machine-tabs')).toBeHidden();
+  await expect(page.locator('#sessions')).toBeFocused();
+});
+
+test('at 760 px signed in, search sits between the name and the connection, machines online and account, overlapping neither', async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 800 });
+  await openDemo(page, '&machines=3');
+  await page.evaluate(() => { const a = document.getElementById('avatar'); a.hidden = false; a.textContent = 'D'; document.getElementById('conn').textContent = 'Connected'; });
+  const brand = await page.locator('.appbar .brand').boundingBox();
+  const search = await page.locator('.appbar .search').boundingBox();
+  const end = await page.locator('.appbar .appbar-end').boundingBox();
+  const avatar = await page.locator('#avatar').boundingBox();
+  expect(brand.x + brand.width).toBeLessThanOrEqual(search.x);
+  expect(search.x + search.width).toBeLessThanOrEqual(end.x);
+  expect(avatar.x + avatar.width).toBeLessThanOrEqual(760);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+});
+
+test('the name and machines online in the app bar are at least 32 px tall to a mouse', async ({ page }) => {
+  await openDemo(page);
+  for (const c of [page.locator('.appbar .brand'), page.locator('#online')]) { expect((await c.boundingBox()).height).toBeGreaterThanOrEqual(32); }
 });
 
 test('signed out, there is only the sign-in page: no navigation, no search', async ({ page }) => {

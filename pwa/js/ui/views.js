@@ -392,8 +392,9 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
   const key = JSON.stringify([show, current, tabs.map((t) => [t.id, t.name, !!t.away])]);
   if (tabsDrawnAs.get(bar) === key) { return; }
   tabsDrawnAs.set(bar, key);
-  bar.hidden = !show;
+  // Taken before the bar can hide: a hidden tab loses focus.
   const had = bar.contains(bar.ownerDocument?.activeElement) ? bar.ownerDocument.activeElement.dataset.deviceId : null;
+  bar.hidden = !show;
   bar.replaceChildren(...tabs.map((t) => {
     const on = chosen(t);
     return h('button', {
@@ -406,7 +407,10 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
     }, t.name);
   }));
   if (!bar.querySelector('[tabindex="0"]')) { bar.firstElementChild?.setAttribute('tabindex', '0'); }
-  if (had) { [...bar.children].find((b) => b.dataset.deviceId === had)?.focus(); }
+  // A tab with focus is drawn again with it; when the bar itself went, focus goes to what it
+  // controlled (the sessions), not to the document.
+  if (had && show) { [...bar.children].find((b) => b.dataset.deviceId === had)?.focus(); }
+  if (had && !show) { bar.ownerDocument.getElementById('sessions')?.focus({ preventScroll: true }); }
   if (!bar.dataset.keys) {
     bar.dataset.keys = '1';
     bar.addEventListener('keydown', (e) => {

@@ -76,7 +76,7 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
   await expect(page.locator('.session')).toHaveCount(2);
   await expect(page.locator(`.session:not([data-host-id="${LAPTOP}"])`)).toHaveCount(0);
   await expect(page.locator('.machine-label')).toHaveCount(0);
-  await expect(page.locator('#session-count')).toHaveText('2 live');
+  await expect(page.locator('#session-count')).toHaveText('2 live on Laptop');
   await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
   await expect(tab(page, LAPTOP)).toBeFocused();
   await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'false');

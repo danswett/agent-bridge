@@ -245,7 +245,11 @@ export class SessionsPage {
     const { hosts, $ } = this;
     const several = this.#several();
     const machines = new Set(several ? hosts.sessions.list().map((e) => e.hostId) : []).size;
-    $('session-count').textContent = !n ? '' : several ? `${n} live on ${plural(machines, 'machine', 'machines')}` : `${n} live`;
+    // One machine shown: named here, since the machine tabs may be gone and the rows don't say
+    // which machine they are on, yet it is the one answers and replies go to.
+    const ids = hosts.shownIds();
+    const one = !several && ids.length === 1 ? hosts.nameOf(ids[0]) : null;
+    $('session-count').textContent = !n ? '' : several ? `${n} live on ${plural(machines, 'machine', 'machines')}` : one ? `${n} live on ${one}` : `${n} live`;
     const links = hosts.links();
     const synced = (l) => l.phase === 'open' && l.client?.synced !== false;
     // Only once every machine shown has said what it has, or that it can't: an empty list is
