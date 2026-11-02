@@ -254,8 +254,8 @@ public actor RelayBridge {
         }
     }
 
-    public func blobDelete(ticket: String) async throws {
-        _ = try await control(expected: "blob-result") { try BridgeBlob.deleteMessage(id: $0, ticket: ticket) }
+    public func blobDelete(ticket: String, timeout: Duration = .seconds(30)) async throws {
+        _ = try await control(expected: "blob-result", timeout: timeout) { try BridgeBlob.deleteMessage(id: $0, ticket: ticket) }
     }
 
     public func forget(machineID: String) async throws {
@@ -265,7 +265,7 @@ public actor RelayBridge {
         }
     }
 
-    private func control(expected: String, message: (Int) throws -> JSONValue) async throws -> JSONValue {
+    private func control(expected: String, timeout: Duration = .seconds(30), message: (Int) throws -> JSONValue) async throws -> JSONValue {
         try Task.checkCancellation()
         guard authenticated, !closed, controlRequests.count < 64 else { throw RelayError.disconnected }
         nextControlID += 1
@@ -276,7 +276,7 @@ public actor RelayBridge {
                 controlRequests[id] = continuation
                 controlTypes[id] = expected
                 controlTimeouts[id] = Task {
-                    do { try await Task.sleep(for: .seconds(30)) } catch { return }
+                    do { try await Task.sleep(for: timeout) } catch { return }
                     failControl(id, error: RelayError.timeout)
                 }
                 enqueueControl(body)
