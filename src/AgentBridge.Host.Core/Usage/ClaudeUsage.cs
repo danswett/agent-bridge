@@ -204,7 +204,12 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     async Task<(Auth State, string? Plan)> AuthStatusAsync()
     {
         if (probes!.Find(AgentKind.Claude) is not { } exe) { return (Auth.Unavailable, null); }
-        var process = probes.Launcher.Start(new ProbeCommand(exe, ["auth", "status"], WorkingDirectory(), Environment()));
+        if (Environment() is not { } environment)
+        {
+            say($"usage: Claude Code's home ({options.ClaudeHome}) is a relative path, which a probe could not be given without changing whose sign-in it reads; not asking it");
+            return (Auth.Unavailable, null);
+        }
+        var process = probes.Launcher.Start(new ProbeCommand(exe, ["auth", "status"], WorkingDirectory(), environment));
         if (process is null) { return (Auth.Unavailable, null); }
         if (!await EndsWithinAsync(process, options.ClaudeAuthTimeout, "claude auth status")) { return (Auth.Unknown, null); }
         using (process)
@@ -263,8 +268,9 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
                 say("usage: a Claude Code /usage probe is already running here; not starting another");
                 return false;
             }
+            if (Environment() is not { } environment) { return false; }
             var before = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
-            var process = probes.Launcher.Start(new ProbeCommand(exe, ProbeArguments, WorkingDirectory(), Environment()));
+            var process = probes.Launcher.Start(new ProbeCommand(exe, ProbeArguments, WorkingDirectory(), environment));
             if (process is null)
             {
                 say("usage: claude could not be started to read its allowance");
@@ -320,7 +326,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         return probes.WorkingDirectory;
     }
 
-    Dictionary<string, string?> Environment() => ProbeEnvironment.Home("CLAUDE_CONFIG_DIR", options.ClaudeHome, ".claude");
+    Dictionary<string, string?>? Environment() => ProbeEnvironment.Home("CLAUDE_CONFIG_DIR", options.ClaudeHome, ".claude", namespaced: true);
 
     // What .claude.json says: whose account it is (its digest), and Claude Code's last reading of
     // its allowance when that reading is the same account's. A reading saved for another account

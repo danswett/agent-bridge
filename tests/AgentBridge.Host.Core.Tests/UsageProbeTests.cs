@@ -773,6 +773,56 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public void A_relative_agent_home_is_never_handed_to_a_probe_that_would_read_it_from_another_folder()
+    {
+        var variable = "AB_TEST_HOME_" + Guid.NewGuid().ToString("N")[..8];
+        var relative = Path.Combine("profiles", "work");
+
+        // Configured: made absolute where the text names nothing more; refused where it names the credential.
+        Assert.Equal(Path.GetFullPath(relative), ProbeEnvironment.Home(variable, relative, ".codex")![variable]);
+        Assert.Null(ProbeEnvironment.Home(variable, relative, ".claude", namespaced: true));
+
+        // Inherited, as the host itself was started: the same.
+        Environment.SetEnvironmentVariable(variable, relative);
+        try
+        {
+            Assert.Equal(Path.GetFullPath(relative), ProbeEnvironment.Home(variable, relative, ".codex")![variable]);
+            Assert.Null(ProbeEnvironment.Home(variable, relative, ".claude", namespaced: true));
+            var absolute = Path.GetFullPath(relative);
+            Environment.SetEnvironmentVariable(variable, absolute);
+            Assert.Empty(ProbeEnvironment.Home(variable, absolute, ".claude", namespaced: true)!);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, null); }
+    }
+
+    [Fact]
+    public void A_Codex_home_reached_through_a_link_shares_the_lease_of_its_target()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "abl-" + Guid.NewGuid().ToString("N")[..8]);
+        var real = Directory.CreateDirectory(Path.Combine(root, "real", ".codex")).FullName;
+        try
+        {
+            // The home itself a link, and a home inside a linked folder.
+            DiscoveryHoldTests.Link(Path.Combine(root, "home-link"), real);
+            DiscoveryHoldTests.Link(Path.Combine(root, "parent-link"), Path.Combine(root, "real"));
+
+            var key = UsageProbes.LeaseKey(AgentKind.Codex, real);
+            Assert.Equal(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "home-link")));
+            Assert.Equal(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "parent-link", ".codex")));
+            Assert.NotEqual(key, UsageProbes.LeaseKey(AgentKind.Codex, Path.Combine(root, "real", "other")));
+        }
+        finally
+        {
+            foreach (var link in new[] { "home-link", "parent-link" })
+            {
+                var path = Path.Combine(root, link);
+                if (Directory.Exists(path)) { Directory.Delete(path); }
+            }
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public async Task A_slow_sign_in_service_on_the_second_account_read_keeps_the_reading_without_a_key_and_backs_off()
     {
         AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account()) : FakeAppServer.Error("workspace routing discovery timed out"));
@@ -1054,6 +1104,34 @@ public sealed class UsageProbeTests : IDisposable
         AppServer(s => s.Answers[method] = _ => FakeAppServer.Error(message));
 
         Assert.Equal(kind, (await RunToEnd(CodexProbe().Start())).Kind.ToString());
+    }
+
+    [Theory]
+    // The usage read refused for want of a ChatGPT login: signed out since the first read, or not.
+    [InlineData(true, "signed out", nameof(CodexProbeKind.SignedOut))]
+    [InlineData(true, "api key", nameof(CodexProbeKind.NotApplicable))]
+    // The usage read answered with no windows: what the second read says still counts.
+    [InlineData(false, "signed out", nameof(CodexProbeKind.SignedOut))]
+    [InlineData(false, "api key", nameof(CodexProbeKind.NotApplicable))]
+    [InlineData(false, "chatgpt", nameof(CodexProbeKind.Failed))]
+    public async Task What_the_second_account_read_says_counts_whatever_the_usage_read_answered(bool refused, string second, string kind)
+    {
+        object login = second switch
+        {
+            "signed out" => new { account = (object?)null, requiresOpenaiAuth = true },
+            "api key" => new { account = new { type = "apiKey" }, requiresOpenaiAuth = true },
+            _ => Account(),
+        };
+        AppServer(s =>
+        {
+            s.Answers["account/read"] = n => FakeAppServer.Result(n == 1 ? Account() : login);
+            s.Answers["account/rateLimits/read"] = _ => refused ? FakeAppServer.Error("chatgpt authentication required to read rate limits") : FakeAppServer.Result(new { });
+        });
+
+        var outcome = await RunToEnd(CodexProbe().Start());
+
+        Assert.Equal(kind, outcome.Kind.ToString());
+        Assert.Null(outcome.Reading);
     }
 
     [Fact]

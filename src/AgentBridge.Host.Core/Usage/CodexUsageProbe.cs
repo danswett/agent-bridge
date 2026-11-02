@@ -152,7 +152,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     async Task ConverseStandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, TaskCompletionSource released, Action<IProbeProcess> onStart)
     {
         var started = clock.GetUtcNow();
-        var environment = ProbeEnvironment.Home("CODEX_HOME", options.CodexHome, ".codex");
+        var environment = ProbeEnvironment.Home("CODEX_HOME", options.CodexHome, ".codex")!;
         Directory.CreateDirectory(probes.WorkingDirectory);
         var process = probes.Launcher.Start(new ProbeCommand(exe, ["app-server"], probes.WorkingDirectory, environment, Stdio: true));
         if (process is not null) { onStart(process); }
@@ -258,33 +258,38 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         if (Login(first.Result) is { } login) { watch?.End(); return login; }
         var limits = await rpc.CallAsync("account/rateLimits/read", new { excludeResetCreditDetails = true });
         var measured = clock.GetUtcNow();
-        if (limits.Error is { } limitsError)
+        var notChatGpt = limits.Error is { } limitsError && limitsError.Contains("chatgpt authentication required", StringComparison.OrdinalIgnoreCase);
+        if (limits.Error is { } failed && !notChatGpt)
         {
             watch?.End();
-            return limitsError.Contains("chatgpt authentication required", StringComparison.OrdinalIgnoreCase)
-                ? new(CodexProbeKind.NotApplicable, Why: "Codex is not signed in with ChatGPT")
-                : Failure(limitsError, rateLimits: true);
+            return Failure(failed, rateLimits: true);
         }
         var second = await rpc.CallAsync("account/read", new { refreshToken = false });
         var others = watch?.End() ?? true;
+        // What the second read says of the login, looked at before the usage read is: the usage
+        // read can still succeed on an unexpired access token after the refresh token was lost,
+        // which is the late sign-out signal the Linux run found (E13, E14). Any other error is a
+        // failure, so a slow sign-in service backs off rather than being asked at the usual pace.
+        var changed = second.Error is { } secondError
+            ? SignedOut(secondError) && !Slow(secondError) ? new CodexProbeOutcome(CodexProbeKind.SignedOut, null, secondError) : Failure(secondError)
+            : Login(second.Result);
+        if (notChatGpt)
+        {
+            // No ChatGPT login to read: another kind of login now, or none since the first read
+            // (another daemon client signing out), which is a sign-out.
+            return changed is { Kind: CodexProbeKind.SignedOut or CodexProbeKind.Failed } ? changed
+                : new(CodexProbeKind.NotApplicable, Why: "Codex is not signed in with ChatGPT");
+        }
+        // Signed in some other way by the second read (an API key, another provider): the usage
+        // read may have been the old login's, and is not this one's, so it is dropped.
+        if (changed is { Kind: CodexProbeKind.NotApplicable }) { return changed; }
         var reading = Map(limits.Result, measured, null, Plan(first.Result));
-        if (reading is null) { return new(CodexProbeKind.Failed, Why: "Codex's answer had no rate-limit windows"); }
-        if (second.Error is { } secondError)
+        if (reading is null)
         {
-            // The usage read can still succeed on an unexpired access token after the refresh token
-            // was lost: that is the late sign-out signal the Linux run found (E13, E14). Any other
-            // error keeps the (unkeyed) reading but is still a failure, so a slow sign-in service
-            // backs off rather than being asked again at the usual pace.
-            return SignedOut(secondError) && !Slow(secondError) ? new(CodexProbeKind.SignedOut, reading, secondError)
-                : Failure(secondError) with { Reading = reading };
+            return changed is { Kind: CodexProbeKind.SignedOut } ? changed : new(CodexProbeKind.Failed, Why: "Codex's answer had no rate-limit windows");
         }
-        if (Login(second.Result) is { } changed)
-        {
-            // Signed in some other way by the second read (an API key, another provider): the
-            // usage read may have been the old login's, and is not this one's, so it is dropped.
-            // A sign-out or an empty answer keeps it, unkeyed.
-            return changed.Kind == CodexProbeKind.NotApplicable ? changed : changed with { Reading = reading };
-        }
+        // A sign-out or a failed second read keeps the reading, unkeyed.
+        if (changed is not null) { return changed with { Reading = reading }; }
         var key = !others ? Key(Email(first.Result), Email(second.Result), limits.Result) : null;
         return new(CodexProbeKind.Reading, reading with { AccountKey = key });
     }

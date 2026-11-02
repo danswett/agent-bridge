@@ -1010,7 +1010,7 @@ public class DiscoveryHoldTests
 
     // A symbolic link, or on Windows without the privilege for one, a junction: both are
     // reparse points, which is what discovery looks for.
-    static void Link(string link, string target)
+    internal static void Link(string link, string target)
     {
         try { Directory.CreateSymbolicLink(link, target); }
         catch (Exception e) when (OperatingSystem.IsWindows() && e is IOException or UnauthorizedAccessException)

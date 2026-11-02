@@ -221,7 +221,8 @@ refresh and locking, and runs no model turn.
 * **Claude.** `claude -p "/usage" --safe-mode --no-session-persistence --output-format json`, the
   executable found as a launch finds it, in a folder the host owns and keeps empty
   (`<profile>/usage-probe`), with no standard input, and `CLAUDE_CONFIG_DIR` set only for a profile
-  that is not the default (Claude Code names its Windows credential by it). `/usage` is a local
+  that is not the default (Claude Code names its Windows credential by it, so a relative home, which
+  the probe would read from its own folder, is not probed at all). `/usage` is a local
   command: no model is asked. A probe that ends with the file unchanged (rate limited) is a failure.
   `claude auth status`, at most hourly, gates it: only a `claude.ai` login is probed, and one that
   says `loggedIn: false` is the failure `Claude Code is signed out on this machine`, under the
@@ -229,8 +230,8 @@ refresh and locking, and runs no model turn.
   client keeps and shows it beside), with no probe until it says otherwise. The probe's exit code cannot say this: it exits 0
   with the last bars after a sign-out.
 * **Codex.** The route follows what Codex runs here:
-  * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set for
-    a home that is not the default);
+  * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
+    made absolute, for a home that is not the default);
   * the managed daemon running: a WebSocket on its control socket
     (`<CODEX_HOME>/app-server-control/app-server-control.sock`, path `/`), one message per text
     frame, ended with a close frame that is not waited for, since the daemon never answers one;
@@ -250,7 +251,8 @@ refresh and locking, and runs no model turn.
   and clears an earlier sign-out failure and the last probe reading, which was another login's.
   Codex reported as needing sign-in (its `-32603` "...Please log out and sign in again", including
   a reused refresh token, an authentication failure from the usage read after Codex's own recovery,
-  or no account where OpenAI sign-in is required) is the failure
+  or no account where OpenAI sign-in is required, whether the first or the second `account/read`
+  finds it, and whatever the usage read answered between them) is the failure
   `Codex needs signing in again on this machine`, timed when it was found and under the newest
   reading's key (none for a transcript reading); found only by the second `account/read`, the
   usage the probe read just before goes out as the reading, carrying that error. No probe follows for 2 hours or
@@ -276,7 +278,8 @@ idle pace, or `usage.idleIntervalSeconds` when that is longer: a shorter one onl
 what the agents saved), at most every 15 minutes while no session of it is open here and every 5
 while one is, and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
 agent home on the machine: a lease file per agent home under the product's own folder
-(`usage-probes/<agent>-<digest>.lock`), shared by hosts serving different bridge profiles, is
+(`usage-probes/<agent>-<digest>.lock`, the digest of the home's folder with every link on its
+path followed, so a home and a link to it share one), shared by hosts serving different bridge profiles, is
 taken before the host looks at what runs and kept until the probe's process ends, even after the
 host stopped waiting for it. None starts beside a Claude probe already running on the machine (one
 left by a host that has since stopped), nor while the machine's Claude processes, any one's

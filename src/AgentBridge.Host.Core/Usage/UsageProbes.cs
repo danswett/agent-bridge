@@ -48,13 +48,43 @@ public sealed class UsageProbes
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    // One per agent home, as the agent names its own credentials by it.
+    // One per agent home, as the agent names its own credentials by it: the folder itself, so a
+    // home reached through a link and one through its target, which share one auth.json, share
+    // one lease. Only the key: the agent is still given the home as configured.
     internal static string LeaseKey(AgentKind agent, string home)
     {
-        var full = Path.GetFullPath(home).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var full = Physical(home).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (OperatingSystem.IsWindows()) { full = full.ToLowerInvariant(); }
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(full)))[..16];
         return $"{agent.ToString().ToLowerInvariant()}-{hash}";
+    }
+
+    // The path with every link along it followed (symbolic links, and junctions on Windows). A
+    // part that cannot be looked at is taken as it is.
+    internal static string Physical(string path, int depth = 0)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var parts = full[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        for (var i = 0; i < parts.Length; i++)
+        {
+            current = Path.Combine(current, parts[i]);
+            if (depth >= 16) { continue; }
+            string? target = null;
+            try
+            {
+                var info = new DirectoryInfo(current);
+                if (info.LinkTarget is not null) { target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName; }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
+            if (target is not null)
+            {
+                // The target's own path may pass through links too.
+                return Physical(Path.Combine([target, .. parts[(i + 1)..]]), depth + 1);
+            }
+        }
+        return current;
     }
 
     sealed class NoLease : IDisposable
@@ -168,13 +198,32 @@ internal static class ProbeEnvironment
     // already runs with it, left out for the default home (Claude Code names its Windows credential
     // with a hash of CLAUDE_CONFIG_DIR when that is set, so setting it to the default would read
     // another credential), and set otherwise.
-    public static Dictionary<string, string?> Home(string variable, string home, string folder)
+    // A relative home would be resolved by the probe from its own working directory (the host's
+    // empty folder), naming another profile: it is made absolute here, or, where the agent names
+    // its credential by the variable's very text (namespaced: Claude), null, and no probe runs.
+    public static Dictionary<string, string?>? Home(string variable, string home, string folder, bool namespaced = false)
     {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
         var inherited = Environment.GetEnvironmentVariable(variable);
-        if (inherited is { Length: > 0 } && Same(inherited, home)) { return environment; }
+        if (inherited is { Length: > 0 } && Same(inherited, home))
+        {
+            if (Path.IsPathFullyQualified(inherited)) { return environment; }
+            if (namespaced) { return null; }
+            environment[variable] = Path.GetFullPath(inherited);
+            return environment;
+        }
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        environment[variable] = Same(home, Path.Combine(profile, folder)) ? null : home;
+        if (Same(home, Path.Combine(profile, folder)))
+        {
+            environment[variable] = null;
+            return environment;
+        }
+        if (!Path.IsPathFullyQualified(home))
+        {
+            if (namespaced) { return null; }
+            home = Path.GetFullPath(home);
+        }
+        environment[variable] = home;
         return environment;
     }
 
