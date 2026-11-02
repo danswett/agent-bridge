@@ -489,10 +489,12 @@ final class BridgeStore {
         return identity
     }
 
-    func uploadBlob(_ url: URL, type: String?, to host: HostStore) async throws -> UUID {
+    func uploadBlob(_ url: URL, type: String?, to host: HostStore, onlyOn connection: UUID) async throws -> UUID {
+        // Validate the composer's captured connection on this actor. Checking in
+        // a separate actor hop would let reconnect replace it before upload starts.
+        guard host.isLive, host.connectionID == connection else { throw BridgeOperationError("The machine connection changed. Attach the file again.") }
         guard !host.isLocal, host.can("sessions.attach.blob"), let relay, let activeOrigin else { throw RelayError.disconnected }
         let token = generation
-        let connection = host.connectionID
         let (attachment, ticket, key) = try await RelayBlobUpload.prepare(file: url, name: url.lastPathComponent,
                                                                           type: type, recipient: host.id, relay: relay, origin: RelayAddress.validated(activeOrigin))
         return try await BridgeBlobStaging.confirm(attachment, ticket: ticket, key: key, capabilities: host.capabilities,
