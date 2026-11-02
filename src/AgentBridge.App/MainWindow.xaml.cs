@@ -219,8 +219,6 @@ public sealed partial class MainWindow : Window
     {
         if (closed) { return; }
         var bar = AppWindow.TitleBar;
-        bar.ButtonBackgroundColor = Colors.Transparent;
-        bar.ButtonInactiveBackgroundColor = Colors.Transparent;
         var colours = CaptionColours(Root.ActualTheme);
         bar.ButtonForegroundColor = colours?.Text;
         bar.ButtonHoverForegroundColor = colours?.Text;
@@ -237,8 +235,9 @@ public sealed partial class MainWindow : Window
         if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { return null; }
         var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
         if (design?.ThemeDictionaries.TryGetValue(theme == ElementTheme.Dark ? "Dark" : "Light", out var d) != true || d is not ResourceDictionary themed) { return null; }
-        Windows.UI.Color Of(string key) => themed.TryGetValue(key, out var b) && b is Microsoft.UI.Xaml.Media.SolidColorBrush s ? s.Color : Colors.Transparent;
-        return (Of("AbText"), Of("AbText3"), Of("AbSubtle"), Of("AbSelected"));
+        Windows.UI.Color? Of(string key) => themed.TryGetValue(key, out var b) && b is Microsoft.UI.Xaml.Media.SolidColorBrush s ? s.Color : null;
+        return Of("AbText") is { } text && Of("AbText3") is { } inactive && Of("AbSubtle") is { } hover && Of("AbSelected") is { } pressed
+            ? (text, inactive, hover, pressed) : null;
     }
 
     // --- Size and place (#180): down to 360×600, and back where it was left. ---
