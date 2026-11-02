@@ -145,6 +145,8 @@
                 Grid.Row="3"
                 Padding="0,0,0,16"
                 SelectionMode="Single"
+                SingleSelectionFollowsFocus="False"
+                GotFocus="OnListFocus"
                 AutomationProperties.AutomationId="Rows"
                 AutomationProperties.Name="Sessions"
                 ItemsSource="{x:Bind ViewModel.Sessions, Mode=OneWay}"

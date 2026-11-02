@@ -18,6 +18,8 @@ public sealed partial class SessionsPage : UserControl
     MainViewModel? viewModel;
     // Set while the list is being told what is selected, so its event is not taken for a choice.
     bool syncing;
+    // An arrow key, Home, End or Page Up/Down moving through the rows, until the list has handled it.
+    bool navigating;
 
     public SessionsPage()
     {
@@ -129,11 +131,28 @@ public sealed partial class SessionsPage : UserControl
     // Alt+Up and Alt+Down on a row move it within its group (#164).
     void OnListKey(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Key is not (VirtualKey.Up or VirtualKey.Down)) { return; }
         var alt = e.KeyStatus.IsMenuKeyDown || Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (!alt && e.Key is VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End or VirtualKey.PageUp or VirtualKey.PageDown)
+        {
+            navigating = true;
+            DispatcherQueue.TryEnqueue(() => navigating = false);
+            return;
+        }
+        if (e.Key is not (VirtualKey.Up or VirtualKey.Down)) { return; }
         if (!alt || RowOf(e.OriginalSource as DependencyObject) is not { } row) { return; }
         e.Handled = true;
         row.MoveBy(e.Key == VirtualKey.Up ? -1 : 1);
+    }
+
+    // The list's own selection-follows-focus is off: with it, any keyboard focus on a row chose
+    // it, so a row given focus back after a move, or a focused row drawn again as the list
+    // reordered, took the open session from one opened by a toast, search or Needs you. Moving
+    // through the rows with the keys still opens each row reached, here.
+    void OnListFocus(object sender, RoutedEventArgs e)
+    {
+        if (!navigating || viewModel is null || e.OriginalSource is not ListViewItem { Content: SessionCardViewModel card }) { return; }
+        navigating = false;
+        viewModel.Selected = card;
     }
 
     // Shift+F10 or the menu key on a row: its menu, as right-click opens it.

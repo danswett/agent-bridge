@@ -126,16 +126,20 @@ static partial class SelfTest
             }
             else { Check(false, "finds the form question's Needs you entry"); }
             // Alt+Down and Alt+Up on a row (§9, #164): the row moves, perhaps drawn by another
-            // control, and its list item has focus again, so the next move is the same row's.
-            var movable = Rows(window).Where(r => r.Card is { Row.CanMoveDown: true }).OrderBy(Top).FirstOrDefault();
+            // control, and its list item has focus again, so the next move is the same row's. A row
+            // other than the open one, as from its menu: the session open stays open.
+            var movable = Rows(window).Where(r => r.Card is { Row.CanMoveDown: true } c && c != main.Selected).OrderBy(Top).FirstOrDefault();
             if (movable?.Card is { } moving)
             {
                 bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving);
+                var openBefore = main.Selected;
                 movable.MoveBy(1);
                 var down = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
                 Rows(window).FirstOrDefault(r => r.Card == moving)?.MoveBy(-1);
                 var up = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
                 Check(down && up, "keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row");
+                await Task.Delay(300);
+                Check(main.Selected == openBefore && openBefore != moving, $"leaves the open session open while another row moves and takes focus ({main.Selected?.Id ?? "none"})");
             }
             else { Check(false, "finds a row that can move down"); }
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
@@ -149,7 +153,7 @@ static partial class SelfTest
                 var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
-                Check(main.Selected == choiceCard && ById<TextBlock>(window.Sessions.SessionPaneView, "Receipt") is { ActualHeight: > 0 }, "keeps the answered session open, its receipt shown");
+                Check(main.Selected == choiceCard && ById<TextBlock>(window.Sessions.SessionPaneView, "Receipt") is { ActualHeight: > 0 }, $"keeps the answered session open, its receipt shown{(main.Selected == choiceCard ? "" : $" (open: {main.Selected?.Id ?? "none"})")}");
             }
             else { Check(false, "finds the single-choice question's option button"); }
 
