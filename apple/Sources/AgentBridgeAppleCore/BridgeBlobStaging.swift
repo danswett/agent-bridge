@@ -17,6 +17,7 @@ public enum BridgeBlobStaging {
             while true {
                 try Task.checkCancellation()
                 try await validateConnection()
+                try Task.checkCancellation()
                 let remaining = clock.now.duration(to: deadline)
                 guard remaining > .zero else { throw RelayError.timeout }
                 // Cancelling this UI operation must not cancel the shared Noise
