@@ -777,7 +777,7 @@ One agent the session started, from `subagents` ([design/subagents.md](../design
 | `id` | string | The agent's own id (Copilot's `agentId`) |
 | `parent` | string? | The `id` of the sub-agent that started it; absent when the main agent did. A client lists it under its parent |
 | `kind` | `"background"` \| `"task"` | `background` runs past its starter's turn and can be woken by a message; `task` is part of its starter's turn. Unknown reads as `task` |
-| `name` | string? | Its label: the starter's description of the job, else its agent type. At most 120 bytes |
+| `name` | string? | Its label: the starter's description of the job, else its display name, else its agent type. An agent chooses it, so the host cleans it ([design/subagents.md](../design/subagents.md) §6): no control, bidi, format (zero-width, BOM, tags) or other default-ignorable characters, whitespace collapsed to single spaces, at most 60 characters and 120 bytes (cut with `…`), and `Delegate “<name>”` for one that reads as "Main agent". Absent when nothing is left. Clients still clean it themselves |
 | `task` | string? | The prompt it was given, at most 512 bytes, the **start** kept |
 | `model` | string? | Its own model, never the session's |
 | `status` | `"working"` \| `"idle"` \| `"waiting"` \| `"ended"` | `waiting`: a question of its own is pending. `idle`: a background agent between runs, which a message can wake. `ended`: it can never run again (a task agent done, its own abort or failure, or the session's CLI exiting). Unknown reads as `idle` |

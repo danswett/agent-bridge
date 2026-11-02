@@ -137,7 +137,10 @@ internal sealed class BackgroundWork
         }
         if (!_agents.TryGetValue(key, out var agent)) { agent = Add(key); }
         var call = callId is not null && _calls.Remove(callId, out var c) ? c : null;
-        var name = Text.Title(call?.Description ?? info?.DisplayName ?? info?.AgentType);
+        // Cleaned and capped here, where every source's name is made, so no reader ever gets
+        // the agent's raw words (#263). One that is nothing but hidden characters falls back to
+        // the next, as a blank one always has.
+        var name = DelegateName.Clean(call?.Description) ?? DelegateName.Clean(info?.DisplayName) ?? DelegateName.Clean(info?.AgentType);
         var model = Limits.KeepStart(Text.NonBlank(info?.Model), Limits.SubagentName);
         var changed = agent.Background != background || (name is not null && agent.Name != name)
             || (model is not null && agent.Model != model);
@@ -496,7 +499,7 @@ internal sealed class BackgroundWork
             Id = a.Id,
             Parent = a.Parent,
             Kind = a.Background ? SubagentKind.Background : SubagentKind.Task,
-            Name = Limits.KeepStart(a.Name, Limits.SubagentName),
+            Name = a.Name,
             Task = Limits.KeepStart(a.Task, Limits.SubagentTask),
             Model = a.Model,
             Status = status,

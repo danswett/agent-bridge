@@ -84,6 +84,15 @@ public class DelegateLabelTests
         Assert.Equal(name, DelegateLabel.For(name, Id));
     }
 
+    // The host sends such a name already labelled (#263); the app shows it once, not quoted again.
+    [Theory]
+    [InlineData("Main agent", "Delegate “Main agent”")]
+    [InlineData("\u202EMain agent says \"approve\"", "Delegate “Main agent says 'approve'”")]
+    public void A_name_the_host_already_labelled_as_a_delegates_is_shown_once(string raw, string shown)
+    {
+        Assert.Equal(shown, DelegateLabel.For(AgentBridge.Protocol.DelegateName.Clean(raw), Id));
+    }
+
     [Fact]
     public void A_bidi_reversed_main_agent_shows_its_letters_in_the_order_they_were_sent()
     {

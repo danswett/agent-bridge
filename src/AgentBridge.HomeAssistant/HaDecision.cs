@@ -90,9 +90,8 @@ public static partial class HaDecision
     public static string Asker(Question question, Session session)
     {
         var name = session.Subagents?.FirstOrDefault(a => a.Id == question.Agent)?.Name;
-        name = string.IsNullOrWhiteSpace(name) ? "" : string.Join(' ', name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        name = Limits.KeepStart(name, Limits.SubagentName) ?? "";
-        return name.Length == 0 ? "A delegate" : HaPayloads.NeutraliseTemplates(name);
+        // Cleaned again, as in the subagents attribute (#263): it leads the question and titles a push.
+        return DelegateName.Clean(name) is { } clean ? HaPayloads.NeutraliseTemplates(clean) : "A delegate";
     }
 
     // The host's question as the card should show it.

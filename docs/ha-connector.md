@@ -256,8 +256,12 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   host's list (running first, then the most recently finished), each `{name, status, line}`:
   `status` is `working`, `waiting`, `idle` or `ended`, and `line` is absent until the
   delegate has said something. `subagents_more` counts the entries left out, here or by the
-  host, when there are any. Names keep their first 120 bytes and lines their last 300,
-  whitespace collapsed and template markup broken as in names, so five entries come to a few
+  host, when there are any. A name is a delegate's own words, so it is cleaned again here
+  as the host cleans it (`DelegateName`, [design/subagents.md](design/subagents.md) §6, #263):
+  no bidi, invisible or control characters, at most 60 characters and 120 bytes, and
+  `Delegate “<name>”` for one that reads as "Main agent"; one with nothing left is `""`.
+  Lines keep their last 300 bytes, whitespace collapsed; template markup is broken in both,
+  as in session names, so five entries come to a few
   KiB with any number of delegates. They are also budgeted against the rest of the
   attributes, never at the card text's cost: past 15 KiB in all (Home Assistant keeps 16 KiB
   of a state's attributes, less room for End session's hint and its own), the lines go, then
@@ -330,7 +334,8 @@ begins with "*name* asks:" and a blank line, so the card shows whose it is witho
 about delegates. The name is added before the length check above, so it can never be what
 makes an answerable question one the card would have to cut. And the decision attributes
 gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
-"*name* asks · *their usual title*" and keep the session's tag.
+"*name* asks · *their usual title*" and keep the session's tag. *name* is cleaned as in the
+`subagents` attribute, and is "A delegate" when the list no longer has it or nothing is left.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and

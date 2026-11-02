@@ -232,7 +232,9 @@ public static class HaPayloads
         {
             var entry = new JsonObject
             {
-                ["name"] = NeutraliseTemplates(Limits.KeepStart(Flatten(a.Name), Limits.SubagentName) ?? ""),
+                // Cleaned again (#263): the host already has, but cards and automations that know
+                // nothing of delegates read this, so it does not rely on where the session came from.
+                ["name"] = NeutraliseTemplates(DelegateName.Clean(a.Name) ?? ""),
                 ["status"] = a.Status.ToString().ToLowerInvariant(),
             };
             if (Limits.KeepEnd(Flatten(a.Line), Limits.SubagentLine).Text is { Length: > 0 } line) { entry["line"] = NeutraliseTemplates(line); }

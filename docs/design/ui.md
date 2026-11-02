@@ -513,7 +513,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   NFKD-folded, with marks and case dropped by code point (so a combining mark outside the BMP
   goes too), and Cyrillic, Greek, Armenian and Latin IPA letters drawn like those of "main
   agent" are read as them (а, і, М, Μ, α, ι, ո, ɑ, ı and the like), then checked for "main"
-  followed by "agent…", or "mainagent…". No such list is complete, so it is not the guard:
+  followed by "agent…", or "mainagent…". The host sends such a name already in that form
+  (design/subagents.md §6, #263), which is shown as it is rather than quoted twice. No such
+  list is complete, so it is not the guard:
   every line that says who asks or works puts the word "Delegate" before the label ("Delegate
   *name* asks" in the status line, the question's heading and Needs you; "Working · task:
   Delegate *name*"), as the conversation's events do, and the main agent's own lines never
