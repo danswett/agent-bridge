@@ -43,6 +43,10 @@ Stale/offline actions
 show a Not sent receipt and never queue a later mutation. Windows can act directly
 from a background tray process; iOS background delivery is the dependency below.
 
+The host's read-only reason disables known action capabilities and prevents new
+mutation attempts or retries, even if its advertised capabilities still list the
+action. Session/usage inspection and staged-attachment cleanup remain available.
+
 ## Platform and host dependencies
 
 - **Mac/Linux host actions and local administration:** the host selects
