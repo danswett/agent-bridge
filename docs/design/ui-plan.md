@@ -42,6 +42,12 @@ current client shows. Its fixtures also feed the shadow gate (#40). If sign-off 
 | U7 | #168 | PWA platform layer: shortcut hints, safe areas, back navigation | U5 | `pwa/js/platform.js` (new) |
 | U8 | #176 | Delegates in both clients: strip, tab, inspector, sheet, attributed questions | S1, U5, U6 | `pwa/`, `src/AgentBridge.App` |
 
+**U8 part 1 landed early, in the PWA (#176):** its cards show only the main agent's own
+response and reasoning (`activity.source` and `own`), and a compact Delegates block in today's
+layout, a delegate opened to its own words with `session.get { id, agent }`. The logic is in
+`pwa/js/attribution.js`, so U5 and the rest of U8 move only the markup. The app's parity is
+#229. The rest of U8 (strip, tab, inspector, sheet, attributed questions) stays as planned.
+
 **Later, outside this plan:** the macOS app (P5) and native phone apps (P8) build on ui.md
 §7. They extend the generator with SwiftUI and Compose outputs when they start.
 

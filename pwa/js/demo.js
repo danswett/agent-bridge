@@ -120,6 +120,11 @@ export class DemoConnection {
 export class DemoHost {
   transports = new Set();
   calls = [];
+  // Every session.get request's data, for a test to see what was asked (a delegate by agent).
+  getLog = [];
+  // What each delegate said in full, by its id, for session.get with agent; a test changes it.
+  delegateWords = clone(DELEGATE_WORDS);
+  failDelegateGets = 0;
   seq = 0;
   revision = 0;
 
@@ -224,7 +229,20 @@ export class DemoHost {
       case 'sessions.list':
         return reply({ sessions: [...this.sessions.values()].map(withoutHistory), revision: this.revision });
       case 'session.get': {
+        this.getLog.push(clone(data ?? {}));
         const s = this.sessions.get(data?.id);
+        // With agent: that one delegate in full, as a host since sub-agents answers. After the
+        // answer delay and any hold, so a test can change the delegate while one is on its way.
+        // failDelegateGets: that many fail first, as during a reconnect.
+        if (s && typeof data?.agent === 'string') {
+          if (this.failDelegateGets > 0) {
+            this.failDelegateGets--;
+            t.deliver({ re: id, ok: false, error: 'the machine is reconnecting' });
+            return undefined;
+          }
+          this.#after(() => delegateDetail(this.sessions.get(data.id) ?? s, data.agent, this.delegateWords)).then(reply);
+          return undefined;
+        }
         return reply(s ? withHistory(s) : { missing: true });
       }
       case 'sessions.subscribe': {
@@ -731,6 +749,54 @@ function withHistory(s) {
     if (c.activity.currentTool) { c.activity.history.push(c.activity.currentTool); }
   }
   return c;
+}
+
+// session.get { id, agent }: the delegate's entry with its own words, as a host since sub-agents
+// sends it, or missing when the session lists no such delegate.
+function delegateDetail(s, agent, said) {
+  const entry = (s.subagents ?? []).find((a) => a.id === agent);
+  if (!entry) { return { missing: true }; }
+  const words = said[agent] ?? {};
+  return { ...clone(entry), response: words.response ?? entry.line ?? '', ...(words.reasoning ? { reasoning: words.reasoning } : {}), history: [] };
+}
+
+// What the demo's delegates said in full, beyond the latest line a list carries.
+const DELEGATE_WORDS = {
+  'demo-agent-suite': {
+    response: 'The suite fails on HEAD: **RestartAfterResume** times out.\n\nBisecting over the last 10 commits: 4 left to try.',
+    reasoning: 'A timing failure that only shows after a resume. Bisect first, then read the timer.',
+  },
+  'demo-agent-witness': {
+    response: 'The witness follows the first reply of a turn, not the latest. That is why it misses a resume.',
+    reasoning: 'Check CI before saying so.',
+  },
+};
+
+// ?delegates=1: a session whose main agent started two background delegates and went idle. The
+// host's top-level response and reasoning are the delegates' (source names them); the main
+// agent's own are in own, which the card shows as its words.
+export function demoDelegating(base = Date.now()) {
+  const at = (ms) => new Date(base - ms).toISOString();
+  return {
+    id: 'demo-delegates', agent: 'copilot', title: 'Fix RestartAfterResume', repository: 'danswett/agent-bridge', branch: 'fix/restart-after-resume',
+    model: 'claude-opus-5.5', status: 'idle', statusSince: at(17 * 60000), startedAt: at(20 * 60000), updatedAt: at(30000),
+    activity: {
+      response: 'Bisecting over the last 10 commits: 4 left to try.',
+      reasoning: 'Check CI before saying so.',
+      userMessage: 'Run the suite and check the witness logic, both in the background.',
+      turnCount: 1,
+      background: { agents: 2, shells: 1 },
+      source: { response: 'demo-agent-suite', reasoning: 'demo-agent-witness' },
+      own: { response: 'Started 2 background agents: one runs the full suite, one reads the witness logic. I\'ll report back when both are done.', reasoning: 'Two independent jobs: delegate both.', at: at(17 * 60000) },
+    },
+    subagents: [
+      { id: 'demo-agent-witness', kind: 'background', name: 'Read witness shell logic', task: 'Read the witness\'s shell logic and check it follows the latest reply of a turn.', model: 'gpt-5.6-luna', status: 'working', startedAt: at(17 * 60000), line: 'Check CI before saying so.', currentTool: { id: 'demo-t1', name: 'powershell', summary: 'Watch the checks', status: 'running', startedAt: at(40000) }, shells: 0 },
+      { id: 'demo-agent-suite', kind: 'background', name: 'Run full test suite', task: 'Run the full test suite on HEAD and report any failure with its first error line.', model: 'claude-haiku-5.5', status: 'working', startedAt: at(16 * 60000), line: 'Bisecting over the last 10 commits: 4 left to try.', shells: 1 },
+      { id: 'demo-agent-grep', parent: 'demo-agent-witness', kind: 'task', name: 'Find the timer reset', model: 'gpt-5.6-luna', status: 'working', startedAt: at(2 * 60000), line: 'Two candidates in RestartWitness.cs.', shells: 0 },
+      { id: 'demo-agent-review', parent: 'demo-agent-witness', kind: 'task', name: 'Review the witness change', model: 'gpt-5.6-luna', status: 'ended', outcome: 'done', startedAt: at(12 * 60000), endedAt: at(11 * 60000), line: 'No regressions: the flag now follows the latest reply.', shells: 0 },
+      { id: 'demo-agent-lint', kind: 'task', name: 'Lint the PWA', model: 'claude-haiku-5.5', status: 'ended', outcome: 'failed', startedAt: at(15 * 60000), endedAt: at(14 * 60000), line: 'eslint could not start: no config found.', shells: 0 },
+    ],
+  };
 }
 
 // A few changes on a loop, so the demo looks alive: the working session's tool moves on,

@@ -201,6 +201,28 @@ test('getSession returns null for a session that has ended', async () => {
   assert.equal(await p, null);
 });
 
+test('a delegate is asked for by agent, and a host that answers with the whole session is not taken for the delegate', async () => {
+  const t = fakeTransport();
+  const client = new HostClient(t);
+  const p = client.getSubagent('s1', 'agent-3a91');
+  await flush();
+  assert.deepEqual(t.sent[0], { id: 1, op: 'session.get', data: { id: 's1', agent: 'agent-3a91' } });
+  t.host({ re: 1, ok: true, result: { id: 'agent-3a91', kind: 'background', name: 'Run full test suite', status: 'working', response: 'Bisect over the last 10 commits.', reasoning: 'Timing.' } });
+  const a = await p;
+  assert.deepEqual([a.name, a.response, a.reasoning], ['Run full test suite', 'Bisect over the last 10 commits.', 'Timing.']);
+
+  // A host before sub-agents ignores agent and sends the session.
+  const old = client.getSubagent('s1', 'agent-3a91');
+  await flush();
+  t.host({ re: 2, ok: true, result: session('s1', { activity: { response: 'The session\'s, not the delegate\'s.' } }) });
+  await assert.rejects(old, /does not report delegates in detail/);
+
+  const gone = client.getSubagent('s1', 'agent-gone');
+  await flush();
+  t.host({ re: 3, ok: true, result: { missing: true } });
+  assert.equal(await gone, null);
+});
+
 test('usage.subscribe returns the report and each usage.update is heard as usage', async () => {
   const t = fakeTransport();
   const client = await subscribed(t, new SessionsStore());

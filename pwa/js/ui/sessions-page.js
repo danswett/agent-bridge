@@ -86,6 +86,10 @@ export class SessionsPage {
         const client = hosts.link(hostId)?.client;
         return client ? client.getSession(id) : Promise.reject(new Error('not connected'));
       },
+      fetchDelegate: (hostId, id, agent) => {
+        const client = hosts.link(hostId)?.client;
+        return client ? client.getSubagent(id, agent) : Promise.reject(new Error('not connected'));
+      },
       machine: (hostId) => ({ name: hosts.nameOf(hostId) ?? 'another machine', show: this.#several() }),
       answering: (hostId) => this.answering(hostId),
       order: this.order,

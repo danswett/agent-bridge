@@ -360,7 +360,7 @@ a { color: var(--ab-bridge); }
 }
 
 .body { border-top: 1px solid var(--ab-stroke2); margin-top: 8px; padding-top: 4px; }
-.note.truncated { font-style: italic; }
+.note.truncated, .note.dropped { font-style: italic; }
 .plain { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .facts { color: var(--ab-text2); font-size: .8rem; margin: 10px 0 0; overflow-wrap: anywhere; }
 
@@ -377,6 +377,39 @@ summary {
 .tool .tool-summary { color: var(--ab-text2); overflow-wrap: anywhere; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
 .tool .tool-mark { align-self: center; display: flex; }
+
+/* ---- Main agent and delegates (#176): one voice per line (ui.md §1) ----
+   The main agent's words are labelled as its own once delegates speak in the same card; each
+   delegate's line sits under its name, in meta style, never in the main agent's place. */
+.voice-label { margin: 8px 0 0; color: var(--ab-text2); font-size: .8rem; font-weight: 600; }
+.voice-label:not([hidden]) ~ .response > :first-child { margin-top: 2px; }
+.delegates { margin: 8px 0; padding-top: 4px; border-top: 1px solid var(--ab-stroke2); }
+.delegates-head { margin: 6px 0 2px; color: var(--ab-text2); font-size: .8rem; font-weight: 600; }
+.delegate-list { list-style: none; margin: 0; padding: 0; }
+.delegate { min-width: 0; }
+.delegate[data-depth="1"] { padding-left: 16px; }
+.delegate[data-depth="2"] { padding-left: 32px; }
+.delegate[data-depth="3"] { padding-left: 48px; }
+.delegate .delegate-detail { margin: 0; }
+.delegate-summary { display: block; padding: 6px 0; min-width: 0; font-weight: 400; color: var(--ab-text); }
+.delegate-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.delegate-name { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
+.delegate-time { color: var(--ab-text2); font-size: .8rem; white-space: nowrap; }
+.delegate-time:not(:empty)::before { content: "·"; margin-right: 6px; }
+.delegate-under { color: var(--ab-text2); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
+.delegate-under::before { content: "·"; margin-right: 6px; }
+.delegate-line { display: block; margin: 2px 0 0 20px; color: var(--ab-text2); font-size: .82rem; overflow-wrap: anywhere; }
+.delegate-body { margin: 0 0 8px 20px; padding-left: 10px; border-left: 2px solid var(--ab-stroke2); font-size: .88rem; }
+.delegate-body h5 { margin: 8px 0 2px; color: var(--ab-text2); font-size: .78rem; font-weight: 600; }
+.delegate-facts { margin: 4px 0; color: var(--ab-text2); font-size: .8rem; overflow-wrap: anywhere; }
+.delegate-body .reasoning { margin: 4px 0; }
+.delegates-finished { margin: 2px 0; }
+.delegates-finished > summary { font-size: .82rem; }
+/* A row opens in place; its chevron says so, pointing down into it once open. */
+.delegate-chevron { width: 16px; height: 16px; margin-left: auto; color: var(--ab-text2); transition: transform .2s ease; }
+.delegate-detail[open] .delegate-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .delegate-chevron { transition: none; } }
+.delegates-more { font-size: .8rem; }
 
 /* ---- Markdown ---- */
 .md { overflow-wrap: anywhere; }

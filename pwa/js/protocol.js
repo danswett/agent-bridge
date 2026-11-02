@@ -117,8 +117,9 @@ export function readQuestion(raw) {
   };
 }
 
-// One sub-agent the session started, as far as the list and status need it: who it is,
-// where it sits and whether it runs. Its words and tools are for the delegate views (#176).
+// One sub-agent the session started: who it is, where it sits, whether it runs, and its latest
+// line. response, reasoning and history come only from session.get { id, agent }; a list's
+// entry reads them as absent.
 export function readSubagent(raw) {
   const a = obj(raw);
   if (!a || !str(a.id)) { return null; }
@@ -128,9 +129,39 @@ export function readSubagent(raw) {
     parent: str(a.parent),
     kind: readSubagentKind(a.kind),
     name: str(a.name),
+    task: str(a.task),
+    model: str(a.model),
     status,
     outcome: status === 'idle' || status === 'ended' ? (a.outcome === undefined || a.outcome === null ? null : readSubagentOutcome(a.outcome)) : null,
+    startedAt: str(a.startedAt),
+    endedAt: status === 'idle' || status === 'ended' ? str(a.endedAt) : null,
+    line: str(a.line),
+    currentTool: status === 'working' || status === 'waiting' ? readTool(a.currentTool) : null,
+    shells: Number.isSafeInteger(a.shells) && a.shells > 0 ? a.shells : 0,
+    response: str(a.response),
+    responseTruncated: a.responseTruncated === true,
+    reasoning: str(a.reasoning),
+    history: Array.isArray(a.history) ? a.history.map(readTool).filter(Boolean) : null,
   };
+}
+
+// activity.source: which sub-agent wrote the top-level response and reasoning, each on its
+// own, by id. A field left out is the main agent's; null when both are.
+export function readSource(raw) {
+  const s = obj(raw);
+  if (!s) { return null; }
+  const response = str(s.response) || null;
+  const reasoning = str(s.reasoning) || null;
+  return response || reasoning ? { response, reasoning } : null;
+}
+
+// activity.own: the main agent's own text for a field whose top-level text is not it. null
+// when it says nothing.
+export function readOwn(raw) {
+  const o = obj(raw);
+  if (!o) { return null; }
+  const own = { response: str(o.response), responseTruncated: o.responseTruncated === true, reasoning: str(o.reasoning), at: str(o.at) };
+  return own.response !== null || own.responseTruncated || own.reasoning !== null ? own : null;
 }
 
 // Work still running after the session's own turn: { agents, shells }, or null when there
@@ -176,6 +207,10 @@ export function readSession(raw) {
       turnCount: num(a.turnCount),
       compactions: num(a.compactions),
       background: readBackground(a.background),
+      // Whose the top-level response and reasoning are, and the main agent's own beside them
+      // (attribution.js says which to show). A host before sub-agents sends neither.
+      source: readSource(a.source),
+      own: readOwn(a.own),
     },
     question: readQuestion(s.question),
     // Absent (null) from a host that lists none, or can't: Claude and Codex so far.

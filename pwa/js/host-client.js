@@ -5,7 +5,7 @@
 // `onmessage(message)` / `onclose(error)` callbacks, carrying already-parsed JSON. In the
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
-import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult } from './protocol.js';
+import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult, readSubagent } from './protocol.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
@@ -113,6 +113,17 @@ export class HostClient {
   async getSession(id) {
     const r = await this.request(Ops.sessionGet, { id });
     return r?.missing === true ? null : readSession(r);
+  }
+
+  // One sub-agent in full, with its own response, reasoning and history (session.get with
+  // agent), or null once it or its session has gone. A host before sub-agents ignores agent
+  // and sends the whole session, which is never taken for the delegate's.
+  async getSubagent(id, agent) {
+    const r = await this.request(Ops.sessionGet, { id, agent });
+    if (r?.missing === true) { return null; }
+    const a = readSubagent(r);
+    if (!a || a.id !== agent) { throw new HostError(Ops.sessionGet, 'this machine does not report delegates in detail'); }
+    return a;
   }
 
   // Answers a question: data is session.answer's { id, question, request, fields | text }.
