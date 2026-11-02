@@ -273,9 +273,10 @@ static partial class SelfTest
             && rail.FooterMenuItems.OfType<NavigationViewItem>().Single().Tag as string == "settings",
             $"has a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot ({string.Join(", ", tags)})");
         // NavigationView draws the pages' layer with the radius in its left modes, not in its top mode.
-        var layer = Find<Grid>(rail).FirstOrDefault(g => g.Name == "ContentGrid");
+        // Found from the page's side: each rail item's template has a ContentGrid of its own, first.
+        var layer = ById<Grid>(rail, "Content") is { } content ? Above<Grid>(content, g => g.Name == "ContentGrid") : null;
         var radius = ((CornerRadius)Application.Current.Resources["AbRadiusCard"]).TopLeft;
-        check(layer is { CornerRadius: var r } && Math.Abs(r.TopLeft - radius) < 0.1 && r.TopRight == 0 && r.BottomLeft == 0, $"draws the pages on a layer with an {radius} px top-left radius");
+        check(layer is { CornerRadius: var r } && Math.Abs(r.TopLeft - radius) < 0.1 && r.TopRight == 0 && r.BottomLeft == 0, $"draws the pages on a layer with an {radius} px top-left radius ({(layer is null ? "none" : layer.CornerRadius.ToString())})");
 
         foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
         {
@@ -297,6 +298,11 @@ static partial class SelfTest
             finally { root.Children.Remove(button); }
         }
         window.RootElement.RequestedTheme = ElementTheme.Default;
+        // Back in the app's own theme before anything else reads a colour: the status words are
+        // compared with the app's brushes next.
+        var own = Application.Current.RequestedTheme == ApplicationTheme.Dark ? ElementTheme.Dark : ElementTheme.Light;
+        await Until(() => window.RootElement.ActualTheme == own, TimeSpan.FromSeconds(10));
+        await Task.Delay(300);
 
         var scale = window.RootElement.XamlRoot.RasterizationScale;
         var (w, h) = WindowPlacement.Smallest(scale);
@@ -458,6 +464,14 @@ static partial class SelfTest
         [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static partial bool SystemParametersInfo(uint action, uint param, ref HIGHCONTRAST value, uint winIni);
+    }
+    static T? Above<T>(DependencyObject node, Func<T, bool> match) where T : DependencyObject
+    {
+        for (var up = VisualTreeHelper.GetParent(node); up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            if (up is T t && match(t)) { return t; }
+        }
+        return null;
     }
     static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
     {
