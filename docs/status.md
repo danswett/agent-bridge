@@ -94,6 +94,7 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
   - At 11-02 03:05 PT: no unexplained mismatch since the #226 host went on (00:45 PT). Coverage: sessions 21, questions 42, status transitions 163, background 10, compactions 1, resume snapshots 58.
   - The earliest pass is about 01:00 PT on 11-03, when the older mismatches leave the 24 h window.
   - Codex is capped: its weekly allowance read 95% used.
+  - Check VM-M's gate with `./build/shadow-soak-vm.ps1 -Subscription <id> -Status`. It runs `shadow summary --gate` on VM-M; the DEV-VM1 command above reads only DEV-VM1's own reports. Run `-Finish` only after that reads PASS.
 - DEV-VM1's own shadow ends when it migrates, and VM-M stays the comparator.
 - Update the shadow build with `build/shadow-week.ps1 -Update` after relevant merges. Agent sessions can't use `-Install`; the #67 guard refuses it.
 - #163: a skipped sample splits one disagreement into many episodes. Not fixed.
