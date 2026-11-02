@@ -91,7 +91,7 @@ jobs:
           bu KERNELBASE!TerminateProcess ".if (@$status != 0) { .echo DIAG: TerminateProcess with a nonzero code; r $code; r $status; $stacks; .dump /ma /u $d\\terminateprocess.dmp } ; g"
           g
           "@ | Set-Content "$out\cdb.txt"
-          $runs = 20; $bad = 0
+          $runs = 25; $bad = 0
           for ($i = 1; $i -le $runs; $i++) {
             $debugged = $env:CDB -and (($i % 3 -ne 0) -or -not $arm) -and (($i % 2 -eq 1) -or $arm)
             Remove-Item "$env:LOCALAPPDATA\AgentBridge\app\*.log" -ErrorAction SilentlyContinue
@@ -105,14 +105,12 @@ jobs:
               if (-not $finished) { Stop-Process -Id $p.Id -Force; Get-Process AgentBridge -ErrorAction SilentlyContinue | Stop-Process -Force }
               $m = Select-String "$out\run$i\cdb.log" -Pattern 'Exit process .*, code ([0-9a-fA-F]+)' | Select-Object -Last 1
               $exit = if ($m) { $m.Matches[0].Groups[1].Value } else { 'none' }
-              $failed = (-not $finished) -or ($exit -ne '0') -or (Select-String "$out\run$i\cdb.log" -Pattern 'DIAG: (?!attached|exit event)' -Quiet)
+              $failed = (-not $finished) -or ($exit -ne '0') -or (Select-String "$out\run$i\cdb.log" -Pattern '^DIAG: (?!attached|exit event)' -Quiet)
             } else {
-              $p = Start-Process $exe -ArgumentList '--self-test', "`"$result`"" -PassThru
-              $null = $p.Handle
-              $finished = $p.WaitForExit(180000)
-              if (-not $finished) { Stop-Process -Id $p.Id -Force }
-              $exit = if ($finished) { $p.ExitCode } else { 'timeout' }
+              ./build/app-self-test.ps1 -Exe $exe -Result $result -Logs "$out\run$i" | Out-File "$out\run$i\self-test.txt"
+              $exit = $LASTEXITCODE
               $failed = "$exit" -ne '0'
+              if ($failed) { Get-Content "$out\run$i\self-test.txt" | Select-Object -Last 45 }
             }
             Copy-Item "$env:LOCALAPPDATA\AgentBridge\app\*.log" "$out\run$i" -ErrorAction SilentlyContinue
             $unfinished = if (Test-Path $result) { (Get-Content $result -Raw | ConvertFrom-Json).unfinished } else { 'no result' }
