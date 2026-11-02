@@ -74,7 +74,7 @@ an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
 | 5 | Main agent idle, only background commands | `delegating` | "N background commands" |
 | 6 | Nothing running | `idle` | "Idle" |
 | 7 | **Overlay.** Any of the above while an agent drives | the same glyph plus `driven-badge`; `working` and `delegating` turn from active to agent | The same words, in agent colour, with "Driven by an agent" on rows |
-| 8 | **Refines rule 4.** The agent can't list its sub-agents (Claude `Task`, Codex threads, until #84's later slices, or a host older than `subagents`): `background.agents` counts them but neither `subagents` nor `subagentsMore` lists any | `delegating` | "Delegating to N agents · details not reported". Nothing is ever wrongly attributed |
+| 8 | **Refines rule 4.** The agent can't list its sub-agents (a host older than `subagents`, or an agent whose transcript counts its delegates without saying which they are): `background.agents` counts them but neither `subagents` nor `subagentsMore` lists any | `delegating` | "Delegating to N agents · details not reported". Nothing is ever wrongly attributed |
 
 While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
 `ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.

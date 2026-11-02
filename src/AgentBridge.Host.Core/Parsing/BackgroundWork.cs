@@ -20,6 +20,9 @@ namespace AgentBridge.Host.Core.Parsing;
 // started, and Running drops whatever began before the session's current process did.
 // Without that, a CLI that was replaced, or a host reading an old tail, left a session
 // "delegating" for good, waiting on work nothing would ever finish.
+//
+// Claude's and Codex's delegates are entries here too (ClaudeParser, CodexParser), as far
+// as their transcripts say anything of them (docs/design/subagents.md §3).
 internal sealed class BackgroundWork
 {
     // Enough for any real session; a hostile transcript cannot grow these without bound.
@@ -239,13 +242,47 @@ internal sealed class BackgroundWork
 
     // agent_idle: spent on the oldest run still owed one; only a notice no run is owed
     // ends the current run (one whose end its own events never showed), or says how one
-    // ended whose start was only skimmed.
-    public void AgentIdle(string? agentId, DateTimeOffset? at = null)
+    // ended whose start was only skimmed. Claude's task-notification and Codex's agent
+    // states are notices of the same kind, the only word of a run's end, with its outcome.
+    public void AgentIdle(string? agentId, DateTimeOffset? at = null, SubagentOutcome outcome = SubagentOutcome.Done)
     {
         if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return; }
         if (agent.IdleOwed > 0) { agent.IdleOwed--; return; }
-        if (!agent.Working) { Outcome(agent, at, SubagentOutcome.Done); return; }
-        Stop(agent, at, SubagentOutcome.Done);
+        if (!agent.Working) { Outcome(agent, at, outcome); return; }
+        Stop(agent, at, outcome);
+    }
+
+    // Whether any sub-agent is known: only one can have started another.
+    public bool HasAgents => _agents.Count > 0;
+
+    public bool Knows(string agentId) => _agents.ContainsKey(agentId);
+
+    // Whether a known agent is between runs, and since when.
+    public bool Stopped(string agentId, out DateTimeOffset? endedAt)
+    {
+        endedAt = null;
+        if (!_agents.TryGetValue(agentId, out var agent) || agent.Working) { return false; }
+        endedAt = agent.EndedAt;
+        return true;
+    }
+
+    // Claude notifies an agent's end only once it has no live background agents of its own
+    // (its task-notification says so), so every one under it has stopped by then, whether or
+    // not its own notice was read.
+    public void DescendantsStopped(string agentId, DateTimeOffset? at)
+    {
+        foreach (var agent in _agents.Values.Where(a => a.Working && Under(a, agentId)).ToList()) { Stop(agent, at, SubagentOutcome.Done); }
+    }
+
+    bool Under(Agent agent, string ancestor)
+    {
+        var a = agent;
+        for (var depth = 0; depth < 64 && a.Parent is { } parent; depth++)
+        {
+            if (parent == ancestor) { return true; }
+            if (!_agents.TryGetValue(parent, out a)) { return false; }
+        }
+        return false;
     }
 
     // Written once, after the agent's first run; written again for every agent as the

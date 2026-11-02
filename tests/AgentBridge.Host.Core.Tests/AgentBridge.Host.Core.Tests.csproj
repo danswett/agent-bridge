@@ -17,6 +17,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
     <None Include="..\fixtures\copilot\*" Link="fixtures\copilot\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\claude\**\*" Link="fixtures\claude\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\codex\*" Link="fixtures\codex\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

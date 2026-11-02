@@ -15,6 +15,7 @@ internal sealed class SessionTracker
     readonly SessionState _state = new();
     readonly TranscriptParser _parser;
     TranscriptTail? _tail;
+    ClaudeSubagents? _subagents;
     Workspace? _workspace;
     (DateTime, long) _workspaceStamp;
     SessionStatus? _lastStatus;
@@ -48,9 +49,17 @@ internal sealed class SessionTracker
             if (_tail is null || !string.Equals(_tail.Path, path, StringComparison.Ordinal))
             {
                 _tail = new TranscriptTail(path, _options);
+                _subagents = null;
                 _parser.Reset();
             }
             _tail.Read(_parser);
+            // A nested Claude delegate's start and parent are written only beside the session's
+            // transcript; one can exist only once a delegate of the session's does.
+            if (_parser is ClaudeParser claude && _state.Background.HasAgents)
+            {
+                _subagents ??= new ClaudeSubagents();
+                foreach (var record in _subagents.Read(path)) { claude.Nested(record); }
+            }
         }
         if (discovered.StateDirectory is { } dir) { RefreshWorkspace(Path.Combine(dir, "workspace.yaml")); }
         return Settle(Build());

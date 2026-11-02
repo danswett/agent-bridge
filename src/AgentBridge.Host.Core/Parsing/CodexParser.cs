@@ -17,6 +17,19 @@ namespace AgentBridge.Host.Core.Parsing;
 // speaks. Reasoning is encrypted unless the user asked for summaries, so its absence is
 // normal. Response-stream user messages are skipped: they include the environment
 // context and instructions Codex injects, not what the user typed.
+//
+// Sub-agents (docs/design/subagents.md §3), as Codex CLI 0.166.0 (multi_agent v1) records
+// them in the session's own rollout (tests/fixtures/codex): an item_completed of type
+// CollabAgentToolCall for each multi-agent tool the session calls, naming the threads it
+// acted on (receiver_thread_ids, receiver_agents with each one's agent_nickname) and how each
+// stood then (agents_states: "pending_init", "running", "interrupted", "shutdown",
+// "not_found", {"completed": text} or {"errored": text}); spawn_agent's carries the prompt
+// and model as well. A sub-agent that stops tells the session in a user message,
+// <subagent_notification>{"agent_path": its thread id, "status": …}</subagent_notification>.
+// A sub-agent is a thread of its own with a rollout of its own (never a session, CodexRollout),
+// so what it says reaches this one only through these, never as its response. It stays open
+// for more input until closed, so a finished one is idle, not ended. Its own sub-agents would
+// be in its own rollout, which is not read: they are neither listed nor counted.
 internal sealed class CodexParser(SessionState state, TimeProvider time) : TranscriptParser(state, time)
 {
     static readonly IReadOnlyList<byte[]> Markers =
@@ -26,9 +39,23 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         Marker("\"UserMessage\""),
         Marker("\"compacted\""),
         Marker("\"session_meta\""),
+        // A sub-agent started or stopped long before the window is still listed as it is now.
+        Marker("\"CollabAgentToolCall\""),
+        Marker("\"multi_agent.subagent_notification\""),
     ];
 
+    const string NotificationStart = "<subagent_notification>";
+
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
+
+    // The session's own thread: a sub-agent another sub-agent started is not the main agent's.
+    string? _thread;
+
+    public override void Reset()
+    {
+        base.Reset();
+        _thread = null;
+    }
 
     protected override void Count(JsonElement e)
     {
@@ -40,6 +67,9 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 break;
             case "compacted":
                 S.Compactions++;
+                break;
+            case "response_item" when Json.Str(payload, "type") == "message" && Json.Str(payload, "role") == "user":
+                Notification(payload, Json.Time(e, "timestamp"));
                 break;
             case "event_msg":
                 switch (Json.Str(payload, "type"))
@@ -54,6 +84,9 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                     case "item_completed" when Json.Obj(payload, "item") is { } item && Json.Str(item, "type") == "UserMessage":
                         S.UserMessage = ContentText(item) ?? S.UserMessage;
                         S.FirstUserMessage ??= S.UserMessage;
+                        break;
+                    case "item_completed" when Json.Obj(payload, "item") is { } item && Json.Str(item, "type") == "CollabAgentToolCall":
+                        Collab(item, Json.Time(e, "timestamp"));
                         break;
                 }
                 break;
@@ -91,6 +124,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
 
     void Meta(JsonElement payload, DateTimeOffset? at)
     {
+        _thread ??= Text.NonBlank(Json.Str(payload, "id"));
         S.StartedAt ??= Json.Time(payload, "timestamp") ?? at;
         S.Cwd ??= Json.Str(payload, "cwd");
         if (Json.Obj(payload, "git") is { } git)
@@ -205,10 +239,120 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                     }
                     break;
                 }
+            case "CollabAgentToolCall":
+                {
+                    var before = S.Background.Version;
+                    Collab(item, at);
+                    return S.Background.Version != before;
+                }
             default:
                 return false;
         }
         return true;
+    }
+
+    // One multi-agent tool call of the session's: the threads it started, woke, closed or waited
+    // on, and how each stood when it returned.
+    void Collab(JsonElement item, DateTimeOffset? at)
+    {
+        var work = S.Background;
+        var sender = Text.NonBlank(Json.Str(item, "sender_thread_id"));
+        var parent = sender is null || _thread is null || string.Equals(sender, _thread, StringComparison.OrdinalIgnoreCase) ? null : sender;
+        var nicknames = new Dictionary<string, (string? Nickname, string? Role)>(StringComparer.Ordinal);
+        if (Json.Arr(item, "receiver_agents") is { } agents)
+        {
+            foreach (var a in agents.EnumerateArray())
+            {
+                if (a.ValueKind == JsonValueKind.Object && Text.NonBlank(Json.Str(a, "thread_id")) is { } id) { nicknames[id] = (Json.Str(a, "agent_nickname"), Json.Str(a, "agent_role")); }
+            }
+        }
+        var receivers = new List<string>();
+        if (Json.Arr(item, "receiver_thread_ids") is { } ids)
+        {
+            receivers.AddRange(ids.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).OfType<string>().Where(x => x.Length > 0));
+        }
+        receivers.AddRange(nicknames.Keys.Where(k => !receivers.Contains(k)));
+        switch (Json.Str(item, "tool"))
+        {
+            case "spawn_agent":
+                foreach (var id in receivers)
+                {
+                    var (nickname, role) = nicknames.GetValueOrDefault(id);
+                    work.AgentStarted(Json.Str(item, "id"), id, at, background: true, new BackgroundWork.StartInfo(DisplayName: nickname, AgentType: role, Model: Json.Str(item, "model"), Parent: parent));
+                    work.AgentPrompt(id, Json.Str(item, "prompt"));
+                }
+                break;
+            // Input for a sub-agent wakes it; what its state was as the call returned says
+            // nothing of how that run will go.
+            case "send_input" or "resume_agent" or "send_message" or "followup_task":
+                foreach (var id in receivers) { work.AgentActive(id, at); }
+                return;
+            // Closed, it takes no more input.
+            case "close_agent":
+                foreach (var id in receivers) { work.AgentEnded(id, at, aborted: false); }
+                return;
+        }
+        if (Json.Obj(item, "agents_states") is { } states)
+        {
+            foreach (var p in states.EnumerateObject()) { State(p.Name, p.Value, at); }
+        }
+    }
+
+    // A <subagent_notification> user message: a sub-agent stopped, and how.
+    bool Notification(JsonElement p, DateTimeOffset? at)
+    {
+        if (ContentText(p) is not { } text || !text.StartsWith(NotificationStart, StringComparison.Ordinal)) { return false; }
+        var (start, end) = (text.IndexOf('{', StringComparison.Ordinal), text.LastIndexOf('}'));
+        if (start < 0 || end < start) { return false; }
+        var before = S.Background.Version;
+        try
+        {
+            using var doc = JsonDocument.Parse(text.AsMemory(start, end - start + 1));
+            if (doc.RootElement.ValueKind == JsonValueKind.Object && Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is { } agent
+                && Json.Get(doc.RootElement, "status") is { } status)
+            {
+                State(agent, status, at);
+            }
+        }
+        catch (JsonException) { return false; }
+        return S.Background.Version != before;
+    }
+
+    // A sub-agent's status as Codex reports it: running, stopped (completed is done; errored or
+    // interrupted failed), or gone for good (shut down, or no longer known).
+    void State(string agent, JsonElement state, DateTimeOffset? at)
+    {
+        var work = S.Background;
+        if (!work.Knows(agent)) { return; }
+        switch (state.ValueKind)
+        {
+            case JsonValueKind.String:
+                switch (state.GetString())
+                {
+                    case "pending_init" or "running":
+                        work.AgentActive(agent, at);
+                        break;
+                    case "interrupted":
+                        work.AgentIdle(agent, at, SubagentOutcome.Failed);
+                        break;
+                    case "shutdown" or "not_found":
+                        work.AgentEnded(agent, at, aborted: false);
+                        break;
+                }
+                break;
+            case JsonValueKind.Object:
+                if (Json.Get(state, "completed") is { } completed)
+                {
+                    work.AgentSaid(agent, completed.ValueKind == JsonValueKind.String ? completed.GetString() : null, null, null);
+                    work.AgentIdle(agent, at);
+                }
+                else if (Json.Get(state, "errored") is { } errored)
+                {
+                    work.AgentSaid(agent, errored.ValueKind == JsonValueKind.String ? errored.GetString() : null, null, null);
+                    work.AgentIdle(agent, at, SubagentOutcome.Failed);
+                }
+                break;
+        }
     }
 
     bool Item(JsonElement p, DateTimeOffset? at)
@@ -221,6 +365,9 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                     if (text is not null) { S.Response = text; S.Activity(at); }
                     break;
                 }
+            // Otherwise what Codex injects, never shown: only a sub-agent's notice is read.
+            case "message" when Json.Str(p, "role") == "user":
+                return Notification(p, at);
             case "reasoning" when Json.Arr(p, "summary") is { } summary:
                 {
                     var text = Text.NonBlank(string.Join('\n', summary.EnumerateArray().Select(x =>
