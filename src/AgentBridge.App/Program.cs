@@ -44,6 +44,9 @@ public static class Program
             new App(options, single, installed);
         });
         ToastActivator.Stop();
+        // Said in the self-test's log: on CI, a run whose result showed no failure once ended with
+        // exit code 1, and this tells the app's own code from what happened after it.
+        if (options.SelfTest is not null) { AppLog.Write($"self-test: the app ends with exit code {App.ExitCode}"); }
         return App.ExitCode;
     }
 }

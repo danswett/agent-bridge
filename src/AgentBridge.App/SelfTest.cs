@@ -25,7 +25,11 @@ static partial class SelfTest
         var result = new Dictionary<string, object?>();
         var checks = new List<string>();
         var failures = new List<string>();
-        void Check(bool ok, string what) { (ok ? checks : failures).Add(what); }
+        void Check(bool ok, string what)
+        {
+            (ok ? checks : failures).Add(what);
+            if (!ok) { AppLog.Write($"self-test: failed: {what}"); }
+        }
         // A ThemeResource or StaticResource that resolves to nothing, in any theme: logged, and a
         // failure, since an installed app may die of it with nothing but 0xC000027B.
         // Off by default: without it, the event is never raised and a failed reference passes.
@@ -228,8 +232,18 @@ static partial class SelfTest
         {
             failures.Add($"crashed: {e}");
         }
-        await Write(outFile, result, checks, failures, null);
-        exit(failures.Count == 0 ? 0 : 1);
+        // Written again if a failure arrived while it was written (a resource reference failing as
+        // a theme settles), so the file always says why the run failed.
+        int written;
+        do
+        {
+            written = failures.Count;
+            await Write(outFile, result, checks, failures, null);
+        }
+        while (failures.Count != written);
+        var code = failures.Count == 0 ? 0 : 1;
+        AppLog.Write($"self-test: finished, exit code {code}");
+        exit(code);
     }
 
     // The result file. unfinished: the check under way, when written part-way through.
