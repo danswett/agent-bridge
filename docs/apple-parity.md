@@ -1,7 +1,8 @@
 # Apple client parity
 
 Source comparison for the native macOS 15+, iOS 18+ and iPadOS 18+ clients,
-November 2, 2026. This describes the implemented Windows app, not its roadmap.
+November 2, 2026, including the delegate inspector in Windows commit `1ec2eb0`
+(#250). This describes implemented Windows behavior, not its roadmap.
 The current delivery scope is **local development builds**, as chosen by the
 user. Signed distribution is deferred by choice and is not a completion condition
 for that scope.
@@ -33,7 +34,8 @@ separately.
 Notification actions require the app to come to the foreground and the device to
 be unlocked. Simple choices/approvals are offered only with an opted-in complete
 question preview; full forms, Other answers and more than three choices open the
-session. Free-text answers and replies use native text-input actions. Every press
+session. Free-text answers and replies use native text-input actions. Delegate-only waits do not reannounce an unchanged old main-agent response,
+including after reconnect. Every press
 is single-use and revalidates the account, current subscription, a fresh
 `session.get`, capabilities and connection before sending. Stale/offline actions
 show a Not sent receipt and never queue a later mutation. Windows can act directly
