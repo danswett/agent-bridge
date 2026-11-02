@@ -31,7 +31,7 @@ public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, stri
 // status as a glyph and words (docs/design/ui.md §2.2, StatusRules), a header that stays when
 // folded, and below it the question, the response, reasoning, the last message, the reply box,
 // the tool history, the facts and End session.
-public sealed class SessionCardViewModel : Observable
+public sealed partial class SessionCardViewModel : Observable
 {
     static readonly Dictionary<AgentKind, string> AgentNames = new() { [AgentKind.Copilot] = "Copilot", [AgentKind.Claude] = "Claude", [AgentKind.Codex] = "Codex", [AgentKind.Unknown] = "Agent" };
 
@@ -169,7 +169,16 @@ public sealed class SessionCardViewModel : Observable
     public string? GroupHeader { get => groupHeader; internal set { if (Set(ref groupHeader, value)) { Raise(nameof(HasGroupHeader)); } } }
     public bool HasGroupHeader => groupHeader is not null;
     public bool Pinned { get => pinned; internal set => Set(ref pinned, value); }
-    public bool Unread { get => unread; internal set => Set(ref unread, value); }
+    public bool Unread
+    {
+        get => unread;
+        internal set
+        {
+            if (!Set(ref unread, value)) { return; }
+            Raise(nameof(ShowAge));
+            Raise(nameof(RowLabel));
+        }
+    }
     public RowActions? Row { get; internal set; }
     // A keyboard move: the card's title takes focus again once it is drawn in its new place.
     public bool WantsFocus { get => wantsFocus; set => Set(ref wantsFocus, value); }
@@ -282,8 +291,11 @@ public sealed class SessionCardViewModel : Observable
         // Idle needs no clock; delegating does, since it is waiting on something.
         SinceText = View == "idle" ? "" : $"for {Words.Duration(session.StatusSince, now)}";
         UpdatedText = $"updated {Words.Ago(session.UpdatedAt, now)}";
+        AgeText = Words.Age(session.UpdatedAt, now);
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
+        Raise(nameof(AgeText));
+        Raise(nameof(Details));
     }
 
     // The tool history, from session.get, newest first.

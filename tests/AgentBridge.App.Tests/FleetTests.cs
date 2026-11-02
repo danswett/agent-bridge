@@ -133,6 +133,34 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(["here"], main.Sessions.Select(c => c.Id));
     }
 
+    [Fact]
+    public async Task With_more_than_one_machine_a_row_names_its_machine_and_the_tabs_name_each_machine_short()
+    {
+        await BothMachinesAsync();
+        var there = Card("there")!;
+
+        Assert.Equal("Build server", TestUi.Read(() => there.RowPlace));
+        Assert.EndsWith(" · Build server", TestUi.Read(() => there.RowFacts));
+        Assert.StartsWith("Build server · ", TestUi.Read(() => there.HeaderPlace));
+        Assert.Equal(["All", "Test PC", "Build server"], TestUi.Read(() => main.Machines.Select(m => m.Short).ToList()));
+    }
+
+    [Fact]
+    public async Task A_machine_tab_that_hides_the_open_session_closes_it_and_one_that_still_lists_it_keeps_it_open()
+    {
+        await BothMachinesAsync();
+        ui.Post(() => main.Selected = main.AllCards.Single(c => c.Id == "there"));
+
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
+        Assert.Equal("there", TestUi.Read(() => main.Selected?.Id));
+        ui.Post(() => main.SelectedMachine = main.Machines[0]);
+        Assert.Equal("there", TestUi.Read(() => main.Selected?.Id));
+
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key is not null && m.Key != "remote-id"));
+        Assert.Null(TestUi.Read(() => main.Selected));
+        Assert.False(TestUi.Read(() => Card("there")!.Selected));
+    }
+
     [Theory]
     [InlineData(FleetState.SignedOut)]
     [InlineData(FleetState.Refused)]

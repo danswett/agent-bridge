@@ -25,7 +25,9 @@ public sealed class QuestionView : StackPanel
     readonly Button resend = new() { Content = "Send again" };
     Button? send;
 
-    public QuestionView(QuestionViewModel vm, Action<bool> editing)
+    // heading: who asks (ui.md §6.4, "Main agent asks" or "<delegate> asks"), in place of the
+    // question's own Waiting on you or Permission requested.
+    public QuestionView(QuestionViewModel vm, Action<bool> editing, string? heading = null)
     {
         this.vm = vm;
         this.editing = editing;
@@ -36,7 +38,7 @@ public sealed class QuestionView : StackPanel
         BorderBrush = Ui.Brush("AbNeeds");
         AutomationId(this, "Question");
 
-        Children.Add(new TextBlock { Text = vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") });
+        Children.Add(new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") });
         Children.Add(new MarkdownView { Markdown = vm.Message });
 
         if (!vm.Answerable)

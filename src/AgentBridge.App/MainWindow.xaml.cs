@@ -63,6 +63,9 @@ public sealed partial class MainWindow : Window
         UsagePane.ViewModel = viewModel.Usage;
         LaunchPane.ViewModel = launch;
         if (viewModel.Settings is { } s) { SettingsPane.ViewModel = s; }
+        SessionsView.ViewModel = viewModel;
+        SessionsView.Launch = launch;
+        SessionsView.NewRequested += () => ShowPage("launch");
         Nav.SelectedItem = SessionsItem;
         viewModel.OpenRequested += Reveal;
     }
@@ -77,7 +80,7 @@ public sealed partial class MainWindow : Window
     // In front and visible: a toast would only repeat what the window shows.
     public bool IsInFront => active && AppWindow.IsVisible;
 
-    internal ItemsControl CardList => Cards;
+    internal SessionsPage Sessions => SessionsView;
     internal FrameworkElement RootElement => Root;
     internal NavigationView Rail => Nav;
     internal TitleBar Bar => AppTitleBar;
@@ -104,18 +107,13 @@ public sealed partial class MainWindow : Window
     void OnNavigate(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
-        SessionsPage.Visibility = Ui.Show(tag == "sessions");
+        SessionsView.Visibility = Ui.Show(tag == "sessions");
         MachinesPage.Visibility = Ui.Show(tag == "machines");
         UsagePane.Visibility = Ui.Show(tag == "usage");
         LaunchPane.Visibility = Ui.Show(tag == "launch");
         if (tag == "launch") { Launch.Opened(); } else { Launch.Closed(); }
         SettingsPane.Visibility = Ui.Show(tag == "settings");
         if (tag == "settings") { SettingsPane.Opened(); }
-    }
-
-    void OnMachineChosen(object sender, SelectionChangedEventArgs e)
-    {
-        if (MachinePicker.SelectedItem is MachineChoice choice) { ViewModel.SelectedMachine = choice; }
     }
 
     // A machine's row on the Machines page: its sessions, on the Sessions page.
@@ -137,18 +135,9 @@ public sealed partial class MainWindow : Window
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
 
-    // A toast, the tray or the search box asked for a session: its card, on screen.
-    void Reveal(SessionCardViewModel card)
-    {
-        Nav.SelectedItem = SessionsItem;
-        DispatcherQueue.TryEnqueue(() =>
-        {
-            if (Cards.ContainerFromItem(card) is UIElement element)
-            {
-                element.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = true, VerticalAlignmentRatio = 0 });
-            }
-        });
-    }
+    // A toast, the tray or the search box asked for a session: it is MainViewModel.Selected
+    // already, so the Sessions page shows it, its row scrolled into view.
+    void Reveal(SessionCardViewModel card) => Nav.SelectedItem = SessionsItem;
 
     // --- Search (ui.md §7, §9): every machine's sessions, opened as a toast opens one. ---
 

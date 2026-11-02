@@ -139,85 +139,8 @@
                         Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
                 </StackPanel>
 
-                <!-- Sessions. -->
-                <Grid x:Name="SessionsPage" Grid.Row="1" AutomationProperties.AutomationId="SessionsPage">
-                    <ScrollViewer x:Name="SessionsPane" AutomationProperties.AutomationId="SessionsPane">
-                        <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
-                             the column off the right edge (see LaunchView). -->
-                        <Grid>
-                            <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
-                                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Sessions" />
-                                <ComboBox
-                                    x:Name="MachinePicker"
-                                    AutomationProperties.AutomationId="MachinePicker"
-                                    AutomationProperties.Name="Show sessions from"
-                                    Header="Machines"
-                                    HorizontalAlignment="Stretch"
-                                    ItemsSource="{x:Bind ViewModel.Machines}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
-                                    SelectionChanged="OnMachineChosen"
-                                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate x:DataType="core:MachineChoice">
-                                            <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <!-- Your order, Most recent or Machine (#164). -->
-                                <ComboBox
-                                    x:Name="SortPicker"
-                                    AutomationProperties.AutomationId="SortPicker"
-                                    AutomationProperties.Name="Sort sessions"
-                                    Header="Sort"
-                                    MinWidth="160"
-                                    ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
-                                    SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
-                                <InfoBar
-                                    AutomationProperties.AutomationId="FleetNote"
-                                    IsClosable="False"
-                                    Severity="Informational"
-                                    IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
-                                    Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
-                                <TextBlock
-                                    Style="{StaticResource AbSecondaryText}"
-                                    AutomationProperties.AutomationId="EmptyText"
-                                    TextWrapping="Wrap"
-                                    Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
-                                    Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
-                                <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Spacing="14" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="core:SessionCardViewModel">
-                                            <local:SessionCard Card="{x:Bind}" />
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <!-- Ended · N, folded: sessions a host removed while the app was running (#164). -->
-                                <Expander
-                                    HorizontalAlignment="Stretch"
-                                    HorizontalContentAlignment="Stretch"
-                                    AutomationProperties.AutomationId="Ended"
-                                    Header="{x:Bind ViewModel.EndedHeader, Mode=OneWay}"
-                                    Visibility="{x:Bind local:Ui.Show(ViewModel.HasEnded), Mode=OneWay}">
-                                    <ItemsControl ItemsSource="{x:Bind ViewModel.Ended}" IsTabStop="False">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="core:EndedRow">
-                                                <StackPanel Padding="0,4">
-                                                    <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" Text="{x:Bind Title}" />
-                                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Meta}" />
-                                                </StackPanel>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </Expander>
-                            </StackPanel>
-                        </Grid>
-                    </ScrollViewer>
-                </Grid>
+                <!-- Sessions (ui.md §5.2, §6): the list, the session and its inspector, by the window's width. -->
+                <local:SessionsPage x:Name="SessionsView" Grid.Row="1" />
 
                 <!-- Machines (#180, #213): one row per machine on the account, this one first, then the others,
                      then those offline. A row is ui.md §6.1's: the icon and the status trailing the name both on
