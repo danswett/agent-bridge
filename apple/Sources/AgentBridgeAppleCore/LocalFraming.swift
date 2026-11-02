@@ -3,7 +3,7 @@ import Foundation
 /// The host's local socket uses a little-endian UInt32 length followed by UTF-8 JSON.
 /// A local frame must not exceed 65,519 bytes (docs/protocol/local-pipe.md).
 public enum LocalFraming {
-    public static let maximumPayloadSize = 65_519
+    public static let maximumPayloadSize = 65519
 
     public enum FrameError: Error, Equatable, Sendable {
         case oversized(Int)

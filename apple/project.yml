@@ -12,19 +12,22 @@ targets:
   AgentBridgeMac:
     type: application
     platform: macOS
-    sources: [Apps, Transport]
+    sources: [Apps]
     dependencies:
       - package: AgentBridgeAppleCore
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.agentbridge.mac
       GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_CFBundleDisplayName: Agent Bridge
   AgentBridgeMobile:
     type: application
     platform: iOS
-    sources: [Apps, Transport]
+    sources: [Apps]
     dependencies:
       - package: AgentBridgeAppleCore
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.agentbridge.mobile
       GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_CFBundleDisplayName: Agent Bridge
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
       TARGETED_DEVICE_FAMILY: '1,2'
