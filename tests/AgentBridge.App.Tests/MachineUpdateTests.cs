@@ -172,4 +172,23 @@ public sealed class MachineUpdateTests : IAsyncLifetime
         await Wait.UntilAsync(() => remoteHost.Sent(UpdateProtocol.Check).Count == 1, "the other machine asked to check");
         Assert.Equal(1, localChecks);
     }
+
+    [Fact]
+    public async Task A_machines_update_sits_inside_its_own_row_on_the_machines_page_and_this_machines_row_has_its_own_check()
+    {
+        var update = await ListedAsync();
+
+        var rows = TestUi.Read(() => main.MachineRows.ToArray());
+        var desk = rows.Single(r => r.Name == "Desk PC");
+        Assert.Same(update, desk.Update);
+        Assert.True(desk.HasUpdate);
+        Assert.False(desk.CanCheckHere);
+        var here = rows.Single(r => r.Key == Machine.LocalKey);
+        Assert.Null(here.Update);
+        Assert.True(here.CanCheckHere);
+
+        // Gone from the machine, gone from its row.
+        remoteHost.Capabilities.Remove(UpdateProtocol.Capability);
+        await Wait.UntilAsync(() => TestUi.Read(() => main.MachineRows.Single(r => r.Name == "Desk PC").Update) is null, "the update gone from the row");
+    }
 }

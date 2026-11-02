@@ -86,7 +86,7 @@ public sealed class UsageTests
 
         Assert.Equal(["High", "Mid", "Low"], vm.Rows.Select(r => r.Label));
         Assert.Equal(["crit", "warn", ""], vm.Rows.Select(r => r.Windows[0].Severity));
-        Assert.Equal("High 92% · Mid 76% · Low 20%", vm.Summary);
+        Assert.Equal("High · high 92% · Mid · mid 76% · Low · low 20%", vm.Summary);
         var w = vm.Rows[0].Windows[0];
         Assert.Equal(45.2, w.Elapsed);
         Assert.Equal("47% ahead of pace", w.PaceText);
@@ -105,6 +105,26 @@ public sealed class UsageTests
 
         Assert.Equal(["octo · pro", "dswett_microsoft", "monalisa"], vm.Rows.Select(r => r.Detail));
         Assert.Equal([null, null, "No Copilot credential was available for monalisa."], vm.Rows.Select(r => r.Error));
+    }
+
+    [Fact]
+    public void Two_copilot_accounts_with_long_logins_are_told_apart_in_full_and_no_line_says_which_machine_read_them()
+    {
+        // #225: on a phone the login was cut to "d" while "read on <machine>" kept its space, and
+        // the summary read "GitHub Copilot 12% · GitHub Copilot 0%".
+        const string first = "danswett-with-a-much-longer-login", second = "dswett_microsoft-enterprise-managed";
+        var reader = new UsageReader(new string('b', 32), "DSWETT-DEV-VM1-WITH-A-LONG-NAME");
+        var vm = new UsageViewModel(new FakeTimeProvider(Now));
+
+        vm.Update(new UsageReport([Agent("GitHub Copilot", 12) with { Account = first, Plan = null, ReadBy = reader },
+            Agent("GitHub Copilot", 0) with { Account = second, Plan = null, Slot = 2, ReadBy = reader }]));
+
+        Assert.Equal($"GitHub Copilot · {first} 12% · GitHub Copilot · {second} 0%", vm.Summary);
+        Assert.Equal([first, second], vm.Rows.Select(r => r.Account));
+        Assert.Equal([first, second], vm.Rows.Select(r => r.Detail));
+        Assert.All(vm.Rows, r => Assert.DoesNotContain("read on", r.Label + r.Detail + r.Age, StringComparison.Ordinal));
+        // Kept for the age's tooltip and accessible description.
+        Assert.All(vm.Rows, r => Assert.Equal("read on DSWETT-DEV-VM1-WITH-A-LONG-NAME", r.ReadOn));
     }
 
     [Fact]

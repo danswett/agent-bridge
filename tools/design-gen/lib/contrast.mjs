@@ -2,7 +2,7 @@
 // list of every pair they cover in dark and light, each with its measured ratio.
 
 import { contrast, over, parseColor } from './color.mjs';
-import { roleTokens, surfaceTokens } from './tokens.mjs';
+import { roleTokens, surfaceTokens, hyperlinkTokens, accentShades } from './tokens.mjs';
 
 export function contrastPairs(tokens) {
   const rules = tokens.color.contrast;
@@ -47,6 +47,16 @@ export function contrastPairs(tokens) {
       for (const v of own.filter((r) => r.variant.startsWith('ink'))) { add(v[theme], `${role}.${v.variant}`, base[theme], role, 'graphic'); }
     }
     for (const t of surfaces.filter((s) => /^text\d*$/.test(s.name))) { everywhere(t[theme], `surface.${t.name}`, 'text'); }
+    // Hyperlinks are words in Bridge's shades, wherever text goes; WinUI's own words on an accent
+    // fill (an accent button) and selected text on the accent are measured on the palette.
+    for (const l of hyperlinkTokens(tokens)) { everywhere(l[theme], `accent.${l.name}`, 'text'); }
+    const shades = Object.fromEntries(accentShades(tokens).map((s) => [s.shade, s.value]));
+    const winui = tokens.color.accent?.winuiText;
+    if (winui) {
+      const fill = theme === 'dark' ? 'light2' : 'dark1';
+      add(theme === 'dark' ? winui.onFillDark : winui.onFillLight, 'accent.textOnFill', shades[fill], `accent.${fill}`, 'text');
+      add(winui.selected, 'accent.selectedText', shades.base, 'accent.base', 'text');
+    }
   }
   return out;
 }

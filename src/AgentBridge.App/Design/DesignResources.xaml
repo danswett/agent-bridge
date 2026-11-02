@@ -41,6 +41,13 @@
                 <SolidColorBrush x:Key="AbText2" Color="#9E000000" />
                 <SolidColorBrush x:Key="AbText3" Color="#94000000" />
                 <SolidColorBrush x:Key="AbShadow" Color="#2E000000" />
+                <SolidColorBrush x:Key="AbLink" Color="#0B7A6E" />
+                <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="#0B7A6E" />
+                <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="#0B7A6E" />
+                <SolidColorBrush x:Key="AbLinkPointerOver" Color="#0A665C" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPointerOver" Color="#0A665C" />
+                <SolidColorBrush x:Key="AbLinkPressed" Color="#08524A" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPressed" Color="#08524A" />
             </ResourceDictionary>
             <ResourceDictionary x:Key="Dark">
                 <SolidColorBrush x:Key="AbBridge" Color="#2DD4BF" />
@@ -70,6 +77,13 @@
                 <SolidColorBrush x:Key="AbText2" Color="#B8FFFFFF" />
                 <SolidColorBrush x:Key="AbText3" Color="#8AFFFFFF" />
                 <SolidColorBrush x:Key="AbShadow" Color="#2E000000" />
+                <SolidColorBrush x:Key="AbLink" Color="#2DD4BF" />
+                <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="#2DD4BF" />
+                <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="#2DD4BF" />
+                <SolidColorBrush x:Key="AbLinkPointerOver" Color="#5EEAD4" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPointerOver" Color="#5EEAD4" />
+                <SolidColorBrush x:Key="AbLinkPressed" Color="#2DD4BF" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPressed" Color="#2DD4BF" />
             </ResourceDictionary>
             <ResourceDictionary x:Key="HighContrast">
                 <SolidColorBrush x:Key="AbBridge" Color="{ThemeResource SystemColorHighlightColor}" />
@@ -99,8 +113,25 @@
                 <SolidColorBrush x:Key="AbText2" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbText3" Color="{ThemeResource SystemColorWindowTextColor}" />
                 <SolidColorBrush x:Key="AbShadow" Color="{ThemeResource SystemColorWindowTextColor}" />
+                <SolidColorBrush x:Key="AbLink" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="SystemControlHyperlinkTextBrush" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="HyperlinkButtonForeground" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="AbLinkPointerOver" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPointerOver" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="AbLinkPressed" Color="{ThemeResource SystemColorHotlightColor}" />
+                <SolidColorBrush x:Key="HyperlinkButtonForegroundPressed" Color="{ThemeResource SystemColorHotlightColor}" />
             </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
+
+    <!-- WinUI's accent palette as Bridge (design/tokens.json color.accent): the controls that follow
+         the system accent take it instead of the person's Windows accent. High contrast ignores it. -->
+    <Color x:Key="SystemAccentColorLight3">#5EEAD4</Color>
+    <Color x:Key="SystemAccentColorLight2">#2DD4BF</Color>
+    <Color x:Key="SystemAccentColorLight1">#14B8A6</Color>
+    <Color x:Key="SystemAccentColor">#0E8073</Color>
+    <Color x:Key="SystemAccentColorDark1">#0B7A6E</Color>
+    <Color x:Key="SystemAccentColorDark2">#0A665C</Color>
+    <Color x:Key="SystemAccentColorDark3">#08524A</Color>
 
     <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
     <FontFamily x:Key="MonoFontFamily">ms-appx:///Assets/Fonts/AgentBridgeMono-Regular.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas</FontFamily>
@@ -116,6 +147,57 @@
     <x:Double x:Key="AbSpace8">32</x:Double>
     <x:Double x:Key="AbSpace10">40</x:Double>
     <x:Double x:Key="AbSpace12">48</x:Double>
+    <x:Double x:Key="AbLayoutThreePane">1280</x:Double>
+    <x:Double x:Key="AbLayoutTwoPane">760</x:Double>
+    <x:Double x:Key="AbLayoutTitleBar">48</x:Double>
+    <x:Double x:Key="AbLayoutMinWidth">360</x:Double>
+    <x:Double x:Key="AbLayoutMinHeight">600</x:Double>
+    <x:Double x:Key="AbLayoutList">320</x:Double>
+    <x:Double x:Key="AbLayoutListMin">264</x:Double>
+    <x:Double x:Key="AbLayoutInspector">336</x:Double>
+    <x:Double x:Key="AbLayoutReadingMax">712</x:Double>
+
+    <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
+    <Style x:Key="AbTypeTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="20" />
+        <Setter Property="LineHeight" Value="28" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
+    <Style x:Key="AbTypeRow" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
+    <Style x:Key="AbTypeReading" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="24" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
+    <Style x:Key="AbTypeMeta" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
+    <Style x:Key="AbTypeSectionHeader" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="16" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
+    <Style x:Key="AbTypeCode" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/AgentBridgeMono-Regular.ttf#Agent Bridge Mono, Cascadia Mono, SF Mono, Roboto Mono, Consolas" />
+        <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
+    </Style>
 
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />

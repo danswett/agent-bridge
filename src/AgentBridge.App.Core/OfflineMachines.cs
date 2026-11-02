@@ -32,6 +32,8 @@ public sealed class OfflineMachineViewModel : Observable
     public string Name => name;
     public DateTimeOffset LastSeen => lastSeen;
     public string LastSeenText => $"Offline \u00b7 last seen {Words.Ago(lastSeen, time.GetUtcNow())}";
+    // The Machines page's row says "Offline" as its status, so its facts start at when.
+    public string SeenText => $"Last seen {Words.Ago(lastSeen, time.GetUtcNow())}";
     public bool Armed => armedAt is not null;
     public bool Busy => busy;
     public bool CanForget => !busy;
@@ -48,6 +50,7 @@ public sealed class OfflineMachineViewModel : Observable
         lastSeen = m.LastSeen;
         Raise(nameof(LastSeen));
         Raise(nameof(LastSeenText));
+        Raise(nameof(SeenText));
         // Seen again since the first press (back and gone again between two looks at the list):
         // a press now confirms nothing about this absence, so it arms again.
         if (armedAt is not null) { armedAt = null; error = null; Changed(); }
@@ -96,6 +99,7 @@ public sealed class OfflineMachineViewModel : Observable
             Changed();
         }
         Raise(nameof(LastSeenText));
+        Raise(nameof(SeenText));
     }
 
     public static string Explain(string why) => why switch

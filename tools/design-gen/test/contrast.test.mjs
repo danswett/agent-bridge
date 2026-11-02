@@ -57,3 +57,19 @@ test('words on a tint are measured on it over each surface it sits on, and only 
   wider.color.contrast.tints.subtle.push('surface.text3');
   assert.ok(failures(contrastPairs(wider)).some((p) => p.theme === 'dark' && p.fg === 'surface.text3' && p.bg === 'subtle on card'));
 });
+test('hyperlinks, words on an accent fill and selected text reach 4.5:1 on the Bridge accent palette, in dark and light', () => {
+  const accent = pairs.filter((p) => p.fg.startsWith('accent.'));
+  for (const fg of ['accent.link', 'accent.linkPointerOver', 'accent.linkPressed']) { assert.ok(covered(fg, 'text'), `${fg} is measured as text on every surface`); }
+  assert.ok(accent.some((p) => p.theme === 'dark' && p.fg === 'accent.link' && p.bg === 'needs.fill on card'), 'a link in a question is measured on the needs fill');
+  assert.ok(accent.some((p) => p.theme === 'dark' && p.fg === 'accent.textOnFill' && p.bg === 'accent.light2'));
+  assert.ok(accent.some((p) => p.theme === 'light' && p.fg === 'accent.textOnFill' && p.bg === 'accent.dark1'));
+  assert.ok(accent.some((p) => p.fg === 'accent.selectedText' && p.bg === 'accent.base'));
+  assert.deepEqual(failures(accent).map(describe), []);
+});
+
+test('the check finds a SystemAccentColor too light for white selected text', () => {
+  const lighter = structuredClone(tokens);
+  lighter.color.accent.windows.base = '#0D9488';
+  const found = failures(contrastPairs(lighter));
+  assert.ok(found.some((p) => p.fg === 'accent.selectedText' && p.ratio < 3.8), found.map(describe).join('; '));
+});
