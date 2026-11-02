@@ -351,4 +351,42 @@ public sealed class MainTests : IAsyncLifetime
         Assert.Equal(["later", "old"], opened);
         Assert.False(main.Sessions.Single(c => c.Id == "old").Folded);
     }
+
+    [Fact]
+    public async Task Search_finds_sessions_holding_every_word_typed_in_their_title_repository_or_branch_titles_starting_with_it_first()
+    {
+        await SnapshotAsync();
+        await host.SendAsync(Events.SessionUpsert, Make.Session("plan", title: "Plan migration to Windows app", updated: Make.T0.AddMinutes(3)));
+        await Wait.UntilAsync(() => main.Sessions.Count == 3, "the first new card");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("fix", title: "Fix the plan banner", updated: Make.T0.AddMinutes(4)) with { Repository = "danswett/agent-ha-bridge", Branch = "fix/banner" });
+        await Wait.UntilAsync(() => main.Sessions.Count == 4, "the second new card");
+        Assert.Equal(["fix", "plan", "asking", "old"], Order());
+
+        IReadOnlyList<SearchHit> Find(string q) => TestUi.Read(() => main.Search(q));
+        // A title starting with the words comes before one only holding them, however the list has them.
+        Assert.Equal(["plan", "fix"], Find("plan").Select(h => h.SessionId));
+        Assert.Equal(["plan", "fix"], Find("PLAN").Select(h => h.SessionId));
+        Assert.Equal(["plan"], Find("migration").Select(h => h.SessionId));
+        Assert.Equal(["fix"], Find("plan ha-bridge").Select(h => h.SessionId));
+        Assert.Equal(["fix"], Find("fix/").Select(h => h.SessionId));
+        Assert.Empty(Find("plan nowhere"));
+        Assert.Empty(Find("   "));
+        var plain = Find("a session");
+        Assert.Equal(["asking", "old"], plain.Select(h => h.SessionId));
+        Assert.All(plain, h => Assert.Equal(("A session", "danswett/agent-bridge", (string?)null), (h.Title, h.Detail, h.Machine)));
+    }
+
+    [Fact]
+    public async Task Choosing_a_search_result_opens_its_session_as_a_toast_click_does()
+    {
+        var opened = new List<string>();
+        main.OpenRequested += c => opened.Add(c.Id);
+        await SnapshotAsync();
+        main.Sessions.Single(c => c.Id == "old").Folded = true;
+
+        ui.Post(() => main.Open(main.Search("session").First(h => h.SessionId == "old")));
+        await Wait.UntilAsync(() => opened.Count == 1, "the session to open");
+        Assert.Equal(["old"], opened);
+        Assert.False(main.Sessions.Single(c => c.Id == "old").Folded);
+    }
 }

@@ -71,8 +71,8 @@
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, so a
              column narrower than its MaxWidth was pushed off the right edge. -->
         <Grid>
-            <StackPanel MaxWidth="720" Padding="16,12,16,24" Spacing="12">
-                <TextBlock Style="{StaticResource AbSectionTitle}" AutomationProperties.AutomationId="LaunchTitle" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
+            <StackPanel MaxWidth="720" Padding="24,20,24,24" Spacing="12">
+                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" AutomationProperties.AutomationId="LaunchTitle" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
                 <ComboBox
                     x:Name="MachineBox" Tag="machine" Header="Machine" MinWidth="320"
                     AutomationProperties.AutomationId="LaunchMachine"

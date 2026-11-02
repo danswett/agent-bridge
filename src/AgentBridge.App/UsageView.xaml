@@ -11,7 +11,8 @@
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->
         <Grid>
-            <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
+            <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
+                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Usage" />
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.Summary, Mode=OneWay}" />
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
@@ -25,7 +26,7 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="core:UsageRowViewModel">
-                            <Border Background="{ThemeResource AbCard}" BorderBrush="{ThemeResource AbStroke2}" BorderThickness="1" CornerRadius="14" Padding="16,12">
+                            <Border Background="{ThemeResource AbCard}" BorderBrush="{ThemeResource AbStroke2}" BorderThickness="1" CornerRadius="{StaticResource AbRadiusCard}" Padding="16,12">
                                 <StackPanel Spacing="8">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="{x:Bind Label}" />
