@@ -126,14 +126,25 @@ public sealed partial class SessionView : UserControl
 
     // Opened from Needs you (SessionCardViewModel.WantsFocus): keyboard focus into the question, or
     // the reply box when there is none, so the next Tab is in the session and not back in the lane.
-    // Tried again after each layout pass until it lands, as the pane may still be hidden in one
-    // column, and cleared only then (it was once cleared by a row the list had hidden).
+    // A question with nothing to press (one answered at the machine) has the session's own first
+    // control instead. Tried again after each layout pass while the pane is still hidden (one
+    // column, before the layout changes), and cleared only once it lands (it was once cleared by a
+    // row the list had hidden), or once the pane is shown with nothing to take it.
     bool focusPending;
     void TakeFocus()
     {
         if (!attached || Card is not { WantsFocus: true } c) { return; }
-        var target = (questionView is not null ? FocusManager.FindFirstFocusableElement(questionView) as Control : null) ?? ReplyBox;
-        if (target.Focus(FocusState.Keyboard))
+        var shown = Visibility == Visibility.Visible && ActualWidth > 0 && ActualHeight > 0;
+        var target = (questionView is not null ? FocusManager.FindFirstFocusableElement(questionView) as Control : null)
+            ?? (ReplyBox is { IsEnabled: true, Visibility: Visibility.Visible } ? ReplyBox : null)
+            ?? FocusManager.FindFirstFocusableElement(this) as Control;
+        if (target is null && shown)
+        {
+            c.WantsFocus = false;
+            if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
+            return;
+        }
+        if (target is not null && target.Focus(FocusState.Keyboard))
         {
             c.WantsFocus = false;
             target.StartBringIntoView();
