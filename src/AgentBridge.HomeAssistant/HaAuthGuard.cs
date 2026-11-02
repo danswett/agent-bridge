@@ -181,7 +181,10 @@ public sealed class HaAuthGuard
             // What another process, or the attempt waited on, has found meanwhile; and, for an
             // attempt still to be made, the record's reservation, so another process (serve beside
             // ha shadow or shadow run) waits for its answer too rather than sending its own at once.
-            var giveUp = Environment.TickCount64 + (long)Reservation.TotalMilliseconds;
+            // Each reservation waited on is given its full time: one handed on to another attempt is
+            // that attempt's, and abandoning it early would send a second unproven token beside it.
+            string? waitingOn = null;
+            var waitingSince = time.GetTimestamp();
             // The reservation is this attempt's own, and only its answer or its end lets go of it.
             var mine = Guid.NewGuid().ToString("N");
             while (true)
@@ -194,10 +197,18 @@ public sealed class HaAuthGuard
                     {
                         decision = Decide(credential, now);
                         if (decision.Gate != Gate.Probe || path is null || unwritable) { return false; }
-                        if (s.ProbeBy is not null && s.ProbeUntil > now && Environment.TickCount64 < giveUp)
+                        if (s.ProbeBy is not null && s.ProbeUntil > now)
                         {
-                            busy = true;
-                            return false;
+                            if (s.ProbeBy != waitingOn)
+                            {
+                                waitingOn = s.ProbeBy;
+                                waitingSince = time.GetTimestamp();
+                            }
+                            if (time.GetElapsedTime(waitingSince) < Reservation)
+                            {
+                                busy = true;
+                                return false;
+                            }
                         }
                         s.ProbeBy = mine;
                         s.ProbeUntil = now + Reservation;
@@ -526,7 +537,11 @@ public sealed class HaAuthGuard
         if (!server.Credentials.TryGetValue(credential.Id, out var c))
         {
             server.Credentials[credential.Id] = c = new Cred();
-            foreach (var old in server.Credentials.Where(x => x.Key != credential.Id && x.Value.Rejections == 0).OrderBy(x => x.Value.AttemptAt ?? DateTimeOffset.MinValue)
+            // Never one with a refusal, nor, during a ban, one that has had its look: forgotten, it
+            // would look again before the ban's next scheduled look.
+            foreach (var old in server.Credentials.Where(x => x.Key != credential.Id && x.Value.Rejections == 0
+                    && !(server.BannedSince is { } since && x.Value.AttemptAt >= since))
+                .OrderBy(x => x.Value.AttemptAt ?? DateTimeOffset.MinValue)
                 .Take(Math.Max(0, server.Credentials.Count - MaxCredentials)).Select(x => x.Key).ToList())
             {
                 server.Credentials.Remove(old);

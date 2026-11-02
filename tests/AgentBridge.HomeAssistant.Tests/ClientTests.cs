@@ -284,8 +284,31 @@ public class ClientTests
         Assert.Contains("GET image", e.Message, StringComparison.Ordinal);
     }
 
-    // A body that sends its first bytes and then nothing more.
-    sealed class Stalling : Stream
+    // The headers and the body share the one timeout, as they did read with ResponseContentRead:
+    // each in well under it, together over it, the request times out.
+    [Fact]
+    public async Task A_publish_whose_headers_and_body_together_outlast_the_timeout_times_out()
+    {
+        var handler = new Late(TimeSpan.FromMilliseconds(700),
+            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(TimeSpan.FromMilliseconds(700))) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) });
+
+        var e = await Record.ExceptionAsync(() => client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true));
+
+        Assert.True(e is TimeoutException or OperationCanceledException, $"expected a timeout, got {e?.GetType().Name ?? "success"}");
+    }
+
+    sealed class Late(TimeSpan delay, Func<HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return respond();
+        }
+    }
+
+    // A body that sends its first bytes and then nothing more, or nothing more until pause is up.
+    sealed class Stalling(TimeSpan? pause = null) : Stream
     {
         bool sent;
 
@@ -297,7 +320,7 @@ public class ClientTests
                 buffer.Span[0] = 0x89;
                 return 1;
             }
-            await Task.Delay(Timeout.Infinite, cancellationToken);
+            await Task.Delay(pause ?? Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;
         }
 

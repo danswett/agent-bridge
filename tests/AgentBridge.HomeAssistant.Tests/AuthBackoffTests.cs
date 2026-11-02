@@ -588,6 +588,64 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1, seen);
     }
 
+    // One attempt ends without an answer and another process's takes the reservation over: the
+    // process still waiting gives the new one its full time, not what was left of the first's.
+    [Fact]
+    public async Task A_reservation_handed_on_to_another_attempt_is_waited_for_in_full()
+    {
+        var sent = 0;
+        var handler = new Waiting(() =>
+        {
+            Interlocked.Increment(ref sent);
+            return Task.FromResult(HttpStatusCode.Unauthorized);
+        });
+        var first = new HaAuthGuard(Record, time);
+        using var out1 = await first.EnterAsync(first.Credential(Url, Token));
+        var waiter = Publish(new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time)));
+        await Task.Delay(500);
+
+        time.Advance(TimeSpan.FromSeconds(20));
+        HandOn("another-attempt");
+        await Task.Delay(500);
+        time.Advance(TimeSpan.FromSeconds(30));
+        await Task.Delay(500);
+        Assert.Equal(0, Volatile.Read(ref sent));
+
+        time.Advance(TimeSpan.FromMinutes(1));
+        await waiter;
+        Assert.Equal(1, sent);
+    }
+
+    // Another process's attempt taking over the reservation, as one atomic write of the record.
+    void HandOn(string attempt)
+    {
+        using var held = new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!;
+        record["probeBy"] = attempt;
+        record["probeUntil"] = time.GetUtcNow() + TimeSpan.FromSeconds(45);
+        File.WriteAllText(Record + ".test", record.ToJsonString());
+        File.Move(Record + ".test", Record, overwrite: true);
+    }
+
+    // During a ban each token has one look, then waits for the scheduled one; however many other
+    // tokens look after it, the record does not forget it had its look.
+    [Fact]
+    public async Task A_token_that_looked_during_a_ban_waits_for_the_scheduled_look_however_many_tokens_follow()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var guard = new HaAuthGuard(Record, time);
+        var serve = Client(ha, guard);
+        Assert.Null(await Publish(serve));
+        ha.Status = HttpStatusCode.Forbidden;
+        await Publish(serve);
+        for (var i = 0; i < 20; i++) { await Publish(Client(ha, guard, $"token-{i}-not-a-secret")); }
+        var before = ha.Seen.Count;
+
+        await Hammer(serve, TimeSpan.FromMinutes(10));
+
+        Assert.Equal(before, ha.Seen.Count);
+    }
+
     sealed class Waiting(Func<Task<HttpStatusCode>> answer) : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

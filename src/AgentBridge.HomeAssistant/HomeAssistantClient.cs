@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -355,6 +356,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken)
     {
         using var lease = await auth.EnterAsync(credential, cancellationToken);
+        var started = Stopwatch.GetTimestamp();
         // The headers first, and the refusal recorded from them: Home Assistant counted it when it
         // answered, however its body then goes.
         var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -364,9 +366,14 @@ public sealed class HomeAssistantClient : IHomeAssistant
             throw refused;
         }
         if (completion == HttpCompletionOption.ResponseHeadersRead) { return response; }
-        // The body as ResponseContentRead would have read it, within the same timeout.
+        // The body as ResponseContentRead would have read it: within what is left of the one timeout
+        // the headers began, not a second one of its own.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (http.Timeout != Timeout.InfiniteTimeSpan) { deadline.CancelAfter(http.Timeout); }
+        if (http.Timeout != Timeout.InfiniteTimeSpan)
+        {
+            var left = http.Timeout - Stopwatch.GetElapsedTime(started);
+            deadline.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+        }
         try
         {
             await response.Content.LoadIntoBufferAsync(deadline.Token);
