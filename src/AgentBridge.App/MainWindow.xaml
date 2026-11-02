@@ -117,6 +117,107 @@
                                 TextWrapping="Wrap"
                                 Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
                                 Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
+                            <!-- Needs you · N (#165): every pending question on every machine, oldest first. It
+                                 refers to the cards below and never moves them. -->
+                            <Border
+                                AutomationProperties.AutomationId="NeedsYou"
+                                AutomationProperties.Name="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.HasNeedsYou), Mode=OneWay}"
+                                Background="{ThemeResource AbNeedsFill}"
+                                BorderBrush="{ThemeResource AbNeeds}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12,10">
+                                <StackPanel Spacing="8">
+                                    <TextBlock
+                                        AutomationProperties.HeadingLevel="Level2"
+                                        FontSize="13"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource AbNeedsHead}"
+                                        Text="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}" />
+                                    <ItemsControl ItemsSource="{x:Bind ViewModel.NeedsYou}" IsTabStop="False">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Spacing="10" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="core:NeedsYouEntry">
+                                                <Grid ColumnSpacing="8" AutomationProperties.AutomationId="NeedsYouEntry">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <!-- The Needs you glyph (#178), decorative: the lane's heading says it. -->
+                                                    <local:StatusGlyphView Size="16" Margin="0,8,0,0" VerticalAlignment="Top" Glyph="{x:Bind Glyph}" AutomationProperties.AutomationId="NeedsYouGlyph" />
+                                                    <StackPanel Grid.Column="1" Spacing="2">
+                                                        <HyperlinkButton
+                                                            Padding="0"
+                                                            MinHeight="32"
+                                                            AutomationProperties.AutomationId="NeedsYouOpen"
+                                                            AutomationProperties.Name="{x:Bind OpenName, Mode=OneWay}"
+                                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                            Click="{x:Bind Open}">
+                                                            <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{x:Bind Title, Mode=OneWay}" />
+                                                        </HyperlinkButton>
+                                                        <TextBlock
+                                                            TextWrapping="Wrap"
+                                                            Text="{x:Bind Line}"
+                                                            Visibility="{x:Bind local:Ui.Show(ShowLine)}" />
+                                                        <!-- An approval answered here shows its prompt whole: everything Approve once allows. -->
+                                                        <local:MarkdownView
+                                                            AutomationProperties.AutomationId="NeedsYouPrompt"
+                                                            WrapCode="True"
+                                                            Markdown="{x:Bind Prompt}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasPrompt)}" />
+                                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta, Mode=OneWay}" />
+                                                        <TextBlock
+                                                            FontWeight="SemiBold"
+                                                            Foreground="{ThemeResource AbNeedsText}"
+                                                            Text="Answer at the machine"
+                                                            Visibility="{x:Bind local:Ui.Show(AtMachine)}" />
+                                                        <!-- Deny moves to a line of its own when the two don't fit, as in a narrow window with large text. -->
+                                                        <local:FlowPanel Spacing="8" LineSpacing="8" Margin="0,4,0,0" Visibility="{x:Bind local:Ui.Show(Approvable)}">
+                                                            <Button
+                                                                MinHeight="32"
+                                                                Style="{StaticResource AccentButtonStyle}"
+                                                                AutomationProperties.AutomationId="NeedsYouApprove"
+                                                                AutomationProperties.Name="{x:Bind ApproveName, Mode=OneWay}"
+                                                                Content="{x:Bind ApproveLabel, Mode=OneWay}"
+                                                                IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
+                                                                Click="{x:Bind Approve}" />
+                                                            <Button
+                                                                MinHeight="32"
+                                                                AutomationProperties.AutomationId="NeedsYouDeny"
+                                                                AutomationProperties.Name="{x:Bind DenyName, Mode=OneWay}"
+                                                                Content="{x:Bind DenyLabel, Mode=OneWay}"
+                                                                IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
+                                                                Click="{x:Bind Deny}" />
+                                                        </local:FlowPanel>
+                                                        <!-- The machine failed the op: the same request again, as the card's Send again.
+                                                             On a row of its own, so a narrow window or large text can't push it out of sight. -->
+                                                        <Button
+                                                            MinHeight="32"
+                                                            AutomationProperties.AutomationId="NeedsYouResend"
+                                                            AutomationProperties.Name="{x:Bind ResendName, Mode=OneWay}"
+                                                            Content="Send again"
+                                                            Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}"
+                                                            Click="{x:Bind Resend}" />
+                                                        <!-- In the text colour, not the outcome's: the role colours are checked against
+                                                             the card, not the Needs you fill, and the words say the outcome. -->
+                                                        <TextBlock
+                                                            TextWrapping="Wrap"
+                                                            IsTextSelectionEnabled="True"
+                                                            Text="{x:Bind StatusText, Mode=OneWay}"
+                                                            Foreground="{ThemeResource AbText}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasStatus), Mode=OneWay}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
                             <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>

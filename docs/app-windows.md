@@ -108,6 +108,18 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   keeps the last reading of each allowance between runs in `<profile>-usage.json`, so a reading
   outlives its machine going offline; a row says `read on <machine>` unless this machine read it
   (#172). A toast for another machine's question says which machine, and its answer goes there.
+* **Needs you** (#165, [ui.md](design/ui.md) §6.1). Above the cards, every pending question on
+  every machine, whatever the picker shows, oldest first: the session's title, the question's
+  first line (an approval's whole prompt, when it fits), the machine and agent, how long it has
+  waited, and a delegate's name when a delegate asks. Approve once and Deny press the card's
+  own buttons (its `QuestionViewModel`), offered only for Copilot's prompts, which a host writes
+  whole and literal, and only under the whole prompt (600 characters and 12 lines at most, no
+  table, code wrapped, shaped as a host writes it: prose, then at most one fenced block ending
+  it, its fence naming no language but json or diff, and no link, whose words hide where it goes) since Approve once allows all of it; a
+  longer approval, a Codex one, a
+  form and anything this app can't answer open the card, with focus; a prompt marked
+  `answerAtMachine` says so, with no controls. The lane never moves a card. Its count is the
+  tray's "N waiting on you" and the Sessions badge.
 
 ### Starting the host at logon: a scheduled task
 

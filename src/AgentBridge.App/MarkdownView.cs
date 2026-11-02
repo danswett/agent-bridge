@@ -16,6 +16,7 @@ public sealed class MarkdownView : StackPanel
     // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
     static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
+    bool wrapCode;
 
     public MarkdownView() => Spacing = 8;
 
@@ -26,12 +27,31 @@ public sealed class MarkdownView : StackPanel
         {
             if (value == markdown) { return; }
             markdown = value;
-            Children.Clear();
-            foreach (var b in MarkdownModel.Parse(value)) { Children.Add(Block(b)); }
+            Render();
         }
     }
 
-    static UIElement Block(MdBlock block) => block switch
+    // Code wraps rather than scrolls: where every character must be seen without scrolling, as an
+    // approval's prompt in Needs you, whose Approve once allows all of it (#165).
+    public bool WrapCode
+    {
+        get => wrapCode;
+        set
+        {
+            if (value == wrapCode) { return; }
+            wrapCode = value;
+            Render();
+        }
+    }
+
+    void Render()
+    {
+        Children.Clear();
+        if (markdown is null) { return; }
+        foreach (var b in MarkdownModel.Parse(markdown)) { Children.Add(Block(b)); }
+    }
+
+    UIElement Block(MdBlock block) => block switch
     {
         MdParagraph p => Text(p.Inlines),
         MdHeading h => Heading(h),
@@ -85,12 +105,14 @@ public sealed class MarkdownView : StackPanel
 
     static UIElement Heading(MdHeading h) => Text(h.Inlines, h.Level switch { 1 => 20, 2 => 18, 3 => 16, _ => 14 }, bold: true);
 
-    static UIElement Code(MdCode c) => new Border
+    UIElement Code(MdCode c) => new Border
     {
         Background = Ui.Brush("AbSubtle"),
         CornerRadius = new CornerRadius(6),
         Padding = new Thickness(10, 8, 10, 8),
-        Child = new ScrollViewer
+        Child = WrapCode
+            ? new TextBlock { Text = c.Text.TrimEnd('\n'), FontFamily = Mono, FontSize = 13, IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap }
+            : new ScrollViewer
         {
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -100,7 +122,7 @@ public sealed class MarkdownView : StackPanel
         },
     };
 
-    static UIElement Quote(MdQuote q)
+    UIElement Quote(MdQuote q)
     {
         var inner = new StackPanel { Spacing = 6 };
         foreach (var b in q.Blocks) { inner.Children.Add(Block(b)); }
@@ -113,7 +135,7 @@ public sealed class MarkdownView : StackPanel
         };
     }
 
-    static UIElement List(MdList l)
+    UIElement List(MdList l)
     {
         var panel = new StackPanel { Spacing = 4 };
         var n = l.Start;
