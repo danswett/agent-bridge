@@ -259,6 +259,21 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Empty(UsageProbesStarted);
     }
 
+    [Fact]
+    public async Task No_Claude_probe_starts_while_the_machines_processes_cannot_be_listed()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript(refresh: true);
+        f.Processes.Unreadable(AgentKind.Claude);
+        var claude = Claude();
+
+        await claude.CollectAsync();
+        await Settled(claude);
+
+        Assert.Empty(UsageProbesStarted);
+        Assert.Contains(log, l => l.Contains("could not be listed", StringComparison.Ordinal));
+    }
+
     // ---- Codex ----
 
     static object Window(int percent, int minutes, DateTimeOffset resets) => new { usedPercent = percent, windowDurationMins = minutes, resetsAt = resets.ToUnixTimeSeconds() };
@@ -491,6 +506,84 @@ public sealed class UsageProbeTests : IDisposable
         await Until(() => server.Answered == 4);
         // Not the grace period too: nothing Codex does then is cut off by end of input (E13).
         Assert.Null(launcher.Started.Single().InputClosedAt);
+    }
+
+    [Fact]
+    public async Task Stopping_the_host_after_the_reporting_timeout_still_waits_for_a_late_Codex_probes_answers()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+        await AdvanceUntil(time, () => log.Any(l => l.Contains("did not answer within", StringComparison.Ordinal)), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(65));
+        Assert.Contains(log, l => l.Contains("did not answer within", StringComparison.Ordinal));
+
+        var stopping = monitor.DisposeAsync().AsTask();
+        await Task.Delay(100);
+        Assert.False(stopping.IsCompleted);
+
+        release.SetResult();
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        await Until(() => server.Answered == 4);
+        Assert.Null(launcher.Started.Single().InputClosedAt);
+    }
+
+    [Fact]
+    public async Task A_failed_or_hung_conversation_leaves_no_process_watch_running_after_the_probe()
+    {
+        var looks = 0;
+        f.Processes.Queried = agent => { if (agent == AgentKind.Codex) { Interlocked.Increment(ref looks); } };
+
+        // codex app-server ends while it is being asked who is signed in.
+        var gate = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/read"] = gate.Task);
+        var failed = CodexProbe().Start();
+        await Until(() => server.Received.Any(r => r.Method == "account/read"));
+        launcher.Started.Single().End(1);
+        Assert.Equal(CodexProbeKind.Failed, (await RunToEnd(failed)).Kind);
+        await Watched();
+
+        // codex app-server never answers the usage read, and is given up on at the ceiling.
+        launcher.Started.Clear();
+        server = AppServer(s => s.Before["account/rateLimits/read"] = new TaskCompletionSource().Task);
+        var hung = CodexProbe().Start();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+        await AdvanceUntilDone(hung.Reported, TimeSpan.FromSeconds(61));
+        await RunToEnd(hung);
+        Assert.NotNull(launcher.Started.Single().InputClosedAt);
+        await Watched();
+
+        async Task Watched()
+        {
+            var after = Volatile.Read(ref looks);
+            await AdvanceUntil(time, () => false, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5));
+            Assert.Equal(after, Volatile.Read(ref looks));
+        }
+    }
+
+    [Fact]
+    public async Task A_sign_out_followed_by_an_api_key_login_clears_the_sign_out_and_leaves_the_transcripts()
+    {
+        CodexUsed();
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+
+        // Signed in again with an API key, outside any session this host saw.
+        AppServer(s => s.Answers["account/read"] = _ => FakeAppServer.Result(new { account = new { type = "apiKey" }, requiresOpenaiAuth = true }));
+        time.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1));
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        var usage = await codex.CollectAsync();
+        Assert.Equal((UsageSource.Transcript, null), (usage!.Source, usage.Error));
     }
 
     [Fact]

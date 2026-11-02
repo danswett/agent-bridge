@@ -20,8 +20,10 @@ internal sealed record CodexProbeOutcome(CodexProbeKind Kind, AgentUsage? Readin
 
 // Reported: what the probe found, at most CodexReportTimeout after it started. Finished: when the
 // host has let go of it: standard input closed after the grace period, or the daemon connection
-// closed, or the process given up on as hung at the ceiling.
-internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished);
+// closed, or the process given up on as hung at the ceiling. Answered: when a standalone
+// app-server has no question left unanswered (or was given up on as hung), which can be after
+// Reported gave up waiting: until then, the host's exit would close its input mid-answer.
+internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished, Task Answered);
 
 // Codex's own reading of its allowance, asked of its app-server (#200, spike #197 X-1 to X-5).
 // Codex answers account/rateLimits/read with its own credentials and refresh, and the request
@@ -48,16 +50,21 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     public CodexProbeRun Start()
     {
         var reported = new TaskCompletionSource<CodexProbeOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = Task.Run(async () =>
         {
-            try { await RunAsync(reported); }
+            try { await RunAsync(reported, answered); }
             catch (Exception e) { reported.TrySetResult(new(CodexProbeKind.Failed, Why: $"the probe failed: {e.GetType().Name}")); }
-            finally { reported.TrySetResult(new(CodexProbeKind.Failed, Why: "the probe ended without an answer")); }
+            finally
+            {
+                reported.TrySetResult(new(CodexProbeKind.Failed, Why: "the probe ended without an answer"));
+                answered.TrySetResult();
+            }
         });
-        return new(reported.Task, finished);
+        return new(reported.Task, finished, answered.Task);
     }
 
-    async Task RunAsync(TaskCompletionSource<CodexProbeOutcome> reported)
+    async Task RunAsync(TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered)
     {
         if (probes.Find(AgentKind.Codex) is not { } exe)
         {
@@ -72,9 +79,11 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         }
         if (observed.Processes.Count == 0)
         {
-            await StandaloneAsync(exe, reported);
+            await StandaloneAsync(exe, reported, answered);
             return;
         }
+        // The daemon's sign-in and refresh go on whether or not this connection does.
+        answered.TrySetResult();
         IRpcLink? daemon;
         using (var connect = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
         {
@@ -88,7 +97,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         await DaemonAsync(daemon, reported);
     }
 
-    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported)
+    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered)
     {
         var started = clock.GetUtcNow();
         var environment = ProbeEnvironment.Home("CODEX_HOME", options.CodexHome, ".codex");
@@ -102,11 +111,23 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         }
         var link = new JsonLinesLink(process.Input, process.Reader);
         var watch = new CodexWatch(probes, process.Id, clock);
-        var conversation = ConverseAsync(link, watch);
-        var answered = await SettleAsync(conversation, reported, started);
         var ceiling = started + options.CodexCeiling;
-        if (!answered) { answered = await WithinAsync(conversation, ceiling - clock.GetUtcNow()); }
-        if (answered)
+        bool done;
+        try
+        {
+            var conversation = ConverseAsync(link, watch);
+            _ = conversation.ContinueWith(_ => answered.TrySetResult(), TaskScheduler.Default);
+            done = await SettleAsync(conversation, reported, started);
+            if (!done) { done = await WithinAsync(conversation, ceiling - clock.GetUtcNow()); }
+        }
+        finally
+        {
+            // A conversation that failed or hung never reached the watch's own end, and its polling
+            // would otherwise outlive the probe, one more loop for every probe that went wrong.
+            watch.End();
+            answered.TrySetResult();
+        }
+        if (done)
         {
             // After the last answer, long enough for any refresh Codex started to finish or hit its
             // own limit before end of input tears its runtime down (X-4, E13).
@@ -365,6 +386,7 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
     // Whether another Codex process was seen at any point.
     public bool End()
     {
+        if (stop.IsCancellationRequested) { return seen; }
         stop.Cancel();
         Look();
         return seen;

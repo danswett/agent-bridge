@@ -104,13 +104,12 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions"))) { return; }
             pace.Started(now);
             var run = new CodexUsageProbe(options, probes!, clock, say).Start();
-            answering = run.Reported;
+            answering = run.Answered;
             running = Task.Run(async () =>
             {
                 try
                 {
                     var outcome = await run.Reported;
-                    lock (gate) { answering = null; }
                     Apply(outcome);
                     await run.Finished;
                 }
@@ -153,6 +152,9 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     line = $"usage: {CodexUsageProbe.SignedOutError} ({outcome.Why}); not asking it again for {options.ProbeBackoffMax.TotalHours:0} hours or until a Codex session runs here";
                     break;
                 case CodexProbeKind.NotApplicable:
+                    // Signed in some other way now (an API key, another provider): no longer a
+                    // sign-out to report, and the transcripts stand alone.
+                    signedOutAt = null;
                     pace.Hold(now);
                     line = $"usage: Codex is not asked for its allowance ({outcome.Why}); its transcripts are read";
                     break;

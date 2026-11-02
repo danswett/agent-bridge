@@ -1187,6 +1187,25 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(2, UsageMerge.Latest([new UsageReport([probe, transcript, keyed with { ReadBy = laptop }])]).Count);
     }
 
+    [Fact]
+    public void A_machines_older_keyless_sign_out_is_dropped_once_it_gives_a_newer_keyed_reading_and_a_newer_one_still_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var signedOut = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var probe = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", AccountKey = "c0dec0dec0de", Source = UsageSource.Api, MeasuredAt = Make.T0.AddMinutes(10), ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+
+        var row = Assert.Single(UsageMerge.Merge([new UsageReport([signedOut]), new UsageReport([probe])]).Agents);
+        Assert.Equal((UsageSource.Api, null), (row.Source, row.Error));
+        Assert.Single(UsageMerge.Latest([new UsageReport([signedOut, probe])]));
+
+        var later = signedOut with { MeasuredAt = Make.T0.AddMinutes(20) };
+        Assert.Contains(UsageMerge.Merge([new UsageReport([later]), new UsageReport([probe])]).Agents, a => a.Error == later.Error);
+    }
+
     OfflineMachineViewModel[] Offline()
     {
         OfflineMachineViewModel[] now = [];

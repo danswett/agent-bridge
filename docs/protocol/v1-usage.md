@@ -124,7 +124,8 @@ Agent-ha-bridge's usage card, kept exactly:
   machine that sent it), and two machines give two rows until a keyed reading arrives. One machine's
   keyed and keyless readings of an agent are never shown side by side: whichever it took last stands
   for that machine, the other is left out, so Codex alternating between a probe's keyed reading and
-  its transcripts' keyless ones is still one row.
+  its transcripts' keyless ones is still one row. A failure is held to the same rule: one older than
+  that machine's last reading of the other kind is left out, and one newer still shows.
 * **Rows in order of the fullest window**, highest first. The folded summary is
   `GitHub Copilot 79% · Claude Code 12%`, each figure in its own colour.
 * **Colour by percent:** 90 and up critical (red), 75 and up warning (amber), else normal.
@@ -240,7 +241,8 @@ refresh and locking, and runs no model turn.
   `accountId` and a non-null `ordinaryUsageAllowed` on the snapshot, the standalone route, and no
   other Codex process seen from just before the first `account/read` to just after the second.
   A daemon-route reading never has one: another client can switch the daemon's login unseen.
-  An API-key login, another provider or no `codex` falls back to the transcripts with no error.
+  An API-key login, another provider or no `codex` falls back to the transcripts with no error,
+  and clears an earlier sign-out failure.
   Codex reported as needing sign-in (its `-32603` "...Please log out and sign in again", including
   a reused refresh token, an authentication failure from the usage read after Codex's own recovery,
   or no account where OpenAI sign-in is required) is the failure
@@ -264,7 +266,8 @@ other refusal is an answer and is not retried.
 An agent is asked to read its own allowance only once the newest reading is 15 minutes old (the
 idle pace), at most every 15 minutes while no session of it is open here and every 5 while one is,
 and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
-agent and profile, and none starts beside a Claude probe already running on the machine. After a
+agent and profile, and none starts beside a Claude probe already running on the machine, nor
+while the machine's Claude processes cannot be listed to tell. After a
 failure or a rate-limited answer the next waits 15 minutes, then 30, 60 and at most 2 hours, until
 one works; the last reading stands meanwhile. A finished probe's reading is read at once, not at
 the next turn.
@@ -280,7 +283,8 @@ E4). So the host never kills a probe:
   the process running with its input open; a late answer is still followed by the grace period.
   Only at 10 minutes is it given up on as hung, with its input closed. A Codex process left running
   counts as another Codex process, so no standalone probe starts beside it. Its input goes with the
-  host, so a host stopping first waits for the probe's answers (at most 60 s), though not for the
+  host, so a host stopping first waits for the probe's answers (at most 60 s, even when they are
+  already later than the 60 s it reports within), though not for the
   grace period: no refresh was seen running after the last answer (E13). A host that is killed
   cannot wait.
 

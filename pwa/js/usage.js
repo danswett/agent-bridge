@@ -143,7 +143,9 @@ function usageSlots(reports) {
 // One machine's readings of an agent that name an account and that name none are never shown side
 // by side: whichever kind it took last stands for it (#200). Codex alternates between them, a
 // probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and kept
-// apart they were one allowance shown twice. Mirrors UsageMerge.Current.
+// apart they were one allowance shown twice. A failure is held to the same rule: a sign-out older
+// than the other kind's last reading is history, and one newer than it still stands. Mirrors
+// UsageMerge.Current.
 function current(agents) {
   const of = (a) => `${a.agent}\u0000${a.readBy?.id ?? ''}`;
   const at = (a) => Date.parse(a.measuredAt ?? '') || 0;
@@ -156,8 +158,8 @@ function current(agents) {
     into.set(of(a), Math.max(into.get(of(a)) ?? 0, at(a)));
   }
   return agents.filter((a) => {
-    if (!a.windows?.length || !bare.has(of(a)) || !named.has(of(a))) { return true; }
-    return at(a) >= (keyless(a) ? named : bare).get(of(a));
+    const other = (keyless(a) ? named : bare).get(of(a));
+    return other === undefined || at(a) >= other;
   });
 }
 

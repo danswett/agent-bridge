@@ -805,14 +805,15 @@ public static class UsageMerge
     // side by side: whichever kind it took last stands for it (#200). Codex alternates between them,
     // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
     // kept apart they were one allowance shown twice, the older of the two going stale beside it.
+    // A failure is held to the same rule: a sign-out older than the other kind's last reading is
+    // history, and one newer than it still stands.
     static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
     {
         static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
         var readings = all.Where(a => a.Windows.Count > 0).ToList();
         var keyless = readings.Where(UsageShare.Keyless).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
         var keyed = readings.Where(a => !UsageShare.Keyless(a)).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
-        return all.Where(a => a.Windows.Count == 0 || !keyless.TryGetValue(Of(a), out var bare) || !keyed.TryGetValue(Of(a), out var named)
-            || a.MeasuredAt >= (UsageShare.Keyless(a) ? named : bare));
+        return all.Where(a => !(UsageShare.Keyless(a) ? keyed : keyless).TryGetValue(Of(a), out var other) || a.MeasuredAt >= other);
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

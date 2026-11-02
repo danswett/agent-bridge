@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, latestUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -58,6 +58,17 @@ test('two keyless Codex readings from different machines stay two rows, and a ke
   const transcript = codex('vm', 5);
   assert.deepEqual(mergeUsage([{ agents: [probe] }, { agents: [transcript] }].map(readUsage)).map((r) => r.source), ['transcript']);
   assert.deepEqual(mergeUsage([{ agents: [codex('vm', 40)] }, { agents: [codex('vm', 5, keyed)] }].map(readUsage)).map((r) => r.source), ['api']);
+});
+
+test('a machines older keyless sign-out is dropped once it gives a newer keyed reading, and a newer one still stands', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const signedOut = (ago) => ({ agent: 'codex', label: 'Codex', error: 'Codex needs signing in again on this machine', measuredAt: iso(-ago), windows: [], readBy: vm });
+  const probe = { agent: 'codex', label: 'Codex', accountKey: 'c0dec0dec0de', source: 'api', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };
+  const merged = mergeUsage([{ agents: [signedOut(600_000)] }, { agents: [probe] }].map(readUsage));
+  assert.deepEqual(merged.map((r) => [r.source, r.error ?? null]), [['api', null]]);
+  assert.equal(latestUsage([{ agents: [signedOut(600_000), probe] }].map(readUsage)).length, 1);
+  const later = mergeUsage([{ agents: [signedOut(1_000)] }, { agents: [probe] }].map(readUsage));
+  assert.ok(later.some((r) => r.error === 'Codex needs signing in again on this machine'));
 });
 
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {

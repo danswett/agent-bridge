@@ -235,8 +235,15 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     {
         if (probes!.Find(AgentKind.Claude) is not { } exe) { return false; }
         // One at a time, on the machine and not only in this host: another host of this user, or
-        // this one before a restart, may have left one running.
-        if (probes.Processes.Observe(AgentKind.Claude).Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
+        // this one before a restart, may have left one running. A list that could not be read
+        // cannot show there is none.
+        var observed = probes.Processes.Observe(AgentKind.Claude);
+        if (!observed.Listed)
+        {
+            say("usage: Claude Code's processes could not be listed; not starting a /usage probe");
+            return false;
+        }
+        if (observed.Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
         {
             say("usage: a Claude Code /usage probe is already running here; not starting another");
             return false;
