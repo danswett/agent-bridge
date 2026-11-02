@@ -106,7 +106,8 @@ public actor BridgeAttachmentUploader {
         }
         do {
             try await endpoint.validateConnection()
-            var state = try await BridgeAttachmentState(json: endpoint.send(.init(op: "attachment.start", data: metadata)))
+            var state = try await BridgeAttachmentState(json: send(.init(op: "attachment.start", data: metadata), endpoint: endpoint))
+            try Task.checkCancellation()
             guard state.received <= prepared.size, !state.complete || state.received == prepared.size else { throw BridgeOperationError("The machine returned an invalid file offset.") }
             var lastProgress: ContinuousClock.Instant?
             while !state.complete {
@@ -122,7 +123,8 @@ public actor BridgeAttachmentUploader {
                     operation = chunk(id: idString, offset: state.received, bytes: bytes)
                 }
                 let expectedOffset = state.received + bytes.count
-                state = try await BridgeAttachmentState(json: endpoint.send(operation))
+                state = try await BridgeAttachmentState(json: send(operation, endpoint: endpoint))
+                try Task.checkCancellation()
                 guard state.received == expectedOffset, !state.complete || state.received == prepared.size else { throw BridgeOperationError("The attachment acknowledgment did not match the bytes sent.") }
                 // A fast direct upload can acknowledge thousands of chunks per second.
                 // Keep those acknowledgments off the UI actor except for useful progress.
@@ -150,7 +152,15 @@ public actor BridgeAttachmentUploader {
 
     public func discard(id: UUID, endpoint: BridgeAttachmentUploadEndpoint) async throws {
         try await endpoint.validateConnection()
-        _ = try await endpoint.send(.init(op: "attachment.discard", data: ["attachment": .string(id.uuidString.lowercased())]))
+        _ = try await send(.init(op: "attachment.discard", data: ["attachment": .string(id.uuidString.lowercased())]), endpoint: endpoint)
+    }
+
+    private func send(_ operation: BridgeOperation, endpoint: BridgeAttachmentUploadEndpoint) async throws -> JSONValue {
+        try Task.checkCancellation()
+        // Cancelling a transport request closes the shared session channel. Let a
+        // started attachment request settle, then the upload checks cancellation
+        // and discards its staged ID without interrupting other session traffic.
+        return try await Task { try await endpoint.send(operation) }.value
     }
 
     private func chunk(id: String, offset: Int, bytes: Data) -> BridgeOperation {
