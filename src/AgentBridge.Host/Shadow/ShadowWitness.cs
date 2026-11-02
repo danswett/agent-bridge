@@ -52,7 +52,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             {
                 known = CodexCompactions(cid, dc, hc);
             }
-            else if (Explainable(d) && d.Kind is ShadowKinds.Status or ShadowKinds.Model && ids.TryGetValue(d.Session!, out var qid)
+            else if (Explainable(d) && d.Kind is ShadowKinds.Status or ShadowKinds.Model or ShadowKinds.QuestionMissingOnHost && ids.TryGetValue(d.Session!, out var qid)
                 && daemon.Sessions.TryGetValue(qid, out var dq) && host.Sessions.TryGetValue(qid, out var hq) && dq.Agent == "claude" && hq.Agent == "claude")
             {
                 known = ClaudeAnswerHeld(qid, dq, hq, d.Kind);
@@ -94,22 +94,23 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     // waiting, and shows the launch's model alias (haiku) where the transcript names the model.
     // Put down to that only while the daemon's armed question is a call in the session's own
     // transcript (the one its registration names), and:
-    //   status: the transcript has that call's tool_result and, after it, a finished turn
-    //           (end_turn), and the host shows the session idle with no question;
+    //   status and question.missingOnHost: the transcript has that call's tool_result and,
+    //           after it, a finished turn (end_turn) that is still its last state, and the host
+    //           shows the session idle with no question;
     //   model:  the daemon's model is a bare alias whose name is a part of the host's
     //           claude-<...> model, and the transcript's latest model is the host's.
     // Copilot's and Codex's, and any other Claude status or model, stay mismatches.
     string? ClaudeAnswerHeld(string id, ShadowSession daemon, ShadowSession host, string kind)
     {
         if (daemon.Question?.CallId is not { Length: > 0 } call) { return null; }
-        if (kind == ShadowKinds.Status && (host.Status != "idle" || host.Question is not null)) { return null; }
+        if (kind is ShadowKinds.Status or ShadowKinds.QuestionMissingOnHost && (host.Status != "idle" || host.Question is not null)) { return null; }
         if (kind == ShadowKinds.Model && !Alias(daemon.Model, host.Model)) { return null; }
         if (paths.ClaudeRegistration(id)?.TranscriptPath is not { } transcript) { return null; }
         var seen = ClaudeTurnEvidence.Read(transcript, call);
         if (!seen.Asked) { return null; }
         return kind switch
         {
-            ShadowKinds.Status when seen.Answered && seen.EndedAfterAnswer => Issue(290),
+            ShadowKinds.Status or ShadowKinds.QuestionMissingOnHost when seen.Answered && seen.EndedAfterAnswer => Issue(290),
             ShadowKinds.Model when seen.LastModel is { } m && m == host.Model => Issue(290),
             _ => null,
         };
@@ -991,7 +992,8 @@ public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAft
             foreach (var raw in from > 0 ? lines.Skip(1) : lines)
             {
                 var line = raw.TrimEnd('\r');
-                if (line.Length == 0 || !line.Contains(call, StringComparison.Ordinal) && !line.Contains("\"assistant\"", StringComparison.Ordinal)) { continue; }
+                if (line.Length == 0 || !line.Contains(call, StringComparison.Ordinal) && !line.Contains("\"assistant\"", StringComparison.Ordinal)
+                    && !line.Contains("\"user\"", StringComparison.Ordinal)) { continue; }
                 JsonElement root;
                 try
                 {
@@ -1010,13 +1012,19 @@ public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAft
                 {
                     if (message.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } name && name != "<synthetic>") { model = name; }
                     if (content.Any(x => Is(x, "tool_use", "id", call))) { asked = true; }
-                    if (answered && message.TryGetProperty("stop_reason", out var s) && s.ValueKind == JsonValueKind.String && s.GetString() == "end_turn") { ended = true; }
+                    // The finished turn must be the transcript's last state: an assistant entry that
+                    // goes on (a tool_use) after an end_turn is a new turn under way (found in review).
+                    var stop = message.TryGetProperty("stop_reason", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+                    if (answered) { ended = stop is "end_turn" or "stop_sequence"; }
                 }
                 else if (type == "user" && content.Any(x => Is(x, "tool_result", "tool_use_id", call)))
                 {
                     answered = true;
                     ended = false;
                 }
+                // Any other main-chain user entry after the answer (a new prompt, another call's
+                // result) starts or continues a turn, so the earlier end_turn is not the last state.
+                else if (type == "user") { ended = false; }
             }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(false, false, false, null); }

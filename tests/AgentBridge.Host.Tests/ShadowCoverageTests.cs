@@ -542,6 +542,32 @@ public sealed class ShadowCoverageTests : IDisposable
         Show(Asked(null, next, multi), Asked("call-2", next, multi), null, 1);
         Assert.Equal(new Dictionary<string, int> { ["choice"] = 1, ["multi"] = 1 }, ledger.Today.Coverage.Questions);
     }
+
+    [Fact]
+    public void A_question_the_daemon_holds_for_a_known_bug_is_not_counted_failed()
+    {
+        Directory.CreateDirectory(reports);
+        var ledger = new ShadowLedger(reports, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(15), time);
+        var session = ShadowHash.Session(A);
+        var asked = time.GetUtcNow();
+        void Show(string? known, int samples)
+        {
+            for (var i = 0; i < samples; i++)
+            {
+                ledger.Record(new ShadowComparison(true, 1, 1, [new(ShadowKinds.QuestionMissingOnHost, session, "daemon fields=1") { Known = known }], []),
+                    View(null, null, null, Session(A, "waiting", question: Asked(null, asked, new ShadowField("choice", 2, "h")))),
+                    View(null, null, null, Session(A, "idle")));
+                time.Advance(TimeSpan.FromSeconds(15));
+            }
+        }
+
+        // Held past the grace, but put down to agent-ha-bridge#290 at every sample.
+        Show("agent-ha-bridge#290", 8);
+        Assert.Empty(ledger.Today!.Coverage!.FailedQuestions);
+        // Unexplained, the same is a failed question.
+        Show(null, 8);
+        Assert.Single(ledger.Today!.Coverage!.FailedQuestions);
+    }
     // Found in review (#77): past a day's cap a mismatch keeps no time or session, so nothing can
     // say it was explained or over.
     [Fact]

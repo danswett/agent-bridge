@@ -795,6 +795,7 @@ public sealed class ShadowWitnessTests : IDisposable
         o["isSidechain"] = true;
         return o;
     }
+    static object Prompt => new { type = "user", message = new { role = "user", content = "next, please" } };
     static object EndTurn => Assistant([new { type = "text", text = "ok" }], "end_turn");
 
     IReadOnlyList<ShadowDifference> HeldAnswer(string daemonModel = "haiku", string agent = "claude", string? call = Call)
@@ -813,14 +814,24 @@ public sealed class ShadowWitnessTests : IDisposable
         var held = HeldAnswer();
         Assert.Equal("agent-ha-bridge#290", KnownOf(held, ShadowKinds.Status));
         Assert.Equal("agent-ha-bridge#290", KnownOf(held, ShadowKinds.Model));
+        Assert.Equal("agent-ha-bridge#290", KnownOf(held, ShadowKinds.QuestionMissingOnHost));
 
         // Still asking: the waiting is right, so the status stays a mismatch; the alias is the same either way.
         ClaudeTranscript(AskCall);
         Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.QuestionMissingOnHost));
         Assert.Equal("agent-ha-bridge#290", KnownOf(HeldAnswer(), ShadowKinds.Model));
         // Answered, but the turn is still going.
         ClaudeTranscript(AskCall, Answer);
         Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.QuestionMissingOnHost));
+        // A new turn after the finished one: a host still idle then is the host's own, and stays counted.
+        ClaudeTranscript(AskCall, Answer, EndTurn, Prompt, Assistant([new { type = "tool_use", id = "toolu_bash", name = "Bash" }], "tool_use"));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.QuestionMissingOnHost));
+        ClaudeTranscript(AskCall, Answer, EndTurn, Prompt);
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.QuestionMissingOnHost));
 
         ClaudeTranscript(AskCall, Answer, EndTurn);
         // Not a model the alias names, another agent, or a question the transcript never asked.
