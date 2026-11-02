@@ -185,12 +185,13 @@ instead of as a task of its own:
 
 * **Which Dev Box.** Read from the Dev Box agent's own settings
   (`C:\Program Files\Microsoft Dev Box Agent\…\appsettings.Production.json`): its Dev Center, project
-  and name, afresh for every pass, so a reprovision is followed. A machine without it is not a Dev
-  Box (`not-a-devbox`, said once), and nothing is done. A Dev Center address that is not
-  `https://<name>.devcenter.azure.com` is not followed, since the user's token would go there. A
-  settings file that is there but cannot be used (not JSON, a shape not known, such an address)
-  is a Dev Box that cannot be kept awake: with keep-awake on, every pass is `failed` and says so,
-  and the app keeps showing the section with the alarm.
+  and name, afresh for every pass, so a reprovision is followed. A machine without the Dev Box
+  agent is not a Dev Box (`not-a-devbox`, said once), and nothing is done. A Dev Center address
+  that is not `https://<name>.devcenter.azure.com` is not followed, since the user's token would go
+  there. Settings that are there but cannot be used (not JSON, a shape not known, such an address,
+  or the agent installed with no settings file found or searchable under it) are a Dev Box that
+  cannot be kept awake: with keep-awake on, every pass is `failed` and says so, and the app keeps
+  showing the section with the alarm.
 * **As whom.** The Azure CLI's sign-in: `az account get-access-token --resource
   https://devcenter.azure.com`, run with no window (`az.cmd` through `cmd.exe`). Dev Center's
   developer API under `users/me` is the only scope that lets a user skip or delay their own Dev

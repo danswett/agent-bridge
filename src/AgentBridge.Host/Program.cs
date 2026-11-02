@@ -671,7 +671,7 @@ KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
 
 // Dev Boxes are Windows machines: anywhere else this is not one.
 static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
-    OperatingSystem.IsWindows() ? DevBoxIdentity.Read(DevBoxIdentity.FindSettings()) : (null, null);
+    OperatingSystem.IsWindows() ? DevBoxIdentity.Find() : (null, null);
 
 static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 

@@ -79,7 +79,7 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
 }
 
 // The Dev Box keep-awake (devBox.*, docs/host-config.md), present when this machine is a Microsoft
-// Dev Box: when its Dev Box agent's settings file is here, whether or not the host can use it.
+// Dev Box: when the Dev Box agent is installed, whether or not the host can use its settings.
 // KeepAwake: whether passes run now. Last: the last pass, its outcome in agent-ha-bridge's words
 // (skipped, delayed, safe, no-action, blocked, failed) or the host's own (stood-back, busy,
 // not-a-devbox), and what it did; Alarming when a person should look (failed, blocked, or a

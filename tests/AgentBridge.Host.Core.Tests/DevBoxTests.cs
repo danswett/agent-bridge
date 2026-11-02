@@ -106,6 +106,23 @@ public sealed class DevBoxTests : IDisposable
 
         Assert.Equal(newer, DevBoxIdentity.FindSettings(Path.Combine(root, "agent")));
         Assert.Null(DevBoxIdentity.FindSettings(Path.Combine(root, "no-agent-here")));
+        Assert.Equal("new-box", DevBoxIdentity.Find(Path.Combine(root, "agent")).Identity!.DevBox);
+    }
+
+    // Only a machine without the Dev Box agent is not a Dev Box. One whose agent is installed but
+    // whose settings are not found there cannot be kept awake, which must be said, not hidden.
+    [Fact]
+    public void A_Dev_Box_agent_installed_without_settings_to_find_is_a_problem_not_a_machine_that_is_not_a_Dev_Box()
+    {
+        Assert.Equal((null, null), DevBoxIdentity.Find(Path.Combine(root, "no-agent-here")));
+
+        var installed = Path.Combine(root, "agent-without-settings");
+        Directory.CreateDirectory(Path.Combine(installed, "1.0"));
+        var (identity, problem) = DevBoxIdentity.Find(installed);
+
+        Assert.Null(identity);
+        Assert.Contains("the Dev Box agent is installed", problem);
+        Assert.Contains($"no {DevBoxIdentity.SettingsFile} was found", problem);
     }
 
     [Fact]

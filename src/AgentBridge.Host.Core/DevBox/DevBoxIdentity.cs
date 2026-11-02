@@ -18,10 +18,34 @@ public sealed record DevBoxIdentity(Uri Endpoint, string Project, string DevBox)
         try
         {
             if (!Directory.Exists(root)) { return null; }
-            return Directory.EnumerateFiles(root, SettingsFile, new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
-                .Select(f => new FileInfo(f)).OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault()?.FullName;
+            return Newest(root);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    static string? Newest(string root) =>
+        Directory.EnumerateFiles(root, SettingsFile, new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+            .Select(f => new FileInfo(f)).OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault()?.FullName;
+
+    // This machine's identity, found and read. Only a machine without the Dev Box agent at all is
+    // not a Dev Box: one whose agent is installed but whose settings cannot be searched, found or
+    // kept hold of is a Dev Box that cannot be kept awake, which is said (a problem), never taken
+    // for "not a Dev Box", whose silence would let it hibernate.
+    public static (DevBoxIdentity? Identity, string? Problem) Find(string root = AgentRoot)
+    {
+        string? path;
+        try
+        {
+            if (!Directory.Exists(root)) { return (null, null); }
+            path = Newest(root);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return (null, $"the Dev Box agent is installed ({root}), but its settings could not be searched for ({e.Message})");
+        }
+        if (path is null) { return (null, $"the Dev Box agent is installed ({root}), but no {SettingsFile} was found under it"); }
+        var (identity, problem) = Read(path);
+        return identity is null && problem is null ? (null, $"{path} was there, then could not be found to read") : (identity, problem);
     }
 
     // This machine's identity, or null with why when it is not a Dev Box this host can act for.
