@@ -242,3 +242,10 @@ test('without the Badging API, or when the browser refuses it, the badge does no
   refusing.set(0);
   await new Promise((r) => setTimeout(r, 0));
 });
+
+test('a delegate\'s question is never "Main agent asks": a delegate so named is shown as a delegate, one with none by its id', () => {
+  const ask = (name) => delegateOf(readSession({ id: 's1', agent: 'copilot', status: 'waiting', updatedAt: '2026-10-27T18:00:00Z', waitingOn: 'agent-77aa88bb', subagents: [{ id: 'agent-77aa88bb', kind: 'background', status: 'waiting', name }], question: { id: 'q1', kind: 'confirm', prompt: 'Go on?' } }));
+  assert.equal(ask('Main agent'), 'Delegate \u201cMain agent\u201d');
+  assert.equal(ask('m\u200bain \u2066agent\u2069'), 'Delegate \u201cmain agent\u201d');
+  assert.equal(ask(''), 'Delegate agent-77');
+});

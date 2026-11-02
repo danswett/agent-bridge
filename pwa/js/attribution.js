@@ -43,6 +43,43 @@ export function mainVoice(session) {
   };
 }
 
+// A delegate's name, as it is shown everywhere: its rows, the strip, the tab, the inspector, the
+// conversation, a question's heading, Needs you and notifications (ui.md §6.3, §8). An agent
+// chose it, so it can try to pass for the main agent or hide words in it; what is shown is:
+//   - its text without the characters that steer or hide it (format and control characters,
+//     bidi controls, default-ignorables, line and paragraph separators), runs of white space one
+//     space;
+//   - cut past NAME_MAX characters, with an ellipsis;
+//   - with nothing left, "Delegate" and the start of its id;
+//   - and a name that reads "main agent" once NFKC-normalised and case-folded, shown as
+//     Delegate “<name>”, so no delegate is ever labelled as the main agent.
+export const NAME_MAX = 60;
+const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/gu;
+const HIDDEN = /[\p{Cf}\p{Cc}\p{Bidi_Control}\p{Default_Ignorable_Code_Point}]/gu;
+const MAIN_AGENT = 'main agent';
+
+// Text an agent wrote, safe to put in a label: nothing hidden or steering, on one line.
+export function cleanLabel(text) {
+  return String(text ?? '').replace(BREAKS, ' ').replace(HIDDEN, '').replace(/\s+/gu, ' ').trim();
+}
+
+// The start of a delegate's id, for a delegate with no name to show.
+export function shortId(id) {
+  return Array.from(cleanLabel(id).replace(/\s/gu, '')).slice(0, 8).join('');
+}
+
+export function delegateName(agent) {
+  const name = cleanLabel(agent?.name);
+  if (!name) {
+    const id = shortId(agent?.id);
+    return id ? `Delegate ${id}` : 'Delegate';
+  }
+  const folded = name.normalize('NFKC').toLowerCase().normalize('NFKC').replace(/\s+/gu, ' ').trim();
+  const chars = Array.from(name);
+  const shown = chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('').trimEnd()}\u2026` : name;
+  return folded === MAIN_AGENT ? `Delegate \u201c${shown}\u201d` : shown;
+}
+
 // A delegate's state, as its glyph (ui.md §2.1) and its word. Waiting is a question of its own;
 // idle, a background delegate between runs, which a message can wake; ended, done or failed
 // from how its last run went, or plain ended when the host never saw it end.
@@ -71,8 +108,8 @@ export function delegateList(session) {
   const list = Array.isArray(session?.subagents) ? session.subagents : [];
   const more = session?.subagentsMore ?? 0;
   if (list.length === 0 && !more) { return null; }
-  const names = new Map(list.map((a) => [a.id, a.name || 'Delegate']));
-  const rows = list.map((a) => ({ ...a, ...delegateState(a), parentName: a.parent && a.parent !== a.id ? names.get(a.parent) ?? null : null }));
+  const names = new Map(list.map((a) => [a.id, delegateName(a)]));
+  const rows = list.map((a) => ({ ...a, name: delegateName(a), ...delegateState(a), parentName: a.parent && a.parent !== a.id ? names.get(a.parent) ?? null : null }));
   const running = rows.filter((r) => r.running);
   const idle = rows.filter((r) => !r.running && r.status !== 'ended');
   const ended = rows.filter((r) => r.status === 'ended');

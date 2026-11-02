@@ -729,6 +729,22 @@ test.describe('the session pane after #221\'s review', () => {
     await expect(v.locator('.question .question-head')).toHaveText('A delegate asks');
   });
 
+  test('a delegate named "Main agent", disguised or not, asks as a delegate in the pane, Needs you and its row', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, COPILOT);
+    for (const [name, shown] of [['Main agent', 'Main agent'], ['\u2067MAIN\u200b AGENT\u2069', 'MAIN AGENT']]) {
+      await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
+      const asks = `Delegate \u201c${shown}\u201d asks`;
+      await expect(v.locator('.question .question-head')).toHaveText(asks);
+      await expect(page.locator('#needs-you .needs-delegate')).toHaveText(asks);
+      await expect(page.locator(`.session[data-id="${COPILOT}"] .row-facts`)).toContainText(asks);
+    }
+    await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
+    // With no name, the start of its id.
+    await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: '\u200b' }, DELEGATES[1]] });
+    await expect(v.locator('.question .question-head')).toHaveText('Delegate agent-7 asks');
+  });
+
   test('the main agent\'s words are dated by when it wrote them, not by a delegate\'s later update', async ({ page }) => {
     await openDemo(page, '&delegates=1');
     const v = await open(page, 'demo-delegates');

@@ -164,3 +164,9 @@ test('The glyph is named with its state, as ui.md §9 reads a row: title, status
   assert.equal(name({ status: 'working', driver: 'agent' }), 'Plan Migration to Windows App, working, driven by an agent, DEV-VM1');
   assert.equal(statusLabel(sessionStatus(session({ title: null })), { title: null }), 'Untitled session, idle');
 });
+
+test('Rules 2 and 3: a delegate named "Main agent" is named as a delegate, never as the main agent', () => {
+  const impostor = { id: 'x1', kind: 'task', status: 'waiting', name: '\u2067Main agent\u2069' };
+  assert.equal(said({ status: 'waiting', waitingOn: 'x1', subagents: [impostor] }).text, 'Delegate \u201cMain agent\u201d asks');
+  assert.equal(said({ status: 'working', subagents: [{ ...impostor, status: 'working', name: 'MAIN AGENT' }] }).text, 'Working · task: Delegate \u201cMAIN AGENT\u201d');
+});
