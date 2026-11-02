@@ -117,6 +117,102 @@
                                 TextWrapping="Wrap"
                                 Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
                                 Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
+                            <!-- Needs you · N (#165): every pending question on every machine, oldest first. It
+                                 refers to the cards below and never moves them. -->
+                            <Border
+                                AutomationProperties.AutomationId="NeedsYou"
+                                AutomationProperties.Name="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.HasNeedsYou), Mode=OneWay}"
+                                Background="{ThemeResource AbNeedsFill}"
+                                BorderBrush="{ThemeResource AbNeeds}"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12,10">
+                                <StackPanel Spacing="8">
+                                    <TextBlock
+                                        AutomationProperties.HeadingLevel="Level2"
+                                        FontSize="13"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource AbNeedsHead}"
+                                        Text="{x:Bind ViewModel.NeedsYouHeader, Mode=OneWay}" />
+                                    <ItemsControl ItemsSource="{x:Bind ViewModel.NeedsYou}" IsTabStop="False">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Spacing="10" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="core:NeedsYouEntry">
+                                                <Grid ColumnSpacing="8" AutomationProperties.AutomationId="NeedsYouEntry">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <!-- A plain mark until the status glyphs (#178). -->
+                                                    <Ellipse Width="10" Height="10" Margin="0,11,0,0" VerticalAlignment="Top" Fill="{ThemeResource AbNeeds}" />
+                                                    <StackPanel Grid.Column="1" Spacing="2">
+                                                        <HyperlinkButton
+                                                            Padding="0"
+                                                            MinHeight="32"
+                                                            AutomationProperties.AutomationId="NeedsYouOpen"
+                                                            AutomationProperties.Name="{x:Bind OpenName, Mode=OneWay}"
+                                                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                            Click="{x:Bind Open}">
+                                                            <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{x:Bind Title, Mode=OneWay}" />
+                                                        </HyperlinkButton>
+                                                        <TextBlock
+                                                            TextWrapping="Wrap"
+                                                            Text="{x:Bind Line}"
+                                                            Visibility="{x:Bind local:Ui.Show(ShowLine)}" />
+                                                        <!-- An approval answered here shows its prompt whole: everything Approve once allows. -->
+                                                        <local:MarkdownView
+                                                            AutomationProperties.AutomationId="NeedsYouPrompt"
+                                                            WrapCode="True"
+                                                            Markdown="{x:Bind Prompt}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasPrompt)}" />
+                                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta, Mode=OneWay}" />
+                                                        <TextBlock
+                                                            FontWeight="SemiBold"
+                                                            Foreground="{ThemeResource AbNeedsText}"
+                                                            Text="Answer at the machine"
+                                                            Visibility="{x:Bind local:Ui.Show(AtMachine)}" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0" Visibility="{x:Bind local:Ui.Show(Approvable)}">
+                                                            <Button
+                                                                MinHeight="32"
+                                                                Style="{StaticResource AccentButtonStyle}"
+                                                                AutomationProperties.AutomationId="NeedsYouApprove"
+                                                                AutomationProperties.Name="{x:Bind ApproveName, Mode=OneWay}"
+                                                                Content="{x:Bind ApproveLabel, Mode=OneWay}"
+                                                                IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
+                                                                Click="{x:Bind Approve}" />
+                                                            <Button
+                                                                MinHeight="32"
+                                                                AutomationProperties.AutomationId="NeedsYouDeny"
+                                                                AutomationProperties.Name="{x:Bind DenyName, Mode=OneWay}"
+                                                                Content="{x:Bind DenyLabel, Mode=OneWay}"
+                                                                IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
+                                                                Click="{x:Bind Deny}" />
+                                                            <!-- The machine failed the op: the same request again, as the card's Send again. -->
+                                                            <Button
+                                                                MinHeight="32"
+                                                                AutomationProperties.AutomationId="NeedsYouResend"
+                                                                Content="Send again"
+                                                                Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}"
+                                                                Click="{x:Bind Resend}" />
+                                                        </StackPanel>
+                                                        <TextBlock
+                                                            TextWrapping="Wrap"
+                                                            IsTextSelectionEnabled="True"
+                                                            Text="{x:Bind StatusText, Mode=OneWay}"
+                                                            Foreground="{x:Bind local:Ui.ToneBrush(StatusTone), Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasStatus), Mode=OneWay}" />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
                             <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>

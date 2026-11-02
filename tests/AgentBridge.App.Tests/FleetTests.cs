@@ -115,6 +115,30 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Needs_you_lists_every_machines_questions_oldest_first_whatever_the_picker_shows_and_an_approval_goes_to_its_own_machine()
+    {
+        localHost.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        await BothMachinesAsync();
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("here", question: Make.Approval() with { AskedAt = Make.T0.AddMinutes(2) }, updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => main.NeedsYou.Count == 2, "both machines' questions");
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
+
+        TestUi.Read(() =>
+        {
+            Assert.Equal(["there", "here"], main.NeedsYou.Select(e => e.Card.Id));
+            Assert.StartsWith("Build server · Copilot · ", main.NeedsYou[0].Meta);
+            Assert.StartsWith("Test PC · Copilot · ", main.NeedsYou[1].Meta);
+            Assert.Equal(2, main.Waiting);
+            return true;
+        });
+
+        ui.Post(() => main.NeedsYou[1].Approve());
+        await Wait.UntilAsync(() => localHost.Sent(Ops.SessionAnswer).Count == 1, "the approval");
+        Assert.Equal("here", localHost.Sent(Ops.SessionAnswer)[0].GetProperty("id").GetString());
+        Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
+    }
+
+    [Fact]
     public async Task A_machine_that_leaves_takes_its_cards_with_it_but_a_relay_that_drops_for_a_moment_does_not()
     {
         await BothMachinesAsync();
