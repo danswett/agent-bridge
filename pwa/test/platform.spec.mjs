@@ -235,6 +235,30 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(page).toHaveURL(/icon\.svg$/);
   });
 
+  test('the header\'s Back over a delegate closes it, so Forward to its session shows it closed and Back from there is the list', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    const detail = delegateRow(page).locator('.delegate-detail');
+    await v.locator('.session-header .back').click();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await page.goForward();
+    await expect(v).toBeVisible();
+    await expect(detail).not.toHaveAttribute('open', '');
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('widened from a phone to three panes over a delegate, the delegate\'s step goes and the session stays', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    const hash = new URL(page.url()).hash;
+    // Both width queries change at once: one step back, not two.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBeNull();
+    await page.waitForTimeout(300);
+    expect(new URL(page.url()).hash).toBe(hash);
+    await expect(v).toBeVisible();
+  });
+
   test('installed on an iPhone, a swipe in from the left edge goes from a delegate to its session, then to the list', async ({ page }) => {
     const v = await openDelegate(page, AS.iosInstalled);
     // A swipe as iOS delivers it: a touch from the edge, moved most of the way across.

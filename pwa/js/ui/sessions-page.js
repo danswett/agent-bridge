@@ -81,6 +81,7 @@ export class SessionsPage {
   // The delegate a phone's back stack has an entry for (#168), and the listeners that keep it.
   #delegateShown = null;
   #listening = null;
+  #stepping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -187,7 +188,7 @@ export class SessionsPage {
     if (!views || !win) { return; }
     this.#listening = new AbortController();
     const { signal } = this.#listening;
-    if (this.#delegateLevel()) { win.history.back(); }
+    if (this.#delegateLevel()) { this.#stepBack(); }
     // toggle doesn't bubble: it is heard on its way down.
     views.addEventListener('toggle', (e) => {
       const d = e.target;
@@ -200,21 +201,24 @@ export class SessionsPage {
         if (this.#delegateLevel()) { win.history.replaceState(overDelegate(id), '', url); } else { win.history.pushState(overDelegate(id), '', url); }
         this.#delegateShown = id;
       } else if (state?.delegate === id && this.phone.matches) {
-        win.history.back();
+        this.#stepBack();
       }
     }, { capture: true, signal });
     win.addEventListener('popstate', () => {
+      this.#stepping = false;
       const want = this.#delegateLevel() ? win.history.state.delegate : null;
       const had = this.#delegateShown;
       this.#delegateShown = want;
       if ((had === null && want === null) || !this.phone.matches) { return; }
-      const v = this.view.selected?.view;
-      if (!v) { return; }
-      for (const d of v.querySelectorAll(`${DELEGATE}[open]`)) {
-        if (d.closest('.delegate')?.dataset.id !== want) { d.open = false; }
+      // Every view's, not only the selected one's: going back from a delegate to the list (the
+      // header's Back) has deselected its session by now, and a delegate left open there would be
+      // open without its step when the session is opened again or gone forward to.
+      for (const d of views.querySelectorAll(`${DELEGATE}[open]`)) {
+        if (d.closest('.delegate')?.dataset.id !== want || !this.view.selected?.view?.contains(d)) { d.open = false; }
       }
       // Forward again: the delegate it was on, where it still is.
-      const row = want ? [...v.querySelectorAll('.delegate')].find((el) => el.dataset.id === want)?.querySelector(DELEGATE) : null;
+      const v = this.view.selected?.view;
+      const row = want && v ? [...v.querySelectorAll('.delegate')].find((el) => el.dataset.id === want)?.querySelector(DELEGATE) : null;
       if (row && !row.open) {
         this.view.selected.setTab('delegates');
         row.open = true;
@@ -226,6 +230,14 @@ export class SessionsPage {
   #pushed() { return this.phone.matches && this.#open && this.shell?.route === 'sessions' && this.#overList(); }
 
   #delegateLevel() { return typeof globalThis.history?.state?.delegate === 'string'; }
+
+  // Back one step from a delegate's entry, once: both width queries report one resize, and a
+  // second back before the first lands would go past the session to the list.
+  #stepBack() {
+    if (this.#stepping) { return; }
+    this.#stepping = true;
+    globalThis.history.back();
+  }
 
   // Every machine shown, more than one of them: the cards say which machine each is on.
   #several() { return this.hosts.all && this.hosts.shownIds().length > 1; }
@@ -406,7 +418,7 @@ export class SessionsPage {
   // one gets an entry under it, so its back goes to the list rather than out of the app. A
   // delegate's entry goes with the phone's width: wider, a delegate is not a step of its own.
   #resized() {
-    if (!this.phone.matches && this.#delegateLevel()) { globalThis.history.back(); }
+    if (!this.phone.matches && this.#delegateLevel()) { this.#stepBack(); }
     this.#listBeneath();
     this.#settleSelection();
     this.view.layoutChanged();
