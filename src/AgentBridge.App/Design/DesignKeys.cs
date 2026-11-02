@@ -79,6 +79,16 @@ static class DesignKeys
 
     public const string MonoFontFamily = "MonoFontFamily";
 
+    // Inline mono's scale and its size for each ramp role (docs/design/ui.md §4.2).
+    public static readonly string[] InlineMono =
+    [
+        "AbInlineMonoScale",
+        "AbInlineMonoRow",
+        "AbInlineMonoReading",
+        "AbInlineMonoMeta",
+        "AbInlineMonoSectionHeader",
+    ];
+
     // The bundled monospace and its licence, as the app's folder holds them
     // (AgentBridge.App.csproj copies them from design/fonts).
     public static readonly string[] FontFiles =

@@ -9,7 +9,8 @@
   color-scheme: light dark;
   --radius: 14px;
   --tap: 44px;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-text);
   font-size: 16px;
   line-height: 1.45;
   -webkit-text-size-adjust: 100%;
@@ -99,7 +100,7 @@ a { color: var(--ab-bridge); }
 .machine-button .icon { grid-row: 1 / 3; width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
 .machine-name { font-weight: 600; }
 .machine-sub { grid-column: 2; grid-row: 2; color: var(--ab-text2); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
-.machine-id { font: .8rem var(--ab-font-mono); }
+.machine-id { font-size: .8rem; }
 .machine-state { grid-column: 3; grid-row: 1 / 3; color: var(--ab-bridge); font-size: .85rem; }
 .machine-button.selected { border-color: var(--ab-bridge); box-shadow: inset 0 0 0 1px var(--ab-bridge); }
 .machine-button.selected .machine-state { color: var(--ab-bridge); }
@@ -290,11 +291,13 @@ a { color: var(--ab-bridge); }
 
 .meta { margin: 0 0 2px; color: var(--ab-text2); font-size: .88rem; display: flex; flex-wrap: wrap; gap: 0 6px; }
 .meta > * + *::before { content: "·"; margin-right: 6px; }
+/* A separator is in the text face, whichever face the item it leads is in (ui.md §4.2, rule 4). */
+.meta > * + *::before { font-family: var(--font-text); font-size-adjust: none; font-weight: 400; letter-spacing: normal; }
 .agent-name { color: var(--ab-text); font-weight: 600; }
 /* With every machine shown, the machine a card is on leads its meta line. */
 .machine-label { color: var(--ab-bridge); font-weight: 600; overflow-wrap: anywhere; }
 .repo, .branch, .model { overflow-wrap: anywhere; }
-.branch { font-family: var(--ab-font-mono); font-size: .82rem; }
+
 
 .status-line { margin: 2px 0; font-size: .9rem; color: var(--ab-text2); display: flex; flex-wrap: wrap; align-items: center; }
 .status-line .glyph { margin-right: 7px; }
@@ -311,7 +314,7 @@ a { color: var(--ab-bridge); }
 
 .tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
 .tool-line .glyph { align-self: center; }
-.tool-line .tool-name { font-weight: 600; font-family: var(--ab-font-mono); }
+
 .tool-line .tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* Reduced motion stops every glyph (ui.md §9): the state is in the shape, never the motion. */
@@ -334,10 +337,25 @@ summary {
 .tools { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
 .tool { display: grid; grid-template-columns: 1.4em auto 1fr auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--ab-stroke2); align-items: baseline; }
 .tool:last-child { border-bottom: 0; }
-.tool .tool-name { font-family: var(--ab-font-mono); font-weight: 600; }
+
 .tool .tool-summary { color: var(--ab-text2); overflow-wrap: anywhere; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
 .tool .tool-mark { align-self: center; display: flex; }
+
+/* ---- inline mono (ui.md §4.2, #215) ----
+   Mono on a line of text sits as if it were the same face: its x-height matched to the text
+   face's (font-size-adjust, from the generated ratio for this platform; the generated scale
+   where a browser has no font-size-adjust), at the same weight, baseline and line height. What
+   is mono: commands, paths, ids, branch@SHA, a tool's name with its arguments, and code. */
+.mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md code {
+  font-family: var(--ab-font-mono); font-weight: inherit; letter-spacing: normal; line-height: inherit;
+  font-size: calc(1em * var(--ab-inline-mono-scale));
+}
+@supports (font-size-adjust: ex-height 0.5) {
+  .mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md code {
+    font-size: 1em; font-size-adjust: ex-height var(--ab-inline-mono-x);
+  }
+}
 
 /* ---- Markdown ---- */
 .md { overflow-wrap: anywhere; }
@@ -345,7 +363,7 @@ summary {
 .md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 8px 0; }
 .md ul, .md ol { padding-left: 1.4em; }
 .md h4, .md h5, .md h6 { margin: 12px 0 4px; font-size: 1rem; }
-.md code { font: .86em var(--ab-font-mono); background: var(--ab-subtle); padding: 1px 4px; border-radius: 4px; }
+.md code { background: var(--ab-subtle); padding: 1px 4px; border-radius: 4px; }
 /* Never a tint on a role fill: a linked `code` in a question would be bridge at 4.41:1 on subtle
    over the light needs fill (design/tokens.json color.contrast.tints). */
 .question .md pre, .question .md :not(pre) > code { background: var(--ab-card); }

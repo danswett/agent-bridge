@@ -160,6 +160,21 @@ every colour from the generated roles (#177).
 - **Reading measure:** the conversation is capped at about 68 characters (680–712 px on
   desktop) and set a step larger than the UI around it.
 - **Mono** is never smaller than 11 px.
+- **Inline mono** (mono on a line of text, #215) sits as if it were the same face:
+  1. **Matched x-height.** It is scaled so its x-height matches the text face's: the scale is
+     the text face's x-height over Agent Bridge Mono's, per platform, from `tokens.json`
+     `type.inlineMono` (generated as `--ab-inline-mono-x` and `--ab-inline-mono-scale` for the
+     PWA, which uses `font-size-adjust` where the browser has it, and as `AbInlineMono*` sizes
+     per ramp role for WinUI, which hasn't). Never under 11 px.
+  2. **Same baseline and line height** as the text around it. No padding, background or
+     letter-spacing on an inline run, except a code span in prose (Markdown's `code`).
+  3. **Same weight** as the text around it: a tool name is not bold beside regular text.
+  4. **Separators are always in the text face**, with the same space on both sides, whatever
+     face the run beside them is in.
+  5. **What is mono:** commands, paths, agent and session ids, branch@SHA, and a tool's name with
+     its arguments. **Text face:** repository, machine and model names, which people read as
+     names.
+  A code block takes the same matched size as the reading text around it.
 
 ### 4.3 Ramps
 
