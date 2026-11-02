@@ -29,12 +29,22 @@
                 throw Failure.io
             }
             serving = Task.detached {
-                let peer = Darwin.accept(fd, nil, nil)
-                guard peer >= 0 else { throw Failure.io }
-                defer { Darwin.close(peer) }
-                var flag: Int32 = 1
-                _ = withUnsafePointer(to: &flag) { setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, $0, socklen_t(MemoryLayout<Int32>.size)) }
-                try serve(peer)
+                // Detached tasks still use Swift's cooperative pool. Blocking
+                // accept/read there can occupy every CI worker, preventing the
+                // client callbacks and even test deadlines from running.
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    DispatchQueue(label: "dev.agentbridge.tests.socket").async {
+                        do {
+                            let peer = Darwin.accept(fd, nil, nil)
+                            guard peer >= 0 else { throw Failure.io }
+                            defer { Darwin.close(peer) }
+                            var flag: Int32 = 1
+                            _ = withUnsafePointer(to: &flag) { setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, $0, socklen_t(MemoryLayout<Int32>.size)) }
+                            try serve(peer)
+                            continuation.resume()
+                        } catch { continuation.resume(throwing: error) }
+                    }
+                }
             }
         }
 
@@ -78,7 +88,7 @@
             try LocalFraming.encode(Data(json.utf8))
         }
 
-        enum Failure: Error { case io }
+        enum Failure: Error { case io, expectedEOF }
     }
 
     @Test(.timeLimit(.minutes(1))) func localReaderPreservesFragmentedEventAndResponseOrder() async throws {
@@ -131,7 +141,7 @@
             signal.continuation.yield(())
             signal.continuation.finish()
             var byte: UInt8 = 0
-            #expect(Darwin.read(fd, &byte, 1) == 0)
+            guard Darwin.read(fd, &byte, 1) == 0 else { throw SocketFixture.Failure.expectedEOF }
         }
         let bridge = LocalBridge()
         let stream = try await bridge.connect(path: fixture.path)
@@ -152,7 +162,7 @@
         let fixture = try SocketFixture { fd in
             _ = try SocketFixture.request(fd)
             var byte: UInt8 = 0
-            #expect(Darwin.read(fd, &byte, 1) == 0)
+            guard Darwin.read(fd, &byte, 1) == 0 else { throw SocketFixture.Failure.expectedEOF }
         }
         let bridge = LocalBridge()
         let stream = try await bridge.connect(path: fixture.path)

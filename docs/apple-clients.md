@@ -43,6 +43,9 @@ native builds. Cryptographic vectors are byte-identical to the .NET/WebCrypto
 fixtures. Transport tests use in-memory encrypted peers and disposable local
 sockets. A debug-only `--ui-fixture` launch exercises UI actions without opening
 a host connection; its footer explicitly identifies simulated actions.
+Blocking POSIX I/O in the disposable socket fixtures runs on Dispatch queues,
+with continuations returning results to the tests. It must not occupy Swift's
+cooperative executor, which also runs client callbacks and timeout tasks.
 
 See [the parity checklist](apple-parity.md) for remaining work. This is not yet a
 shipping-parity claim: a real .NET-host/relay interoperability run,
