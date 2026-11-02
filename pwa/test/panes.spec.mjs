@@ -140,6 +140,18 @@ test.describe('on a phone', () => {
     await expect(page.locator('#list-pane')).toBeVisible();
   });
 
+  test('a pushed session\'s Back, overflow, tabs and reply buttons are at least 44 px to a finger', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    const controls = await v.locator('.session-header .back, .session-header .more button, .view-tab, .reply-tools button').filter({ visible: true }).all();
+    expect(controls.length).toBeGreaterThanOrEqual(5);
+    for (const c of controls) {
+      const b = await c.boundingBox();
+      expect(b.width).toBeGreaterThanOrEqual(44);
+      expect(b.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);

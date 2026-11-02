@@ -657,7 +657,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
 .view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
 .view-tab {
-  position: relative; flex: none; min-height: var(--tap); padding: 0 2px;
+  position: relative; flex: none; min-height: var(--tap); min-width: var(--tap); padding: 0 2px;
   font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
   background: none; border: 0; cursor: pointer; white-space: nowrap;
 }
@@ -667,11 +667,11 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--ab-bridge);
 }
 @media (forced-colors: active) { .view-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
-@media (min-width: 760px) { .view-tab { min-height: 36px; } }
+@media (min-width: 760px) { .view-tab { min-height: 36px; min-width: 32px; } }
 /* A desktop's width on a touch screen: the header's buttons and the tabs back to 44 (§9). */
 @media (min-width: 760px) and (pointer: coarse) {
   .session-header .icon-button { width: var(--tap); height: var(--tap); }
-  .view-tab { min-height: var(--tap); }
+  .view-tab { min-height: var(--tap); min-width: var(--tap); }
 }
 .view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
 .session-view[data-tab="conversation"] .inspector { display: none; }

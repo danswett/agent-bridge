@@ -336,6 +336,15 @@ test.describe('at a desktop\'s width on a touch screen', () => {
       expect(b.height).toBeGreaterThanOrEqual(44);
     }
     expect((await page.locator('#search').boundingBox()).height).toBeGreaterThanOrEqual(44);
+    // And the session's header buttons, and the tabs once the inspector is hidden.
+    await page.locator('.session-view:not([hidden]) .inspector-button').click();
+    const controls = await page.locator('.session-view:not([hidden]) .header-actions .icon-button, .session-view:not([hidden]) .view-tab').filter({ visible: true }).all();
+    expect(controls.length).toBeGreaterThanOrEqual(4);
+    for (const c of controls) {
+      const b = await c.boundingBox();
+      expect(b.width).toBeGreaterThanOrEqual(44);
+      expect(b.height).toBeGreaterThanOrEqual(44);
+    }
   });
 });
 
