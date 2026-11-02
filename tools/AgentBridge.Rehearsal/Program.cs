@@ -206,7 +206,9 @@ internal static class Program
                     var token = File.ReadAllText(p.Option("--token-file")!).Trim();
                     if (token.Length == 0) { return Outcome.Error("the token file is empty"); }
                     var slug = p.Option("--slug") ?? AgentBridge.HomeAssistant.HaContract.MachineSlug(Environment.MachineName);
-                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                    // No redirects: the refusal above vets this URL only, and a redirect could take
+                    // the token and the presses somewhere it never looked at.
+                    using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
                     var ha = new SoakHa(new AgentBridge.HomeAssistant.HomeAssistantClient(url, token, http));
                     if (p.Name == "soak resumable") { return await SoakResumableAsync(ha, slug, profileFolder, ct); }
                     var options = new SoakOptions(slug, p.Option("--workspace") ?? "Rehearsal",
