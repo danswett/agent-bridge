@@ -150,6 +150,8 @@ export function motion(tokens, platform) {
   const where = `motion.platform.${platform}`;
   const def = motionPlatform(tokens, platform);
   const limit = m.limitMs;
+  // Without a limit every comparison below is false (333 > undefined), and nothing is refused.
+  if (!Number.isInteger(limit) || limit <= 0) { throw new Error('motion.limitMs must be a positive whole number of ms'); }
   const durations = MOTION_DURATIONS.map((name) => {
     const ms = def.duration?.[name];
     // Whole milliseconds: WinUI's TimeSpan form has one fractional part, and CSS needs no more.

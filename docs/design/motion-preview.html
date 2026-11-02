@@ -175,7 +175,9 @@ const steps = [
     anim(r, [{ background: css('--ab-selected') }, { background: 'transparent' }], 'press');
     const s = $('.session');
     s.style.display = 'block';
-    anim(s, [{ opacity: 0, transform: `translateX(${distance('push')}px)` }, { opacity: 1, transform: 'none' }], 'push');
+    for (const part of s.querySelectorAll(':scope > :not(.toast)')) {
+      anim(part, [{ opacity: 0, transform: `translateX(${distance('push')}px)` }, { opacity: 1, transform: 'none' }], 'push');
+    }
   }],
   [10400, 'Show reasoning · disclosure', () => {
     $('.reasoning').style.display = 'block';
@@ -202,8 +204,11 @@ const steps = [
   [14800, 'The toast leaves · toast', () => {
     anim($('.toast'), [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateY(${distance('toast')}px)` }], 'toast', true);
   }],
-  [15600, 'Back · push, run backwards', () => {
-    anim($('.session'), [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateX(${distance('push')}px)` }], 'push', true);
+  [15600, 'Back · push, mirrored', () => {
+    $('.session').style.display = 'none';
+    for (const part of $('.list-screen').querySelectorAll(':scope > :not(.menu)')) {
+      anim(part, [{ opacity: 0, transform: `translateX(-${distance('push')}px)` }, { opacity: 1, transform: 'none' }], 'push');
+    }
   }],
 ];
 const END = 17000;

@@ -121,8 +121,6 @@
   --ab-motion-push-duration: 250ms;
   --ab-motion-push-ease: cubic-bezier(0, 0, 0, 1);
   --ab-motion-push-distance: 24px;
-  --ab-motion-push-exit-duration: 83ms;
-  --ab-motion-push-exit-ease: cubic-bezier(1, 0, 1, 1);
   --ab-motion-pane-duration: 167ms;
   --ab-motion-pane-ease: cubic-bezier(0, 0, 0, 1);
   --ab-motion-pane-distance: 12px;
@@ -257,7 +255,6 @@
     --ab-motion-travel: 0;
     --ab-motion-push-duration: 83ms;
     --ab-motion-push-distance: 0px;
-    --ab-motion-push-exit-duration: 83ms;
     --ab-motion-pane-duration: 83ms;
     --ab-motion-pane-distance: 0px;
     --ab-motion-pane-exit-duration: 83ms;

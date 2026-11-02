@@ -228,8 +228,6 @@
     <x:String x:Key="AbMotionPushDuration">00:00:00.250</x:String>
     <x:String x:Key="AbMotionPushEase">0,0,0,1</x:String>
     <x:Double x:Key="AbMotionPushDistance">24</x:Double>
-    <x:String x:Key="AbMotionPushExitDuration">00:00:00.083</x:String>
-    <x:String x:Key="AbMotionPushExitEase">1,0,1,1</x:String>
     <x:String x:Key="AbMotionPushReduced">CrossFade</x:String>
     <x:String x:Key="AbMotionPaneDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionPaneEase">0,0,0,1</x:String>

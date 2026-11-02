@@ -87,6 +87,7 @@ test('nothing but the glyphs runs longer than 300 ms, in the tokens or in either
   }
   const run = generateWith('slow', (t) => { t.motion.platform.windows.duration.emphasis = 333; });
   assert.throws(() => run(), /emphasis is 333 ms, past motion\.limitMs/);
+  assert.throws(generateWith('nolimit', (t) => { delete t.motion.limitMs; t.motion.platform.windows.duration.emphasis = 333; }), /motion\.limitMs must be a positive/);
 });
 
 test('no curve overshoots and no spring bounces', () => {

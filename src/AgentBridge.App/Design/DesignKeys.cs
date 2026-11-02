@@ -151,8 +151,6 @@ static class DesignKeys
         "AbMotionPushDuration",
         "AbMotionPushEase",
         "AbMotionPushDistance",
-        "AbMotionPushExitDuration",
-        "AbMotionPushExitEase",
         "AbMotionPushReduced",
         "AbMotionPaneDuration",
         "AbMotionPaneEase",
