@@ -47,6 +47,7 @@ public sealed class MarkdownView : StackPanel
                 rich.FontSize = ReadingType<double>(TextBlock.FontSizeProperty);
                 rich.LineHeight = ReadingType<double>(TextBlock.LineHeightProperty);
                 rich.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+                FitInlineMono(rich);
                 break;
             case Panel panel:
                 foreach (var child in panel.Children) { Read(child); }
@@ -106,6 +107,7 @@ public sealed class MarkdownView : StackPanel
         var para = new Paragraph();
         foreach (var i in inlines) { para.Inlines.Add(Inline(i)); }
         rich.Blocks.Add(para);
+        FitInlineMono(rich);
         return rich;
     }
 
@@ -136,6 +138,25 @@ public sealed class MarkdownView : StackPanel
         if (style.HasFlag(MdStyle.Strike)) { run.TextDecorations = Windows.UI.Text.TextDecorations.Strikethrough; }
         if (style.HasFlag(MdStyle.Code)) { run.FontFamily = Mono; }
         return run;
+    }
+
+    // A code span in prose is inline mono (ui.md §4.2, #215): at the size that gives it the text
+    // face's x-height (the generated AbInlineMonoScale), on the paragraph's own line height and
+    // weight. Set again once the paragraph takes the reading size.
+    static void FitInlineMono(RichTextBlock rich)
+    {
+        var size = Math.Round(rich.FontSize * (double)Application.Current.Resources["AbInlineMonoScale"], 2);
+        var mono = Mono.Source;
+        foreach (var run in rich.Blocks.OfType<Paragraph>().SelectMany(p => Runs(p.Inlines)).Where(r => r.FontFamily?.Source == mono)) { run.FontSize = size; }
+    }
+
+    static IEnumerable<Run> Runs(InlineCollection inlines)
+    {
+        foreach (var i in inlines)
+        {
+            if (i is Run r) { yield return r; }
+            else if (i is Span s) { foreach (var inner in Runs(s.Inlines)) { yield return inner; } }
+        }
     }
 
     static UIElement Heading(MdHeading h) => Text(h.Inlines, h.Level switch { 1 => 20, 2 => 18, 3 => 16, _ => 14 }, bold: true);

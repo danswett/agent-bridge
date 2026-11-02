@@ -406,6 +406,8 @@ separate, explicit step ([migration.md](migration.md)).
 
 ## The app
 
+**Inline mono** ([ui.md](design/ui.md) §4.2, #215): a path, an id, a branch or a tool call on a line of text is in Agent Bridge Mono at that line's role's generated inline size (`AbInlineMono*`, through the app's `InlineMonoRow` and `InlineMonoMeta` styles), so its x-height is Segoe UI Variable's, on the role's own line height and weight; a code span in a response is scaled the same way (`AbInlineMonoScale`). Repository, machine and model names are in the text face, and separators are always text. Code standing on its own lines keeps the Code role.
+
 **The window** ([ui.md](design/ui.md) §7, #180): Mica behind the app's own 48 px title bar, which carries the mark, "Agent Bridge" and a search box (Ctrl+K), beside the system caption buttons; a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot and a 3×16 Bridge pill on the page shown; and the pages on a layer with an 8 px top-left radius. Each page has its title in the type ramp's title role. The search box finds sessions on every machine by the words of their title, repository, branch, agent or machine, titles starting with them first, then the most recently updated, whichever machine the list shows, and opens the one chosen as a toast does. The window resizes freely down to 360×600 and opens where it was left (`<profile>-window.json`, maximised too), unless that is off every screen, when it opens centred on the main display at 1280×860 or as large as the display allows. WinUI's controls that follow the system accent (accent buttons, the rail's pill, checked controls, focused fields, selected text and links) are Bridge, from the generated accent palette ([design/README.md](../design/README.md)); high contrast keeps the system's colours.
 | Page | What it has | Parity source |
 |---|---|---|
@@ -481,7 +483,7 @@ reaches the real host or its profile.
   window is never wider than its screen), finds the rows by automation id, checks each row's two lines, opens sessions from
   the list and answers a
   question on each machine by invoking its button's automation peer, checks the generated
-  design resources in every theme, draws every glyph and icon, checks the status words' colours on rows and in the header and the tool glyph's name and that words and glyphs follow a theme flip, sets code in the bundled
+  design resources in every theme, draws every glyph and icon, checks the status words' colours on rows and in the header and the tool glyph's name and that words and glyphs follow a theme flip, measures inline mono's x-height against the text face's in each ramp role (within 1 px, #215), sets code in the bundled
   font, narrows the list with the machine tabs, resizes the window across the breakpoints (three panes at 1440, two with
   tabs at 1000, one column at 400×900, Back, and the session open kept through each), launches a session from the Launch page
   and waits for its row,

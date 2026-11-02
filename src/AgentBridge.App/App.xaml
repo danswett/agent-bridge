@@ -19,6 +19,18 @@
                 <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="IsTextSelectionEnabled" Value="True" />
             </Style>
+            <!-- Inline mono (ui.md §4.2, #215): a path, id, branch or tool call on a line of a ramp
+                 role, in Agent Bridge Mono at that role's generated inline size (its x-height the text
+                 face's) and the role's own line height and weight. The Code role (AbTypeCode) is for
+                 code standing on its own lines. -->
+            <Style x:Key="InlineMonoRow" TargetType="TextBlock" BasedOn="{StaticResource AbTypeRow}">
+                <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource AbInlineMonoRow}" />
+            </Style>
+            <Style x:Key="InlineMonoMeta" TargetType="TextBlock" BasedOn="{StaticResource AbTypeMeta}">
+                <Setter Property="FontFamily" Value="{StaticResource MonoFontFamily}" />
+                <Setter Property="FontSize" Value="{StaticResource AbInlineMonoMeta}" />
+            </Style>
             <Style x:Key="AbSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
                 <Setter Property="Margin" Value="0,12,0,4" />
             </Style>

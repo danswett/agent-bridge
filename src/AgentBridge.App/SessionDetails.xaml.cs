@@ -23,7 +23,8 @@ public sealed partial class SessionDetails : UserControl
         set => SetValue(CardProperty, value);
     }
 
-    public static Style ValueStyle(bool mono) => (Style)Application.Current.Resources[mono ? "AbTypeCode" : "AbTypeRow"];
+    // A row of Details is a Row-role line: mono values at the role's inline mono size (ui.md §4.2).
+    public static Style ValueStyle(bool mono) => (Style)Application.Current.Resources[mono ? "InlineMonoRow" : "AbTypeRow"];
     public static string ValueId(string label) => $"Detail:{label}";
 
     void Changed()
