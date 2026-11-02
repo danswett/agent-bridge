@@ -13,8 +13,8 @@ using Windows.System;
 namespace AgentBridge.App;
 
 // One session's card (pwa/js/ui/session-card.js). Everything it shows comes from its
-// SessionCardViewModel; this adds what only a window can do: the glow, pasting and picking
-// files, the clipboard and keyboard shortcuts.
+// SessionCardViewModel; this adds what only a window can do: pasting and picking files, the
+// clipboard and keyboard shortcuts. Its status glyph turns on its own (StatusGlyphView).
 public sealed partial class SessionCard : UserControl
 {
     // Pictures are read to be made smaller; nothing else over the limit is read at all.
@@ -23,9 +23,9 @@ public sealed partial class SessionCard : UserControl
     public static readonly DependencyProperty CardProperty = DependencyProperty.Register(
         nameof(Card), typeof(object), typeof(SessionCard), new PropertyMetadata(null, (d, e) => ((SessionCard)d).OnCard(e.OldValue as SessionCardViewModel, e.NewValue as SessionCardViewModel)));
 
-    static readonly bool Animations = new Windows.UI.ViewManagement.UISettings().AnimationsEnabled;
     QuestionView? questionView;
-    bool pulsing;
+    // The Words state the status words are in; null until entered, or after a theme change.
+    string? words;
     // Listening to the card: only while on screen. The machine picker takes cards off the list
     // and puts them back, which makes a new control each time while the card stays alive, so a
     // control that kept listening once off screen would be kept, and called, for as long as the
@@ -38,6 +38,9 @@ public sealed partial class SessionCard : UserControl
         InitializeComponent();
         Loaded += (_, _) => Attach();
         Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
+        // The Words states' ThemeResources are read as a state is entered: entered again, they are
+        // the new theme's.
+        ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
     }
 
     public SessionCardViewModel? Card
@@ -46,7 +49,7 @@ public sealed partial class SessionCard : UserControl
         set => SetValue(CardProperty, value);
     }
 
-    public static string Chevron(bool folded) => folded ? "\uE76C" : "\uE70D";
+    public static double ChevronAngle(bool folded) => folded ? 0 : 90;
     public static string FoldName(string title, bool folded) => $"{title}: {(folded ? "folded, press to open" : "open, press to fold")}";
     public static string FoldLabel(string title, bool folded, bool unread) => unread ? $"{FoldName(title, folded)}, new activity" : FoldName(title, folded);
     public static string RemoveName(string name) => $"Remove {name}";
@@ -62,8 +65,8 @@ public sealed partial class SessionCard : UserControl
         }
         if (!attached) { return; }
         SyncQuestion();
-        SyncGlow();
         Bindings.Update();
+        ShowWords();
     }
 
     void Attach()
@@ -72,9 +75,21 @@ public sealed partial class SessionCard : UserControl
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
         SyncQuestion();
-        SyncGlow();
         Bindings.Update();
+        words = null;
+        ShowWords();
         TakeFocus();
+    }
+
+    public static string WordsState(StatusTone tone) => $"Words{tone}";
+
+    void ShowWords()
+    {
+        var next = WordsState(Card?.StatusTone ?? StatusTone.Plain);
+        if (words == next) { return; }
+        if (words is null) { VisualStateManager.GoToState(this, "WordsUnset", false); }
+        VisualStateManager.GoToState(this, next, false);
+        words = next;
     }
 
     void Detach()
@@ -85,7 +100,6 @@ public sealed partial class SessionCard : UserControl
         questionView?.Detach();
         questionView = null;
         QuestionHost.Content = null;
-        if (pulsing) { Pulse.Stop(); pulsing = false; }
         Bindings.StopTracking();
     }
 
@@ -93,7 +107,7 @@ public sealed partial class SessionCard : UserControl
     {
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
-        if (all) { SyncGlow(); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
         if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
 
@@ -195,18 +209,6 @@ public sealed partial class SessionCard : UserControl
         questionView = q is null ? null : new QuestionView(q, Editing) { Tag = q };
         QuestionHost.Content = questionView;
         QuestionHost.Visibility = Ui.Some(questionView);
-    }
-
-    void SyncGlow()
-    {
-        var on = Card?.View is "working" or "waiting";
-        if (on && Animations)
-        {
-            if (!pulsing) { Pulse.Begin(); pulsing = true; }
-            return;
-        }
-        if (pulsing) { Pulse.Stop(); pulsing = false; }
-        Glow.Opacity = on ? 0.6 : 0;
     }
 
     void Editing(bool on)

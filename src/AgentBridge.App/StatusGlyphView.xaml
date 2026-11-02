@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A status glyph (docs/design/ui.md §2.1): the generated AbGlyph* style in its role's colour,
+     and the driven diamond over it (rule 7). The colours are ThemeResources set by the visual
+     states, so a glyph follows light, dark and high contrast like everything else; the
+     diamond's knockout is the card it sits on. -->
+<UserControl
+    x:Class="AgentBridge.App.StatusGlyphView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="False">
+    <Grid x:Name="Root">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="Role">
+                <!-- Left between two others when the theme changes, so the new theme's brush is set. -->
+                <VisualState x:Name="Unset" />
+                <VisualState x:Name="Neutral">
+                    <VisualState.Setters>
+                        <Setter Target="Shape.Foreground" Value="{ThemeResource AbNeutral}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Active">
+                    <VisualState.Setters>
+                        <Setter Target="Shape.Foreground" Value="{ThemeResource AbActive}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Agent">
+                    <VisualState.Setters>
+                        <Setter Target="Shape.Foreground" Value="{ThemeResource AbAgent}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Needs">
+                    <VisualState.Setters>
+                        <Setter Target="Shape.Foreground" Value="{ThemeResource AbNeeds}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Danger">
+                    <VisualState.Setters>
+                        <Setter Target="Shape.Foreground" Value="{ThemeResource AbDanger}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <ContentControl x:Name="Shape" Style="{StaticResource AbGlyphIdle}" Foreground="{ThemeResource AbNeutral}" />
+        <ContentControl
+            x:Name="Badge"
+            Style="{StaticResource AbGlyphDrivenBadge}"
+            Foreground="{ThemeResource AbAgent}"
+            Background="{ThemeResource AbCard}"
+            Visibility="Collapsed" />
+    </Grid>
+</UserControl>

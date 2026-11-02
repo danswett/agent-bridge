@@ -14,10 +14,13 @@
             IsSettingsVisible="False"
             SelectionChanged="OnNavigate">
             <NavigationView.MenuItems>
-                <NavigationViewItem x:Name="SessionsItem" Content="Sessions" Tag="sessions" AutomationProperties.AutomationId="NavSessions">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8BD;" />
-                    </NavigationViewItem.Icon>
+                <!-- The design's icons (design/icons) beside the words: they are stroked shapes, which an
+                     IconElement can't draw, so they are the item's content rather than its Icon. -->
+                <NavigationViewItem x:Name="SessionsItem" Tag="sessions" AutomationProperties.AutomationId="NavSessions" AutomationProperties.Name="Sessions">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ContentControl Style="{StaticResource AbIconSessions}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
+                        <TextBlock Text="Sessions" VerticalAlignment="Center" />
+                    </StackPanel>
                     <NavigationViewItem.InfoBadge>
                         <InfoBadge
                             Value="{x:Bind ViewModel.Waiting, Mode=OneWay}"
@@ -27,23 +30,26 @@
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
                 <NavigationViewItem
-                    x:Name="LaunchItem" Content="Launch" Tag="launch" AutomationProperties.AutomationId="NavLaunch"
+                    x:Name="LaunchItem" Tag="launch" AutomationProperties.AutomationId="NavLaunch" AutomationProperties.Name="Launch"
                     Visibility="{x:Bind local:Ui.Show(Launch.Available), Mode=OneWay}">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE768;" />
-                    </NavigationViewItem.Icon>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ContentControl Style="{StaticResource AbIconLaunch}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
+                        <TextBlock Text="Launch" VerticalAlignment="Center" />
+                    </StackPanel>
                 </NavigationViewItem>
-                <NavigationViewItem Content="Usage" Tag="usage" AutomationProperties.AutomationId="NavUsage">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE9D2;" />
-                    </NavigationViewItem.Icon>
+                <NavigationViewItem Tag="usage" AutomationProperties.AutomationId="NavUsage" AutomationProperties.Name="Usage">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ContentControl Style="{StaticResource AbIconUsage}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
+                        <TextBlock Text="Usage" VerticalAlignment="Center" />
+                    </StackPanel>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="Settings" Tag="settings" AutomationProperties.AutomationId="NavSettings">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE713;" />
-                    </NavigationViewItem.Icon>
+                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ContentControl Style="{StaticResource AbIconSettings}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
+                        <TextBlock Text="Settings" VerticalAlignment="Center" />
+                    </StackPanel>
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 

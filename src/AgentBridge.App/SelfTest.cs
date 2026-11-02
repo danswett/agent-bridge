@@ -45,7 +45,17 @@ static class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(cards.Any(c => ById<FrameworkElement>(c, "Response") is MarkdownView { Children.Count: > 0 }), "renders a response's Markdown");
+            // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
+            // styles and named as its row reads (§9).
+            var glyphs = cards.Select(c => (c.Card, Glyph: ById<StatusGlyphView>(c, "StatusGlyph"))).ToList();
+            var unnamed = glyphs.Where(g => g.Glyph is null || g.Card is null || AutomationProperties.GetName(g.Glyph) != g.Card.GlyphLabel || Find<Microsoft.UI.Xaml.Shapes.Path>(g.Glyph).Count == 0).Select(g => g.Card?.Id ?? "?").ToList();
+            Check(glyphs.Count > 0 && unnamed.Count == 0, $"draws every card's status glyph, named with its state{(unnamed.Count > 0 ? $": not {string.Join(", ", unnamed)}" : "")}");
+            result["glyphs"] = glyphs.Select(g => $"{g.Card?.Glyph}{(g.Card?.Driven == true ? "+driven" : "")}: {g.Card?.StatusText}").ToList();
+            var navIcons = Find<ContentControl>(window.RootElement).Where(c => AutomationProperties.GetAutomationId(c) == "NavIcon").ToList();
+            Check(navIcons.Count >= 3 && navIcons.All(i => Find<Microsoft.UI.Xaml.Shapes.Path>(i).FirstOrDefault()?.Stroke is SolidColorBrush { Color.A: > 0 }),
+                $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
+            await CheckStatusLines(window, cards, Check);
 
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.CardList, Path.ChangeExtension(outFile, ".sessions.png"));
@@ -164,6 +174,49 @@ static class SelfTest
     // The design's generated resources (Design/DesignResources.xaml, tools/design-gen): every brush
     // in every theme, and every glyph and icon drawn. A key missing from one theme would fail only
     // on a machine using that theme, and a resource that fails to load shows only as 0xC000027B.
+    // The status words in their tone's text colour, the current tool's glyph named for its state
+    // (ui.md §9), and the status line inside its card. Then the window's theme flipped: the words
+    // and the glyphs must take the other theme's colours without a session update, as the cards
+    // behind them do; a brush looked up once kept the old theme's, dark on dark.
+    static async Task CheckStatusLines(MainWindow window, List<SessionCard> cards, Action<bool, string> check)
+    {
+        static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : "none";
+        var lines = cards.Where(c => c.Card is not null).Select(c => (Control: c, Card: c.Card!, Words: ById<TextBlock>(c, "Status"), Glyph: ById<StatusGlyphView>(c, "StatusGlyph"))).ToList();
+        List<string> Wrong(Func<StatusTone, object?> expected) => [.. lines.Where(l => l.Words is null || Colour(l.Words.Foreground) != Colour(expected(l.Card.StatusTone))).Select(l => l.Card.Id)];
+        var wrong = Wrong(Ui.WordsBrush);
+        check(lines.Count > 0 && wrong.Count == 0, $"sets every status's words in its tone's text colour{(wrong.Count > 0 ? $": not {string.Join(", ", wrong)}" : "")}");
+
+        var tools = lines.Where(l => l.Card.HasTool).Select(l => (l.Card, Glyph: ById<StatusGlyphView>(l.Control, "ToolGlyph"))).ToList();
+        var unnamed = tools.Where(t => t.Glyph is null || AutomationProperties.GetName(t.Glyph) != t.Card.ToolState || AutomationProperties.GetAccessibilityView(t.Glyph) != AccessibilityView.Content).Select(t => t.Card.Id).ToList();
+        check(tools.Count > 0 && unnamed.Count == 0, $"names every current tool's glyph with its state{(unnamed.Count > 0 ? $": not {string.Join(", ", unnamed)}" : "")}");
+
+        var outside = lines.Where(l => l.Words is { } w && w.TransformToVisual(l.Control).TransformPoint(new Windows.Foundation.Point(w.ActualWidth, 0)).X > l.Control.ActualWidth + 0.5).Select(l => l.Card.Id).ToList();
+        check(outside.Count == 0, $"keeps every status's words inside its card{(outside.Count > 0 ? $": not {string.Join(", ", outside)}" : "")}");
+
+        // High contrast keeps its own dictionary whatever the window asks for: nothing to flip.
+        if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { return; }
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        var root = window.RootElement;
+        var flip = root.ActualTheme == ElementTheme.Dark ? ElementTheme.Light : ElementTheme.Dark;
+        if (design?.ThemeDictionaries.TryGetValue(flip.ToString(), out var d) != true || d is not ResourceDictionary themed) { check(false, $"finds the {flip} theme's brushes"); return; }
+        object? Themed(string key) => themed.TryGetValue(key, out var b) ? b : null;
+        root.RequestedTheme = flip;
+        try
+        {
+            await Until(() => lines.All(l => l.Control.ActualTheme == flip), TimeSpan.FromSeconds(10));
+            await Task.Delay(100);
+            var stale = Wrong(t => Themed(Ui.WordsKey(t)));
+            check(stale.Count == 0, $"turns every status's words to the {flip} theme's colour without an update{(stale.Count > 0 ? $": not {string.Join(", ", stale)}" : "")}");
+            var staleGlyphs = lines.Where(l => l.Glyph is null || Find<ContentControl>(l.Glyph).FirstOrDefault() is not { } shape || Colour(shape.Foreground) != Colour(Themed($"Ab{StatusGlyphView.RoleOf(l.Card.Glyph, l.Card.Driven)}"))).Select(l => l.Card.Id).ToList();
+            check(staleGlyphs.Count == 0, $"turns every status glyph to the {flip} theme's colour without an update{(staleGlyphs.Count > 0 ? $": not {string.Join(", ", staleGlyphs)}" : "")}");
+        }
+        finally
+        {
+            root.RequestedTheme = ElementTheme.Default;
+            await Until(() => lines.All(l => l.Control.ActualTheme != flip), TimeSpan.FromSeconds(10));
+        }
+    }
+
     static void CheckDesign(MainWindow window, Action<bool, string> check)
     {
         var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);

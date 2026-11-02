@@ -435,18 +435,47 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
-    public void A_card_says_what_the_session_is_doing_as_the_dashboard_did()
+    public void A_card_says_what_the_session_is_doing_in_the_words_and_glyph_of_the_status_rules()
     {
         var card = new SessionCardViewModel(Make.Session(background: Background.Of(2, 1), turns: 3), Context());
-        Assert.Equal(("delegating", "Waiting for background agents"), card.State);
+        // Counted but not listed: rule 8.
+        Assert.Equal(("delegating", "Delegating to 2 agents · details not reported"), card.State);
+        Assert.Equal((StatusGlyph.Delegating, StatusTone.Plain), (card.Glyph, card.StatusTone));
+        Assert.Equal("A session, delegating to 2 agents · details not reported, Test PC", card.GlyphLabel);
         Assert.Equal("2 background agents · 1 background command · 3 turns · pid 100 · C:\\src\\agent-bridge", card.Facts);
         Assert.Equal("Copilot · danswett/agent-bridge · main · claude-opus-5.5", card.Meta);
         Assert.Equal("for 5m", card.SinceText);
 
         card.Update(Make.Session(question: Make.Approval() with { AnswerAtMachine = true }));
-        Assert.Equal(("waiting", "Waiting at the machine"), card.State);
+        Assert.Equal(("waiting", "Waiting on you · answer at the machine"), card.State);
+        Assert.Equal((StatusGlyph.Needs, StatusTone.Needs), (card.Glyph, card.StatusTone));
         card.Update(Make.Session(status: SessionStatus.Ending));
         Assert.Equal("Ending session…", card.StatusText);
+        Assert.Equal((StatusGlyph.Ended, StatusTone.Muted), (card.Glyph, card.StatusTone));
+    }
+
+    [Fact]
+    public async Task A_tool_call_shows_the_working_glyph_while_it_runs_and_done_or_failed_once_it_ends()
+    {
+        var running = new ToolCall { Id = "t1", Name = "Bash", Status = ToolStatus.Running, StartedAt = Make.T0 };
+        var card = new SessionCardViewModel(Make.Session(status: SessionStatus.Working) with { Activity = new Activity { CurrentTool = running } }, Context());
+        Assert.Equal(StatusGlyph.Working, card.ToolGlyph);
+        // Named for its state, as its words are only the tool's name and summary (ui.md §9).
+        Assert.Equal("running", card.ToolState);
+        card.Update(Make.Session(status: SessionStatus.Working) with { Activity = new Activity { CurrentTool = running with { Status = ToolStatus.Failed } } });
+        Assert.Equal((StatusGlyph.Failed, "failed"), (card.ToolGlyph, card.ToolState));
+
+        var history = Make.Session() with { Activity = new Activity { History = [running, running with { Id = "t2", Status = ToolStatus.Done }, running with { Id = "t3", Status = ToolStatus.Failed }] } };
+        var withHistory = new SessionCardViewModel(Make.Session(), new CardContext
+        {
+            Deliveries = deliveries,
+            Folds = new FoldStore(folds),
+            Capabilities = () => connection.Capabilities,
+            FetchDetail = _ => Task.FromResult<Session?>(history),
+            Time = clock,
+        });
+        await withHistory.LoadHistoryAsync();
+        Assert.Equal([StatusGlyph.Failed, StatusGlyph.Done, StatusGlyph.Working], withHistory.History.Select(r => r.Glyph));
     }
 
     [Fact]
@@ -457,8 +486,9 @@ public sealed class CardTests : IAsyncLifetime
 
         card.Update(Make.Session() with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c" });
         Assert.Equal((true, "Driven by an agent", "homeassistant:0f1e2d3c"), (card.Driven, card.DriverText, card.DriverPrincipal));
-        // The state it shows is unchanged: only the colour is the agent's.
-        Assert.Equal("idle", card.View);
+        // The state it shows is unchanged: the diamond is added and the words are the agent's.
+        Assert.Equal(("idle", StatusGlyph.Idle, StatusTone.Agent), (card.View, card.Glyph, card.StatusTone));
+        Assert.Equal("A session, idle, driven by an agent, Test PC", card.GlyphLabel);
 
         card.Update(Make.Session());
         Assert.Equal((false, "", (string?)null), (card.Driven, card.DriverText, card.DriverPrincipal));

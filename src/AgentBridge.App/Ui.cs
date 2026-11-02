@@ -25,34 +25,17 @@ public static class Ui
         _ => Brush("AbText2"),
     };
 
-    // A card's frame by what it shows: the PWA's colours (pwa/app.css .frame.*), in the design
-    // roles: active while working or delegating, needs while waiting, neutral while ending.
-    public static Brush StateBrush(string view) => view switch
+    // A status's words (docs/design/ui.md §2.2, §3): needs' text for a question, agent's text while
+    // an agent drives, secondary while the session ends. Never active or neutral, which are glyph
+    // colours; the glyph itself is StatusGlyphView. SessionCard sets these through its Words
+    // states, as ThemeResources that follow a theme change; this is what the self-test expects.
+    public static string WordsKey(StatusTone tone) => tone switch
     {
-        "working" or "delegating" => Brush("AbActive"),
-        "waiting" => Brush("AbNeeds"),
-        "ending" => Brush("AbNeutral"),
-        _ => Brush("AbStroke2"),
+        StatusTone.Needs => "AbNeedsText",
+        StatusTone.Agent => "AbAgentText",
+        StatusTone.Muted => "AbText2",
+        _ => "AbText",
     };
 
-    // The status dot beside the words (pwa/app.css .dot): a glyph, so neutral when nothing runs,
-    // where the frame is only a hairline.
-    public static Brush DotBrush(string view) => view switch
-    {
-        "working" or "delegating" or "waiting" => StateBrush(view),
-        _ => Brush("AbNeutral"),
-    };
-
-    // The edge and glow: purple in place of the state's colour while an agent drives the session
-    // (pwa/app.css .frame.agent).
-    public static Brush EdgeBrush(string view, bool agent) => agent ? Brush("AbAgent") : StateBrush(view);
-
-    public static DoubleCollection StateDash(string view) => view switch
-    {
-        "delegating" => [4, 3],
-        "ending" => [1, 2],
-        _ => [],
-    };
-
-    public static double StateThickness(string view) => view is "working" or "waiting" ? 2 : 1;
+    public static Brush WordsBrush(StatusTone tone) => Brush(WordsKey(tone));
 }

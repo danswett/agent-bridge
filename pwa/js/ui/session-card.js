@@ -157,7 +157,8 @@ export class SessionCard {
     e.tool.hidden = !t;
     if (t) {
       e.tool.dataset.status = t.status;
-      setGlyph(e.toolGlyph, TOOL_GLYPH[t.status], { size: 12 });
+      // Named for its state: the words beside it are the tool's name and summary (ui.md §9).
+      setGlyph(e.toolGlyph, TOOL_GLYPH[t.status], { size: 12, label: t.status });
       e.toolName.textContent = t.name;
       e.toolSummary.textContent = t.summary ?? '';
     }
