@@ -176,3 +176,8 @@ test('path data must open with a moveto and say something, as SVG draws nothing 
   assert.throws(() => readDesignSvg(svgFile('empty', '<path d="" stroke="currentColor"/>'), 'glyph'), /needs path data/);
   assert.equal(formatCommands(parsePathData('m2 2l2 0')), 'M2,2 L4,2');
 });
+
+test('a comma anywhere but between two numbers is refused, as browsers stop drawing there', () => {
+  for (const d of ['M2,,2L4 4', 'M,2 2L4 4', 'M2 2,L4 4', ',M2 2', 'M2 2L4 4,']) { assert.throws(() => parsePathData(d), /comma out of place/, d); }
+  assert.equal(formatCommands(parsePathData('M2 , 2L4,4a1,1 0 0,1 2,0')), 'M2,2 L4,4 A1,1 0 0 1 6,4');
+});

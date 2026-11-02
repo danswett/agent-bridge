@@ -65,6 +65,9 @@ const ARGS = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 };
 // smooth and quadratic forms are refused, since no design file uses them and XAML spells them
 // differently enough to deserve a test of their own when one does.
 export function parsePathData(d, file = 'path') {
+  // SVG allows one comma between two numbers and nowhere else; browsers stop drawing at any
+  // other, so one here would make the sprite and the XAML differ.
+  if (/,\s*,|[A-Za-z]\s*,|,\s*[A-Za-z]|^\s*,|,\s*$/.test(d)) { throw new Error(`${file}: a comma out of place in "${d}"`); }
   const out = [];
   let i = 0;
   const skip = () => { while (i < d.length && /[\s,]/.test(d[i])) { i++; } };
