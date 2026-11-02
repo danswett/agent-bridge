@@ -879,6 +879,38 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1 + HaAuthGuard.MaxOutstanding, sent);
     }
 
+    // A write waiting its turn with the guard is checked again when it gets it: the connector's
+    // check that agent-ha-bridge is not running, made when the write was asked for, may no longer
+    // hold, and a write sent then would be over entities agent-ha-bridge has taken back.
+    [Fact]
+    public async Task A_write_kept_waiting_by_the_guard_is_checked_again_before_it_is_sent()
+    {
+        var gate = new TaskCompletionSource();
+        var sent = 0;
+        var handler = new Waiting(async () =>
+        {
+            if (Interlocked.Increment(ref sent) > 1) { await gate.Task; }
+            return HttpStatusCode.OK;
+        });
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(client));
+        var busy = Enumerable.Range(0, HaAuthGuard.MaxOutstanding).Select(_ => Publish(client)).ToList();
+        while (Volatile.Read(ref sent) < 1 + HaAuthGuard.MaxOutstanding) { await Task.Delay(10); }
+
+        var taken = false;
+        HomeAssistantClient.SendCheck.Value = () => { if (Volatile.Read(ref taken)) { throw new InvalidOperationException("agent-ha-bridge is running"); } };
+        Task<Exception?> waiting;
+        try { waiting = Publish(client); }
+        finally { HomeAssistantClient.SendCheck.Value = null; }
+        await Task.Delay(200);
+        Volatile.Write(ref taken, true);
+        gate.SetResult();
+        await Task.WhenAll(busy);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => waiting);
+        Assert.Equal(1 + HaAuthGuard.MaxOutstanding, sent);
+    }
+
     // Home Assistant serves an image without reading the token, so an image found, or not, says
     // nothing of it: callers with a token not yet accepted still go one at a time.
     [Fact]

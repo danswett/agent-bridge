@@ -1220,49 +1220,49 @@ public sealed partial class HaConnector : IAsyncDisposable
             if (agentHaBridge() is { } active) { throw new AgentHaBridgeRunning(active); }
         }
 
+        // Checked again when the request has its turn to be sent (HomeAssistantClient.SendCheck),
+        // not only when it was asked for: HaAuthGuard can keep a request waiting for its turn, and
+        // agent-ha-bridge may have taken this machine's entities over meanwhile.
+        Task Write(Func<Task> call)
+        {
+            Check();
+            var outer = HomeAssistantClient.SendCheck.Value;
+            HomeAssistantClient.SendCheck.Value = Check;
+            try { return call(); }
+            finally { HomeAssistantClient.SendCheck.Value = outer; }
+        }
+
+        Task<T> Write<T>(Func<Task<T>> call)
+        {
+            Check();
+            var outer = HomeAssistantClient.SendCheck.Value;
+            HomeAssistantClient.SendCheck.Value = Check;
+            try { return call(); }
+            finally { HomeAssistantClient.SendCheck.Value = outer; }
+        }
+
         public string? Refused => inner.Refused;
 
-        public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.PublishAsync(topic, payload, retain, cancellationToken);
-        }
+        public Task PublishAsync(string topic, string payload, bool retain, CancellationToken cancellationToken = default) =>
+            Write(() => inner.PublishAsync(topic, payload, retain, cancellationToken));
 
-        public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.RenameEntityAsync(entityId, newEntityId, cancellationToken);
-        }
+        public Task RenameEntityAsync(string entityId, string newEntityId, CancellationToken cancellationToken = default) =>
+            Write(() => inner.RenameEntityAsync(entityId, newEntityId, cancellationToken));
 
-        public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.CallServiceAsync(domain, service, data, cancellationToken);
-        }
+        public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default) =>
+            Write(() => inner.CallServiceAsync(domain, service, data, cancellationToken));
 
-        public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.DeleteImageAsync(imageId, cancellationToken);
-        }
+        public Task DeleteImageAsync(string imageId, CancellationToken cancellationToken = default) =>
+            Write(() => inner.DeleteImageAsync(imageId, cancellationToken));
 
-        public Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.CreateInputBooleanAsync(name, icon, cancellationToken);
-        }
+        public Task<string> CreateInputBooleanAsync(string name, string icon, CancellationToken cancellationToken = default) =>
+            Write(() => inner.CreateInputBooleanAsync(name, icon, cancellationToken));
 
-        public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.DeleteInputBooleanAsync(id, cancellationToken);
-        }
+        public Task DeleteInputBooleanAsync(string id, CancellationToken cancellationToken = default) =>
+            Write(() => inner.DeleteInputBooleanAsync(id, cancellationToken));
 
-        public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default)
-        {
-            Check();
-            return inner.SetEntityNameAsync(entityId, name, cancellationToken);
-        }
+        public Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default) =>
+            Write(() => inner.SetEntityNameAsync(entityId, name, cancellationToken));
 
         public Task<IReadOnlyList<string>> ListInputBooleansAsync(CancellationToken cancellationToken = default) => inner.ListInputBooleansAsync(cancellationToken);
 

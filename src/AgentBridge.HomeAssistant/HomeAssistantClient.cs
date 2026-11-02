@@ -352,6 +352,10 @@ public sealed class HomeAssistantClient : IHomeAssistant
         }
     }
 
+    // What the caller checks again once a request has its turn with the guard, which can keep it
+    // waiting: thrown, nothing is sent (the connector's check that agent-ha-bridge is not running).
+    internal static readonly AsyncLocal<Action?> SendCheck = new();
+
     // Every request with the token, through the guard: held back when Home Assistant has refused
     // it (or this address) and asking again now could only bring a ban closer, and reported to it
     // when Home Assistant answers. A refusal throws what the guard says, never the response.
@@ -360,6 +364,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken, bool provesToken = true)
     {
         using var lease = await auth.EnterAsync(credential, cancellationToken);
+        SendCheck.Value?.Invoke();
         var started = Stopwatch.GetTimestamp();
         // The headers first, and the refusal recorded from them: Home Assistant counted it when it
         // answered, however its body then goes.
@@ -548,6 +553,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         using var lease = await auth.EnterAsync(credential, timeout.Token);
+        SendCheck.Value?.Invoke();
         WebSocket ws;
         try { ws = await connect(WebSocketUri, timeout.Token); }
         // Only a refusal says anything of the token: a 200 or 404 where the upgrade was expected
