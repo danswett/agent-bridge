@@ -543,3 +543,79 @@ test('a question that arrives while its session is still sliding in on a phone s
   await expect(view(page, CLAUDE).locator('.question-slot .question')).toHaveCount(1);
   expect(await travelling()).toEqual([false]);
 });
+
+// Enough sessions that the list scrolls.
+async function many(page, n = 24) {
+  await page.evaluate((n) => {
+    const d = window.agentBridgeDemo;
+    for (let i = 0; i < n; i += 1) {
+      const t = new Date(Date.now() - (i + 10) * 60_000).toISOString();
+      d.upsert({ id: `demo-many-${i}`, agent: 'copilot', title: `Session ${i + 1}`, status: 'idle', startedAt: t, updatedAt: t, statusSince: t, activity: {} });
+    }
+  }, n);
+  await expect(page.locator('.session[data-id^="demo-many-"]')).toHaveCount(n);
+}
+
+test('a second press inside the last one\'s release shows its fill at once', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-press-duration', '5000ms'));
+  const main = row(page, CODEX).locator('.row-main');
+  const b = await main.boundingBox();
+  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(main).toHaveAttribute('data-press', 'released');
+  await page.mouse.down();
+  expect(await main.evaluate((el) => [el.dataset.press ?? null, getComputedStyle(el).transitionDuration])).toEqual([null, '0s']);
+  await page.mouse.up();
+});
+
+test('a row moved past the edge of the list by Alt+Down ends in full view', async ({ page }) => {
+  await openDemo(page, { height: 520 });
+  await many(page);
+  // The last row wholly in sight, with a row below it out of sight.
+  const id = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#session-list > .session')];
+    const visible = (el) => {
+      const r = el.getBoundingClientRect();
+      for (let p = el.parentElement; p; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        if (cs.overflowY === 'visible') { continue; }
+        const b = p.getBoundingClientRect();
+        if (r.top < b.top || r.bottom > b.top + p.clientHeight) { return false; }
+      }
+      return r.top >= 0 && r.bottom <= innerHeight;
+    };
+    const i = rows.findIndex((el, k) => visible(el) && rows[k + 1] && !visible(rows[k + 1]));
+    return rows[i]?.dataset.id ?? null;
+  });
+  expect(id).not.toBeNull();
+  await row(page, id).locator('.row-main').press('Alt+ArrowDown');
+  await page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-reorder' && a.playState === 'running'));
+  // In view to the pixel's rounding.
+  await expect(row(page, id)).toBeInViewport({ ratio: 0.95 });
+});
+
+test('the selection pill fades in on the row chosen when the row it left is scrolled out of sight, and slides only when both are in sight', async ({ page }) => {
+  await openDemo(page, { height: 520 });
+  await many(page);
+  const first = page.locator('#session-list > .session').first();
+  await first.locator('.row-main').click();
+  await expect(first).toHaveClass(/selected/);
+  const last = page.locator('#session-list > .session').last();
+  await last.scrollIntoViewIfNeeded();
+  await expect(first).not.toBeInViewport();
+  const before = (await motions(page)).length;
+  await last.locator('.row-main').click();
+  await expect(last).toHaveClass(/selected/);
+  const pill = (await motions(page)).slice(before).filter((m) => m.id === 'ab-motion-selection');
+  expect(pill).toHaveLength(1);
+  expect(pill[0].travels).toBe(false);
+  // Its neighbour, in sight with it: the pill slides.
+  const next = page.locator('#session-list > .session').nth(-2);
+  const now = (await motions(page)).length;
+  await next.locator('.row-main').click();
+  const slid = (await motions(page)).slice(now).filter((m) => m.id === 'ab-motion-selection');
+  expect(slid).toHaveLength(1);
+  expect(slid[0].travels).toBe(true);
+});

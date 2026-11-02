@@ -142,7 +142,11 @@ export const PRESSABLE = '.button, .icon-button, .row-main, .nav-item, .view-tab
 export function watchPresses(doc = globalThis.document) {
   const timers = new WeakMap();
   let pressed = null;
-  doc.addEventListener('pointerdown', (e) => { pressed = e.target.closest?.(PRESSABLE) ?? null; }, true);
+  doc.addEventListener('pointerdown', (e) => {
+    pressed = e.target.closest?.(PRESSABLE) ?? null;
+    // A second press inside the last one's release: its fill shows at once, not eased in.
+    if (pressed?.dataset.press) { clearTimeout(timers.get(pressed)); delete pressed.dataset.press; }
+  }, true);
   const release = () => {
     const el = pressed;
     pressed = null;
@@ -176,6 +180,26 @@ export function slide(el, entry, fromX, fromY, { pseudo = null, scaleX = 1 } = {
   const scale = scaleX !== 1 ? ` scaleX(${scaleX})` : '';
   const origin = scaleX !== 1 ? { transformOrigin: 'left center' } : {};
   return run(el, [{ transform: `translate(${fromX}px, ${fromY}px)${scale}`, ...origin }, { transform: 'none', ...origin }], entry, t, pseudo ? { pseudoElement: pseudo } : {});
+}
+
+// Where an element is on screen (its box), or null when none of it shows: off the viewport, or
+// scrolled out of a list that clips it. What an indicator may slide from (ui.md §5.3, Selection).
+export function seen(el) {
+  if (!el?.isConnected || !el.getClientRects().length) { return null; }
+  const r = el.getBoundingClientRect();
+  return r.width && r.height && shown(el, r) ? r : null;
+}
+
+// A selection indicator moving from the box `from` (seen() before the change, or null when the
+// old one was out of sight) to `to`: it slides when both are on screen, and fades in on `to` when
+// the old one wasn't. Nothing when `to` isn't on screen either.
+export function select(to, entry, from, { pseudo = null, axis = 'xy', scaleX = false } = {}) {
+  const r = seen(to);
+  if (!r) { return null; }
+  if (!from) {
+    return run(to, [{ opacity: 0 }, { opacity: 1 }], entry, timing(entry, { doc: to.ownerDocument }), pseudo ? { pseudoElement: pseudo } : {});
+  }
+  return slide(to, entry, axis.includes('x') ? from.left - r.left : 0, axis.includes('y') ? from.top - r.top : 0, { pseudo, scaleX: scaleX ? from.width / r.width : 1 });
 }
 
 // A copy of el, drawn where it is, that fades out over the entry's leaving time, while the

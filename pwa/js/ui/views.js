@@ -5,7 +5,7 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
-import { enter, leave, slide } from './motion.js';
+import { enter, leave, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
 
 const LONG_PRESS_MS = 500;
@@ -236,9 +236,10 @@ export class SessionListView {
   // Moves a row and keeps the move in view and in focus.
   #move(card, delta) {
     if (this.filter || !this.order.move(this.#keyOf(card), delta)) { return false; }
-    this.#moved(card.element, () => this.render());
+    // Into view before the slide is measured: the slide's first frame puts the row back where it
+    // was, and a scroll then would find it already in sight and leave its new place clipped.
+    this.#moved(card.element, () => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });
     card.els.open.focus({ preventScroll: true });
-    card.element.scrollIntoView({ block: 'nearest' });
     this.#say(delta < 0 ? 'Moved up' : 'Moved down');
     return true;
   }
@@ -427,15 +428,13 @@ export class SessionListView {
     const next = key && this.#cards.has(key) ? key : null;
     if (next !== this.#selected) {
       const old = this.selected?.els.open;
-      const from = old?.isConnected && old.getClientRects().length ? old.getBoundingClientRect() : null;
+      const from = old?.isConnected ? seen(old) : null;
       this.#selected = next;
       for (const [k, c] of this.#cards) { c.setSelected(k === next); }
-      // Selection (ui.md §5.3): the pill slides from the row it left, when that row is in sight.
+      // Selection (ui.md §5.3): the pill slides from the row it left when that row is in sight,
+      // and fades in when it was scrolled away or hidden. A first selection has no pill to move.
       const to = next ? this.#cards.get(next).els.open : null;
-      if (from && to?.isConnected && to.getClientRects().length) {
-        const r = to.getBoundingClientRect();
-        slide(to, 'selection', from.left - r.left, from.top - r.top, { pseudo: '::before' });
-      }
+      if (old?.isConnected && to) { showSelection(to, 'selection', from, { pseudo: '::before' }); }
       // Shown now, its news is seen.
       this.schedule();
     }
@@ -490,7 +489,7 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
   // Taken before the bar can hide: a hidden tab loses focus.
   const had = bar.contains(bar.ownerDocument?.activeElement) ? bar.ownerDocument.activeElement.dataset.deviceId : null;
   const was = bar.hidden ? null : bar.querySelector('[aria-selected="true"]');
-  const from = was?.getClientRects().length ? was.getBoundingClientRect() : null;
+  const from = seen(was);
   bar.hidden = !show;
   bar.replaceChildren(...tabs.map((t) => {
     const on = chosen(t);
@@ -504,11 +503,11 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
     }, t.name);
   }));
   if (!bar.querySelector('[tabindex="0"]')) { bar.firstElementChild?.setAttribute('tabindex', '0'); }
-  // Selection (ui.md §5.3): the bar under the tab slides from the one chosen before.
+  // Selection (ui.md §5.3): the bar under the tab slides from the one chosen before, or fades in
+  // when that one was scrolled out of the bar.
   const now = bar.querySelector('[aria-selected="true"]');
-  if (from && now?.getClientRects().length && was.dataset.deviceId !== now.dataset.deviceId) {
-    const r = now.getBoundingClientRect();
-    slide(now, 'selection', from.left - r.left, 0, { pseudo: '::after', scaleX: from.width / r.width });
+  if (was && now && was.dataset.deviceId !== now.dataset.deviceId) {
+    showSelection(now, 'selection', from, { pseudo: '::after', axis: 'x', scaleX: true });
   }
   // A tab with focus is drawn again with it; when the bar itself went, focus goes to what it
   // controlled (the sessions), not to the document.
