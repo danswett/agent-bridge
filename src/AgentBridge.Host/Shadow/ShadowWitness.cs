@@ -104,18 +104,29 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     string? CopilotNames(ShadowView daemon, ShadowView host)
     {
         if (daemon.Resumable is not { } theirs || host.ResumableEntries is not { } entries) { return null; }
-        var relabelled = new List<(string Title, string Id)>();
+        var relabelled = new List<(string Title, string Id, string Agent, string Launcher)>();
+        var plains = new List<string>();
         var changed = false;
+        var dropped = false;
         foreach (var e in entries)
         {
             var (plain, repeated) = Unrepeated(e.Label, e.Id);
-            if (repeated && !string.Equals(LaunchService.Repeated(plain, e.Id), e.Label, StringComparison.Ordinal)) { return null; }
+            if (repeated)
+            {
+                if (!string.Equals(LaunchService.Repeated(plain, e.Id), e.Label, StringComparison.Ordinal)) { return null; }
+                // The host tells labels apart over every eligible session, live ones included, so
+                // a suffix with no earlier namesake offered here was reserved by one that is not:
+                // that collision cannot be shown from this list, and stripping it would let a
+                // daemon list missing a suffix it needs pass as #278 (found in review).
+                if (!plains.Contains(plain, StringComparer.OrdinalIgnoreCase)) { return null; }
+            }
+            plains.Add(plain);
             var yaml = e.Agent == "copilot" && Guid.TryParseExact(e.Id, "D", out _)
                 ? ResumableStore.ReadYaml(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "workspace.yaml"))
                 : [];
             if (yaml.ContainsKey("summary") || !yaml.TryGetValue("name", out var name))
             {
-                relabelled.Add((plain, e.Id));
+                relabelled.Add((plain, e.Id, e.Agent, e.Launcher));
                 continue;
             }
             // The host's label must be the one its rule makes from the name, so only the title
@@ -125,12 +136,30 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             if (!prefixed && LaunchService.Title(entry, prefixed: false) != plain) { return null; }
             changed = true;
             var prompt = ResumableStore.FirstPrompt(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "events.jsonl"), DaemonPromptEnds);
-            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id)); }
+            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); }
+            else { dropped = true; }
         }
         if (!changed) { return null; }
+        // The agent is named while the eligible sessions are of more than one kind. Dropping the
+        // only one of a kind can make the daemon's list single-kind and unnamed (found in review),
+        // unless a live session of another kind, which is eligible but not offered, keeps it
+        // named. That cannot be told from here, so it is left a mismatch.
+        var agents = relabelled.Select(r => r.Agent).Distinct(StringComparer.Ordinal).ToList();
+        if (dropped && agents.Count == 1 && entries.Select(e => e.Agent).Distinct(StringComparer.Ordinal).Count() > 1)
+        {
+            if (host.Sessions.Values.Any(s => s.Agent != agents[0])) { return null; }
+            for (var i = 0; i < relabelled.Count; i++)
+            {
+                var r = relabelled[i];
+                var named = $"{Launchers.Find(r.Launcher)?.Label ?? r.Launcher}: ";
+                // A label cut to fit was cut with its name in it; without the name more of it fits.
+                if (!r.Title.StartsWith(named, StringComparison.Ordinal) || r.Title.EndsWith("...", StringComparison.Ordinal)) { return null; }
+                relabelled[i] = r with { Title = r.Title[named.Length..] };
+            }
+        }
         var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var mine = new List<string>();
-        foreach (var (title, id) in relabelled)
+        foreach (var (title, id, _, _) in relabelled)
         {
             var label = title;
             if (!labels.Add(label))
@@ -841,8 +870,10 @@ public sealed class RolloutCompactions(string path)
 {
     const int MaxLine = 64 * 1024 * 1024;
     static readonly byte[] Marker = "\"compacted\""u8.ToArray();
+    const int AnchorBytes = 64;
     long offset;
     int count;
+    byte[] anchor = [];
 
     public string Path => path;
 
@@ -851,8 +882,10 @@ public sealed class RolloutCompactions(string path)
         try
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            // A rollout that shrank was replaced: counted again from its start.
-            if (stream.Length < offset) { (offset, count) = (0, 0); }
+            // A rollout that shrank, or whose bytes before the offset changed (replaced at the
+            // same size, or truncated and regrown), is counted again from its start, as
+            // TranscriptTail does: length alone kept a replaced rollout's old count (found in review).
+            if (stream.Length < offset || !Anchor(stream, offset).AsSpan().SequenceEqual(anchor)) { (offset, count, anchor) = (0, 0, []); }
             stream.Seek(offset, SeekOrigin.Begin);
             var line = new MemoryStream();
             var buffer = new byte[1 << 20];
@@ -876,9 +909,20 @@ public sealed class RolloutCompactions(string path)
                 if (!tooLong && line.Length + (read - start) <= MaxLine) { line.Write(buffer, start, read - start); } else { tooLong = true; }
                 position += read;
             }
+            anchor = Anchor(stream, offset);
             return count;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return -1; }
+    }
+
+    static byte[] Anchor(FileStream stream, long end)
+    {
+        var length = (int)Math.Min(AnchorBytes, end);
+        if (length == 0) { return []; }
+        var bytes = new byte[length];
+        stream.Seek(end - length, SeekOrigin.Begin);
+        stream.ReadExactly(bytes);
+        return bytes;
     }
 
     static bool Compacted(ReadOnlySpan<byte> line)

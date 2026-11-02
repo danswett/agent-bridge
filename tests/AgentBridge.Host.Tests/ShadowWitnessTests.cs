@@ -611,10 +611,13 @@ public sealed class ShadowWitnessTests : IDisposable
 
     static ShadowResumeEntry Entry(string label, string id, string agent) => new(label, id, agent, agent, @"C:\r\repo", null);
 
-    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, params ShadowResumeEntry[] host)
+    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, params ShadowResumeEntry[] host) => Resume(daemon, null, host);
+
+    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, string? liveAgent, params ShadowResumeEntry[] host)
     {
         var d = new ShadowView { Resumable = [.. daemon.Select(ShadowHash.Normalize)] };
-        var h = new ShadowView { Resumable = [.. host.Select(e => ShadowHash.Normalize(e.Label))], ResumableEntries = host, SeesAgentHaBridge = true };
+        var live = liveAgent is null ? new Dictionary<string, ShadowSession>() : new Dictionary<string, ShadowSession> { ["live"] = new() { Id = "live", Agent = liveAgent, Status = "working" } };
+        var h = new ShadowView { Sessions = live, Resumable = [.. host.Select(e => ShadowHash.Normalize(e.Label))], ResumableEntries = host, SeesAgentHaBridge = true };
         var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
         return [.. differences.Where(x => x.Kind.StartsWith("resumable.", StringComparison.Ordinal))];
     }
@@ -643,7 +646,12 @@ public sealed class ShadowWitnessTests : IDisposable
         CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", prompt: null);
         ShadowResumeEntry[] host = [Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")];
 
-        Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
+        // Its leaving makes the daemon's list one kind of session, which it does not name.
+        Assert.All(Resume(["Hello - repo"], host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
+        Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+        // Unless a live session of another kind could still have it named: that cannot be told here.
+        Assert.All(Resume(["Hello - repo"], "copilot", host), x => Assert.Null(x.Known));
+        Assert.All(Resume(["Claude: Hello - repo"], "copilot", host), x => Assert.Null(x.Known));
 
         // With a prompt to label it by, the daemon would have offered it: leaving it out is something else.
         CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
@@ -651,5 +659,35 @@ public sealed class ShadowWitnessTests : IDisposable
         // And a session with no name is no case of it at all.
         CopilotSession(Named, "cwd: C:\\r\\repo\n", prompt: null);
         Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+    }
+
+    [Fact]
+    public void A_label_told_apart_from_a_namesake_is_freed_only_when_the_namesake_is_in_the_list()
+    {
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
+        CopilotSession(Summarised, "cwd: C:\\r\\repo\nsummary: Fix The Widget\n", "widget");
+
+        // Told apart from the named session, which the daemon labels by its prompt instead.
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Fix The Widget - repo", "Claude: Hello - repo"],
+            Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Copilot: Fix The Widget - repo (22222222)", Summarised, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")),
+            x => Assert.Equal("agent-ha-bridge#278", x.Known));
+        // Told apart from a namesake that is not offered (a live session holds it): the daemon's
+        // plain label is not shown to be right, so it stays a mismatch.
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Tidy up - repo", "Claude: Hello - repo"],
+            Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Copilot: Tidy up - repo (22222222)", Summarised, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")),
+            x => Assert.Null(x.Known));
+    }
+
+    [Fact]
+    public void A_rollout_replaced_at_the_same_length_is_counted_again()
+    {
+        var rollout = CodexRollout(Compacted(), JsonSerializer.Serialize(new { type = "event_msg", payload = new { type = "x" } }));
+        var count = new RolloutCompactions(rollout);
+        Assert.Equal(1, count.Count());
+        var length = new FileInfo(rollout).Length;
+        var filler = JsonSerializer.Serialize(new { type = "event_msg" });
+        File.WriteAllText(rollout, filler + new string(' ', (int)length - filler.Length - 1) + "\n");
+        Assert.Equal(length, new FileInfo(rollout).Length);
+        Assert.Equal(0, count.Count());
     }
 }
