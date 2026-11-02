@@ -48,12 +48,17 @@ public sealed class HaAuthGuard
     // longer than any request the host makes takes to time out.
     static readonly TimeSpan Reservation = TimeSpan.FromSeconds(45);
     const int MaxCredentials = 16;
+    // Requests out at once from this process, even with an accepted token: one revoked while a
+    // burst is on its way is refused once per request already sent, before the first refusal can
+    // stop the rest. Each is then counted, by Home Assistant towards a ban and here towards the three.
+    internal const int MaxOutstanding = 2;
 
     readonly string? path;
     readonly TimeProvider time;
     readonly Action<string> log;
     readonly object gate = new();
     readonly SemaphoreSlim probe = new(1, 1);
+    readonly SemaphoreSlim outstanding = new(MaxOutstanding, MaxOutstanding);
     readonly List<HaCredential> known = [];
     State state = new();
     bool unreadableSaid;
@@ -157,7 +162,15 @@ public sealed class HaAuthGuard
     // known to be accepted waits for any other such attempt to Home Assistant to finish first.
     public async Task<Lease> EnterAsync(HaCredential credential, CancellationToken cancellationToken = default)
     {
+        // Taken before the record is read, so a request waiting for its turn decides on what the
+        // requests before it were answered.
+        await outstanding.WaitAsync(cancellationToken);
         try { return await EnterCoreAsync(credential, cancellationToken); }
+        catch
+        {
+            outstanding.Release();
+            throw;
+        }
         finally { Notify(); }
     }
 
@@ -257,6 +270,7 @@ public sealed class HaAuthGuard
         readonly string? reservation;
         SemaphoreSlim? probe;
         bool answered;
+        int disposed;
 
         internal Lease(HaAuthGuard guard, HaCredential credential, SemaphoreSlim? probe, Seen seen, string? reservation)
         {
@@ -308,10 +322,15 @@ public sealed class HaAuthGuard
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref probe, null) is not { } held) { return; }
-            // Answered, the reservation went with the answer; this only lets go of one left over.
-            try { guard.Unreserve(reservation); }
-            finally { held.Release(); }
+            if (Interlocked.Exchange(ref disposed, 1) == 1) { return; }
+            try
+            {
+                if (Interlocked.Exchange(ref probe, null) is not { } held) { return; }
+                // Answered, the reservation went with the answer; this only lets go of one left over.
+                try { guard.Unreserve(reservation); }
+                finally { held.Release(); }
+            }
+            finally { guard.outstanding.Release(); }
         }
     }
 

@@ -301,7 +301,9 @@ public sealed class HomeAssistantClient : IHomeAssistant
         try
         {
             using var request = Request(HttpMethod.Get, $"api/image/serve/{imageId}/original");
-            using var response = await SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            // Home Assistant serves an image without reading the token (its view does not require
+            // auth), so only a refusal or a ban from it says anything.
+            using var response = await SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token, provesToken: false);
             if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
             await EnsureAsync(response, "GET image", deadline.Token);
             if (response.Content.Headers.ContentLength is { } length && length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
@@ -353,14 +355,17 @@ public sealed class HomeAssistantClient : IHomeAssistant
     // Every request with the token, through the guard: held back when Home Assistant has refused
     // it (or this address) and asking again now could only bring a ban closer, and reported to it
     // when Home Assistant answers. A refusal throws what the guard says, never the response.
-    async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken)
+    // provesToken: false for a path Home Assistant answers without reading the token, whose answer
+    // other than a 401 or 403 must not count the token as accepted.
+    async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken, bool provesToken = true)
     {
         using var lease = await auth.EnterAsync(credential, cancellationToken);
         var started = Stopwatch.GetTimestamp();
         // The headers first, and the refusal recorded from them: Home Assistant counted it when it
         // answered, however its body then goes.
         var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        if (lease.Answered(response.StatusCode) is { } refused)
+        if ((provesToken || response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            && lease.Answered(response.StatusCode) is { } refused)
         {
             response.Dispose();
             throw refused;

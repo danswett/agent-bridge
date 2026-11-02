@@ -1239,7 +1239,10 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   then goes; and every process reads what the others have recorded before each request.
 - **A token not yet accepted** goes one request at a time, across processes too, so a burst of
   callers spends one attempt, not one each. That covers a fresh start, a fresh token, and a look
-  during a ban.
+  during a ban. An accepted token goes at most 2 requests at a time in each process, so if it is
+  revoked while a burst is on its way, only those already out are refused. A request Home
+  Assistant answers without reading the token (an image from `/api/image/serve`) never counts as
+  accepting it.
 - **A 403 is taken for a ban**, whatever the token. Home Assistant answers a refused or
   under-privileged token with 401; it answers 403 only to an address it has banned (or a proxy in
   front of it does, to a machine it refuses). Requests from a banned address are refused before

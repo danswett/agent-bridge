@@ -588,6 +588,65 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1, seen);
     }
 
+    // A token accepted, then revoked while a burst is on its way: the requests already out are
+    // refused one each, so only a couple may be out at once, and none follows the refusals.
+    [Fact]
+    public async Task A_burst_with_an_accepted_token_revoked_meanwhile_sends_no_more_than_two_before_a_refusal_comes_back()
+    {
+        var revoked = false;
+        var gate = new TaskCompletionSource();
+        var sent = 0;
+        var handler = new Waiting(async () =>
+        {
+            Interlocked.Increment(ref sent);
+            if (!Volatile.Read(ref revoked)) { return HttpStatusCode.OK; }
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time));
+        Assert.Null(await Publish(client));
+        Volatile.Write(ref revoked, true);
+
+        var burst = Enumerable.Range(0, 10).Select(_ => Publish(client)).ToList();
+        await Task.Delay(500);
+        Assert.Equal(1 + HaAuthGuard.MaxOutstanding, Volatile.Read(ref sent));
+        gate.SetResult();
+        await Task.WhenAll(burst);
+
+        Assert.Equal(1 + HaAuthGuard.MaxOutstanding, sent);
+    }
+
+    // Home Assistant serves an image without reading the token, so an image found, or not, says
+    // nothing of it: callers with a token not yet accepted still go one at a time.
+    [Fact]
+    public async Task An_image_fetch_answered_without_a_refusal_does_not_count_the_token_as_accepted()
+    {
+        var gate = new TaskCompletionSource();
+        var sent = 0;
+        var handler = new Routed(async request =>
+        {
+            if (request.RequestUri!.AbsolutePath.StartsWith("/api/image/", StringComparison.Ordinal)) { return HttpStatusCode.NotFound; }
+            Interlocked.Increment(ref sent);
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler), auth: new HaAuthGuard(Record, time));
+        Assert.Null(await client.DownloadImageAsync("abc123", 1024));
+
+        var burst = Enumerable.Range(0, 6).Select(_ => Publish(client)).ToList();
+        await Task.Delay(300);
+        gate.SetResult();
+        await Task.WhenAll(burst);
+
+        Assert.Equal(1, sent);
+    }
+
+    sealed class Routed(Func<HttpRequestMessage, Task<HttpStatusCode>> answer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(await answer(request));
+    }
+
     // One attempt ends without an answer and another process's takes the reservation over: the
     // process still waiting gives the new one its full time, not what was left of the first's.
     [Fact]
