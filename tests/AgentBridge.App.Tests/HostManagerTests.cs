@@ -133,6 +133,62 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Restarting_waits_for_the_stopped_hosts_task_run_to_end_rather_than_running_the_task_into_it()
+    {
+        manager.SetStartAtSignIn(true);
+        host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+        tasks.OnRun = () => host.Start();
+        // hostw outlives the host it waited for by a few looks (#280).
+        tasks.StillRunningLooks = 3;
+
+        await manager.RestartAsync();
+
+        Assert.Empty(tasks.Ignored);
+        Assert.Equal([manager.TaskName], tasks.Ran);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    public async Task An_update_that_fails_to_apply_starts_the_host_again_once_its_task_run_has_ended()
+    {
+        manager.SetStartAtSignIn(true);
+        host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+        tasks.OnRun = () => host.Start();
+        tasks.StillRunningLooks = 3;
+
+        var failed = await Assert.ThrowsAsync<IOException>(() => manager.StopAndApplyAsync(() => { }, () => throw new IOException("the package is damaged")));
+
+        Assert.Equal("the package is damaged", failed.Message);
+        Assert.Empty(tasks.Ignored);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    public async Task A_start_through_the_task_that_brings_no_host_up_is_still_reported_and_not_run_again()
+    {
+        manager.SetStartAtSignIn(true);
+
+        var failed = await Assert.ThrowsAsync<TimeoutException>(() => manager.StartAsync());
+
+        Assert.Equal("the host did not start; see its log", failed.Message);
+        Assert.Equal([manager.TaskName], tasks.Ran);
+    }
+
+    [Fact]
+    public async Task A_task_run_that_never_ends_is_reported_within_the_start_timeout()
+    {
+        manager.SetStartAtSignIn(true);
+        tasks.StillRunningLooks = int.MaxValue;
+
+        var failed = await Assert.ThrowsAsync<TimeoutException>(() => manager.StartAsync());
+
+        Assert.Contains("its logon task's last run had not ended", failed.Message);
+        Assert.Empty(tasks.Ran);
+    }
+
+    [Fact]
     public async Task Stopping_asks_the_host_to_stop_and_a_host_that_will_not_is_ended()
     {
         host.On(HostOps.Stop, _ => new { stopping = true });
@@ -200,6 +256,7 @@ public sealed class HostManagerTests : IAsyncLifetime
         if (!OperatingSystem.IsWindows()) { return; }
 
         Assert.False(new WindowsLogonTasks().Exists("agent-bridge-test-" + Guid.NewGuid().ToString("N")));
+        Assert.False(new WindowsLogonTasks().IsRunning("agent-bridge-test-" + Guid.NewGuid().ToString("N")));
     }
 
     public sealed class Refusing

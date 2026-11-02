@@ -29,6 +29,8 @@ public interface ILogonTasks
     void Delete(string name);
     // Starts the task's action now.
     void Run(string name);
+    // Whether an instance of the task is running; false when there is no such task.
+    bool IsRunning(string name);
 }
 
 // Starting and ending processes, behind an interface for the same reason.
@@ -201,10 +203,34 @@ public sealed class HostManager
     {
         if (await IsRunningAsync(ct)) { return; }
         if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
-        if (tasks.Exists(TaskName)) { tasks.Run(TaskName); }
-        else if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
-        else { processes.Start(layout.LauncherExe, layout.ServeArguments); }
+        if (tasks.Exists(TaskName)) { await RunTaskAsync(ct); return; }
+        if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
+        processes.Start(layout.LauncherExe, layout.ServeArguments);
         await WaitAsync(running: true, StartTimeout, ct);
+    }
+
+    // The task runs agent-bridge-hostw, which lasts as long as the host it waits for, and is
+    // registered IgnoreNew, so sign-in never runs a second host. A Run while the instance of a
+    // host just stopped is still on its way out is therefore dropped without a word: on
+    // 2026-11-02 a Restart stopped the host, ran the task into that instance, and reported "the
+    // host did not start" (#280). So the task is run only once its last instance has ended,
+    // within the same start timeout; and while one runs, a host it is still bringing up (a Start
+    // pressed during sign-in) is as good as one this started. Run once only: a run that brings
+    // no host up is a failed start, reported as one, not retried.
+    async Task RunTaskAsync(CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + StartTimeout;
+        var ran = false;
+        while (true)
+        {
+            if (!ran && !tasks.IsRunning(TaskName)) { tasks.Run(TaskName); ran = true; }
+            if (await IsRunningAsync(ct)) { return; }
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException(ran ? "the host did not start; see its log" : $"the host did not start: its logon task's last run had not ended after {StartTimeout.TotalSeconds:0} s");
+            }
+            await Task.Delay(Poll, ct);
+        }
     }
 
     // An update between the host stopping for it and being applied (Settings' Update and restart,
@@ -370,6 +396,7 @@ public sealed class WindowsLogonTasks : ILogonTasks
 {
     const int CreateOrUpdate = 6;
     const int LogonInteractiveToken = 3;
+    const int TaskStateRunning = 4;
 
     public bool Exists(string name) => Use(folder =>
     {
@@ -393,6 +420,16 @@ public sealed class WindowsLogonTasks : ILogonTasks
         return true;
     });
 
+    // IRegisteredTask.State: TASK_STATE_RUNNING while any instance of it runs.
+    public bool IsRunning(string name) => Use(folder =>
+    {
+        object? task;
+        try { task = Call(folder, "GetTask", name); }
+        catch (Exception e) when (e is COMException or FileNotFoundException) { return false; }
+        try { return Convert.ToInt32(Invoke(task!, "State", System.Reflection.BindingFlags.GetProperty, []), System.Globalization.CultureInfo.InvariantCulture) == TaskStateRunning; }
+        finally { Release(task); }
+    });
+
     static T Use<T>(Func<object, T> act)
     {
         var type = Type.GetTypeFromProgID("Schedule.Service") ?? throw new InvalidOperationException("Task Scheduler is not available");
@@ -414,9 +451,12 @@ public sealed class WindowsLogonTasks : ILogonTasks
     // Late binding wraps every COM failure in TargetInvocationException, which slipped past
     // callers' filters for COMException/UnauthorizedAccessException: a policy-denied
     // registration on first run ended the app. Callers see the real exception instead.
-    internal static object? Call(object target, string name, params object?[] args)
+    internal static object? Call(object target, string name, params object?[] args) =>
+        Invoke(target, name, System.Reflection.BindingFlags.InvokeMethod, args);
+
+    static object? Invoke(object target, string name, System.Reflection.BindingFlags flags, object?[] args)
     {
-        try { return target.GetType().InvokeMember(name, System.Reflection.BindingFlags.InvokeMethod, null, target, args); }
+        try { return target.GetType().InvokeMember(name, flags, null, target, args); }
         catch (System.Reflection.TargetInvocationException e) when (e.InnerException is not null)
         {
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(e.InnerException);

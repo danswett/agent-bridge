@@ -376,6 +376,7 @@ sealed class NoLogonTasks : ILogonTasks
     public void Register(string name, string xml) => throw new InvalidOperationException("the demo does not install anything");
     public void Delete(string name) { }
     public void Run(string name) { }
+    public bool IsRunning(string name) => false;
 }
 
 sealed class NoProcesses : IProcesses
