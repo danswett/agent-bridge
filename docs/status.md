@@ -59,7 +59,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | Machine | State |
 |---|---|
 | DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). It then auto-updated through the unchanged x64 channel to 0.1.914 (11-01 23:47), the first release with Arm64 too. The first real machine; watch it |
-| DSWETT-DEV-VM1 | agent-ha-bridge plus a **read-only shadow host** (profile `shadow`, 83385c7) comparing with the daemon (#40). A **Dev Box**: migrate disables agent-ha-bridge's keep-awake task, so it waited for the host's own keep-awake (#47, merged in #224, 0.1.977). **Ready to migrate**: the owner has the commands. On 11-02 migrate refused, correctly, because sessions started with agent-ha-bridge's PowerShell hooks were running, both coordinators among them. Plan (owner, 11-02): the host must include the HA backoff (#234); 0.1.1040 and later do. Check with `(Get-Item "$env:LOCALAPPDATA\AgentBridgeApp\current\agent-bridge-host.exe").VersionInfo.ProductVersion`, since the updater can defer while sessions run. **That is met**: DEV-VM1 was on 0.1.1059 at 11-02 13:00 PT, and #242 no longer blocks anything (fixed by #243, diagnostics in #244). What remains: both coordinators hand off (done 11-02 13:30 PT; the UI coordinator moved to DEV-VM2), the owner ends every session on DEV-VM1, migrates, and resumes the overall coordinator from the app. Afterwards, remove the shadow host (`build/shadow-week.ps1 -Uninstall`) and check `devbox status` |
+| DSWETT-DEV-VM1 | **Migrated** 2026-11-02 14:16 PT on 0.1.1108, a **Dev Box**. `migration status` reads "as migrated" for the Copilot and Claude hooks, hook intake is on, and agent-ha-bridge's daemon and keep-awake tasks are disabled. `devbox status`: the host's own keep-awake is on (#47, #224). The first session launched through the new host (14:20) is the overall coordinator. **HA connector: token refused** at 14:19:55 (the host stops after 3 attempts, #234); the old daemon's token was accepted until 14:14, so the stored one is likely a bad paste. The owner re-runs `ha token set`. Still to do (owner, #67 guard): remove the read-only **shadow host** (profile `shadow`) with `build/shadow-week.ps1 -Uninstall`, then Forget "DSWETT-DEV-VM1 (shadow)" in the PWA; check the HA entities once the token is accepted |
 | DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. Since 2026-11-01 13:39 also a **view-only app install** (0.1.730 or later; `delivery.readOnly`, push off, HA connector off). The PWA lists it online and read-only, and its Claude and Codex usage rows are back. agent-ha-bridge there is unaffected |
 | DSWETT-ARM8 (ARM laptop) | **Migrated** 2026-11-01 23:54 on the native **Arm64** build (0.1.914, #222), auto-updating since (0.1.1018 on 11-02). Device key in the TPM; an answer from the PWA was typed into a session, so injection works on Arm64. HA connector online since 11-02 00:13, after an IP ban (below) |
 | DSWETT-DEV-VM2 | New on 11-02: the UI coordinator moved here from DEV-VM1 so DEV-VM1 could migrate |
@@ -70,7 +70,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 ### Running work
 
 Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work at once (decided 2026-11-01):
-- **Overall coordinator** (bridge session a6ed320ca83044c5, DEV-VM1): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
+- **Overall coordinator** (Copilot session 50e5b45a on DEV-VM1 since 2026-11-02 14:20 PT, taking over from a6ed320ca83044c5): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
 - **UI coordinator**: track B (§5), which names the session currently holding it; it moved to DSWETT-DEV-VM2 on 11-02. It merges its own PRs under the same rule.
 - Cross-track needs go on #170.
 
@@ -81,7 +81,9 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
   
   Its worktree is `~/repos/wt/agent-bridge-usage-live` on DEV-VM1 (branch `feat/usage-live`).
 - **The VM soak** keeps running on VM-M without a coordinator (driver at bfc4744, shadow host at #251's 670fc077). #251 labels agent-ha-bridge#289 and #290; the earliest gate pass is about 11:18 PT on 11-03 if nothing new recurs. Check with `-Status` (§3), then `-Finish`.
-- **After DEV-VM1 migrates:** check its HA entities (online, version, no `_2` duplicates), `devbox status`, then `build/shadow-week.ps1 -Uninstall`. Post on #170.
+- **After DEV-VM1 migrates:** check its HA entities (online, version, no `_2` duplicates), `devbox status`, then `build/shadow-week.ps1 -Uninstall`. Post on #170. *Done at 14:16 PT except the HA entities (token refused) and the shadow uninstall, both with the owner.*
+
+**Resumed, 2026-11-02 14:20 PT** (session 50e5b45a). Delegates restarted: #238's security re-review and its six live checks on `rehearsal-m`; #263 (host name cleaning); #266 (hooks test flake); S2 (#174). The Apple client drafts (#254, #260, #264–#268, #276, #277) are another contributor's and are not coordinated here.
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
@@ -116,7 +118,7 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 
 1. **Watch ULTRA.** Its HA entities (`*_dswett_ultra_*`) and the PWA should agree, and answers, replies and launches from the phone and the HA card should all work. Install from the PWA worked on 2026-11-01 (0.1.690 to 0.1.700); Install from the HA card's button is still untried live (#161).
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
-3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. DEV-VM1 next. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
+3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
 5. **HOME last** (P7): move the publication-writer role, migrate, then retire the HA dashboard as an explicit operator action.
 6. **UI design track** (§5).
