@@ -25,6 +25,11 @@ public sealed partial class MainWindow : Window
     bool maximizeWhenShown;
     // Whether the window was maximised before it was last minimised: what it comes back as.
     bool wasMaximized;
+    // Kept: the colour change is raised only while the UISettings that took the handler lives.
+    readonly Windows.UI.ViewManagement.UISettings uiSettings = new();
+    // The UI thread's, taken while on it: the change arrives on another.
+    readonly DispatcherQueue ui = DispatcherQueue.GetForCurrentThread();
+    bool closed;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -37,11 +42,19 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"));
 
         // The title bar is the window's own (ui.md §7), over Mica; the caption buttons stay the
-        // system's, as tall as the bar and in the app's theme.
+        // system's, as tall as the bar and in the app's theme (PaintCaptionButtons).
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
-        AppWindow.TitleBar.PreferredTheme = TitleBarTheme.UseDefaultAppMode;
+        PaintCaptionButtons();
+        Root.ActualThemeChanged += (_, _) => PaintCaptionButtons();
+        // Raised on a thread-pool thread: painted on the UI thread, as everything else is.
+        uiSettings.ColorValuesChanged += OnColorValuesChanged;
+        Closed += (_, _) =>
+        {
+            closed = true;
+            uiSettings.ColorValuesChanged -= OnColorValuesChanged;
+        };
 
         if (selfTest) { AppWindow.Resize(new SizeInt32(1100, 1400)); }
         else { Place(); }
@@ -188,6 +201,44 @@ public sealed partial class MainWindow : Window
         SearchBox.Text = "";
         SearchBox.ItemsSource = null;
         ViewModel.Open(hit);
+    }
+
+    // --- The caption buttons (#240) ---
+
+    // In the window's theme, set here on the UI thread, and the system's own in high contrast. Not
+    // through AppWindow.TitleBar.PreferredTheme: for that, Windows App SDK repaints the caption
+    // buttons from UISettings.ColorValuesChanged on a thread-pool thread (AppWindowTitleBar::
+    // OnUISettingsColorValuesChanged, CTitleBar::UpdateColors, PaintTitle), racing the UI thread's
+    // own repaint of them and the window's teardown. A high-contrast switch then ended the app
+    // in dcomp.dll: an access violation on x64, a CFG fail fast on Arm64, with no managed
+    // exception. With the theme left Legacy, that handler paints nothing.
+    void OnColorValuesChanged(Windows.UI.ViewManagement.UISettings sender, object args) =>
+        ui.TryEnqueue(PaintCaptionButtons);
+
+    internal void PaintCaptionButtons()
+    {
+        if (closed) { return; }
+        var bar = AppWindow.TitleBar;
+        bar.ButtonBackgroundColor = Colors.Transparent;
+        bar.ButtonInactiveBackgroundColor = Colors.Transparent;
+        var colours = CaptionColours(Root.ActualTheme);
+        bar.ButtonForegroundColor = colours?.Text;
+        bar.ButtonHoverForegroundColor = colours?.Text;
+        bar.ButtonPressedForegroundColor = colours?.Text;
+        bar.ButtonInactiveForegroundColor = colours?.Inactive;
+        bar.ButtonHoverBackgroundColor = colours?.Hover;
+        bar.ButtonPressedBackgroundColor = colours?.Pressed;
+    }
+
+    // The design's text and fills for a theme (Design/DesignResources.xaml); none in high
+    // contrast, where the system's colours are the right ones.
+    internal static (Windows.UI.Color Text, Windows.UI.Color Inactive, Windows.UI.Color Hover, Windows.UI.Color Pressed)? CaptionColours(ElementTheme theme)
+    {
+        if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { return null; }
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        if (design?.ThemeDictionaries.TryGetValue(theme == ElementTheme.Dark ? "Dark" : "Light", out var d) != true || d is not ResourceDictionary themed) { return null; }
+        Windows.UI.Color Of(string key) => themed.TryGetValue(key, out var b) && b is Microsoft.UI.Xaml.Media.SolidColorBrush s ? s.Color : Colors.Transparent;
+        return (Of("AbText"), Of("AbText3"), Of("AbSubtle"), Of("AbSelected"));
     }
 
     // --- Size and place (#180): down to 360×600, and back where it was left. ---
