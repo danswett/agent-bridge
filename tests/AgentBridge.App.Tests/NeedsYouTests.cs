@@ -240,6 +240,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nport: 8080\n```\n\nWhich option?" }));
         Assert.Equal("After the tildes", NeedsYouEntry.LineOf(Make.Form() with { Message = "~~~\na\n```\nb\n~~~\nAfter the tildes" }));
         Assert.Equal("only code", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nonly code\n```" }));
+        Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\rport: 8080\r```\r\rWhich option?" }));
     }
 
     [Theory]

@@ -242,7 +242,8 @@ public sealed partial class NeedsYouEntry : Observable
     {
         string? open = null;
         string? code = null;
-        foreach (var l in q.Message.Split('\n'))
+        // Any line ending the renderer breaks on: a bare CR too.
+        foreach (var l in q.Message.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
         {
             if (open is not null)
             {
