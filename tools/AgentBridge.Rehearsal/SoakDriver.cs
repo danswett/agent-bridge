@@ -494,6 +494,9 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
         foreach (var (path, name) in files)
         {
+            // Copilot's in-use markers are held locked by the running CLI and carry nothing.
+            var leaf = Path.GetFileName(path);
+            if (leaf.StartsWith("inuse.", StringComparison.Ordinal) || leaf.EndsWith(".lock", StringComparison.Ordinal)) { continue; }
             using var src = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var dst = zip.CreateEntry(name, CompressionLevel.SmallestSize).Open();
             src.CopyTo(dst);

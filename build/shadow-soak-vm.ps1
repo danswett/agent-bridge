@@ -268,19 +268,26 @@ New-Item -ItemType Directory -Path '$soak\collect' -Force | Out-Null
 'size=' + (Get-Item '$zip').Length
 "@
     Write-Information $made -InformationAction Continue
-    if ($made -notmatch 'size=(\d+)') { throw "nothing collected for $Collect" }
+    if ($made -notmatch '(?m)^PASS ' -or $made -notmatch 'size=(\d+)') { throw "nothing collected for $Collect" }
     $size = [long]$Matches[1]
-    # run-command hands back the last 4 KB of output, so the zip comes in pieces under that.
-    $piece = 2800
+    # run-command hands back the last 4 KB of output, so the zip comes in pieces under that,
+    # each through az directly: the rehearsal script's checks per call tripled the time.
+    $piece = 2900
     $bytes = [Collections.Generic.List[byte]]::new()
-    for ($at = 0; $at -lt $size; $at += $piece) {
-        $text = Invoke-Guest M -Script @"
+    New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+    $pieceFile = Join-Path $scratch "soak-piece-$([guid]::NewGuid().ToString('n')).ps1"
+    try {
+        for ($at = 0; $at -lt $size; $at += $piece) {
+            Set-Content -Path $pieceFile -Encoding utf8 -Value @"
 `$s = [IO.File]::OpenRead('$zip'); try { `$null = `$s.Seek($at, 'Begin'); `$b = New-Object byte[] $piece; `$n = `$s.Read(`$b, 0, $piece); 'B64=' + [Convert]::ToBase64String(`$b, 0, `$n) } finally { `$s.Dispose() }
 "@
-        if ($text -notmatch 'B64=([A-Za-z0-9+/=]+)') { throw "piece at $at did not come back" }
-        $bytes.AddRange([Convert]::FromBase64String($Matches[1]))
-        Write-Progress -Activity "copying $Collect" -PercentComplete ([int](100 * $bytes.Count / $size))
-    }
+            $json = az vm run-command invoke -g rg-agent-bridge-rehearsal -n rehearsal-m --command-id RunPowerShellScript --scripts "@$pieceFile" --subscription $Subscription --only-show-errors -o json
+            $text = (($json | ConvertFrom-Json).value | Where-Object code -Like '*StdOut*').message
+            if ($LASTEXITCODE -or "$text" -notmatch 'B64=([A-Za-z0-9+/=]+)') { throw "piece at $at did not come back" }
+            $bytes.AddRange([Convert]::FromBase64String($Matches[1]))
+            Write-Progress -Activity "copying $Collect" -PercentComplete ([int](100 * $bytes.Count / $size))
+        }
+    } finally { Remove-Item $pieceFile -ErrorAction SilentlyContinue }
     if ($bytes.Count -ne $size) { throw "copied $($bytes.Count) of $size bytes" }
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
     $local = Join-Path $OutDir "$Collect.zip"
