@@ -236,8 +236,16 @@ public sealed partial class MainWindow : Window
         var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
         if (design?.ThemeDictionaries.TryGetValue(theme == ElementTheme.Dark ? "Dark" : "Light", out var d) != true || d is not ResourceDictionary themed) { return null; }
         Windows.UI.Color? Of(string key) => themed.TryGetValue(key, out var b) && b is Microsoft.UI.Xaml.Media.SolidColorBrush s ? s.Color : null;
-        return Of("AbText") is { } text && Of("AbText3") is { } inactive && Of("AbSubtle") is { } hover && Of("AbSelected") is { } pressed
-            ? (text, inactive, hover, pressed) : null;
+        // A caption glyph's alpha is ignored (only the backgrounds take it), so the translucent
+        // tertiary text is laid over the shell the title bar sits on, as it would be drawn.
+        return Of("AbText") is { } text && Of("AbText3") is { } inactive && Of("AbShell") is { } shell && Of("AbSubtle") is { } hover && Of("AbSelected") is { } pressed
+            ? (Over(text, shell), Over(inactive, shell), hover, pressed) : null;
+    }
+
+    static Windows.UI.Color Over(Windows.UI.Color top, Windows.UI.Color under)
+    {
+        byte Mix(byte t, byte u) => (byte)Math.Round((t * top.A + u * (255 - top.A)) / 255.0);
+        return new Windows.UI.Color { A = 255, R = Mix(top.R, under.R), G = Mix(top.G, under.G), B = Mix(top.B, under.B) };
     }
 
     // --- Size and place (#180): down to 360×600, and back where it was left. ---

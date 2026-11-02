@@ -29,9 +29,11 @@ $null = $p.Handle
 $finished = $p.WaitForExit($TimeoutSeconds * 1000)
 Copy-Item (Join-Path (Split-Path $appLog) '*.log') $Logs -ErrorAction SilentlyContinue
 if (-not $finished) { Stop-Process -Id $p.Id -Force }
-if (Test-Path $Result) { Get-Content $Result } else { Write-Error 'the self-test wrote no result' -ErrorAction Continue }
+$wrote = Test-Path $Result
+if ($wrote) { Get-Content $Result } else { Write-Output '::error::the self-test wrote no result' }
 $code = if ($finished) { $p.ExitCode } else { $null }
-if ($code -eq 0) { exit 0 }
+# Ended with 0 having written nothing: no check ran, so it did not pass.
+if ($code -eq 0) { exit $(if ($wrote) { 0 } else { 1 }) }
 
 if ($null -eq $code) { Write-Output "::error::the self-test did not finish in $TimeoutSeconds s" }
 else {
@@ -47,5 +49,5 @@ Write-Output '--- what Windows recorded'
 Start-Sleep -Seconds 3
 Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $started } -ErrorAction SilentlyContinue |
     Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', '.NET Runtime' -and $_.Message -match 'AgentBridge' } |
-    ForEach-Object { "[$($_.TimeCreated.ToString('o'))] $($_.ProviderName) $($_.Id): $(($_.Message -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -First 12) -join ' | ')" }
+    ForEach-Object { "[$([TimeZoneInfo]::ConvertTimeBySystemTimeZoneId($_.TimeCreated, 'Pacific Standard Time').ToString('yyyy-MM-dd HH:mm:ss')) Pacific] $($_.ProviderName) $($_.Id): $(($_.Message -split "`r?`n" | Where-Object { $_ -match '\S' } | Select-Object -First 12) -join ' | ')" }
 exit $(if ($null -eq $code) { 1 } else { $code })
