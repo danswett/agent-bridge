@@ -35,6 +35,8 @@ async function fixTimes(page) {
     for (const t of document.querySelectorAll('.row-age, .speaker-age')) { t.textContent = '1m ago'; }
   });
 }
+// The bottom navigation is fixed: out of a full-page picture of the list.
+const hideBar = (page) => page.evaluate(() => { document.getElementById('nav').hidden = true; });
 // A session, opened from its row as a person would: pushed over the list on a phone.
 async function show(page, id) {
   await page.locator(`.session[data-id="${id}"] .row-main`).click();
@@ -100,7 +102,8 @@ try {
 
   // Needs you (#165), with every machine shown: a permission prompt answered in the lane, a
   // delegate's question, the forms that open their sessions and a read-only machine's question.
-  const wide = { viewport: { width: 1440, height: 900 } };
+  // Tall enough for the whole lane: at desktop widths the list pane scrolls on its own.
+  const wide = { viewport: { width: 1440, height: 1400 } };
   for (const [scheme, name, device] of [['light', 'needs-you-light.png', undefined], ['dark', 'needs-you-dark.png', undefined], ['light', 'needs-you-wide.png', wide]]) {
     const { context, page } = await open(scheme, '&machines=3', device);
     await page.evaluate(() => {
@@ -129,7 +132,7 @@ try {
       const r = document.getElementById(id).getBoundingClientRect();
       return { x: r.left, y: r.top + scrollY, width: r.width };
     }));
-    await page.screenshot({ path: out(name), fullPage: true, clip: { x: 0, y: lane.y - 8, width: page.viewportSize().width, height: list.y - lane.y + 160 } });
+    await page.screenshot({ path: out(name), fullPage: true, clip: { x: Math.max(0, lane.x - 8), y: lane.y - 8, width: Math.min(page.viewportSize().width, lane.width + 16), height: list.y - lane.y + 160 } });
     await context.close();
     console.log(`docs/${name}`);
   }
