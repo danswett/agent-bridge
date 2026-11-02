@@ -150,3 +150,15 @@ test('a square viewBox is read by its numbers, so 16 and 16.0 are the same side'
   const svg = readDesignSvg(svgFile('vb16', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', 'viewBox="0 0 16 16.0"'), 'glyph');
   assert.equal(svg.size, 16);
 });
+
+test('a viewBox with no area is refused, as WinUI cannot size a glyph by it', () => {
+  for (const vb of ['0 0 -16 -16', '0 0 0 0']) {
+    assert.throws(() => readDesignSvg(svgFile('novb', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', `viewBox="${vb}"`), 'glyph'), /sides above 0/, vb);
+  }
+});
+
+test('a part with two token classes, its own or its group\'s, is refused, since the clients would each pick one', () => {
+  assert.throws(() => readDesignSvg(svgFile('two', '<circle class="knockout ink" cx="8" cy="8" r="5" fill="#FFFFFF"/>'), 'glyph'), /one token class, not knockout and ink/);
+  assert.throws(() => readDesignSvg(svgFile('inherited', '<g class="ink"><circle class="knockout" cx="8" cy="8" r="5" fill="#FFFFFF"/></g>'), 'glyph'), /one token class, not ink and knockout/);
+  assert.doesNotThrow(() => readDesignSvg(svgFile('same', '<g class="ink"><circle class="ink spin" cx="8" cy="8" r="5" fill="#FFFFFF"/></g>'), 'glyph'));
+});

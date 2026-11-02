@@ -274,7 +274,7 @@ export function readDesignSvg(file, kind) {
   const root = parseXml(source, file);
   if (root.tag !== 'svg') { throw new Error(`${file}: the root must be <svg>`); }
   const vb = (root.attrs.viewBox ?? '').trim().split(/[\s,]+/);
-  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || Number(vb[2]) !== Number(vb[3])) { throw new Error(`${file}: needs a square viewBox from 0 0`); }
+  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || Number(vb[2]) !== Number(vb[3]) || !(Number(vb[2]) > 0)) { throw new Error(`${file}: needs a square viewBox from 0 0, with sides above 0`); }
   vb.forEach((v, i) => { vb[i] = Number(v); });
   // The root carries only its size and paint the parts inherit: an opacity, transform or class
   // here would be dropped by both clients rather than drawn.
@@ -293,6 +293,9 @@ export function readDesignSvg(file, kind) {
     checkValues(node.attrs, file, node.tag);
     const own = (node.attrs.class ?? '').split(/\s+/).filter(Boolean);
     for (const c of own) { if (!PART_CLASSES.includes(c)) { throw new Error(`${file}: class "${c}" is not one design/README.md defines`); } }
+    // One token per part: the sprite and the XAML would each pick a different one of two.
+    const tokens = [...new Set([...classes, ...own].filter((c) => c in TOKEN_CLASSES))];
+    if (tokens.length > 1) { throw new Error(`${file}: a part takes one token class, not ${tokens.join(' and ')}`); }
     const all = [...classes, ...own];
     const style = { ...inherited };
     for (const k of [...INHERITED, 'opacity', 'stroke-opacity', 'fill-opacity']) { if (node.attrs[k] !== undefined) { style[k] = node.attrs[k]; } }
