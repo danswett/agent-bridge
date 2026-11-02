@@ -1152,8 +1152,11 @@ garbled, and `last_refresh` was set 9 days back. Then:
 - **Claude sign-out:** gate on `claude auth status`, as planned. E4 shows the probe exits 0
   on cached figures after a sign-out.
 - **Codex sign-out:** treat any of these as signed out: E14's -32603 texts, a 401 from the
-  rate-limit read, or `account/read` answering with `account` null (E14(a) run B). Don't
-  trust `codex login status`.
+  rate-limit read, or `account/read` answering with `account` null (E14(a) run B) when
+  OpenAI sign-in is required. A custom non-OpenAI provider answers `account` null with
+  `requiresOpenaiAuth: false` as a matter of course (0.166's
+  `custom_non_openai_provider_returns_no_account_state`), so only `account` null with
+  `requiresOpenaiAuth: true` counts. Don't trust `codex login status`.
 - **The daemon route** works on Windows. Don't wait for the close echo (E9). The host may
   not be able to start the daemon from a scheduled task, so it should use the daemon only
   when one is already running, which is what the spike recommends anyway.
