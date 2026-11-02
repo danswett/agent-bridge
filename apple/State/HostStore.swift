@@ -106,8 +106,17 @@ final class HostStore: Identifiable {
         transport?.peerKey
     }
 
+    /// A read-only reason wins over stale or contradictory advertised actions.
+    /// Session/usage reads and push still work; update is withdrawn even for reads.
+    private static let readOnlyBlockedCapabilities: Set<String> = [
+        "sessions.answer", "sessions.reply", "sessions.approve", "sessions.stop",
+        "sessions.attach", "sessions.attach.blob", "sessions.attach.direct", "sessions.launch",
+        "sessions.transfer", "sessions.transfer.serve", "launch.trust", "update",
+    ]
+
     func can(_ capability: String) -> Bool {
         isLive && capabilities.contains(capability)
+            && (readOnlyReason == nil || !Self.readOnlyBlockedCapabilities.contains(capability))
     }
 
     var isRunning: Bool {
@@ -120,14 +129,14 @@ final class HostStore: Identifiable {
     }
 
     func perform(_ operation: BridgeOperation, slot: String, consumesReplyDraft: Bool = false) async {
-        guard isLive, attempts[slot]?.isSending != true, attempts[slot]?.uncertain != true else { return }
+        guard isLive, readOnlyReason == nil, attempts[slot]?.isSending != true, attempts[slot]?.uncertain != true else { return }
         attempts[slot] = MutationAttempt(operation: operation, hostInstance: instance, consumesReplyDraft: consumesReplyDraft)
         await deliver(slot)
     }
 
     func retry(_ slot: String) async {
         guard let attempt = attempts[slot], attempt.canRetry, !attempt.isSending,
-              attempt.hostInstance == instance, isLive else { return }
+              attempt.hostInstance == instance, isLive, readOnlyReason == nil else { return }
         attempts[slot]?.isSending = true
         attempts[slot]?.error = nil
         await deliver(slot)
