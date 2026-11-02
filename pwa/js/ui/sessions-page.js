@@ -198,10 +198,24 @@ export class SessionsPage {
     const rest = [card.hostId ?? '', card.id];
     if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#drawPanes(); return; }
     const phone = this.phone.matches;
-    const already = this.shell.route === 'sessions' && this.shell.rest.join('/') === rest.join('/');
+    const onSessions = this.shell.route === 'sessions';
+    const already = onSessions && this.shell.rest.join('/') === rest.join('/');
     if (already) { this.#route(rest); return; }
-    this.shell.go('sessions', { rest, replace: !phone });
-    if (phone) { this.#pushed = globalThis.location?.hash ?? null; }
+    if (!phone) {
+      // From another page (Launch, say) a new entry, so back returns there.
+      this.shell.go('sessions', { rest, replace: onSessions });
+      return;
+    }
+    // A phone's back from a session is always the list: one session replaces another, and from
+    // another page (Launch, a notification's) the list goes in first.
+    const onSession = onSessions && this.shell.rest.length >= 2;
+    if (onSession) {
+      this.shell.go('sessions', { rest, replace: true });
+    } else {
+      if (!onSessions || this.shell.rest.length) { this.shell.go('sessions'); }
+      this.shell.go('sessions', { rest });
+    }
+    this.#pushed = globalThis.location?.hash ?? null;
   }
 
   // The address said which session, or none.
@@ -209,6 +223,10 @@ export class SessionsPage {
     if (rest.length >= 2) {
       this.#want = SessionListView.key(rest[0], rest[1]);
       this.#open = true;
+      // A machine not shown (a link, or a reload after another was picked) is shown on its own,
+      // as a notification's is, without changing what is remembered; until the account's
+      // machines are known, startup does the same with what the address names.
+      if (this.hosts.selection !== null && rest[0] && !this.hosts.shows(rest[0])) { this.hosts.visit(rest[0]); }
     } else {
       this.#want = null;
       this.#open = false;
@@ -268,7 +286,7 @@ export class SessionsPage {
   // The window crossed a width of §5.2. The session named stays selected; a phone that now shows
   // one gets an entry under it, so its back goes to the list rather than out of the app.
   #resized() {
-    if (this.phone.matches && this.#open && this.shell && !this.#pushed) {
+    if (this.phone.matches && this.#open && this.shell?.route === 'sessions' && !this.#pushed) {
       const rest = this.shell.rest;
       this.shell.go('sessions', { replace: true });
       this.shell.go('sessions', { rest });
@@ -481,10 +499,23 @@ export class SessionsPage {
     renderMachineTabs($('machine-tabs'), {
       presence, me: this.me, current: hosts.selection, controls: 'session-list',
       nameOf: (id) => hosts.nameOf(id),
-      onSelect: (id) => hosts.select(id),
+      onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);
   }
+
+  // A machine picked in the tabs: a session named on another stops being the one shown, so the
+  // first of the machine's rows is, rather than a pane waiting for a session it no longer lists.
+  #pickMachine(id) {
+    this.hosts.select(id);
+    const host = this.#want?.split('\n')[0];
+    if (host === undefined || this.hosts.shows(host)) { return; }
+    this.#want = null;
+    if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.shell.go('sessions', { replace: true }); } else { this.#route([]); }
+  }
+
+  // A session route's machine, for startup: shown on its own when it isn't the one remembered.
+  get routedHost() { return this.shell?.route === 'sessions' && this.shell.rest.length >= 2 ? this.shell.rest[0] || null : null; }
 
   #rememberLaunch(hostId) {
     this.#launchHost = hostId;

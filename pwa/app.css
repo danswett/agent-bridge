@@ -241,6 +241,17 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   }
   body[data-page="sessions"][data-session-open="true"] .nav { display: none; }
+  /* Over a session the strip is only the connection's news, never the list's search, and the
+     session starts under it rather than behind it: Back and its menu stay in reach. */
+  body[data-page="sessions"][data-session-open="true"].searching .appbar { display: none; }
+  body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .appbar {
+    display: flex; position: fixed; top: 0; left: 0; right: 0; height: calc(var(--appbar) + env(safe-area-inset-top));
+  }
+  body[data-page="sessions"][data-session-open="true"] .appbar .search { display: none; }
+  body[data-page="sessions"][data-session-open="true"] .appbar .appbar-end { display: flex; }
+  body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .session-pane {
+    top: calc(var(--appbar) + env(safe-area-inset-top)); padding-top: 0;
+  }
   .session-views { flex: 1; min-height: 0; }
   .no-session { display: none; }
   .session-header { padding: var(--ab-space-2) var(--ab-space-4) var(--ab-space-3) var(--ab-space-4); }

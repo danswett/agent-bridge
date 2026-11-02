@@ -152,6 +152,56 @@ test.describe('on a phone', () => {
     }
   });
 
+  // What is drawn at the middle of a control: the control, not a bar over it.
+  const reachable = (locator) => locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!top && (el === top || el.contains(top));
+  });
+
+  test('a session pushed while the connection has news starts under the strip, with Back in reach', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    await page.evaluate(() => { document.body.dataset.conn = 'warn'; document.getElementById('conn').textContent = 'Reconnecting…'; });
+    await expect(page.locator('#conn')).toBeVisible();
+    const strip = await box(page.locator('#appbar'));
+    const header = await box(v.locator('.session-header'));
+    expect(header.y).toBeGreaterThanOrEqual(strip.y + strip.height - 0.5);
+    expect(await reachable(v.locator('.back'))).toBe(true);
+    expect(await reachable(v.locator('.session-header .more'))).toBe(true);
+  });
+
+  test('a session opened from a search is not under the search row, and back returns to what was searched', async ({ page }) => {
+    await openDemo(page);
+    await page.locator('.search-open').filter({ visible: true }).first().tap();
+    await page.keyboard.type('relay');
+    await expect(page.locator('.session')).toHaveCount(1);
+    await row(page, CLAUDE).locator('.row-main').tap();
+    const v = view(page, CLAUDE);
+    await expect(v).toBeVisible();
+    expect(await reachable(v.locator('.back'))).toBe(true);
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#search')).toHaveValue('relay');
+    await expect(page.locator('.session')).toHaveCount(1);
+  });
+
+  test('a session opened from Launch goes back to the list, not to Launch, and a second replaces the first', async ({ page }) => {
+    await openDemo(page);
+    await page.locator('.new-session').filter({ visible: true }).first().tap();
+    await expect(page.locator('[data-route="launch"]')).toBeVisible();
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CLAUDE);
+    await expect(view(page, CLAUDE)).toBeVisible();
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CODEX);
+    await expect(view(page, CODEX)).toBeVisible();
+    await page.goBack();
+    await expect(view(page, CODEX)).toBeHidden();
+    await expect(page.locator('[data-route="sessions"]')).toBeVisible();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('[data-route="launch"]')).toBeVisible();
+  });
+
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);
@@ -165,6 +215,59 @@ test.describe('on a phone', () => {
     await expect(v.locator('.details')).toBeVisible();
     await expect(v.locator('.details .end-button')).toBeVisible();
   });
+});
+
+test('narrowing to a phone on another page stays on that page', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openDemo(page);
+  await open(page, CLAUDE);
+  await page.locator('#nav [data-nav="settings"]').click();
+  await expect(page.locator('[data-route="settings"]')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(100);
+  await expect(page.locator('[data-route="settings"]')).toBeVisible();
+  expect(await page.evaluate(() => location.hash)).toBe('#/settings');
+});
+
+test('Tools left while the session changed are fetched again when they show', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  await v.locator('.view-tab', { hasText: 'Tools' }).click();
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(6);
+  await v.locator('.view-tab', { hasText: 'Conversation' }).click();
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    // Seven calls of its own, where the demo makes up six.
+    const history = Array.from({ length: 7 }, (_, k) => ({ name: 'grep', summary: `call ${k}`, status: 'succeeded', at: new Date().toISOString() }));
+    d.upsert({ ...s, updatedAt: new Date(Date.now() + 1000).toISOString(), activity: { ...s.activity, history } });
+  }, CLAUDE);
+  await page.waitForTimeout(100);
+  await v.locator('.view-tab', { hasText: 'Tools' }).click();
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(7);
+});
+
+test('picking another machine in the tabs shows its first session, not a pane waiting for the last one', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openDemo(page, '&machines=2');
+  await open(page, CLAUDE, 'demo');
+  await expect.poll(() => page.evaluate(() => location.hash)).toContain('/demo/');
+  await page.locator('#machine-tabs [role="tab"]').nth(2).click();
+  await expect(page.locator('.session-view:not([hidden])')).toHaveCount(1);
+  await expect(page.locator('.session-view:not([hidden])')).not.toHaveAttribute('data-host-id', 'demo');
+  await expect(page.locator('#no-session')).toBeHidden();
+});
+
+test('a session address on a machine not shown shows that machine', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openDemo(page, '&machines=2');
+  await page.locator('#machine-tabs [data-device-id="demo"]').click();
+  await expect(page.locator('.session[data-host-id="demo-laptop"]')).toHaveCount(0);
+  const id = await page.evaluate(() => [...window.agentBridgeDemo.machines['demo-laptop'].sessions.keys()][0]);
+  await page.evaluate((id) => { location.hash = `#/sessions/demo-laptop/${id}`; }, id);
+  await expect(view(page, id, 'demo-laptop')).toBeVisible();
+  await expect(row(page, id, 'demo-laptop')).toHaveClass(/selected/);
 });
 
 test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the phone', async ({ page }) => {

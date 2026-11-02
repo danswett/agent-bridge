@@ -363,6 +363,10 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     expect(new URL(page.url()).search).toBe('');
 
+    // At two panes, where Tools is a tab: one left on Tools still opens on its question.
+    await page.setViewportSize({ width: 900, height: 800 });
+    await (await open(page, 'linked-2')).locator('.view-tab', { hasText: 'Tools' }).click();
+    await open(page, 'linked-1');
     // A search that hides the session a notification is about gives way to it.
     await page.keyboard.press('Control+k');
     await page.keyboard.type('linked-1');

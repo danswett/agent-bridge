@@ -322,14 +322,14 @@ export class SessionCard {
     const { inspector } = this.layout();
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
-    if (this.#toolsShown() && !this.#history.loaded) { this.#loadHistory(); }
+    this.#revealTools();
   }
 
   // Conversation or Tools, where they are tabs; Details, from the header's button.
   setTab(tab) {
     this.#tab = tab === 'tools' || tab === 'details' ? tab : 'conversation';
     this.#applyTab();
-    if (this.#toolsShown() && !this.#history.loaded) { this.#loadHistory(); }
+    this.#revealTools();
   }
 
   #applyTab() {
@@ -352,6 +352,13 @@ export class SessionCard {
       return;
     }
     this.setTab(this.#tab === 'details' ? 'conversation' : 'details');
+  }
+
+  // Tools shown: fetched the first time, and again when the session changed while they were
+  // hidden (updates refetch only what is on screen).
+  #revealTools() {
+    if (!this.#toolsShown()) { return; }
+    if (!this.#history.loaded || (this.#history.at !== this.#s.updatedAt && !this.#history.timer)) { this.#loadHistory(); }
   }
 
   #toolsShown() {
@@ -526,6 +533,7 @@ export class SessionCard {
     this.#history.loading = true;
     const body = this.els.historyBody;
     if (!this.#history.loaded) { body.replaceChildren(h('p', { class: 'note', role: 'status' }, 'Loading…')); }
+    const at = this.#s.updatedAt;
     try {
       const full = await this.fetchDetail(this.#s.id);
       if (!full) {
@@ -537,6 +545,7 @@ export class SessionCard {
           : h('p', { class: 'note' }, 'No tool calls yet.'));
       }
       this.#history.loaded = true;
+      this.#history.at = at;
     } catch (e) {
       body.replaceChildren(h('p', { class: 'note warn' }, `Couldn't load the history: ${e.message}`));
     } finally {

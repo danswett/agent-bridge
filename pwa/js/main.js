@@ -107,6 +107,8 @@ function focusLinked() {
   // Taken before the session is shown: showing it closes a search that hid it, which redraws
   // the list, which comes back here.
   linked = null;
+  // Its question is in the conversation, which a tab may have hidden.
+  card.setTab('conversation');
   page.showSession(card.id, card.hostId);
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.
@@ -268,7 +270,7 @@ async function startDemo() {
   demoUpdates.onChange(() => page.drawMachines());
   fleet.onChange(() => page.drawMachines());
   $('machines').hidden = false;
-  hosts.restoreTarget(null);
+  hosts.restoreTarget(page.routedHost ?? null);
   fleet.start();
   // Ready once every machine shown has sent what it has. One remembered from a demo with more
   // machines is not there to send anything, and says it is offline.
@@ -533,7 +535,7 @@ function begin(account) {
   fleet.onChange(() => page.drawMachines());
   forgets.onChange(() => page.drawMachines());
   updates.onChange(() => page.drawMachines());
-  hosts.restoreTarget(link?.host ?? null);
+  hosts.restoreTarget(link?.host ?? page.routedHost ?? null);
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
   // So does "checked 5m ago" under a machine's updates.
