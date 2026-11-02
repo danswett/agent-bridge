@@ -18,6 +18,8 @@ personal account is used.
   incomplete while fetching and verifying a blob. The client now polls the same
   attachment request at 400 ms intervals within the host's 20-minute budget,
   validates progress and connection identity, and waits for verified completion.
+  The composer passes its original connection into preparation, closing a
+  reconnect window between validation and starting the upload.
   Failure cleanup discards the staged attachment and relay ticket without moving
   to a replacement connection. Tests cover incomplete, full-but-unverified,
   complete, timeout, cancellation, malformed progress and connection changes.
@@ -31,6 +33,11 @@ personal account is used.
 - **Question guidance could offer an unusable answer action.** The workbench and
   answer form now respect the host's read-only reason and the question's
   capability, truncation and answer-at-machine restrictions.
+- **A read-only host's conflicting capabilities could enable mutations.** The
+  read-only reason now overrides known action capabilities and blocks new
+  attempts and retries before changing the receipt ledger. Raw capabilities,
+  session/usage reads and attachment cleanup remain available. Three regressions
+  failed before this guard was added.
 - **Sign-in could accept an HTTP success arriving after device-code expiry.**
   The client rechecks monotonic expiry and cancellation after responses and caps
   its last polling sleep to the remaining lifetime. Isolated URLSession fixtures
