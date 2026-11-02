@@ -371,6 +371,26 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(5, ha.Seen.Count);
     }
 
+    // JSON that parses but is no record (an address with nothing under it, a negative count) is
+    // as corrupt as one that does not parse: recording a refusal in it must not fail and leave the
+    // token free to be retried.
+    [Theory]
+    [InlineData("""{ "servers": { "0123456789abcdef": null } }""")]
+    [InlineData("""{ "servers": { "0123456789abcdef": { "credentials": null } } }""")]
+    [InlineData("""{ "strikes": -100, "servers": {} }""")]
+    [InlineData("""{ "servers": null }""")]
+    public async Task A_record_that_parses_but_is_not_one_is_set_aside_and_holds_every_token(string record)
+    {
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Record, record);
+        var ha = new Answering(time);
+
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromHours(1));
+
+        Assert.Empty(ha.Seen);
+        Assert.True(File.Exists(Record + HaAuthGuard.CorruptSuffix));
+    }
+
     // A record that is there but cannot be read now (another program has it open exclusively) is
     // not taken for an empty one: a fresh process sends nothing with a token until it can read it.
     [Fact]

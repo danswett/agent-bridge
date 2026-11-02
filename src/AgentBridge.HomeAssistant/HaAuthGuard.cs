@@ -725,7 +725,7 @@ public sealed class HaAuthGuard
         State? read = null;
         try { read = JsonSerializer.Deserialize<State>(text, Json); }
         catch (JsonException) { }
-        if (read is { Servers: not null })
+        if (read is not null && Valid(read))
         {
             if (text != readText) { reread = true; }
             readText = text;
@@ -760,6 +760,13 @@ public sealed class HaAuthGuard
         basis = new State();
         return null;
     }
+
+    // JSON that parses is not yet a record: a missing table or a negative count, written by hand or
+    // by a bad write, would otherwise throw from the middle of recording a refusal, so that the
+    // refusal went unrecorded and the request was retried as if it had merely failed.
+    static bool Valid(State s) =>
+        s.Servers is not null && s.Strikes >= 0 && s.Refusals >= 0
+        && s.Servers.Values.All(v => v is { Credentials: not null, BanLooks: >= 0 } && v.Credentials.Values.All(c => c is { Rejections: >= 0 }));
 
     // To a temporary file, flushed to the disk, then over the record in one move, so the record is
     // never half written. A handle another program has open on it (a virus scanner, an indexer) is
