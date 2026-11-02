@@ -23,12 +23,17 @@ public sealed partial class StatusGlyphView : UserControl
     string label = "";
     Storyboard? turning;
     string? role;
+    // Windows' animation effects, followed while on screen: turned off with a glyph turning, it
+    // stops; turned back on, it turns again (ui.md §9).
+    readonly Windows.UI.ViewManagement.UISettings settings = new();
+    bool listening;
 
     public StatusGlyphView()
     {
         InitializeComponent();
-        Loaded += (_, _) => { role = null; Apply(); };
-        Unloaded += (_, _) => Stop();
+        Loaded += (_, _) => { Listen(); role = null; Apply(); };
+        // Loaded and Unloaded can come in either order when a control is moved (SessionCard).
+        Unloaded += (_, _) => { if (!IsLoaded) { Unlisten(); Stop(); } };
         // The setters' ThemeResources are read as a state is entered: entered again, they are the
         // new theme's.
         ActualThemeChanged += (_, _) => { role = null; Apply(); };
@@ -78,7 +83,7 @@ public sealed partial class StatusGlyphView : UserControl
     void Turn()
     {
         Stop();
-        if (!IsLoaded || !new Windows.UI.ViewManagement.UISettings().AnimationsEnabled) { return; }
+        if (!IsLoaded || !settings.AnimationsEnabled) { return; }
         var (part, seconds) = glyph switch
         {
             StatusGlyph.Working => ("Spin", 1.2),
@@ -95,6 +100,24 @@ public sealed partial class StatusGlyphView : UserControl
         turning.Children.Add(spin);
         turning.Begin();
     }
+
+    void Listen()
+    {
+        if (listening) { return; }
+        listening = true;
+        settings.AnimationsEnabledChanged += OnAnimationsChanged;
+    }
+
+    void Unlisten()
+    {
+        if (!listening) { return; }
+        listening = false;
+        settings.AnimationsEnabledChanged -= OnAnimationsChanged;
+    }
+
+    // Raised off the UI thread.
+    void OnAnimationsChanged(Windows.UI.ViewManagement.UISettings sender, Windows.UI.ViewManagement.UISettingsAnimationsEnabledChangedEventArgs args) =>
+        DispatcherQueue.TryEnqueue(() => { if (IsLoaded) { Turn(); } });
 
     void Stop()
     {

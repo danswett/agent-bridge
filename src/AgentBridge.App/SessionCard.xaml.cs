@@ -24,6 +24,8 @@ public sealed partial class SessionCard : UserControl
         nameof(Card), typeof(object), typeof(SessionCard), new PropertyMetadata(null, (d, e) => ((SessionCard)d).OnCard(e.OldValue as SessionCardViewModel, e.NewValue as SessionCardViewModel)));
 
     QuestionView? questionView;
+    // The Words state the status words are in; null until entered, or after a theme change.
+    string? words;
     // Listening to the card: only while on screen. The machine picker takes cards off the list
     // and puts them back, which makes a new control each time while the card stays alive, so a
     // control that kept listening once off screen would be kept, and called, for as long as the
@@ -36,6 +38,9 @@ public sealed partial class SessionCard : UserControl
         InitializeComponent();
         Loaded += (_, _) => Attach();
         Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
+        // The Words states' ThemeResources are read as a state is entered: entered again, they are
+        // the new theme's.
+        ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
     }
 
     public SessionCardViewModel? Card
@@ -61,6 +66,7 @@ public sealed partial class SessionCard : UserControl
         if (!attached) { return; }
         SyncQuestion();
         Bindings.Update();
+        ShowWords();
     }
 
     void Attach()
@@ -70,7 +76,20 @@ public sealed partial class SessionCard : UserControl
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
         SyncQuestion();
         Bindings.Update();
+        words = null;
+        ShowWords();
         TakeFocus();
+    }
+
+    public static string WordsState(StatusTone tone) => $"Words{tone}";
+
+    void ShowWords()
+    {
+        var next = WordsState(Card?.StatusTone ?? StatusTone.Plain);
+        if (words == next) { return; }
+        if (words is null) { VisualStateManager.GoToState(this, "WordsUnset", false); }
+        VisualStateManager.GoToState(this, next, false);
+        words = next;
     }
 
     void Detach()
@@ -88,6 +107,7 @@ public sealed partial class SessionCard : UserControl
     {
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
         if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
     }
 

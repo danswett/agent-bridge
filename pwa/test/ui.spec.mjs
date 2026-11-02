@@ -260,8 +260,8 @@ test('every glyph is named with its state, as a row reads: title, status, machin
   await expect(glyphOf(page, DELEGATING)).toHaveAccessibleName('Land the P1 slices, delegating to 2 agents · details not reported, Demo machine');
   await expect(glyphOf(page, COPILOT)).toHaveAccessibleName('Plan Migration to Windows App, waiting on you, Demo machine');
   await expect(page.getByRole('img', { name: 'Refactor the relay client, working, Demo machine' })).toHaveCount(1);
-  // The tool's glyph is decoration beside its words.
-  await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAttribute('aria-hidden', 'true');
+  // The tool's words are its name and summary, so its glyph says whether it is running, done or failed.
+  await expect(card(page, CLAUDE).locator('.tool-line .glyph')).toHaveAccessibleName('running');
 });
 
 test('the latest response is rendered as Markdown', async ({ page }) => {

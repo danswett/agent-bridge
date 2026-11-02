@@ -460,8 +460,10 @@ public sealed class CardTests : IAsyncLifetime
         var running = new ToolCall { Id = "t1", Name = "Bash", Status = ToolStatus.Running, StartedAt = Make.T0 };
         var card = new SessionCardViewModel(Make.Session(status: SessionStatus.Working) with { Activity = new Activity { CurrentTool = running } }, Context());
         Assert.Equal(StatusGlyph.Working, card.ToolGlyph);
+        // Named for its state, as its words are only the tool's name and summary (ui.md §9).
+        Assert.Equal("running", card.ToolState);
         card.Update(Make.Session(status: SessionStatus.Working) with { Activity = new Activity { CurrentTool = running with { Status = ToolStatus.Failed } } });
-        Assert.Equal(StatusGlyph.Failed, card.ToolGlyph);
+        Assert.Equal((StatusGlyph.Failed, "failed"), (card.ToolGlyph, card.ToolState));
 
         var history = Make.Session() with { Activity = new Activity { History = [running, running with { Id = "t2", Status = ToolStatus.Done }, running with { Id = "t3", Status = ToolStatus.Failed }] } };
         var withHistory = new SessionCardViewModel(Make.Session(), new CardContext

@@ -94,6 +94,9 @@ public sealed class SessionCardViewModel : Observable
     public string ToolSummary => session.Activity.CurrentTool?.Summary ?? "";
     // A running tool turns, as working does; a finished one is done or failed.
     public StatusGlyph ToolGlyph => ToolGlyphOf(session.Activity.CurrentTool?.Status ?? ToolStatus.Running);
+    // The tool glyph's accessible name: the words beside it are the tool's name and summary, so
+    // only the glyph says whether it is running, done or failed (ui.md §9), as a history row's does.
+    public string ToolState => (session.Activity.CurrentTool?.Status ?? ToolStatus.Running).ToString().ToLowerInvariant();
     static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
 
     public string Response => session.Activity.Response ?? "";

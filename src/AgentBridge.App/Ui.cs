@@ -27,12 +27,15 @@ public static class Ui
 
     // A status's words (docs/design/ui.md §2.2, §3): needs' text for a question, agent's text while
     // an agent drives, secondary while the session ends. Never active or neutral, which are glyph
-    // colours; the glyph itself is StatusGlyphView.
-    public static Brush WordsBrush(StatusTone tone) => tone switch
+    // colours; the glyph itself is StatusGlyphView. SessionCard sets these through its Words
+    // states, as ThemeResources that follow a theme change; this is what the self-test expects.
+    public static string WordsKey(StatusTone tone) => tone switch
     {
-        StatusTone.Needs => Brush("AbNeedsText"),
-        StatusTone.Agent => Brush("AbAgentText"),
-        StatusTone.Muted => Brush("AbText2"),
-        _ => Brush("AbText"),
+        StatusTone.Needs => "AbNeedsText",
+        StatusTone.Agent => "AbAgentText",
+        StatusTone.Muted => "AbText2",
+        _ => "AbText",
     };
+
+    public static Brush WordsBrush(StatusTone tone) => Brush(WordsKey(tone));
 }

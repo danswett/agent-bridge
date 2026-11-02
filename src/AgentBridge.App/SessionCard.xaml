@@ -13,6 +13,35 @@
         Drop="OnDrop"
         PointerEntered="OnPointerEntered"
         PointerExited="OnPointerExited">
+        <VisualStateManager.VisualStateGroups>
+            <!-- The status words' colour (ui.md §2.2, §3): needs' text for a question, agent's text
+                 while an agent drives, secondary while the session ends. ThemeResources, entered
+                 again on a theme change, as StatusGlyphView's are; never active or neutral, which
+                 are glyph colours. -->
+            <VisualStateGroup x:Name="Words">
+                <VisualState x:Name="WordsUnset" />
+                <VisualState x:Name="WordsPlain">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsNeeds">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbNeedsText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsAgent">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbAgentText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsMuted">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText2}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -93,19 +122,33 @@
                     </Grid>
                 </Button>
                 <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Card.Meta, Mode=OneWay}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <local:StatusGlyphView
-                        VerticalAlignment="Center"
-                        AutomationProperties.AutomationId="StatusGlyph"
-                        Size="16"
-                        Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
-                        Driven="{x:Bind Card.Driven, Mode=OneWay}"
-                        Label="{x:Bind Card.GlyphLabel, Mode=OneWay}" />
-                    <TextBlock
-                        FontWeight="SemiBold"
-                        Foreground="{x:Bind local:Ui.WordsBrush(Card.StatusTone), Mode=OneWay}"
-                        Text="{x:Bind Card.StatusText, Mode=OneWay}"
-                        AutomationProperties.AutomationId="Status" />
+                <local:FlowPanel Spacing="8">
+                    <!-- The glyph and its words stay together, the words wrapping beside the glyph;
+                         the times and the driver follow, on the next line when they do not fit. -->
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <local:StatusGlyphView
+                            VerticalAlignment="Top"
+                            Margin="0,2,0,0"
+                            AutomationProperties.AutomationId="StatusGlyph"
+                            Size="16"
+                            Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
+                            Driven="{x:Bind Card.Driven, Mode=OneWay}"
+                            Label="{x:Bind Card.GlyphLabel, Mode=OneWay}" />
+                        <!-- Coloured by the Words visual states, as ThemeResources, so the words
+                             follow a theme change with the card behind them. -->
+                        <TextBlock
+                            x:Name="StatusWords"
+                            Grid.Column="1"
+                            FontWeight="SemiBold"
+                            TextWrapping="Wrap"
+                            Foreground="{ThemeResource AbText}"
+                            Text="{x:Bind Card.StatusText, Mode=OneWay}"
+                            AutomationProperties.AutomationId="Status" />
+                    </Grid>
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.SinceText, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.UpdatedText, Mode=OneWay}" />
                     <TextBlock
@@ -115,9 +158,9 @@
                         ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(Card.Driven), Mode=OneWay}"
                         AutomationProperties.AutomationId="Driver" />
-                </StackPanel>
+                </local:FlowPanel>
                 <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
-                    <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" />
+                    <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
                     <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.ToolName, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" MaxWidth="640" Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                 </StackPanel>
