@@ -416,6 +416,8 @@ from the tagged source, so E7 to E10 have to check the shipped binary against th
   non-inference request per probe, and E7 lists them all.
 
 **X-4. Ending the probe safely (still open).**
+- **E13(a) to (c) have run on Linux.** [E13 on Linux](#e13-on-linux) corrects parts of
+  this section and decides the shutdown rule.
 - On Unix, closing standard input arms a 45 s watchdog that calls
   `process::exit(1)` (`app-server-transport/src/transport/stdio.rs:125-129`,
   `:168-182`). Closing too early could cut a refresh off between the token response and
@@ -760,3 +762,173 @@ Pin versions: Claude Code 2.1.291 and latest, Codex 0.166.0 and latest.
   name.
 - **macOS was read from the docs only.** The Windows bundle compiles out the Keychain
   branch, so the Keychain details are from the docs and not the code. S7 covers macOS.
+
+## E13 on Linux
+
+E13(a) to (c) ran on 2026-11-01 PT on a disposable Azure VM: Ubuntu 24.04, Codex 0.166.0
+from npm, signed in to a ChatGPT Plus account with device auth. The VM was then
+deleted. Every probe ran the five spike messages with no model turn and no `thread/*` or
+`turn/*` request. E13(d), the Windows repeat, wasn't run.
+
+**These results change X-4 and #200.** The 20-second grace period isn't what decides
+whether a rotated token is lost. Codex's own start-up timeouts are, and they apply to every
+`codex app-server` start, whatever the probe does with standard input.
+
+### How it was run
+
+- **The probe** was a small script that started `codex app-server` (the native binary,
+  with no child processes) and sent `initialize`, `initialized`, `account/read`,
+  `account/rateLimits/read` and `account/read`, each after the previous answer. It logged
+  the time of every send, response, notification and stdin close, the exit code and the
+  process tree. Account identifiers were redacted on the VM.
+- **`mitmdump` logged only method, host, path, status and times.** For
+  `POST auth.openai.com/oauth/token`:
+  - it forwarded the request at once and **held the response** for the stated time, so
+    the server had already rotated the token when Codex was kept waiting;
+  - it kept the token response root-only on the VM, to tell whether Codex saved the new
+    token, and recorded only `sha256(token)[:8]`;
+  - it could answer `/backend-api/wham/accounts/check` with 401s.
+- **The access token lives 240 h (10 days)** (JWT `iat` to `exp`, after both sign-in and
+  refresh). That's what E8 was to measure.
+- **A proactive refresh therefore needs a clock change.** Runs (a), (b) and (c1) stopped
+  chrony and set the VM's clock to a chosen number of seconds before the stored token's
+  `exp`, then restored it. The servers keep their own time, so only Codex's
+  5-minute-window decision moves. After a refresh, the next in-window probe waited until
+  the new token, which was issued in real time, also looked fresh under the shifted clock.
+  Without that wait, 24 of the first 25 in-window probes refreshed 4 to 6 times each,
+  all because of the clock change. All 25 were re-run with the wait.
+- 97 signed-in probe runs in total, with no turns. Traffic seen: `chatgpt.com/backend-api/` paths
+  `wham/accounts/check`, `wham/usage`, `codex/models`, `ps/plugins/*` and
+  `plugins/featured`, plus plugin assets on `*.oaiusercontent.com`, and
+  `auth.openai.com/oauth/token`.
+
+### What happened
+
+**A new finding first: Codex refreshes during start-up, under a 20 s timeout.** When a
+proactive refresh is due, the first `auth()` caller isn't the usage read. It's the cloud
+config bundle load (`cloud-config/src/service.rs:129-189`). That load runs inside
+`CLOUD_CONFIG_BUNDLE_TIMEOUT`, which is 20 s (`:35`), and `initialize` isn't answered until
+it finishes. A token response slower than 20 s is dropped, and the rotation with it. The
+attempt then repeated once, with another 20 s limit. stderr shows "timed out waiting for
+cloud config bundle after 20s", and `initialize` was answered at 40 s.
+
+| Run | Set-up | Token requests (s after start) | Responses | Exit | Token saved? |
+|---|---|---|---|---|---|
+| (a) | In the window (240 s before `exp`). Hold 50 s. Stdin closed when the rate-limit read was sent, at 40.2 s | 0.3 and 20.3 (cut off by the cloud-config 20 s limit), then 40.3 (the rate-limit read's own refresh) | `initialize` at 40.2; `account/read` failed: "failed to load workspace requirements: cloud config: request timed out"; the rate-limit read was never answered | **30.0 s after EOF, exit 0**: the processor's 30 s drain, not the 45 s watchdog | **No.** All three rotations were lost, and `auth.json` kept the token that had been sent |
+| (a) check | The next probe, no hold, about 5 min later, with the token (a) had sent three times | One, at 0.3 | All answered | 0.02 s after EOF | **Yes.** The server accepted that token a fourth time |
+| (b) | As (a), with stdin closed only after all the responses | 0.2 and 20.2 (cut off as in (a)), then 40.2 | `initialize` at 40.2; both `account/read`s failed (cloud config timed out); the rate-limit read failed at 90.6 s: "failed to fetch codex rate limits: application network policy is unavailable" | 0.06 s after EOF, exit 0 | **Yes**, the third rotation. The first two were lost. The probe got **no reading** |
+
+**(c1) Proactive.** 50 probes, from 360 s to 240 s before `exp`, with stdin closed as soon
+as the last response arrived:
+- **25 probes started outside the window** (360 to 301 s before `exp`). None made a token
+  request.
+- **25 probes started inside it** (299 to 240 s, re-run as above). Each made exactly one
+  token request, at 0.08 to 0.17 s (the start-up `auth()`). Every one was answered before
+  the first response and saved, and the process exited 0 within 0.03 s of EOF.
+- **6 more probes aimed the window opening at the gap** after the usage read's `auth()`
+  and before exit, at 301 to 304 s:
+  - At 301 s, the window opened during the rate-limit read. That read made the refresh,
+    waited for it and answered after it (token request at 1.14 s, response at 1.53 s),
+    and the token was saved.
+  - The other five exited before the window opened, with no refresh.
+- **No token request was open, or started, after the last probe response in any (c1)
+  run.** So the repeat with a hold past the 45 s watchdog wasn't needed.
+
+**(c2) Routing recovery.** Fresh token, real clock. The token response was held for 10, 20
+or 30 s. Stdin was closed (i) on the last response or (ii) 20 s after it.
+- **As specified (one 401 on `/accounts/check`), there is no refresh.** Recovery's first
+  step only reloads `auth.json` and retries (`UnauthorizedRecovery`,
+  `login/src/auth/manager.rs:1914-1919` and `:2063-2105`). The retry 30 ms later got 200.
+  All six runs made no token request and answered normally.
+- **A refresh needs two consecutive 401s.** So the six runs were repeated with two:
+
+| Hold | Close | Token request | First `account/read` | Exit | Token saved? |
+|---|---|---|---|---|---|
+| 10 s | (i) on the responses / (ii) +20 s | 0.2 s, released 10.7 s | **Waited for discovery's refresh** and answered after it; all responses by 11.6 s | 0.02–0.03 s after EOF | **Yes**, both |
+| 20 s | (i) / (ii) | 0.2 s, released 20.6 s | Failed at 15.1 s: "workspace routing discovery timed out" | 0.02–0.04 s after EOF | **No**, in both: the 15 s discovery timeout (`workspace_routing.rs:552`) dropped the refresh. In (ii) the process was still running when the held response arrived at 20.6 s, but nothing was waiting for it |
+| 30 s | (i) / (ii) | 0.2 s → **401 `refresh_token_reused`** (still held 30 s) | Failed at 15.1 s, as above | 0.02–0.04 s after EOF | Nothing new to save. **The stored refresh token was now rejected** |
+
+**The 30 s runs used the same stored refresh token as the two 20 s runs.** The server
+accepted that token twice, rotating it each time, and both rotations were lost. It
+rejected the third use, about 100 s after the first, with HTTP 401
+`{"code": "refresh_token_reused", "message": "Your refresh token has already been used to
+generate a new access token. Please try signing in again."}`. Both 30 s runs still
+answered the rate-limit read, using the unexpired access token. Codex itself never
+received the rejection, because discovery had timed out first. `codex login status` still
+said "Logged in using ChatGPT", which confirms X-5.
+
+### What this decides (X-4)
+
+- **(a) failed as expected, but not the way expected.** The rotated tokens were lost.
+  The cause was Codex's 20 s cloud-config limit and the 30 s RPC drain after EOF, and
+  either cuts first. The 45 s watchdog never fired. Losing a rotation didn't sign Codex
+  out at once in (a): the server accepted the old token again 5 minutes later. But (c2)
+  shows the server's tolerance runs out: the same pattern ended in
+  `refresh_token_reused`. **A lost rotation can sign Codex out**, and whether it does
+  depends on server behaviour the client can't see.
+- **(b) passed for EOF.** Closing stdin after the responses lost nothing that the probe
+  could still save.
+- **(c) No refresh outlives the probe's responses.** Every refresh came from one of three
+  places, and each finished, or was cancelled, before the responses:
+  - the start-up `auth()`, which `initialize` waits for;
+  - the usage read's own `auth()`, which the read waits for;
+  - routing discovery, which `account/read` waits for. **The second `account/read` does
+    wait for routing discovery's refresh** (c2, 10 s).
+- **The refreshes that were lost were cancelled by Codex's own timeouts:** 20 s for cloud
+  config at start-up, and 15 s for routing discovery. That happened whatever the probe did
+  with stdin. In (c2), (i) and (ii) gave identical outcomes.
+- **So the 20 s grace period is harmless but buys nothing.** Closing stdin on the last
+  response is as safe as Codex itself.
+- **The remaining risk is a slow token endpoint**, more than 15 to 20 s, while a refresh is
+  due. That loses the rotation on any app-server start, including the user's own. Each
+  probe adds a start, so the pace limits keep their weight. The daemon route (X-3) adds
+  no start and stays preferred whenever the daemon runs.
+
+### Corrections
+
+**X-4:**
+- "When `/accounts/check` returns 401, that discovery runs `unauthorized_recovery()`,
+  which refreshes": the first 401 only reloads from disk. A refresh needs a second
+  consecutive 401.
+- "A background refresh can then still be running after both responses arrive": not
+  observed in any run where the probe waited for its responses. Each refresher found is
+  awaited by `initialize`, the usage read or `account/read`.
+- Add the start-up cloud-config refresh, bounded by 20 s, to "What could still be
+  refreshing". It's the first caller when a refresh is due, and the most likely place to
+  lose a rotation.
+- "On Unix, closing standard input arms a 45 s watchdog": still true, but the process
+  exited at the 30 s drain first, and within 0.06 s of EOF whenever nothing was in flight.
+- "Interim rule": closing stdin after all the responses is sufficient. The grace period
+  can go, or stay as cheap insurance. Either way, the standalone route stays.
+
+**#200 Codex:**
+- **Shutdown.** "It closes standard input only after the responses and the grace period,
+  or by whatever shutdown mechanism E13 chose." E13 chose: close stdin after the last
+  response, which is the second `account/read`. The test "a fake app-server that answers
+  after the 60 s reporting timeout still has its standard input open" still stands.
+- **Errors that aren't a sign-out.** The probe must treat these as transient and back
+  off. They're what a slow token endpoint produces:
+  - "failed to load workspace requirements: cloud config: request timed out";
+  - "workspace routing discovery timed out";
+  - "failed to fetch codex rate limits: application network policy is unavailable".
+- **Sign-out detection** ("an authentication error from the rate-limit read"):
+  - A rejected refresh token can stay hidden for up to 10 days. While the access token is
+    valid the rate-limit read succeeds, and a held or slow rejection is cut off by the
+    15 s discovery timeout before Codex sees it.
+  - So the signal arrives late, at the next refresh, and E14's error texts still decide
+    the failure message.
+  - The rejection carries `refresh_token_reused` with HTTP 401, not the HTTP 400 that
+    E14(b) planned to inject.
+- **E8:** the access token lifetime is 240 h, so a 2-hour E8 run won't cross an expiry
+  without the same clock change.
+
+### Limitations of this run
+
+- **One account, one plan (Plus), one region, one day.** The server's reuse tolerance
+  (four uses over 5 minutes once, two uses then rejection another time) isn't documented,
+  and this run doesn't establish its rule.
+- **The proactive runs moved the VM's clock, not real time.** The backend saw real time
+  throughout, so this only changes when Codex decides to refresh.
+- **mitmdump changed the transport.** Codex reached the backend through the proxy and
+  trusted its CA through `CODEX_CA_CERTIFICATE`. With no hold, a whole probe took 0.6 to
+  6 s.
