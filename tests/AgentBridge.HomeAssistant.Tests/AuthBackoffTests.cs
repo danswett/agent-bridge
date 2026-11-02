@@ -293,6 +293,26 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Single(outcomes, e => ((HomeAssistantAuthException)e!).Sent);
     }
 
+    // serve's app shows what its guard says; a refusal shadow run recorded must reach it too, not
+    // only stop the connector.
+    [Fact]
+    public async Task The_app_hears_of_a_refusal_another_process_recorded()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        var serveGuard = new HaAuthGuard(Record, time);
+        var serve = Client(ha, serveGuard);
+        Assert.Null(await Publish(serve));
+        var told = 0;
+        serveGuard.Changed += () => Interlocked.Increment(ref told);
+
+        ha.Status = HttpStatusCode.Unauthorized;
+        await Publish(Client(ha, new HaAuthGuard(Record, time)));
+        Assert.NotNull(serve.Refused);
+
+        Assert.True(told > 0);
+        Assert.StartsWith("Home Assistant rejected the token", serveGuard.Problem, StringComparison.Ordinal);
+    }
+
     // serve, ha shadow and shadow run are separate processes with a guard each, on one record.
     [Fact]
     public async Task Two_processes_with_a_token_not_yet_accepted_send_one_attempt_between_them()

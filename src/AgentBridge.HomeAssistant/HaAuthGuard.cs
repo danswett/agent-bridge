@@ -66,6 +66,9 @@ public sealed class HaAuthGuard
     bool unwritable;
     // When the record had last been written as this process last read it.
     DateTime readAt;
+    // The record was read again, with whatever another process recorded: what Problem says may have
+    // changed, and the app is told (Notify), not only the connector that will skip its pass.
+    bool reread;
 
     // path: the shared record (FileFor); null keeps it in this process only.
     public HaAuthGuard(string? path = null, TimeProvider? time = null, Action<string>? log = null)
@@ -117,11 +120,27 @@ public sealed class HaAuthGuard
     // a whole pass rather than fail each request in it.
     public string? Refused(HaCredential credential)
     {
+        try
+        {
+            lock (gate)
+            {
+                Refresh();
+                return Decide(credential, time.GetUtcNow()) is { Gate: Gate.Held } d ? Message(credential, d.Kind) : null;
+            }
+        }
+        finally { Notify(); }
+    }
+
+    // Changed, once the lock is let go, when the record was read again meanwhile.
+    void Notify()
+    {
+        bool raise;
         lock (gate)
         {
-            Refresh();
-            return Decide(credential, time.GetUtcNow()) is { Gate: Gate.Held } d ? Message(credential, d.Kind) : null;
+            raise = reread;
+            reread = false;
         }
+        if (raise) { Changed?.Invoke(); }
     }
 
     // ha token set: the token was given again, which counts as a change, so it gets an attempt of
@@ -139,6 +158,12 @@ public sealed class HaAuthGuard
     // HomeAssistantAuthException, with nothing sent, when it may not be made now. One that is not
     // known to be accepted waits for any other such attempt to Home Assistant to finish first.
     public async Task<Lease> EnterAsync(HaCredential credential, CancellationToken cancellationToken = default)
+    {
+        try { return await EnterCoreAsync(credential, cancellationToken); }
+        finally { Notify(); }
+    }
+
+    async Task<Lease> EnterCoreAsync(HaCredential credential, CancellationToken cancellationToken)
     {
         Decision decision;
         lock (gate)
@@ -535,6 +560,7 @@ public sealed class HaAuthGuard
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             var read = JsonSerializer.Deserialize<State>(stream, Json) ?? new State();
             readAt = written;
+            reread = true;
             return read;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
