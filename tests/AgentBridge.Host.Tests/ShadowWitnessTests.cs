@@ -847,4 +847,16 @@ public sealed class ShadowWitnessTests : IDisposable
         ClaudeTranscript(AskCall, Answer, Assistant([new { type = "text", text = "ok" }], "end_turn", "claude-sonnet-5"));
         Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Model));
     }
+
+    [Fact]
+    public void A_question_asked_on_the_first_line_of_the_window_read_is_still_seen()
+    {
+        // The last 512 KiB start exactly where the question was asked, after a line before it.
+        string Line(object o) => JsonSerializer.Serialize(o) + "\n";
+        var fixedPart = Line(AskCall).Length + Line(Answer).Length + Line(Assistant([new { type = "text", text = "" }], "end_turn")).Length;
+        var end = Assistant([new { type = "text", text = new string('x', 512 * 1024 - fixedPart) }], "end_turn");
+        var path = ClaudeTranscript(new { type = "system" }, AskCall, Answer, end);
+        Assert.Equal(512 * 1024, new FileInfo(path).Length - Line(new { type = "system" }).Length);
+        Assert.Equal("agent-ha-bridge#290", KnownOf(HeldAnswer(), ShadowKinds.Status));
+    }
 }

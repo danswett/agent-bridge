@@ -988,8 +988,15 @@ public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAft
             var bytes = new byte[stream.Length - from];
             stream.ReadExactly(bytes);
             var lines = Encoding.UTF8.GetString(bytes).Split('\n');
-            // A tail begun mid-line drops that fragment.
-            foreach (var raw in from > 0 ? lines.Skip(1) : lines)
+            // A tail begun mid-line drops that fragment; one begun just after a newline keeps its
+            // whole first line (found in review).
+            var midLine = false;
+            if (from > 0)
+            {
+                stream.Seek(from - 1, SeekOrigin.Begin);
+                midLine = stream.ReadByte() != '\n';
+            }
+            foreach (var raw in midLine ? lines.Skip(1) : lines)
             {
                 var line = raw.TrimEnd('\r');
                 if (line.Length == 0 || !line.Contains(call, StringComparison.Ordinal) && !line.Contains("\"assistant\"", StringComparison.Ordinal)
