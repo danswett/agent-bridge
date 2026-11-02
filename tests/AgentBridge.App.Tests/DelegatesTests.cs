@@ -490,6 +490,52 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Ask_main_agent_to_stop_it_while_a_reply_is_being_delivered_leaves_that_reply_to_come_out_of_the_box()
+    {
+        using var delivering = new ManualResetEventSlim();
+        host.On(Ops.SessionReply, _ =>
+        {
+            delivering.Wait(FakeHost.Patience);
+            return new ReplyResult(AnswerOutcome.Delivered);
+        });
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("witness"));
+        ui.Post(() => card.Reply!.Text = "Thanks.\n");
+        ui.Post(card.Reply!.Send);
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionReply).Count == 1, "the reply");
+
+        ui.Post(card.Delegates.AskMainAgentToStop);
+        Assert.Equal("Thanks.\nPlease stop your delegate witness.", TestUi.Read(() => card.Reply!.Text));
+
+        delivering.Set();
+        await Wait.UntilAsync(() => card.Reply!.Text == "Please stop your delegate witness.", "the delivered reply to leave the box");
+    }
+
+    [Fact]
+    public async Task A_new_nested_delegate_adds_its_row_to_the_inspector_and_keeps_the_rows_already_there()
+    {
+        Resize(1440);
+        Select("del");
+        var card = Card("del");
+        ui.Post(() => layout.OpenDelegate("witness"));
+        var before = TestUi.Read(() => card.Delegates.Detail.Nested.ToList());
+
+        var next = Delegating() with
+        {
+            Subagents = [.. Delegating().Subagents!, Delegate("trace", "Trace the restart", SubagentKind.Task, started: -1, parent: "witness")],
+            UpdatedAt = Now.AddSeconds(1),
+        };
+        await host.SendAsync(Events.SessionUpsert, next);
+        await Wait.UntilAsync(() => card.Delegates.Detail.Nested.Count == 3, "the new nested delegate");
+
+        var after = TestUi.Read(() => card.Delegates.Detail.Nested.ToList());
+        Assert.Same(before[0], after.Single(n => n.Item.Id == "grep"));
+        Assert.Same(before[1], after.Single(n => n.Item.Id == "review"));
+    }
+
+    [Fact]
     public async Task A_delegate_named_main_agent_is_shown_as_a_delegate_on_every_surface_and_never_as_the_main_agent()
     {
         // A nested task a prompt-injected delegate started, named to pose as the main agent's label,

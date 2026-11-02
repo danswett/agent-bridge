@@ -313,7 +313,10 @@ public sealed class DelegatesViewModel : Observable
     {
         if (Selected is not { } a || reply() is not { } r || !Detail.CanAskToStop || DelegateLabel.SafeId(a.Id) is not { } id) { return; }
         var ask = $"Please stop your delegate {id}.";
-        r.Text = string.IsNullOrWhiteSpace(r.Text) ? ask : $"{r.Text.TrimEnd()} {ask}";
+        // Added after the draft as it stands, never trimmed: a reply still being delivered comes
+        // out of the box only while the draft starts with exactly what was sent.
+        var draft = r.Text;
+        r.Text = string.IsNullOrWhiteSpace(draft) ? ask : char.IsWhiteSpace(draft[^1]) ? draft + ask : $"{draft} {ask}";
         ReplyWanted?.Invoke();
     }
 
@@ -543,11 +546,8 @@ public sealed class DelegatesViewModel : Observable
         SyncRows(d.Tools, [.. tools.Take(50).Select(t => new ToolRow(SessionCardViewModel.ToolGlyphOf(t.Status), t.Status.ToString().ToLowerInvariant(), t.Name, t.Summary, Words.Clock((t.EndedAt ?? now) - t.StartedAt)))]);
         var nested = Descendants(entry.Id, session.Subagents ?? []);
         var want = nested.Where(n => items.ContainsKey(n.Agent.Id)).Select(n => new NestedDelegate(items[n.Agent.Id], Math.Min(n.Depth, 3) * 16)).ToList();
-        if (!d.Nested.SequenceEqual(want))
-        {
-            d.Nested.Clear();
-            foreach (var n in want) { d.Nested.Add(n); }
-        }
+        // Changed a row at a time, as the strip is: a cleared list loses the focused row.
+        Sync(d.Nested, want);
         d.CanAskToStop = entry.Status != SubagentStatus.Ended && reply() is not null && DelegateLabel.SafeId(entry.Id) is not null;
         if (loadingNote) { d.Note = ctx.FetchDelegate is null ? "" : "Loading…"; }
         d.Raised();
