@@ -1,0 +1,244 @@
+<!doctype html>
+<!-- A preview of the motion catalogue (docs/design/ui.md §5.3) on a phone-sized list and
+     session, timed entirely by the generated tokens in pwa/design/tokens.css. It is not the
+     PWA: phase 2 (#232) builds the real thing. Serve the repository root over HTTP and open
+     docs/design/motion-preview.html; tools/design-mockups/motion-preview.js records it to
+     motion-preview.gif. Under prefers-reduced-motion it shows the reduced forms. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Bridge motion preview</title>
+<link rel="stylesheet" href="../../pwa/design/tokens.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--ab-shell); color: var(--ab-text); font: 15px/20px system-ui, sans-serif; overflow: hidden; }
+  .phone { position: relative; width: 390px; height: 640px; overflow: hidden; background: var(--ab-shell); }
+  .screen { position: absolute; inset: 0 0 40px 0; background: var(--ab-shell); }
+  .session { display: none; background: var(--ab-layer); }
+  h1 { font-size: 24px; line-height: 32px; font-weight: 600; margin: 0; padding: 16px 16px 8px; }
+  .tabs { position: relative; display: flex; gap: 20px; padding: 0 16px; height: 36px; align-items: center; color: var(--ab-text2); font-size: 14px; }
+  .tabs span.on { color: var(--ab-text); }
+  .indicator { position: absolute; bottom: 2px; left: 0; height: 3px; border-radius: var(--ab-radius-pill); background: var(--ab-bridge); }
+  .section { padding: 12px 16px 4px; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--ab-text2); }
+  .list { position: relative; }
+  .row { position: relative; display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 12px; padding: 10px 16px; align-items: start; background: transparent; }
+  .row .glyph { grid-row: 1 / 3; width: 16px; height: 16px; margin-top: 2px; position: relative; }
+  .row .glyph svg { position: absolute; inset: 0; width: 16px; height: 16px; }
+  .row .title { font-size: 15px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.unread .title { font-weight: 600; }
+  .row .meta { grid-column: 2; font-size: 13px; line-height: 18px; color: var(--ab-text2); }
+  .row .trail { grid-row: 1; grid-column: 3; font-size: 13px; line-height: 20px; color: var(--ab-text3); font-variant-numeric: tabular-nums; display: flex; align-items: center; height: 20px; }
+  .dot { width: 6px; height: 6px; border-radius: 3px; background: var(--ab-bridge); display: none; }
+  .row.unread .dot { display: block; }
+  .row.unread .age { display: none; }
+  .row.pressed { background: var(--ab-selected); }
+  .menu { position: absolute; right: 16px; width: 168px; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); box-shadow: 0 8px 24px var(--ab-shadow); display: none; }
+  .menu div { padding: 8px 12px; border-radius: var(--ab-radius-control); font-size: 14px; }
+  .bar { display: flex; align-items: center; gap: 8px; padding: 12px 12px 4px; }
+  .back { width: 32px; height: 32px; display: grid; place-items: center; color: var(--ab-text); }
+  .stitle { font-size: 20px; line-height: 28px; font-weight: 600; }
+  .smeta { padding: 0 16px 12px 52px; font-size: 13px; color: var(--ab-text2); display: flex; gap: 6px; align-items: center; }
+  .convo { padding: 8px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .label { font-size: 13px; color: var(--ab-text2); margin-bottom: 6px; }
+  .reading { font-size: 16px; line-height: 24px; }
+  .disclose { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ab-text2); margin-top: 8px; }
+  .chev { width: 16px; height: 16px; display: inline-block; }
+  .reasoning { display: none; margin-top: 6px; font-size: 14px; line-height: 20px; color: var(--ab-text2); }
+  .bubble { align-self: flex-end; max-width: 75%; background: var(--ab-card); border-radius: var(--ab-radius-card); padding: 8px 12px; }
+  .reply { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; background: var(--ab-card); border-radius: var(--ab-radius-card); border-bottom: 2px solid var(--ab-bridge); padding: 8px 8px 8px 12px; color: var(--ab-text3); }
+  .reply .text { flex: 1; }
+  .reply .text.typed { color: var(--ab-text); }
+  .send { width: 32px; height: 32px; border-radius: var(--ab-radius-control); background: var(--ab-bridge); color: var(--ab-bridge-on); display: grid; place-items: center; }
+  .toast { position: absolute; left: 12px; right: 12px; bottom: 76px; background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); padding: 10px 12px; font-size: 14px; display: none; box-shadow: 0 8px 24px var(--ab-shadow); }
+  .caption { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; display: flex; align-items: center; justify-content: center; font: 12px/16px "Agent Bridge Mono", ui-monospace, monospace; color: var(--ab-text2); background: var(--ab-layer); border-top: 1px solid var(--ab-stroke); }
+  svg.icon { width: 20px; height: 20px; color: currentColor; --ab-icon-stroke: 1.5; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="screen list-screen">
+    <h1>Sessions</h1>
+    <div class="tabs"><span class="on" data-tab="all">All</span><span data-tab="DEV-VM1">DEV-VM1</span><span data-tab="ULTRA">ULTRA</span><i class="indicator"></i></div>
+    <div class="section">Sessions</div>
+    <div class="list"></div>
+    <div class="menu"><div>Move up</div><div>Move down</div><div>Pin</div></div>
+  </div>
+  <div class="screen session">
+    <div class="bar"><span class="back"><svg class="icon"><use href="../../pwa/design/sprite.svg#icon-back"/></svg></span><span class="stitle">Fix relay tests</span></div>
+    <div class="smeta"><span class="g"></span><span>Idle · DEV-VM1 · agent-bridge</span></div>
+    <div class="convo">
+      <div>
+        <div class="label">Main agent · 2m</div>
+        <div class="reading">The two flaky relay tests share a port. I gave each its own and both pass ten runs in a row.</div>
+        <div class="disclose"><svg class="chev icon"><use href="../../pwa/design/sprite.svg#icon-chevron"/></svg>Show reasoning</div>
+        <div class="reasoning">Both bind the first free port at start-up, and the second can take the first's before it listens.</div>
+      </div>
+    </div>
+    <div class="reply"><span class="text">Message the main agent</span><span class="send"><svg class="icon"><use href="../../pwa/design/sprite.svg#icon-send"/></svg></span></div>
+    <div class="toast">ULTRA went offline</div>
+  </div>
+  <div class="caption"></div>
+</div>
+<script>
+'use strict';
+const ROOT = document.documentElement;
+const css = (name) => getComputedStyle(ROOT).getPropertyValue(name).trim();
+const ms = (name) => parseFloat(css(name)) || 0;
+const kebab = (s) => s.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+const capture = new URLSearchParams(location.search).has('capture');
+
+// Every animation runs on a catalogue entry's own properties, so reduced motion needs nothing here.
+const running = [];
+let eventTime = 0;
+function anim(el, frames, id, exit = false) {
+  const p = `--ab-motion-${kebab(id)}${exit ? '-exit' : ''}`;
+  const a = el.animate(frames, { duration: ms(`${p}-duration`), easing: css(`${p}-ease`) || 'linear', fill: 'backwards' });
+  // The end state is the element's own style, so a finished animation leaves nothing behind
+  // to outrank the next one on the same element.
+  const last = frames[frames.length - 1];
+  if ('opacity' in last) { el.style.opacity = last.opacity === 1 ? '' : String(last.opacity); }
+  if (capture) { a.pause(); running.push({ a, t0: eventTime }); }
+  return a;
+}
+const distance = (id) => ms(`--ab-motion-${kebab(id)}-distance`);
+const $ = (s, el = document) => el.querySelector(s);
+
+const glyph = (name, role) => `<svg style="color: var(--ab-${role})"><use href="../../pwa/design/sprite.svg#glyph-${name}"/></svg>`;
+const sessions = [
+  { id: 'plan', title: 'Plan migration to the Windows app', meta: 'Working · ULTRA', glyph: ['working', 'active'], age: '1m', machine: 'ULTRA' },
+  { id: 'fix', title: 'Fix relay tests', meta: 'Idle · DEV-VM1', glyph: ['idle', 'neutral'], age: '4m', machine: 'DEV-VM1' },
+  { id: 'review', title: 'Review the usage page', meta: 'Delegating to 3 agents · DEV-VM1', glyph: ['delegating', 'active'], age: '9m', machine: 'DEV-VM1' },
+  { id: 'docs', title: 'Docs pass on ui.md', meta: 'Idle · ULTRA', glyph: ['idle', 'neutral'], age: '22m', machine: 'ULTRA' },
+];
+function rowEl(s) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  el.dataset.id = s.id;
+  el.dataset.machine = s.machine;
+  el.innerHTML = `<span class="glyph">${glyph(...s.glyph)}</span><span class="title">${s.title}</span><span class="trail"><span class="age">${s.age}</span><i class="dot"></i></span><span class="meta">${s.meta}</span>`;
+  return el;
+}
+const list = $('.list');
+for (const s of sessions) { list.append(rowEl(s)); }
+const row = (id) => $(`.row[data-id="${id}"]`);
+function placeIndicator(tab) {
+  const i = $('.indicator');
+  const span = $(`.tabs [data-tab="${tab}"]`);
+  const before = i.getBoundingClientRect().left;
+  i.style.left = `${span.offsetLeft}px`;
+  i.style.width = `${span.offsetWidth}px`;
+  return before - i.getBoundingClientRect().left;
+}
+placeIndicator('all');
+$('.smeta .g').innerHTML = `<span class="glyph" style="display:inline-block;width:14px;height:14px;position:relative">${glyph('idle', 'neutral').replace('<svg ', '<svg width="14" height="14" ')}</span>`;
+const say = (s) => { $('.caption').textContent = s; };
+
+const steps = [
+  [400, 'A session arrives · listItem', () => {
+    const el = rowEl({ id: 'hoku', title: 'Hoku tracker cleanup', meta: 'Working · DEV-VM1', glyph: ['working', 'active'], age: 'now', machine: 'DEV-VM1' });
+    list.prepend(el);
+    anim(el, [{ opacity: 0 }, { opacity: 1 }], 'listItem');
+  }],
+  [1500, 'Unread activity · activityDot', () => {
+    row('fix').classList.add('unread');
+    anim($('.dot', row('fix')), [{ opacity: 0 }, { opacity: 1 }], 'activityDot');
+  }],
+  [2600, 'Working → idle · glyph', () => {
+    const g = $('.glyph', row('plan'));
+    const old = g.firstElementChild;
+    g.insertAdjacentHTML('beforeend', glyph('idle', 'neutral'));
+    $('.meta', row('plan')).textContent = 'Idle · ULTRA';
+    anim(old, [{ opacity: 1 }, { opacity: 0 }], 'glyph');
+    anim(g.lastElementChild, [{ opacity: 0 }, { opacity: 1 }], 'glyph');
+  }],
+  [3600, 'Machine tab · tab and selection', () => tab('DEV-VM1')],
+  [4800, 'Machine tab · tab and selection', () => tab('all')],
+  [6000, 'Alt+↑ moves one row · reorder', () => {
+    const el = row('docs');
+    const before = el.getBoundingClientRect().top;
+    list.insertBefore(el, row('review'));
+    anim(el, [{ transform: `translateY(${before - el.getBoundingClientRect().top}px)` }, { transform: 'none' }], 'reorder');
+  }],
+  [7200, 'Row menu · menu', () => {
+    const m = $('.menu');
+    m.style.top = `${row('fix').offsetTop + list.offsetTop + 40}px`;
+    m.style.display = 'block';
+    anim(m, [{ opacity: 0, transform: `translateY(-${distance('menu')}px)` }, { opacity: 1, transform: 'none' }], 'menu');
+  }],
+  [8300, 'Row menu closes · menu', () => {
+    anim($('.menu'), [{ opacity: 1 }, { opacity: 0 }], 'menu', true);
+  }],
+  [9000, 'Press · press', () => { row('fix').classList.add('pressed'); }],
+  [9150, 'Release, then push · press and push', () => {
+    const r = row('fix');
+    r.classList.remove('pressed', 'unread');
+    anim(r, [{ background: css('--ab-selected') }, { background: 'transparent' }], 'press');
+    const s = $('.session');
+    s.style.display = 'block';
+    for (const part of s.querySelectorAll(':scope > :not(.toast)')) {
+      anim(part, [{ opacity: 0, transform: `translateX(${distance('push')}px)` }, { opacity: 1, transform: 'none' }], 'push');
+    }
+  }],
+  [10400, 'Show reasoning · disclosure', () => {
+    $('.reasoning').style.display = 'block';
+    anim($('.chev'), [{ transform: 'rotate(0deg)' }, { transform: 'rotate(90deg)' }], 'disclosure');
+    $('.chev').style.transform = 'rotate(90deg)';
+    anim($('.reasoning'), [{ opacity: 0, transform: `translateY(-${distance('disclosure')}px)` }, { opacity: 1, transform: 'none' }], 'disclosure');
+  }],
+  [11500, 'Typed', () => { const t = $('.reply .text'); t.textContent = 'Ship it'; t.classList.add('typed'); }],
+  [12000, 'Send · acknowledge', () => {
+    const t = $('.reply .text');
+    t.textContent = 'Message the main agent';
+    t.classList.remove('typed');
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = 'Ship it';
+    $('.convo').append(b);
+    anim(b, [{ opacity: 0, transform: `translateY(${distance('acknowledge')}px)` }, { opacity: 1, transform: 'none' }], 'acknowledge');
+  }],
+  [13000, 'A host goes offline · toast', () => {
+    const t = $('.toast');
+    t.style.display = 'block';
+    anim(t, [{ opacity: 0, transform: `translateY(${distance('toast')}px)` }, { opacity: 1, transform: 'none' }], 'toast');
+  }],
+  [14800, 'The toast leaves · toast', () => {
+    anim($('.toast'), [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: `translateY(${distance('toast')}px)` }], 'toast', true);
+  }],
+  [15600, 'Back · push, mirrored', () => {
+    $('.session').style.display = 'none';
+    for (const part of $('.list-screen').querySelectorAll(':scope > :not(.menu)')) {
+      anim(part, [{ opacity: 0, transform: `translateX(-${distance('push')}px)` }, { opacity: 1, transform: 'none' }], 'push');
+    }
+  }],
+];
+const END = 17000;
+
+function tab(name) {
+  $('.tabs .on').classList.remove('on');
+  $(`.tabs [data-tab="${name}"]`).classList.add('on');
+  const dx = placeIndicator(name);
+  anim($('.indicator'), [{ transform: `translateX(${dx}px)` }, { transform: 'none' }], 'selection');
+  for (const r of list.children) { r.style.display = name === 'all' || r.dataset.machine === name ? '' : 'none'; }
+  anim(list, [{ opacity: 0 }, { opacity: 1 }], 'tab');
+}
+
+let next = 0;
+say('Motion · docs/design/ui.md §5.3');
+// For the recorder: run every step due by t, then hold each animation at t since its step.
+window.__seek = (t) => {
+  while (next < steps.length && steps[next][0] <= t) {
+    eventTime = steps[next][0];
+    say(steps[next][1]);
+    steps[next][2]();
+    next += 1;
+  }
+  for (const { a, t0 } of running) { a.currentTime = Math.max(0, t - t0); }
+};
+window.__end = END;
+if (!capture) {
+  for (const [at, label, run] of steps) { setTimeout(() => { say(label); run(); }, at); }
+  setTimeout(() => location.reload(), END);
+}
+</script>
+</body>
+</html>

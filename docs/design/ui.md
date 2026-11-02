@@ -8,7 +8,8 @@ iOS and Android apps.
 - Machine-readable values (colours, type, spacing, glyphs, icons): [`/design`](../../design/README.md).
 
 *Status: proposed by the design session on 2026-11-01 and signed off by the owner the
-same day (status.md §5). Two light-theme tokens are corrected for contrast in #183.* The
+same day (status.md §5). Two light-theme tokens are corrected for contrast in #183. Motion
+(§5.3) was added in #232 and signed off by the owner on 2026-11-02.* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench".
 Every board is also rendered in [mockups/](mockups/README.md), and its source is in
 [`/design/canvas`](../../design/canvas/README.md). This page is the spec, and it is complete
@@ -50,7 +51,8 @@ people.
 | `driven-badge` | small diamond, bottom right | agent | Added to any glyph while an agent drives the session; the active colour becomes violet |
 
 Motion: `working` turns once per 1.2 s, and `delegating`'s satellites drift once per 8 s.
-Both are still under reduced motion. Nothing else animates on its own.
+Both are still under reduced motion. Nothing else animates on its own: every other motion
+answers the person or a change, and is in the catalogue in §5.3.
 
 The glyph **replaces** today's coloured card edges and glows (`.frame.working`,
 `.frame.delegating`, `.frame.agent` in `pwa/app.css`, and the same in the app). Selection
@@ -193,7 +195,7 @@ Size/line-height in px. Weights are regular unless noted.
 Letter-spacing follows each platform's own tracking: SF's per-size values on Apple and
 Material 3's on Android. Never add tracking to Segoe UI.
 
-## 5. Space, shape and layout
+## 5. Space, shape, layout and motion
 
 ### 5.1 Spacing and radius
 
@@ -227,6 +229,132 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **A pushed session** takes the whole screen on a phone, with the reply box at its foot: the
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
+
+### 5.3 Motion
+
+*Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform
+transitions keep their own timing, the in-flight progress ring is the only loop besides the
+glyphs, and scrolling to a question never moves a conversation the person has scrolled back
+through.*
+
+Motion shows where something came from and where it went. It answers the person or a
+change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
+generated as `--ab-motion-*` for the PWA and `AbMotion*` resources for the app
+([`/design`](../../design/README.md)). This section is the whole list: a motion that isn't
+in the catalogue below isn't in the design.
+
+A recording of most of the catalogue on a phone-sized list and session, timed by the
+generated tokens: [motion-preview.gif](motion-preview.gif), and the same under reduced
+motion: [motion-preview-reduced.gif](motion-preview-reduced.gif). Each frame names the
+motion it shows. The page is [motion-preview.html](motion-preview.html), and
+[tools/design-mockups](../../tools/design-mockups/README.md) records it. It is a preview,
+not the PWA.
+
+**Principles:**
+1. **Motion answers something:** a tap, a key, a drag, or a change worth noticing, such as
+   a question arriving or a session ending. Nothing moves as decoration. Nothing loops but
+   the two glyphs (§2.1) and a progress ring while a request the person made is in flight.
+2. **It orients.** Whatever enters comes from where it lives (the inspector from the
+   trailing edge, a pushed screen from the trailing side, a toast from its edge), and
+   whatever leaves goes back the way it came.
+3. **It never waits for itself.** A change takes effect at once, and motion only shows
+   it. A control works during its own transition. A second tap interrupts the first
+   motion instead of queueing behind it. Nothing is disabled or made untappable while it
+   moves.
+4. **Rows never move on their own** (§1, principle 2). Only the thing that changed
+   animates. A row arriving fades in where it lands; its neighbours take their new places
+   at once rather than sliding, so the list never looks as if it reordered itself.
+5. **Short and calm.** About 100–300 ms (83–250 on Windows and in the PWA), and nothing
+   but the glyphs longer than 300 ms. Entering decelerates. Leaving accelerates and is
+   quicker. A move on screen eases at both ends. Nothing overshoots or bounces.
+6. **Native where it exists.** Each platform's own vocabulary:
+   - Windows: Fluent's theme transitions, connected animation, and the WinUI controls'
+     own motion.
+   - Apple platforms: SwiftUI springs, with no bounce.
+   - Android: Material motion.
+   - The PWA: CSS transitions, plus the View Transitions API where the browser has it.
+     It follows the Windows feel and timings, as everything else in the PWA does (§7).
+
+   A platform's own transition keeps the platform's timing. An app that moves at a
+   different pace from every other app on the device feels foreign (§1, principle 1).
+   The tokens time what a client draws itself.
+
+**Tokens** (`motion.platform`; the PWA inherits Windows):
+
+| Token | Windows and PWA | Apple | Android |
+|---|---|---|---|
+| `fast` | 83 ms | 150 ms; spring 0.15 s, damping 1 | 100 ms |
+| `standard` | 167 ms | 250 ms; spring 0.25 s, damping 1 | 200 ms |
+| `emphasis` | 250 ms | 300 ms; spring 0.3 s, damping 1 | 300 ms |
+| `crossFade`: reduced motion's fade | 83 ms | 150 ms | 100 ms |
+| `standard` easing: moving on screen | `(0.33, 0, 0.67, 1)`, Fluent 2's easy ease | `(0.42, 0, 0.58, 1)`, easeInOut | `(0.2, 0, 0, 1)`, standard |
+| `decelerate`: entering | `(0, 0, 0, 1)`, Fast Out Slow In | `(0, 0, 0.58, 1)`, easeOut | `(0, 0, 0, 1)`, standard decelerate |
+| `accelerate`: leaving | `(1, 0, 1, 1)`, Slow Out Fast In | `(0.42, 0, 1, 1)`, easeIn | `(0.3, 0, 1, 1)`, standard accelerate |
+| `nudge`, `small`, `medium` | 4, 12, 24 px | the same in pt | the same in dp |
+
+Windows' durations are WinUI's own `ControlFasterAnimationDuration`,
+`ControlFastAnimationDuration` and `ControlNormalAnimationDuration`, so what the app draws
+moves at the pace of the controls around it. Android's are Material 3's `short2`, `short4`
+and `medium2`.
+
+**Catalogue.** The Token column names the `motion.catalogue` entry, then its duration and
+easing in, its duration out, and how far it travels.
+
+| Motion | Surface | Trigger | What moves | Token | Platforms | Reduced motion |
+|---|---|---|---|---|---|---|
+| Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: a same-document view transition, whose overlay passes taps through (`pointer-events: none`) and which a second navigation skips; instant where the browser has none. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
+| Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
+| Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
+| Disclosure | Show reasoning, Tool history, a delegate's details, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
+| Arriving and leaving | A session row, a Needs you entry, a delegate in the strip | A host adds or removes it; a question is asked or answered | The item fades in where it lands. Leaving, it fades out, then its space closes at once. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: transitions, with `@starting-style` where supported. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
+| Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
+| Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
+| Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
+| Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
+| Send and Answer | The reply box; a question card; Approve once and Deny in Needs you | Send, Answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
+| Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. System notifications are each OS's own | Cross-fade |
+| Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
+| Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
+| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray or a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through, or is touching | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`. PWA: `scrollIntoView` with smooth behaviour, at the browser's pace. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
+| Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
+
+**Not in the design:**
+- **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
+  or Needs you entry, no shimmer, no animated placeholder.
+- **Parallax, bounce and overshoot,** on content or on controls. Every curve stays within
+  0–1, and every spring has a damping fraction of 1.
+- **Motion on data updates:**
+  - A response streaming in shows as it arrives, with no typing effect and no fade per
+    chunk.
+  - Ages, counts and percentages change in place, with no rolling numbers.
+  - Usage bars take each reading at once. A single fill-width ease when a reading changes
+    was considered and left out. A reading isn't something the person did, and several
+    bars easing every few minutes is motion on its own, which tells the person nothing
+    new. Phase 2 removes the PWA's current 0.4 s ease on them.
+- **Choreography for its own sake:** no staggered list on load, and no motion when the
+  app starts, the window opens or the theme changes.
+
+**Reduced motion.** Each platform's own setting:
+- the PWA: `prefers-reduced-motion: reduce`;
+- the Windows app: Windows' "Animation effects" (`UISettings.AnimationsEnabled`);
+- Apple platforms: Reduce Motion (`accessibilityReduceMotion`);
+- Android: "Remove animations" (an animator duration scale of 0).
+
+Under it:
+- Nothing travels: every distance is 0.
+- An entry marked cross-fade fades over `crossFade`, so a screen or a toast doesn't
+  just blink in. Everything else changes at once.
+- The glyphs and the progress ring are still (§2.1, §9).
+
+The PWA's generated tokens do this by themselves: their reduced-motion block sets every
+duration to 0 or the cross-fade, every distance to 0, and `--ab-motion-travel` (the scale
+for travel no distance token measures, such as the sheet's own height) to 0. The platform
+transitions follow the setting already. The app's own animations check it and follow its changes, as the
+status glyph does, and each entry's `AbMotion*Reduced` resource says which form it takes.
+
+The clients implement this after U5 and U6 (#232, phase 2). Each tests that reduced motion
+makes every change instant or a cross-fade, that no motion runs longer than its token, and
+that a control can be used while it moves.
 
 ## 6. Surfaces
 
@@ -464,7 +592,8 @@ machine, online ones first, then the account's offline machines (#213):
 - **Touch targets:** at least 44×44 on touch platforms, 32×32 on desktop.
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
   Windows App, delegating to 3 agents, DEV-VM1".
-- **Reduced motion** stops all glyph animation. Nothing relies on motion alone.
+- **Reduced motion** stops all glyph animation, and turns every other motion into an
+  instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search.
 

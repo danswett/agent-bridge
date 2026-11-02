@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadTokens, surfaceTokens, monoFont } from './lib/tokens.mjs';
+import { loadTokens, surfaceTokens, monoFont, motion, MOTION_PLATFORMS } from './lib/tokens.mjs';
 import { readDesignDir } from './lib/svg.mjs';
 import { tokensCss, spriteSvg } from './lib/emit-pwa.mjs';
 import { designXaml, designKeysCs, designLayoutCs } from './lib/emit-xaml.mjs';
@@ -57,6 +57,9 @@ export function generate(root = repoRoot) {
   const design = path.join(root, 'design');
   const tokens = loadTokens(design);
   checkFontFiles(root, tokens);
+  // Every platform's motion, not only the two generated today: tokens for the Apple and Android
+  // apps are held to ui.md §5.3 from the start, not when their generator arrives.
+  for (const p of MOTION_PLATFORMS) { motion(tokens, p); }
   const glyphs = readDesignDir(path.join(design, 'glyphs'), 'glyph');
   const icons = readDesignDir(path.join(design, 'icons'), 'icon');
   return {

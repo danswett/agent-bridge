@@ -121,6 +121,84 @@ export function radii(tokens) {
   return Object.entries(tokens.radius.windows).map(([name, v]) => ({ name, value: v, css: `--ab-radius-${kebab(name)}`, xaml: `AbRadius${pascal(name)}` }));
 }
 
+// --- motion (docs/design/ui.md §5.3) ---
+
+export const MOTION_PLATFORMS = ['windows', 'pwa', 'apple', 'android'];
+export const MOTION_DURATIONS = ['instant', 'fast', 'standard', 'emphasis', 'crossFade'];
+export const MOTION_EASINGS = ['standard', 'decelerate', 'accelerate'];
+const REDUCED = ['crossFade', 'instant'];
+
+function motionPlatform(tokens, name) {
+  const all = tokens.motion.platform;
+  let def = all[name];
+  const seen = [name];
+  while (def?.inherits) {
+    if (seen.includes(def.inherits)) { throw new Error(`motion.platform.${name} inherits in a circle`); }
+    seen.push(def.inherits);
+    def = all[def.inherits];
+  }
+  if (!def) { throw new Error(`motion.platform.${name} is missing`); }
+  return def;
+}
+
+// One platform's motion, every name resolved and checked: { limitMs, glyphs, durations, easings,
+// distances, springs, catalogue }. A duration past the limit, a curve that overshoots, a spring
+// that bounces or an entry naming a token the platform lacks is refused, so no client is generated
+// a motion the spec rules out.
+export function motion(tokens, platform) {
+  const m = tokens.motion;
+  const where = `motion.platform.${platform}`;
+  const def = motionPlatform(tokens, platform);
+  const limit = m.limitMs;
+  // Without a limit every comparison below is false (333 > undefined), and nothing is refused.
+  if (!Number.isInteger(limit) || limit <= 0) { throw new Error('motion.limitMs must be a positive whole number of ms'); }
+  const durations = MOTION_DURATIONS.map((name) => {
+    const ms = def.duration?.[name];
+    // Whole milliseconds: WinUI's TimeSpan form has one fractional part, and CSS needs no more.
+    if (!Number.isInteger(ms) || ms < 0) { throw new Error(`${where}.duration.${name} must be a whole number of ms`); }
+    if (ms > limit) { throw new Error(`${where}.duration.${name} is ${ms} ms, past motion.limitMs (${limit})`); }
+    return { name, ms };
+  });
+  const easings = MOTION_EASINGS.map((name) => {
+    const curve = def.easing?.[name];
+    if (!Array.isArray(curve) || curve.length !== 4 || !curve.every((v) => typeof v === 'number')) { throw new Error(`${where}.easing.${name} needs four numbers`); }
+    // x outside 0-1 is no curve at all (and WinUI's KeySpline refuses it); y outside it overshoots.
+    if (!curve.every((v) => v >= 0 && v <= 1)) { throw new Error(`${where}.easing.${name} leaves 0-1: no overshoot`); }
+    return { name, curve };
+  });
+  const springs = Object.entries(def.spring ?? {}).filter(([k]) => !k.startsWith('$')).map(([name, s]) => {
+    if (!(s.response > 0) || s.response * 1000 > limit) { throw new Error(`${where}.spring.${name}: response must be above 0 and within motion.limitMs`); }
+    // A missing damping fraction is SwiftUI's default, which bounces; undefined < 1 is false.
+    if (!Number.isFinite(s.dampingFraction) || s.dampingFraction < 1) { throw new Error(`${where}.spring.${name} bounces: dampingFraction must be at least 1`); }
+    return { name, ...s };
+  });
+  const distances = Object.entries(m.distance).map(([name, px]) => ({ name, px }));
+  const pick = (list, name, what) => {
+    const found = list.find((x) => x.name === name);
+    if (!found) { throw new Error(`motion.catalogue: no ${what} "${name}" on ${platform}`); }
+    return found;
+  };
+  const catalogue = Object.entries(m.catalogue).filter(([k]) => !k.startsWith('$')).map(([id, e]) => {
+    if (!REDUCED.includes(e.reduced)) { throw new Error(`motion.catalogue.${id}.reduced must be ${REDUCED.join(' or ')}`); }
+    return {
+      id,
+      duration: pick(durations, e.duration, 'duration'),
+      easing: pick(easings, e.easing, 'easing'),
+      distance: e.distance === undefined ? null : pick(distances, e.distance, 'distance'),
+      exit: e.exit ? { duration: pick(durations, e.exit.duration, 'duration'), easing: pick(easings, e.exit.easing, 'easing') } : null,
+      reduced: e.reduced,
+    };
+  });
+  const glyphs = Object.entries(m.glyph).filter(([, g]) => typeof g === 'object').map(([name, g]) => {
+    if (!Number.isInteger(g.periodMs) || g.periodMs <= 0) { throw new Error(`motion.glyph.${name}.periodMs must be a whole number of ms`); }
+    return { name, periodMs: g.periodMs };
+  });
+  return { limitMs: limit, glyphs, durations, easings, springs, distances, catalogue, crossFade: pick(durations, 'crossFade', 'duration') };
+}
+
+// How a token's name is spelled in each client: listItem is --ab-motion-list-item and AbMotionListItem.
+export { kebab as cssCase, pascal as xamlCase };
+
 export function spaces(tokens) {
   const unit = tokens.space.unit;
   return tokens.space.scale.filter((v) => v > 0).map((v) => {

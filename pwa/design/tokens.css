@@ -101,6 +101,73 @@
   --ab-space-8: 32px;
   --ab-space-10: 40px;
   --ab-space-12: 48px;
+
+  /* Motion (docs/design/ui.md §5.3): durations, easings and distances, the glyphs' periods,
+     then each catalogue entry's own. Under reduced motion (below) they collapse. */
+  --ab-motion-instant: 0ms;
+  --ab-motion-fast: 83ms;
+  --ab-motion-standard: 167ms;
+  --ab-motion-emphasis: 250ms;
+  --ab-motion-cross-fade: 83ms;
+  --ab-motion-ease-standard: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-ease-accelerate: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-distance-nudge: 4px;
+  --ab-motion-distance-small: 12px;
+  --ab-motion-distance-medium: 24px;
+  --ab-motion-travel: 1;
+  --ab-motion-glyph-working-period: 1200ms;
+  --ab-motion-glyph-delegating-period: 8000ms;
+  --ab-motion-push-duration: 250ms;
+  --ab-motion-push-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-push-distance: 24px;
+  --ab-motion-pane-duration: 167ms;
+  --ab-motion-pane-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-pane-distance: 12px;
+  --ab-motion-pane-exit-duration: 83ms;
+  --ab-motion-pane-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-tab-duration: 167ms;
+  --ab-motion-tab-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-disclosure-duration: 167ms;
+  --ab-motion-disclosure-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-disclosure-distance: 4px;
+  --ab-motion-disclosure-exit-duration: 83ms;
+  --ab-motion-disclosure-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-list-item-duration: 167ms;
+  --ab-motion-list-item-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-list-item-exit-duration: 83ms;
+  --ab-motion-list-item-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-glyph-duration: 83ms;
+  --ab-motion-glyph-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-activity-dot-duration: 167ms;
+  --ab-motion-activity-dot-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-activity-dot-exit-duration: 83ms;
+  --ab-motion-activity-dot-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-selection-duration: 167ms;
+  --ab-motion-selection-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-press-duration: 83ms;
+  --ab-motion-press-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-acknowledge-duration: 167ms;
+  --ab-motion-acknowledge-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-acknowledge-distance: 12px;
+  --ab-motion-toast-duration: 167ms;
+  --ab-motion-toast-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-toast-distance: 12px;
+  --ab-motion-toast-exit-duration: 83ms;
+  --ab-motion-toast-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-sheet-duration: 250ms;
+  --ab-motion-sheet-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-sheet-exit-duration: 167ms;
+  --ab-motion-sheet-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-menu-duration: 83ms;
+  --ab-motion-menu-ease: cubic-bezier(0, 0, 0, 1);
+  --ab-motion-menu-distance: 4px;
+  --ab-motion-menu-exit-duration: 83ms;
+  --ab-motion-menu-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-scroll-duration: 250ms;
+  --ab-motion-scroll-ease: cubic-bezier(0.33, 0, 0.67, 1);
+  --ab-motion-reorder-duration: 167ms;
+  --ab-motion-reorder-ease: cubic-bezier(0.33, 0, 0.67, 1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -169,5 +236,50 @@
     --ab-text2: CanvasText;
     --ab-text3: CanvasText;
     --ab-shadow: CanvasText;
+  }
+}
+
+/* Reduced motion: nothing travels, and every duration is 0 but a cross-fade's, which a
+   catalogue entry marked crossFade takes instead. The glyphs' periods are not here: under
+   reduced motion a glyph stops (animation: none) rather than turning faster. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ab-motion-instant: 0ms;
+    --ab-motion-fast: 0ms;
+    --ab-motion-standard: 0ms;
+    --ab-motion-emphasis: 0ms;
+    --ab-motion-cross-fade: 83ms;
+    --ab-motion-distance-nudge: 0px;
+    --ab-motion-distance-small: 0px;
+    --ab-motion-distance-medium: 0px;
+    --ab-motion-travel: 0;
+    --ab-motion-push-duration: 83ms;
+    --ab-motion-push-distance: 0px;
+    --ab-motion-pane-duration: 83ms;
+    --ab-motion-pane-distance: 0px;
+    --ab-motion-pane-exit-duration: 83ms;
+    --ab-motion-tab-duration: 0ms;
+    --ab-motion-disclosure-duration: 0ms;
+    --ab-motion-disclosure-distance: 0px;
+    --ab-motion-disclosure-exit-duration: 0ms;
+    --ab-motion-list-item-duration: 83ms;
+    --ab-motion-list-item-exit-duration: 83ms;
+    --ab-motion-glyph-duration: 0ms;
+    --ab-motion-activity-dot-duration: 0ms;
+    --ab-motion-activity-dot-exit-duration: 0ms;
+    --ab-motion-selection-duration: 0ms;
+    --ab-motion-press-duration: 0ms;
+    --ab-motion-acknowledge-duration: 83ms;
+    --ab-motion-acknowledge-distance: 0px;
+    --ab-motion-toast-duration: 83ms;
+    --ab-motion-toast-distance: 0px;
+    --ab-motion-toast-exit-duration: 83ms;
+    --ab-motion-sheet-duration: 83ms;
+    --ab-motion-sheet-exit-duration: 83ms;
+    --ab-motion-menu-duration: 0ms;
+    --ab-motion-menu-distance: 0px;
+    --ab-motion-menu-exit-duration: 0ms;
+    --ab-motion-scroll-duration: 0ms;
+    --ab-motion-reorder-duration: 0ms;
   }
 }

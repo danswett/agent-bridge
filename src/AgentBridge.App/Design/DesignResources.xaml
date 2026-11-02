@@ -206,6 +206,91 @@
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
 
+    <!-- Motion (docs/design/ui.md §5.3), the same in every theme, so outside the theme
+         dictionaries. A duration and a KeySpline are strings, as WinUI's own
+         ControlFastAnimationDuration and ControlFastOutSlowInKeySpline are: {StaticResource}
+         makes them a KeyTime, Duration or KeySpline where they're used. With Windows' animation
+         effects off, an entry's Reduced says what it becomes: CrossFade (no travel, over
+         AbMotionCrossFade) or Instant. -->
+    <x:String x:Key="AbMotionInstant">00:00:00.000</x:String>
+    <x:String x:Key="AbMotionFast">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionStandard">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionEmphasis">00:00:00.250</x:String>
+    <x:String x:Key="AbMotionCrossFade">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionEaseStandard">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionEaseDecelerate">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionEaseAccelerate">1,0,1,1</x:String>
+    <x:Double x:Key="AbMotionDistanceNudge">4</x:Double>
+    <x:Double x:Key="AbMotionDistanceSmall">12</x:Double>
+    <x:Double x:Key="AbMotionDistanceMedium">24</x:Double>
+    <x:String x:Key="AbMotionGlyphWorkingPeriod">00:00:01.200</x:String>
+    <x:String x:Key="AbMotionGlyphDelegatingPeriod">00:00:08.000</x:String>
+    <x:String x:Key="AbMotionPushDuration">00:00:00.250</x:String>
+    <x:String x:Key="AbMotionPushEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionPushDistance">24</x:Double>
+    <x:String x:Key="AbMotionPushReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionPaneDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionPaneEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionPaneDistance">12</x:Double>
+    <x:String x:Key="AbMotionPaneExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionPaneExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionPaneReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionTabDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionTabEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionTabReduced">Instant</x:String>
+    <x:String x:Key="AbMotionDisclosureDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionDisclosureEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionDisclosureDistance">4</x:Double>
+    <x:String x:Key="AbMotionDisclosureExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionDisclosureExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionDisclosureReduced">Instant</x:String>
+    <x:String x:Key="AbMotionListItemDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionListItemEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionListItemExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionListItemExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionListItemReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionGlyphDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionGlyphEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionGlyphReduced">Instant</x:String>
+    <x:String x:Key="AbMotionActivityDotDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionActivityDotEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionActivityDotExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionActivityDotExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionActivityDotReduced">Instant</x:String>
+    <x:String x:Key="AbMotionSelectionDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionSelectionEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionSelectionReduced">Instant</x:String>
+    <x:String x:Key="AbMotionPressDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionPressEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionPressReduced">Instant</x:String>
+    <x:String x:Key="AbMotionAcknowledgeDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionAcknowledgeEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionAcknowledgeDistance">12</x:Double>
+    <x:String x:Key="AbMotionAcknowledgeReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionToastDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionToastEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionToastDistance">12</x:Double>
+    <x:String x:Key="AbMotionToastExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionToastExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionToastReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionSheetDuration">00:00:00.250</x:String>
+    <x:String x:Key="AbMotionSheetEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionSheetExitDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionSheetExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionSheetReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionMenuDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionMenuEase">0,0,0,1</x:String>
+    <x:Double x:Key="AbMotionMenuDistance">4</x:Double>
+    <x:String x:Key="AbMotionMenuExitDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionMenuExitEase">1,0,1,1</x:String>
+    <x:String x:Key="AbMotionMenuReduced">Instant</x:String>
+    <x:String x:Key="AbMotionScrollDuration">00:00:00.250</x:String>
+    <x:String x:Key="AbMotionScrollEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionScrollReduced">Instant</x:String>
+    <x:String x:Key="AbMotionReorderDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
+
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />
         <Setter Property="Height" Value="16" />
