@@ -141,10 +141,15 @@ public sealed partial class MainWindow : Window
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
 
-    // The Sessions page's tool history is asked for only while it is on screen.
+    // The Sessions page's tool history is asked for only while it is on screen: its page shown, in
+    // a window that is neither hidden in the tray nor minimised.
     void SyncSessionsOnScreen()
     {
-        if (SessionsView.Layout is { } layout) { layout.OnScreen = SessionsView.Visibility == Visibility.Visible && AppWindow.IsVisible; }
+        if (SessionsView.Layout is { } layout)
+        {
+            layout.OnScreen = SessionsView.Visibility == Visibility.Visible && AppWindow.IsVisible
+                && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        }
     }
     // A toast, the tray or the search box asked for a session: it is MainViewModel.Selected
     // already, so the Sessions page shows it, its row scrolled into view.
@@ -223,7 +228,8 @@ public sealed partial class MainWindow : Window
 
     void OnWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        if (args.DidVisibilityChange) { SyncSessionsOnScreen(); }
+        // Shown, hidden, minimised or restored: the history is asked for only while it can be seen.
+        SyncSessionsOnScreen();
         if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
         if (args.DidPositionChange || args.DidSizeChange) { KeepSmallest(); }
         if (AppWindow.Presenter is OverlappedPresenter { State: not OverlappedPresenterState.Minimized } shown) { wasMaximized = shown.State == OverlappedPresenterState.Maximized; }
