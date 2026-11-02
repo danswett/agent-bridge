@@ -20,7 +20,7 @@ Set-StrictMode -Version Latest
 $Result = [IO.Path]::GetFullPath($Result)
 if (-not $Logs) { $Logs = Split-Path $Result }
 New-Item -ItemType Directory -Force (Split-Path $Result), $Logs | Out-Null
-$appLog = Join-Path $env:LOCALAPPDATA 'AgentBridge' 'app' 'app.log'
+$appLog = [IO.Path]::Combine($env:LOCALAPPDATA, 'AgentBridge', 'app', 'app.log')
 $started = Get-Date
 $p = Start-Process $Exe -ArgumentList '--self-test', "`"$Result`"" -PassThru
 # Held from the start: a Process from Start-Process that is first asked for its exit code after
