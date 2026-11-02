@@ -330,12 +330,15 @@ empty multi-select options), three clears and the multi-select code table.
 A sub-agent's question (Question `agent`, [design/subagents.md](design/subagents.md) §7) is
 armed, read and answered exactly as the session's own: the card has one question, and it
 answers whichever the host says is pending. Two things differ, both additions. Its `question`
-begins with "*name* asks:" and a blank line, so the card shows whose it is without knowing
+begins with "Delegate *name* asks:" and a blank line, so the card shows whose it is without knowing
 about delegates. The name is added before the length check above, so it can never be what
 makes an answerable question one the card would have to cut. And the decision attributes
 gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
-"*name* asks · *their usual title*" and keep the session's tag. *name* is cleaned as in the
-`subagents` attribute, and is "A delegate" when the list no longer has it or nothing is left.
+"Delegate *name* asks · *their usual title*" and keep the session's tag. *name* is cleaned as in the
+`subagents` attribute (`agent_name` is that alone), and the line is "A delegate asks" when the
+list no longer has it or nothing is left. The word "Delegate" is always there (#263), as in the
+clients (ui.md §6.3): no look-alike check is complete ("Ma1n agent" passes it), and the main
+agent's own lines never have it. A name already starting "Delegate " is not given it twice.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
@@ -655,8 +658,8 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   starts it again, and a later turn ending in the same words is a finished turn of its own. What sessions already show when the connector starts is not pushed again. A push that
   fails is logged and holds nothing up. The reply is the main agent's own: while a delegate
   wrote last, its words neither finish a turn nor appear in the push (design/subagents.md
-  §7). A delegate's question is pushed as the session's are, titled "*name* asks · " before
-  the usual title, its text led by "*name* asks:". Its answer buttons are titled the same
+  §7). A delegate's question is pushed as the session's are, titled "Delegate *name* asks · " before
+  the usual title, its text led by "Delegate *name* asks:". Its answer buttons are titled the same
   way, under the session's tag. The hooks' pushes carry no tag at all, the session's own
   questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
   so on that path a delegate's question is treated as the session's are and neither

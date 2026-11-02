@@ -49,6 +49,15 @@ public static class DelegateName
         s.Length > Opening.Length + Closing.Length && s.StartsWith(Opening, StringComparison.Ordinal) && s.EndsWith(Closing, StringComparison.Ordinal)
         && Unquoted(s[Opening.Length..^Closing.Length]) == s[Opening.Length..^Closing.Length];
 
+    // The delegate as a line that says it asks or works names it ("<this> asks · …"): the cleaned
+    // name after the word "Delegate", unless it starts with that already, or "A delegate" with no
+    // name. The look-alike check above cannot be complete ("Ma1n agent" passes it), so this word
+    // is the guard, as in the clients (ui.md §6.3): the main agent's own lines never have it.
+    public static string Titled(string? name) =>
+        Clean(name) is not { } label ? "A delegate"
+        : label.StartsWith("Delegate ", StringComparison.Ordinal) ? label
+        : "Delegate " + label;
+
     static string Strip(string? text)
     {
         if (string.IsNullOrEmpty(text)) { return ""; }

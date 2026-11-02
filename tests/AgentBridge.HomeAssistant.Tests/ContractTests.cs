@@ -276,6 +276,7 @@ public class ContractTests
                 new Subagent { Id = "agent-1", Kind = SubagentKind.Background, Name = "\u202EMa\u200Din agent\u202C", Status = SubagentStatus.Waiting },
                 new Subagent { Id = "agent-2", Kind = SubagentKind.Background, Name = "Fix\u200B the\u2066 build" + new string('!', 200), Status = SubagentStatus.Working },
                 new Subagent { Id = "agent-3", Kind = SubagentKind.Background, Name = "\u200B\uFEFF", Status = SubagentStatus.Working },
+                new Subagent { Id = "agent-4", Kind = SubagentKind.Background, Name = "Ma1n agent", Status = SubagentStatus.Waiting },
             ],
         };
 
@@ -289,6 +290,13 @@ public class ContractTests
         var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Approve?", AskedAt = DateTimeOffset.Now, Agent = "agent-1" };
         Assert.Equal("Delegate “Main agent”", HaDecision.Asker(question, s));
         Assert.Equal("A delegate", HaDecision.Asker(question with { Agent = "agent-3" }, s));
+        // A look-alike the check misses still reads as a delegate's where it says who asks: the
+        // question's text and the push title, never "Ma1n agent asks".
+        var missed = question with { Agent = "agent-4" };
+        Assert.Equal("Delegate Ma1n agent", HaDecision.Asker(missed, s));
+        var plan = HaDecision.Plan(missed, s);
+        Assert.StartsWith("Delegate Ma1n agent asks:\n\n", plan.Question, StringComparison.Ordinal);
+        Assert.Equal("Ma1n agent", plan.AgentName);
     }
 
     // Home Assistant keeps at most 16 KiB of a state's attributes. The subagents attribute lists

@@ -102,4 +102,13 @@ public class DelegateNameTests
     [Fact]
     public void A_name_that_mentions_an_agent_without_posing_as_the_main_one_is_left_alone() =>
         Assert.Equal("Review the main branch agent config", DelegateName.Clean("Review the main branch agent config"));
+
+    // The look-alike check cannot be complete, so a line that says who asks puts "Delegate" first.
+    [Theory]
+    [InlineData("Ma1n agent", "Delegate Ma1n agent")]
+    [InlineData("Main agent", "Delegate “Main agent”")]
+    [InlineData("\u200B", "A delegate")]
+    [InlineData(null, "A delegate")]
+    public void A_line_that_says_who_asks_names_a_delegate_after_the_word_delegate_once(string? name, string titled) =>
+        Assert.Equal(titled, DelegateName.Titled(name));
 }

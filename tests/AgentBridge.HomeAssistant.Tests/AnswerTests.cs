@@ -362,7 +362,7 @@ public sealed class AnswerTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         var attributes = Attributes(SessionEntities.Decision(Node));
-        Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", attributes.GetProperty("question").GetString());
+        Assert.Equal("Delegate Run full test suite asks:\n\nAllow dotnet test?", attributes.GetProperty("question").GetString());
         Assert.Equal(("agent-3a91", "Run full test suite"), (attributes.GetProperty("agent").GetString(), attributes.GetProperty("agent_name").GetString()));
         Assert.True(attributes.GetProperty("answer_on_tap").GetBoolean());
 

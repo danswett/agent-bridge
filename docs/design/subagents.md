@@ -180,8 +180,12 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
      within the same caps. A name already in that form is left as it is, so cleaning again
      changes nothing.
 
-  The HA connector cleans again with the same function, and clients keep their own cleaning
-  and their "Delegate" prefix as defence in depth: the look-alike list cannot be complete.
+  Every line the host or the HA connector writes that says a sub-agent asks (the host's push
+  titles, HA's question text and push titles) puts the word "Delegate" before the cleaned
+  name (`DelegateName.Titled`), as the clients do: the look-alike list cannot be complete
+  ("Ma1n agent" passes it), and the main agent's own lines never have the word. The HA
+  connector cleans again with the same function, and clients keep their own cleaning and
+  their "Delegate" prefix as defence in depth.
   The shadow (#40) compares no sub-agent names, since agent-ha-bridge lists none, so a cleaned
   name never reads as a mismatch.
 
@@ -201,8 +205,8 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   limit, and the entries make way for the card's own text within Home Assistant's 16 KiB.
   The card draws neither yet.
 - A sub-agent's question is armed and answered through the session's own question path.
-  Its name leads the question text ("*name* asks:"), and the decision entity gains `agent`
-  and `agent_name` beside it. Its pushes are titled "*name* asks · …" and keep the session's
+  Its name leads the question text ("Delegate *name* asks:"), and the decision entity gains `agent`
+  and `agent_name` beside it. Its pushes are titled "Delegate *name* asks · …" and keep the session's
   tag.
 - **agent-ha-bridge keeps its behaviour** (the owner's decision, 2026-11-01): its card shows
   whichever agent wrote last, a delegate's text included. This is a known, intentional

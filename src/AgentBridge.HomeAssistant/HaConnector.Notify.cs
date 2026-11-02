@@ -131,8 +131,8 @@ public sealed partial class HaConnector
     {
         var marker = HaNotify.Marker(armed.Plan);
         var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
-        // A sub-agent's question is titled with its name, under the session's tag as ever.
-        var title = armed.Plan.AgentName is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
+        // A sub-agent's question is titled with who asks, under the session's tag as ever.
+        var title = armed.Plan.Asker is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
         return (actions, HaNotify.Payload(sessionId, title, marker, actions, options.DashboardUrlPath, options.MachineName,
             Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel));
     }
