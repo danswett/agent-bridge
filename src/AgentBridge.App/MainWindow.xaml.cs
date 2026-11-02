@@ -49,11 +49,14 @@ public sealed partial class MainWindow : Window
         Root.Loaded += (_, _) => { if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); } };
         Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
         AppWindow.Changed += OnWindowChanged;
+        // Shown for the first time by Activate, which AppWindow.Changed doesn't always report.
+        VisibilityChanged += (_, _) => SyncSessionsOnScreen();
 
         AppWindow.Closing += (_, e) => CloseRequested?.Invoke(e);
         Activated += (_, e) =>
         {
             active = e.WindowActivationState != WindowActivationState.Deactivated;
+            SyncSessionsOnScreen();
             if (active && maximizeWhenShown && AppWindow.Presenter is OverlappedPresenter p)
             {
                 maximizeWhenShown = false;

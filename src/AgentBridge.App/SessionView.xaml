@@ -9,15 +9,7 @@
          actions; Conversation, Delegates and Tools tabs where there is no inspector; the
          conversation at the reading measure; and the reply box. Status is the glyph and its words,
          never an edge or a glow (#178). -->
-    <UserControl.Resources>
-        <!-- The conversation's reading text (§4.3: 15/24), a step larger than the UI around it,
-             including the Markdown a response is drawn from. -->
-        <Style x:Key="AbReadingRich" TargetType="RichTextBlock">
-            <Setter Property="FontSize" Value="15" />
-            <Setter Property="LineHeight" Value="24" />
-            <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
-        </Style>
-    </UserControl.Resources>
+
     <Grid x:Name="ViewRoot">
         <VisualStateManager.VisualStateGroups>
             <!-- The status words' colour (ui.md §2.2, §3), as on the row. -->
@@ -164,9 +156,7 @@
                     HorizontalAlignment="Left"
                     Padding="24,8,24,24"
                     Spacing="24">
-                    <StackPanel.Resources>
-                        <Style TargetType="RichTextBlock" BasedOn="{StaticResource AbReadingRich}" />
-                    </StackPanel.Resources>
+
                     <!-- A question, in the stream, in Needs you colours (§6.4). -->
                     <Border
                         x:Name="QuestionCard"
@@ -223,6 +213,7 @@
                             Visibility="{x:Bind local:Ui.Show(Card.ResponseTruncated), Mode=OneWay}" />
                         <local:MarkdownView
                             x:Name="ResponseView"
+                            Reading="True"
                             AutomationProperties.AutomationId="Response"
                             Markdown="{x:Bind Card.Response, Mode=OneWay}" />
                     </StackPanel>
