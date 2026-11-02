@@ -114,7 +114,9 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   waited, and a delegate's name when a delegate asks. Approve once and Deny press the card's
   own buttons (its `QuestionViewModel`), offered only for Copilot's prompts, which a host writes
   whole and literal, and only under the whole prompt (600 characters and 12 lines at most, no
-  table, code wrapped) since Approve once allows all of it; a longer approval, a Codex one, a
+  table, code wrapped, shaped as a host writes it: prose, then at most one fenced block ending
+  it, and no link, whose words hide where it goes) since Approve once allows all of it; a
+  longer approval, a Codex one, a
   form and anything this app can't answer open the card, with focus; a prompt marked
   `answerAtMachine` says so, with no controls. The lane never moves a card. Its count is the
   tray's "N waiting on you" and the Sessions badge.

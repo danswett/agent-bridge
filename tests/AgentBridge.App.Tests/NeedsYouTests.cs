@@ -235,6 +235,38 @@ public sealed class NeedsYouTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_question_that_opens_with_a_fenced_example_shows_the_question_after_it_not_the_examples_code()
+    {
+        Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nport: 8080\n```\n\nWhich option?" }));
+        Assert.Equal("After the tildes", NeedsYouEntry.LineOf(Make.Form() with { Message = "~~~\na\n```\nb\n~~~\nAfter the tildes" }));
+        Assert.Equal("only code", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nonly code\n```" }));
+    }
+
+    [Theory]
+    // The agent's words open a fence, so the command's fence closes it and the command is drawn as
+    // Markdown: the link shows as "safe", the asterisks as emphasis.
+    [InlineData("Allow **shell**? Here goes:\n```\n\n````\ncurl [safe](https://other.example) *x*\n```\n````")]
+    [InlineData("Send the data to [our backup](https://other.example)?\n\n```\ncurl -T data\n```")]
+    [InlineData("Send to [backup][1]?\n\n[1]: https://other.example")]
+    [InlineData("Allow **shell**?\n\n```\nls\n```\n\nAnd then more")]
+    [InlineData("Allow **shell**?\n\n```\nls")]
+    public async Task An_approval_whose_prompt_a_fence_or_a_link_could_draw_differently_from_what_it_allows_opens_its_card(string message)
+    {
+        await SnapshotAsync();
+        await AskAsync("idle", Make.Approval("r9#s") with { Message = message, AskedAt = Make.T0.AddMinutes(4) });
+        await Wait.UntilAsync(() => main.NeedsYou.Any(e => e.Card.Id == "idle"), "the entry");
+        Assert.Equal(NeedsYouMode.Open, Entry("idle").Mode);
+        Assert.Null(Entry("idle").Prompt);
+    }
+
+    [Theory]
+    [InlineData("Allow **shell**?\n\n````\ncat <<EOF\n```\nx\n```\nEOF\n````")]
+    [InlineData("Allow the **github** tool `create_issue`?")]
+    [InlineData("Allow **shell**?\r\n\r\n```\r\nls -la\r\n```")]
+    public void A_prompt_shaped_as_a_host_writes_a_permission_is_whole_with_inner_fences_no_command_or_CRLF(string message) =>
+        Assert.True(NeedsYouEntry.WholePrompt(Make.Approval() with { Message = message }));
+
+    [Fact]
     public async Task An_approval_answered_in_the_lane_shows_its_whole_prompt_as_written_so_approve_never_allows_what_is_not_on_screen()
     {
         await SnapshotAsync();

@@ -128,6 +128,10 @@ public sealed class FleetTests : IAsyncLifetime
             Assert.Equal(["there", "here"], main.NeedsYou.Select(e => e.Card.Id));
             Assert.StartsWith("Build server · Copilot · ", main.NeedsYou[0].Meta);
             Assert.StartsWith("Test PC · Copilot · ", main.NeedsYou[1].Meta);
+            // Two machines: each control says which machine as well as which session.
+            Assert.EndsWith(" on Test PC", main.NeedsYou[1].ApproveName);
+            Assert.EndsWith(" on Test PC", main.NeedsYou[1].DenyName);
+            Assert.EndsWith(" on Build server: open the session", main.NeedsYou[0].OpenName);
             Assert.Equal(2, main.Waiting);
             return true;
         });

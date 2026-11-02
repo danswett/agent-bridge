@@ -192,19 +192,22 @@
                                                                 Content="{x:Bind DenyLabel, Mode=OneWay}"
                                                                 IsEnabled="{x:Bind CanAnswer, Mode=OneWay}"
                                                                 Click="{x:Bind Deny}" />
-                                                            <!-- The machine failed the op: the same request again, as the card's Send again. -->
-                                                            <Button
-                                                                MinHeight="32"
-                                                                AutomationProperties.AutomationId="NeedsYouResend"
-                                                                Content="Send again"
-                                                                Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}"
-                                                                Click="{x:Bind Resend}" />
                                                         </StackPanel>
+                                                        <!-- The machine failed the op: the same request again, as the card's Send again.
+                                                             On a row of its own, so a narrow window or large text can't push it out of sight. -->
+                                                        <Button
+                                                            MinHeight="32"
+                                                            AutomationProperties.AutomationId="NeedsYouResend"
+                                                            Content="Send again"
+                                                            Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}"
+                                                            Click="{x:Bind Resend}" />
+                                                        <!-- In the text colour, not the outcome's: the role colours are checked against
+                                                             the card, not the Needs you fill, and the words say the outcome. -->
                                                         <TextBlock
                                                             TextWrapping="Wrap"
                                                             IsTextSelectionEnabled="True"
                                                             Text="{x:Bind StatusText, Mode=OneWay}"
-                                                            Foreground="{x:Bind local:Ui.ToneBrush(StatusTone), Mode=OneWay}"
+                                                            Foreground="{ThemeResource AbText}"
                                                             Visibility="{x:Bind local:Ui.Show(HasStatus), Mode=OneWay}" />
                                                     </StackPanel>
                                                 </Grid>

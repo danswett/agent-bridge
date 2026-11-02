@@ -60,12 +60,15 @@ static class SelfTest
             // Needs you (#165): every question on both machines, its count the one the tray shows,
             // and Approve once and Deny right there for the permission prompt.
             var lane = ById<FrameworkElement>(window.RootElement, "NeedsYou");
-            var entries = lane is null ? [] : Find<Grid>(lane).Where(g => AutomationProperties.GetAutomationId(g) == "NeedsYouEntry").ToList();
+            // Waited for: the lane's entries are drawn a layout pass after its list changes, which
+            // can come after the cards are.
+            List<Grid> Entries() => lane is null ? [] : Find<Grid>(lane).Where(g => AutomationProperties.GetAutomationId(g) == "NeedsYouEntry").ToList();
+            await Until(() => Entries().Count == 4, TimeSpan.FromSeconds(10));
+            var entries = Entries();
             result["needsYou"] = main.NeedsYou.Select(e => $"{e.Card.Id}: {e.Mode}").ToList();
             Check(lane is { Visibility: Visibility.Visible } && entries.Count == 4 && main.NeedsYou.Count == main.Waiting, "lists all four questions in Needs you, as many as the tray counts");
-            // Waited for: the lane's entries are drawn a layout pass after its list changes. Every
-            // entry's template has the buttons, collapsed and disabled where it offers none: exactly
-            // one of each is live, the permission prompt's.
+            // Every entry's template has the buttons, collapsed and disabled where it offers none:
+            // exactly one of each is live, the permission prompt's.
             int Live(string id) => lane is null ? 0 : Find<Button>(lane).Count(b => AutomationProperties.GetAutomationId(b) == id && b.IsEnabled);
             var offered = await Until(() => Live("NeedsYouApprove") == 1 && Live("NeedsYouDeny") == 1, TimeSpan.FromSeconds(10));
             result["needsYouButtons"] = lane is null ? null : Find<Button>(lane).Select(b => $"{AutomationProperties.GetAutomationId(b)}: {(b.IsEnabled ? "enabled" : "disabled")}, {b.Visibility}").ToList();

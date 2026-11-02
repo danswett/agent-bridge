@@ -27,8 +27,10 @@ public sealed partial class NeedsYouEntry : Observable
     QuestionViewModel? question;
     string meta = "";
     string? delegateName;
-    // The title last said, so a session renamed while it asks renames its entry.
+    // The title last said, so a session renamed while it asks renames its entry; and the machine,
+    // named only while several are connected.
     string? title;
+    string? machine;
 
     internal NeedsYouEntry(MainViewModel main, string key, string machineKey, SessionCardViewModel card)
     {
@@ -67,9 +69,12 @@ public sealed partial class NeedsYouEntry : Observable
     // own. Read again on every refresh: a later upsert can name a delegate the list had left out.
     public string? Delegate { get => delegateName; private set => Set(ref delegateName, value); }
     public string Meta { get => meta; private set => Set(ref meta, value); }
-    public string OpenName => $"{Title}: open the session";
-    public string ApproveName => $"Approve once: {Title}";
-    public string DenyName => $"Deny: {Title}";
+    // Which session, and on which machine when several are connected: two machines can have
+    // sessions of one title, and a screen reader going through the buttons must tell them apart.
+    string Subject => machine is { Length: > 0 } ? $"{Title} on {machine}" : Title;
+    public string OpenName => $"{Subject}: open the session";
+    public string ApproveName => $"Approve once: {Subject}";
+    public string DenyName => $"Deny: {Subject}";
     public string ApproveLabel => question?.SentValue == "approve" ? "✓ Approve once" : "Approve once";
     public string DenyLabel => question?.SentValue == "deny" ? "✓ Deny" : "Deny";
     public bool CanAnswer => Approvable && question?.CanAnswer == true;
@@ -100,9 +105,10 @@ public sealed partial class NeedsYouEntry : Observable
 
     internal void Refresh(string? machineName, DateTimeOffset now)
     {
-        if (title != Title)
+        if (title != Title || machine != machineName)
         {
             title = Title;
+            machine = machineName;
             Raise(nameof(Title));
             Raise(nameof(OpenName));
             Raise(nameof(ApproveName));
@@ -140,11 +146,47 @@ public sealed partial class NeedsYouEntry : Observable
             && vm.Fields[0].Options.Any(o => o.Value == "approve") && vm.Fields[0].Options.Any(o => o.Value == "deny") ? NeedsYouMode.Approve
         : NeedsYouMode.Open;
 
-    // A table scrolls sideways, so a prompt with one is not whole on screen.
+    // A table scrolls sideways, so a prompt with one is not whole on screen; nor is one not shaped as
+    // a host writes a permission (LiteralShape).
     public static bool WholePrompt(Question q)
     {
         var m = q.Message.Trim();
-        return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && !HasTable(MarkdownModel.Parse(m));
+        return m.Length > 0 && m.Length <= PromptMaxChars && m.Split('\n').Length <= PromptMaxLines && LiteralShape(m) && !HasTable(MarkdownModel.Parse(m));
+    }
+
+    // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
+    // allowed: prose, then at most one fenced block, which ends the prompt and holds the command
+    // literal. A fence in the prose (the agent's own words can open one) would let the command's fence
+    // close it instead and draw the command as Markdown, hiding some of it; and a link shows its
+    // words, not where it goes. Either opens the card (pwa/js/needs-you.js literalShape).
+    static bool LiteralShape(string text)
+    {
+        var message = text.Replace("\r\n", "\n").Replace('\r', '\n');
+        var lines = message.Split('\n');
+        var at = Array.FindIndex(lines, l => Fence().IsMatch(l));
+        if (at >= 0)
+        {
+            var open = Fence().Match(lines[at]).Groups[1].Value;
+            var end = Array.FindIndex(lines, at + 1, l => Closes(open, l));
+            if (end != lines.Length - 1) { return false; }
+        }
+        var prose = string.Join('\n', at >= 0 ? lines[..at] : lines);
+        if (LinkSyntax().IsMatch(prose) || LinkDefinition().IsMatch(prose)) { return false; }
+        // The renderer must agree: the fenced block, if any, is its last block, holding exactly the
+        // command's lines.
+        var blocks = MarkdownModel.Parse(message);
+        if (at < 0) { return !blocks.OfType<MdCode>().Any(); }
+        return blocks.Count > 0 && blocks[^1] is MdCode code && blocks.OfType<MdCode>().Count() == 1
+            && code.Text == string.Join('\n', lines[(at + 1)..^1]);
+    }
+
+    // Whether line closes a fence opened by `open`: the same character, at least as many, nothing after.
+    static bool Closes(string open, string line)
+    {
+        var t = line.TrimEnd();
+        var lead = t.Length - t.TrimStart(' ').Length;
+        var run = t.TrimStart(' ');
+        return lead <= 3 && run.Length >= open.Length && run.All(c => c == open[0]);
     }
 
     static bool HasTable(IEnumerable<MdBlock> blocks) => blocks.Any(b => b switch
@@ -163,9 +205,24 @@ public sealed partial class NeedsYouEntry : Observable
         return s.Subagents?.FirstOrDefault(a => a.Id == id)?.Name is { Length: > 0 } name ? name : "A delegate";
     }
 
-    // A question's first line of prose, never a code fence's.
-    public static string LineOf(Question q) =>
-        PlainLine(q.Message.Split('\n').FirstOrDefault(l => l.Trim().Length > 0 && !Fence().IsMatch(l)) ?? "");
+    // A question's first line of prose, never a line of code; one that is all code shows its first.
+    public static string LineOf(Question q)
+    {
+        string? open = null;
+        string? code = null;
+        foreach (var l in q.Message.Split('\n'))
+        {
+            if (open is not null)
+            {
+                if (Closes(open, l)) { open = null; } else if (l.Trim().Length > 0) { code ??= l; }
+                continue;
+            }
+            var m = Fence().Match(l);
+            if (m.Success) { open = m.Groups[1].Value; continue; }
+            if (l.Trim().Length > 0) { return PlainLine(l); }
+        }
+        return PlainLine(code ?? "");
+    }
 
     // Markdown down to one line of plain text: no emphasis, code or heading marks, whitespace
     // collapsed, cut with an ellipsis (pwa/js/needs-you.js plainLine). For prose only: code is shown
@@ -180,8 +237,12 @@ public sealed partial class NeedsYouEntry : Observable
         return line.Length > LineMax ? line[..(LineMax - 1)].TrimEnd() + "…" : line;
     }
 
-    [GeneratedRegex(@"^\s{0,3}(`{3,}|~{3,})")]
+    [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
     private static partial Regex Fence();
+    [GeneratedRegex(@"\]\s*[(\[]")]
+    private static partial Regex LinkSyntax();
+    [GeneratedRegex(@"^ {0,3}\[[^\]]+\]:", RegexOptions.Multiline)]
+    private static partial Regex LinkDefinition();
     [GeneratedRegex(@"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)")]
     private static partial Regex LeadingMark();
     [GeneratedRegex(@"(\*\*|__|`+)")]
