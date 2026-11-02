@@ -313,7 +313,7 @@ from an agent session, and the #67 guard does not stand in its way.
   tunnel, and raises its `newSession.worktreeLimit` to 30 and lowers `worktreeIdleHours` to 1
   (every launch into the isolated workspace makes a worktree, and at the defaults a launch every
   22 minutes reached the cap of 10 in under four hours, so launches were refused; the old config
-  is kept as `config.json.pre-soak`). It installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
+  is kept as `config.json.pre-soak`, and the daemon is restarted to read it). It installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
   the driver from `-DriverRef`, each checked out at the exact commit. It stops the app's own host,
   whose Home Assistant connector would wake while the daemon restarts; `-Finish` starts it again.
   `-DriverOnly` rebuilds the driver alone, between `-Stop` and `-Start`.

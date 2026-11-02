@@ -202,6 +202,8 @@ foreach ($kv in @(@('worktreeLimit', 30), @('worktreeIdleHours', 1))) {
 if ($loosened) {
     Copy-Item "$ahb\config.json" "$ahb\config.json.pre-soak" -Force
     [IO.File]::WriteAllText("$ahb\config.json", ($config | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
+    # The daemon reads its configuration once, so a launch still judged the old cap until this.
+    & 'C:\Program Files\PowerShell\7\pwsh.exe' -NoProfile -File "$ahb\bin\agent-ha-bridge.ps1" restart 2>&1 | Select-Object -Last 1
 }
 "worktrees: limit $($n.worktreeLimit), reclaimed after $($n.worktreeIdleHours) h"
 
