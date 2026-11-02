@@ -106,6 +106,9 @@ public sealed record HostStatus
     // Why delivery is off: agent-ha-bridge is running for this user (design G5). Null when it
     // is not, so answers, replies and stops are this host's to deliver.
     public string? AgentHaBridge { get; init; }
+    // Why the Home Assistant connector is not reaching Home Assistant: it rejected the token, or
+    // has banned this machine's address, with what to do. Null when nothing is refused.
+    public string? HomeAssistant { get; init; }
     public required HostSettingsView Settings { get; init; }
     public bool RestartRequired { get; init; }
     // The host's log file, for an app to show the end of.

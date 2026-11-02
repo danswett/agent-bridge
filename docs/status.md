@@ -175,6 +175,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #172: usage per account, shared between hosts (in review).
 - **Bugs and follow-ups from live use:**
   - #101: app test timing races;
+  - #227: the HA connector repeated a rejected token until Home Assistant banned the machine (fix in review);
   - #102 and #150: launch busy wording;
   - #106: the logon task doesn't restart a crashed host;
   - #110: an HA connector edge case;

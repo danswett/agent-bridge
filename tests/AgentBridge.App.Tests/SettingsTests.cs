@@ -118,6 +118,43 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.CanSignIn);
     }
 
+    // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
+    // alike, and goes when the host says it has; each change is announced, so the page redraws.
+    [Fact]
+    public async Task Home_Assistant_refusing_this_machine_is_shown_in_the_hosts_words_and_goes_when_the_host_says_so()
+    {
+        await Connected();
+        Assert.False(settings.HasHomeAssistantRefused);
+        var told = new List<(string? Said, bool Shown)>();
+        settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is "" or null or nameof(SettingsViewModel.HomeAssistantRefused) or nameof(SettingsViewModel.HasHomeAssistantRefused))
+            {
+                lock (told) { told.Add((settings.HomeAssistantRefused, settings.HasHomeAssistantRefused)); }
+            }
+        };
+        bool Told((string?, bool) seen) { lock (told) { return told.Contains(seen); } }
+
+        foreach (var said in new[]
+        {
+            "Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host. Stopped after 3 refused attempts with it",
+            "Home Assistant has banned this machine's address; see docs/ha-connector.md, Troubleshooting",
+        })
+        {
+            host.Status = FakeHost.StatusOf() with { HomeAssistant = said };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => Told((said, true)), "the refusal, announced");
+            Assert.Equal(said, settings.HomeAssistantRefused);
+            Assert.True(settings.HasHomeAssistantRefused);
+        }
+
+        host.Status = FakeHost.StatusOf();
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => Told((null, false)), "the refusal gone, announced");
+        Assert.Null(settings.HomeAssistantRefused);
+        Assert.False(settings.HasHomeAssistantRefused);
+    }
+
     [Fact]
     public async Task Turning_off_approval_from_other_devices_writes_it_through_the_host_and_offers_a_restart()
     {

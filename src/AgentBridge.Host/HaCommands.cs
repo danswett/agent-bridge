@@ -32,6 +32,19 @@ public static class HaCommands
                     var token = readSecret();
                     if (string.IsNullOrWhiteSpace(token)) { error.WriteLine("No token was given; nothing changed."); return 1; }
                     HaTokenStore.Save(folder, token);
+                    // Given again, it is a change: one fresh attempt, even if this token was refused before.
+                    if (HostSettings.Load(folder).Settings.HomeAssistant.BaseUrl is { } baseUrl)
+                    {
+                        var record = HaAuthGuard.FileFor(folder);
+                        var auth = new HaAuthGuard(record);
+                        if (!auth.Forget(auth.Credential(baseUrl, token.Trim())))
+                        {
+                            // Stored, but without the record of it the host still holds the token back.
+                            error.WriteLine($"Stored the Home Assistant token, but could not record in {record} that it was given again, so the host may still hold it back. " +
+                                "Make sure that file can be written, then run `agent-bridge-host ha token set` again.");
+                            return 1;
+                        }
+                    }
                     output.WriteLine($"Stored the Home Assistant token, protected{(OperatingSystem.IsWindows() ? " (DPAPI, this Windows user)" : " (readable by you only)")}, in {folder}. Restart agent-bridge-host serve to use it.");
                     return 0;
                 }
@@ -71,7 +84,10 @@ public static class HaCommands
             window = TimeSpan.FromSeconds(s);
         }
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        var client = connect?.Invoke(settings, token) ?? new HomeAssistantClient(ha.BaseUrl, token, http);
+        // The same guard as serve's, through the same record: a token serve has stopped using is
+        // not tried here either.
+        var client = connect?.Invoke(settings, token) ?? new HomeAssistantClient(ha.BaseUrl, token, http,
+            auth: new HaAuthGuard(HaAuthGuard.FileFor(folder), log: error.WriteLine));
         var machine = ha.MachineName ?? Environment.MachineName;
         var report = await HaShadow.CompareAsync(client, source, new HaConnectorOptions
         {
@@ -116,8 +132,22 @@ public static class HaCommands
         output.WriteLine($"  token: {(HaTokenStore.Exists(folder) ? "stored, protected" : "none")}");
         output.WriteLine($"  this machine: {machine}, entities agent_bridge_{slug}_*, topics {HaContract.MachineTopicRoot(slug)}/");
         output.WriteLine($"  dashboard read for retirement: {ha.DashboardUrlPath}");
+        if (Refusal(folder, ha.BaseUrl) is { } refused) { output.WriteLine($"  refused: {refused}"); }
         if (why is null && agentHaBridge?.Invoke() is { } active) { output.WriteLine($"  paused now: {active}"); }
         return 0;
+    }
+
+    // What Home Assistant's refusals, as recorded by every process here, say of the stored token;
+    // null when there are none. Read from the record only: ha status never asks Home Assistant.
+    static string? Refusal(string folder, Uri? baseUrl)
+    {
+        if (baseUrl is null) { return null; }
+        string? token;
+        try { token = HaTokenStore.Load(folder); }
+        catch (System.Security.Cryptography.CryptographicException) { return null; }
+        if (string.IsNullOrEmpty(token)) { return null; }
+        var auth = new HaAuthGuard(HaAuthGuard.FileFor(folder));
+        return auth.Describe(auth.Credential(baseUrl, token));
     }
 
     // Reads a line without echoing it when a person is typing; a pipe is read as it is.

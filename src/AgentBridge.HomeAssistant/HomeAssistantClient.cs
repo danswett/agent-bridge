@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -72,6 +73,10 @@ public interface IHomeAssistant
 
     // config/entity_registry/update with name: one entity's display name, by its id.
     Task SetEntityNameAsync(string entityId, string name, CancellationToken cancellationToken = default);
+
+    // Why nothing may be sent to Home Assistant now (HaAuthGuard: a rejected token, a banned
+    // address), as a refusal would say it; null when something may.
+    string? Refused => null;
 }
 
 // An id from Home Assistant's image store, as the reply card names it: letters and digits only,
@@ -166,19 +171,35 @@ public sealed class HomeAssistantClient : IHomeAssistant
     readonly string token;
     readonly HttpClient http;
     readonly Func<Uri, CancellationToken, Task<WebSocket>> connect;
+    readonly HaAuthGuard auth;
+    readonly HaCredential credential;
 
-    public HomeAssistantClient(Uri baseUrl, string token, HttpClient http, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null)
+    // auth: the host's guard, shared by every caller that uses a Home Assistant token. Without
+    // one, the client keeps its own, so even a client on its own never repeats a refused login.
+    public HomeAssistantClient(Uri baseUrl, string token, HttpClient http, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, HaAuthGuard? auth = null)
     {
         this.baseUrl = new Uri(baseUrl.ToString().TrimEnd('/') + "/");
         this.token = token;
         this.http = http;
+        this.auth = auth ?? new HaAuthGuard();
+        credential = this.auth.Credential(this.baseUrl, token);
         this.connect = connect ?? (async (uri, ct) =>
         {
             var ws = new ClientWebSocket();
-            await ws.ConnectAsync(uri, ct);
+            ws.Options.CollectHttpResponseDetails = true;
+            try { await ws.ConnectAsync(uri, ct); }
+            // A banned address is refused at the upgrade, before any token is offered.
+            catch (WebSocketException e) when (ws.HttpStatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                var status = ws.HttpStatusCode;
+                ws.Dispose();
+                throw new HttpRequestException($"WebSocket: Home Assistant answered {(int)status}", e, status);
+            }
             return ws;
         });
     }
+
+    public string? Refused => auth.Refused(credential);
 
     public Uri WebSocketUri => new UriBuilder(new Uri(baseUrl, "api/websocket"))
     {
@@ -194,14 +215,14 @@ public sealed class HomeAssistantClient : IHomeAssistant
         if (ServiceTarget.Check(data) is { } refused) { throw new InvalidOperationException($"refused a {domain}.{service} call: {refused}"); }
         using var request = Request(HttpMethod.Post, $"api/services/{Uri.EscapeDataString(domain)}/{Uri.EscapeDataString(service)}");
         request.Content = new StringContent(HaContract.Serialize(data), Encoding.UTF8, "application/json");
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
         await EnsureAsync(response, $"{domain}.{service}", cancellationToken);
     }
 
     public async Task<HaState?> GetStateAsync(string entityId, CancellationToken cancellationToken = default)
     {
         using var request = Request(HttpMethod.Get, "api/states/" + Uri.EscapeDataString(entityId));
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
         await EnsureAsync(response, "GET " + entityId, cancellationToken);
         using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
@@ -211,7 +232,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     public async Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default)
     {
         using var request = Request(HttpMethod.Get, "api/states");
-        using var response = await http.SendAsync(request, cancellationToken);
+        using var response = await SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
         await EnsureAsync(response, "GET /api/states", cancellationToken);
         using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
         if (doc.RootElement.ValueKind != JsonValueKind.Array) { throw new InvalidDataException("/api/states is not a list"); }
@@ -280,7 +301,9 @@ public sealed class HomeAssistantClient : IHomeAssistant
         try
         {
             using var request = Request(HttpMethod.Get, $"api/image/serve/{imageId}/original");
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            // Home Assistant serves an image without reading the token (its view does not require
+            // auth), so only a refusal or a ban from it says anything.
+            using var response = await SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token, provesToken: false);
             if (response.StatusCode == HttpStatusCode.NotFound) { return null; }
             await EnsureAsync(response, "GET image", deadline.Token);
             if (response.Content.Headers.ContentLength is { } length && length > maxBytes) { throw new InvalidDataException($"the image is larger than {maxBytes} bytes"); }
@@ -312,10 +335,10 @@ public sealed class HomeAssistantClient : IHomeAssistant
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        using var ws = await connect(WebSocketUri, timeout.Token);
+        using var ws = await OpenAsync(timeout.Token);
         try
         {
-            return await HaWebSocket.RunAsync(ws, token, command, timeout.Token);
+            return await HaWebSocket.RunAsync(ws, command, timeout.Token);
         }
         finally
         {
@@ -326,6 +349,55 @@ public sealed class HomeAssistantClient : IHomeAssistant
                 try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); }
                 catch (Exception e) when (e is WebSocketException or IOException or OperationCanceledException) { }
             }
+        }
+    }
+
+    // What the caller checks again once a request has its turn with the guard, which can keep it
+    // waiting: thrown, nothing is sent (the connector's check that agent-ha-bridge is not running).
+    internal static readonly AsyncLocal<Action?> SendCheck = new();
+
+    // Every request with the token, through the guard: held back when Home Assistant has refused
+    // it (or this address) and asking again now could only bring a ban closer, and reported to it
+    // when Home Assistant answers. A refusal throws what the guard says, never the response.
+    // provesToken: false for a path Home Assistant answers without reading the token, whose answer
+    // other than a 401 or 403 must not count the token as accepted.
+    async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completion, CancellationToken cancellationToken, bool provesToken = true)
+    {
+        using var lease = await auth.EnterAsync(credential, cancellationToken);
+        SendCheck.Value?.Invoke();
+        var started = Stopwatch.GetTimestamp();
+        // The headers first, and the refusal recorded from them: Home Assistant counted it when it
+        // answered, however its body then goes.
+        var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if ((provesToken || response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            && lease.Answered(response.StatusCode) is { } refused)
+        {
+            response.Dispose();
+            throw refused;
+        }
+        if (completion == HttpCompletionOption.ResponseHeadersRead) { return response; }
+        // The body as ResponseContentRead would have read it: within what is left of the one timeout
+        // the headers began, not a second one of its own.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (http.Timeout != Timeout.InfiniteTimeSpan)
+        {
+            var left = http.Timeout - Stopwatch.GetElapsedTime(started);
+            deadline.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
+        }
+        try
+        {
+            await response.Content.LoadIntoBufferAsync(deadline.Token);
+            return response;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            response.Dispose();
+            throw new TimeoutException($"Home Assistant did not send its answer within {http.Timeout.TotalSeconds:F0}s");
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
         }
     }
 
@@ -473,21 +545,53 @@ public sealed class HomeAssistantClient : IHomeAssistant
         return messages;
     }
 
+    // A connection, logged in. The login is a login attempt to Home Assistant like any request's,
+    // so it goes through the guard; auth_ok is also the only thing that resets Home Assistant's
+    // count of failed ones.
     async Task<WebSocket> OpenAsync(CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        var ws = await connect(WebSocketUri, timeout.Token);
+        using var lease = await auth.EnterAsync(credential, timeout.Token);
+        SendCheck.Value?.Invoke();
+        WebSocket ws;
+        try { ws = await connect(WebSocketUri, timeout.Token); }
+        // Only a refusal says anything of the token: a 200 or 404 where the upgrade was expected
+        // means it was never sent, and must not count as accepted.
+        catch (Exception e) when (UpgradeStatus(e) is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+            && lease.Answered(UpgradeStatus(e)!.Value) is { } refused) { throw refused; }
         try
         {
             await HaWebSocket.AuthenticateAsync(ws, token, timeout.Token);
+            lease.Authenticated(true);
             return ws;
+        }
+        catch (HaCommandException e) when (e.Code == "auth_invalid" && lease.Authenticated(false) is { } refused)
+        {
+            ws.Dispose();
+            throw refused;
         }
         catch
         {
             ws.Dispose();
             throw;
         }
+    }
+
+    // The status a refused WebSocket upgrade came back with: carried by the default connection,
+    // or only in the message, as .NET words it ("The server returned status code '403' when
+    // status code '101' was expected").
+    internal static HttpStatusCode? UpgradeStatus(Exception e)
+    {
+        for (var x = e; x is not null; x = x.InnerException)
+        {
+            if (x is HttpRequestException { StatusCode: { } status }) { return status; }
+            if (x is WebSocketException && System.Text.RegularExpressions.Regex.Match(x.Message, @"'(\d{3})'") is { Success: true } m)
+            {
+                return (HttpStatusCode)int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+            }
+        }
+        return null;
     }
 
     static async Task CloseAsync(WebSocket ws)
@@ -531,9 +635,9 @@ internal static class HaWebSocket
         }
     }
 
-    public static async Task<JsonElement> RunAsync(WebSocket ws, string token, JsonObject command, CancellationToken cancellationToken)
+    // One command on a connection already logged in.
+    public static async Task<JsonElement> RunAsync(WebSocket ws, JsonObject command, CancellationToken cancellationToken)
     {
-        await AuthenticateAsync(ws, token, cancellationToken);
         command["id"] = 1;
         var type = command["type"]?.GetValue<string>() ?? "?";
         await SendAsync(ws, command, cancellationToken);

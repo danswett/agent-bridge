@@ -831,6 +831,35 @@ public sealed class ShadowTests : IDisposable
         Assert.DoesNotContain("fixture.invalid", report);
     }
 
+    // After the migration the host's token is usually agent-ha-bridge's, and shadow run reads with
+    // it once a minute in a process of its own: one budget for both, or the reads alone would have
+    // the machine banned in ten minutes (#227).
+    [Fact]
+    public async Task The_shadow_reader_sends_nothing_with_a_token_the_connector_has_stopped_using()
+    {
+        Config();
+        var record = Path.Combine(f.Root, AgentBridge.HomeAssistant.HaAuthGuard.FileName);
+        var refusing = new FakeHomeAssistant(_ => null) { Status = System.Net.HttpStatusCode.Unauthorized };
+        var connector = new AgentBridge.HomeAssistant.HomeAssistantClient(new Uri("https://ha.fixture.invalid:8123"), Token, new HttpClient(refusing),
+            auth: new AgentBridge.HomeAssistant.HaAuthGuard(record, f.Time));
+        foreach (var wait in new[] { 5, 15, 0 })
+        {
+            await Assert.ThrowsAsync<AgentBridge.HomeAssistant.HomeAssistantAuthException>(() => connector.PublishAsync("t", "p", false));
+            f.Time.Advance(TimeSpan.FromMinutes(wait));
+        }
+        Assert.Equal(3, refusing.Seen.Count);
+
+        var inner = new FakeHomeAssistant(_ => "{}");
+        using var reader = new DaemonHaReader("FIXTURE", inner, time: f.Time, auth: new AgentBridge.HomeAssistant.HaAuthGuard(record, f.Time));
+        for (var i = 0; i < 30; i++)
+        {
+            var reading = await reader.ReadAsync(AgentHaBridgeConfig.Read(Paths).Access!);
+            Assert.Equal("Home Assistant refused agent-ha-bridge's token", reading.UsageProblem);
+            f.Time.Advance(TimeSpan.FromMinutes(1));
+        }
+        Assert.Empty(inner.Seen);
+    }
+
     // Answers the headers, then never finishes the body.
     sealed class StallingHomeAssistant : HttpMessageHandler
     {
