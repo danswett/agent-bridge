@@ -3,29 +3,23 @@ import SwiftUI
 
 struct SessionHistoryView: View {
     let sessionID: String
+    var updatedAt: String?
     let onLoad: @MainActor (String) async throws -> JSONValue
     var onLoaded: @MainActor (JSONValue) -> Void = { _ in }
 
-    @State private var tools: [SessionPresentation.Tool] = []
-    @State private var isLoading = false
-    @State private var hasLoaded = false
-    @State private var error: String?
-    @State private var refreshID = UUID()
-    @State private var loadedAt: Date?
-
-    private struct Request: Hashable {
-        let sessionID: String
-        let refreshID: UUID
+    @State private var loader = BridgeHistoryLoader()
+    private var tools: [SessionPresentation.Tool] {
+        loader.value.map(SessionPresentation.toolHistory) ?? []
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isLoading {
+            if loader.isLoading {
                 ProgressView("Loading tools…")
             }
-            if let error {
+            if let error = loader.error {
                 Text(error).foregroundStyle(.secondary)
-            } else if hasLoaded, tools.isEmpty {
+            } else if loader.hasLoaded, tools.isEmpty {
                 Text("No tool calls yet.").foregroundStyle(.secondary)
             }
             ForEach(tools) { tool in
@@ -41,46 +35,33 @@ struct SessionHistoryView: View {
                 }
                 .accessibilityElement(children: .combine)
             }
-            if hasLoaded, !tools.isEmpty {
+            if loader.hasLoaded, !tools.isEmpty {
                 Text("Latest \(tools.count) tool calls · newest first").font(.caption).foregroundStyle(.secondary)
             }
-            if let loadedAt {
+            if let loadedAt = loader.loadedAt {
                 Text("Loaded \(SessionPresentation.timestamp(loadedAt))").font(.caption).foregroundStyle(.secondary)
             }
-            if hasLoaded || error != nil {
-                Button(error == nil ? "Refresh Tool History" : "Try Again") { refreshID = UUID() }
-                    .disabled(isLoading)
+            if loader.hasLoaded || loader.error != nil {
+                Button(loader.error == nil ? "Refresh Tool History" : "Try Again") { loader.refresh(load: onLoad) }
+                    .disabled(loader.isLoading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: Request(sessionID: sessionID, refreshID: refreshID)) {
-            await load()
+        .onAppear {
+            loader.activate(sessionID: sessionID)
+            loader.refresh(load: onLoad)
         }
-    }
-
-    private func load() async {
-        isLoading = true
-        error = nil
-        do {
-            let result = try await onLoad(sessionID)
-            try Task.checkCancellation()
-            if result["missing"]?.bool == true {
-                tools = []
-                error = "This session has ended."
-            } else if result["id"]?.string != sessionID {
-                error = "The host returned details for a different session."
-            } else {
-                tools = SessionPresentation.toolHistory(in: result)
-                onLoaded(result)
-                loadedAt = .now
+        .onChange(of: sessionID) {
+            loader.activate(sessionID: sessionID)
+            loader.refresh(load: onLoad)
+        }
+        .onChange(of: updatedAt) { loader.refresh(load: onLoad) }
+        .onChange(of: loader.value) {
+            if let value = loader.value {
+                onLoaded(value)
             }
-            hasLoaded = true
-            isLoading = false
-        } catch {
-            guard !Task.isCancelled else { return }
-            self.error = "Couldn’t load tool history: \(error.localizedDescription)"
-            isLoading = false
         }
+        .onDisappear { loader.deactivate() }
     }
 
     private func symbol(_ status: String) -> String {
