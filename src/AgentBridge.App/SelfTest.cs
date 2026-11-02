@@ -168,7 +168,14 @@ static partial class SelfTest
                 var answered = await Until(() => choiceCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal), TimeSpan.FromSeconds(20));
                 result["receipt"] = choiceCard.ReceiptText;
                 Check(answered, "answers a question from its session and shows it was delivered");
-                Check(main.Selected == choiceCard && ById<TextBlock>(window.Sessions.SessionPaneView, "Receipt") is { ActualHeight: > 0 }, $"keeps the answered session open, its receipt shown{(main.Selected == choiceCard ? "" : $" (open: {main.Selected?.Id ?? "none"})")}");
+                // The receipt is laid out a pass after its text changes (#247): waited for, then the
+                // same condition checked, so a session that closes or a receipt that never shows
+                // still fails.
+                TextBlock? Receipt() => ById<TextBlock>(window.Sessions.SessionPaneView, "Receipt");
+                bool ReceiptShown() => main.Selected == choiceCard && Receipt() is { Visibility: Visibility.Visible, ActualHeight: > 0 } r && r.Text == choiceCard.ReceiptText;
+                await Until(ReceiptShown, TimeSpan.FromSeconds(5));
+                var receipt = Receipt();
+                Check(ReceiptShown(), $"keeps the answered session open, its receipt shown{(main.Selected == choiceCard ? "" : $" (open: {main.Selected?.Id ?? "none"})")}{(receipt is null ? " (no receipt)" : $" (receipt: {receipt.Visibility}, {receipt.ActualHeight:0.#} px)")}");
             }
             else { Check(false, "finds the single-choice question's option button"); }
 
