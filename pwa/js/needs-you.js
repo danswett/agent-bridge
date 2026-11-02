@@ -42,7 +42,7 @@ export function questionLine(q) {
   const prose = firstLine(nodes);
   if (prose) { return cut(prose); }
   const code = firstPre(nodes);
-  return cut(code ? textOf(code).split('\n').find((l) => l.trim()) ?? '' : '');
+  return cut(reveal(code ? textOf(code).split('\n').find((l) => l.trim()) ?? '' : ''));
 }
 
 const BLOCKS = new Set(['p', 'ul', 'ol', 'li', 'pre', 'blockquote', 'div', 'table', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
@@ -67,7 +67,7 @@ function head(children) {
 function firstLine(nodes) {
   for (const n of nodes.filter(isNode)) {
     if (skipped(n)) { continue; }
-    const words = head(n.children)[0].replace(/\s+/g, ' ').trim();
+    const words = reveal(head(n.children)[0]).replace(/\s+/g, ' ').trim();
     if (words) { return words; }
     const inner = firstLine((n.children ?? []).filter((c) => isNode(c) && BLOCKS.has(c.tag)));
     if (inner) { return inner; }
@@ -138,10 +138,31 @@ export const PROMPT_MAX = Object.freeze({ chars: 600, lines: 12 });
 const hasTable = (nodes) => nodes.some((n) => n && typeof n === 'object' && (n.tag === 'table' || (Array.isArray(n.children) && hasTable(n.children))));
 
 export function wholePrompt(q) {
+  const raw = q?.message ?? '';
+  // A character that is not drawn, or is drawn somewhere other than where it runs, is never on
+  // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
+  if (HIDDEN.test(raw)) { return false; }
   // Every line ending the renderer breaks on is counted: a bare CR is a line too.
-  const m = (q?.message ?? '').trim().replace(/\r\n?/g, '\n');
+  const m = raw.trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
     && literalShape(m) && !hasTable(parseMarkdown(m));
+}
+
+// Characters a reader cannot see as they run: format characters (bidi controls, zero-width
+// spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
+// of the command), private-use and unassigned code points, lone surrogates, and the line and
+// paragraph separators.
+const HIDDEN_CLASS = '[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029]|[^\\P{Cc}\\n\\t]';
+const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
+const HIDDEN_ALL = new RegExp(HIDDEN_CLASS, 'gu');
+
+// Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order
+// it runs.
+export function reveal(text) {
+  return String(text ?? '').replace(HIDDEN_ALL, (c) => {
+    const hex = c.codePointAt(0).toString(16).toUpperCase();
+    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, '0')}`;
+  });
 }
 
 // The agents whose permission prompts a host writes whole and literal, so the lane can show what

@@ -217,6 +217,9 @@ a { color: var(--ab-bridge); }
 /* Never a tint on a role fill, as in a question: a linked `code` would be bridge at 4.41:1 on
    subtle over the light needs fill (design/tokens.json color.contrast.tints). */
 .needs-prompt.md pre, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
+/* The line and the prompt's code read in the order they run: no surrounding direction reorders them
+   (hidden characters are refused or shown as escapes, js/needs-you.js). */
+.needs-line, .needs-prompt code { unicode-bidi: plaintext; direction: ltr; }
 .needs-meta { margin: 2px 0 0; font-size: .8rem; color: var(--ab-text2); overflow-wrap: anywhere; }
 .needs-delegate, .needs-at-machine { color: var(--ab-needs-text); font-weight: 600; }
 .needs-age { font-variant-numeric: tabular-nums; }

@@ -160,7 +160,8 @@ sessions and never moves their rows. An entry leaves when its question does.
   same outcomes (a refused or busy answer can be given again, stale and unconfirmed are
   final). A longer approval (an edit's diff, a long command), one with a table, one not shaped
   as a host writes a permission (a fence in its words, words after its command or its opening
-  fence, a link, whose words hide where it goes), or one from Codex (whose command can reach the machine cut short)
+  fence, a link, whose words hide where it goes, or a character drawn other than where it runs,
+  such as a bidi control or a zero-width space, which the entry's line shows as an escape like `\u202E`), or one from Codex (whose command can reach the machine cut short)
   opens its session instead.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.
