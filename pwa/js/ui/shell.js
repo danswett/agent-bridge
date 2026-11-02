@@ -77,11 +77,13 @@ export class Shell {
   // replace: no new history entry (a page chosen for you, not by you). Applied at once, not on
   // the hashchange event that a location.hash write fires later, so whoever went can scroll to
   // what it went for straight away.
-  go(route, { rest = [], replace = false } = {}) {
+  // state: what the entry carries in history.state (the sessions page marks a session's entry
+  // that has the list beneath it).
+  go(route, { rest = [], replace = false, state = null } = {}) {
     const hash = routeHash(route, ...rest);
     if (this.win.location.hash !== hash) {
       const url = `${this.win.location.pathname}${this.win.location.search}${hash}`;
-      if (replace) { this.win.history.replaceState(null, '', url); } else { this.win.history.pushState(null, '', url); }
+      if (replace) { this.win.history.replaceState(state, '', url); } else { this.win.history.pushState(state, '', url); }
     }
     this.#apply();
   }

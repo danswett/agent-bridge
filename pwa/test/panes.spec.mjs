@@ -30,6 +30,12 @@ async function upsert(page, id, change) {
 
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 const box = (locator) => locator.boundingBox();
+// A width the page has laid out and told its media queries about: their change events come in
+// a rendering update, so two frames on, the page has acted on the new width.
+async function resize(page, width, height) {
+  await page.setViewportSize({ width, height });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
 
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
@@ -202,6 +208,35 @@ test.describe('on a phone', () => {
     await expect(page.locator('[data-route="launch"]')).toBeVisible();
   });
 
+  test('a session\'s address opened directly has the list beneath it, so back goes there, not out of the app', async ({ page }) => {
+    await page.goto(`?demo=1&static=1#/sessions/demo/${CLAUDE}`);
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect(view(page, CLAUDE)).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    expect(new URL(page.url()).hash).toBe('#/sessions');
+  });
+
+  test('after a reload the header\'s Back still pops the session\'s entry, so forward returns to it', async ({ page }) => {
+    await openDemo(page);
+    await open(page, CLAUDE);
+    await page.reload();
+    await page.waitForSelector('html[data-demo-ready]');
+    const v = view(page, CLAUDE);
+    await expect(v).toBeVisible();
+    await v.locator('.back').tap();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await page.goForward();
+    await expect(v).toBeVisible();
+  });
+
+  test('a row opened takes focus to the session\'s title, as the row it was on is gone', async ({ page }) => {
+    await openDemo(page);
+    await row(page, CLAUDE).locator('.row-main').focus();
+    await page.keyboard.press('Enter');
+    await expect(view(page, CLAUDE).locator('.session-title')).toBeFocused();
+  });
+
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);
@@ -227,6 +262,24 @@ test('narrowing to a phone on another page stays on that page', async ({ page })
   await page.waitForTimeout(100);
   await expect(page.locator('[data-route="settings"]')).toBeVisible();
   expect(await page.evaluate(() => location.hash)).toBe('#/settings');
+});
+
+test('Tools are not fetched while another page shows, and are fetched once on coming back', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(6);
+  const calls = () => page.evaluate(() => window.agentBridgeDemo.calls.filter((c) => c === 'session.get').length);
+  const before = await calls();
+  await page.locator('#nav [data-nav="settings"]').click();
+  for (let k = 1; k <= 3; k++) {
+    await upsert(page, CLAUDE, { updatedAt: new Date(Date.now() + 1000 * k).toISOString() });
+    await page.waitForTimeout(1000);
+  }
+  await page.waitForTimeout(1500);
+  expect(await calls()).toBe(before);
+  await page.locator('#nav [data-nav="sessions"]').click();
+  await expect.poll(calls).toBe(before + 1);
 });
 
 test('Tools left while the session changed are fetched again when they show', async ({ page }) => {
@@ -275,14 +328,14 @@ test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the p
   await openDemo(page);
   await open(page, CODEX);
   for (const width of [900, 390, 900, 1440]) {
-    await page.setViewportSize({ width, height: 844 });
+    await resize(page, width, 844);
     await expect(view(page, CODEX)).toBeVisible();
     await expect(page.locator('.session-view:not([hidden])')).toHaveCount(1);
     await expect(row(page, CODEX)).toHaveClass(/\bselected\b/);
     expect(await overflow(page)).toBeLessThanOrEqual(0);
   }
   // Pushed when the window became a phone's: the browser's back goes to the list, not away.
-  await page.setViewportSize({ width: 390, height: 844 });
+  await resize(page, 390, 844);
   await expect(view(page, CODEX)).toBeVisible();
   await page.goBack();
   await expect(page.locator('#list-pane')).toBeVisible();

@@ -126,6 +126,7 @@ export class SessionListView {
             onPin: (c, pinned) => this.#pin(c, pinned, c.els.pin),
             onBack: (c) => this.onBack?.(c),
             layout: this.layout,
+            viewing: () => this.viewing(),
           });
           card.onInspector = () => this.onInspector?.();
           card.element.dataset.key = key;

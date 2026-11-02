@@ -64,8 +64,8 @@ export class SessionCard {
   // all. labelled: whether the row names its machine, as it does with every machine shown.
   // onSelect(card): its row was chosen. onPin(card, pinned), onBack(card): the header's Pin and
   // (on a phone) Back. layout() -> { inspector }: whether the inspector is a pane of its own now.
-  constructor(session, { hostId = null, fetchDetail, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }) }) {
-    Object.assign(this, { hostId, fetchDetail, machineName, labelled, answering, onSelect, onPin, onBack, layout });
+  constructor(session, { hostId = null, fetchDetail, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true }) {
+    Object.assign(this, { hostId, fetchDetail, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     const n = ++seq;
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabT: `s${n}-tab-t` };
     this.#buildRow();
@@ -362,7 +362,8 @@ export class SessionCard {
   }
 
   #toolsShown() {
-    return this.#selected && (this.layout().inspector || this.#tab === 'tools');
+    // On screen only while Sessions shows (and, on a phone, the session is pushed).
+    return this.#selected && this.viewing() && (this.layout().inspector || this.#tab === 'tools');
   }
 
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).

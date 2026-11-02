@@ -57,14 +57,14 @@ export function hostNote(link, name, { online, named = false }) {
   }
 }
 
+const OVER_LIST = Object.freeze({ overList: true });
+
 export class SessionsPage {
   #shownCaps = new Map();
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
   #want = null;
   // Whether the address names a session: on a phone, its view is pushed over the list.
   #open = false;
-  // The address this page pushed for a session on a phone, which Back pops.
-  #pushed = null;
   #inspectorHidden = false;
   // The machine last launched on or picked to launch on: kept here, and on the device as far as
   // its storage allows, so a picker never depends on a write that may fail.
@@ -151,7 +151,7 @@ export class SessionsPage {
       this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
         // Back on Sessions, what it shows is seen now.
-        if (route === 'sessions') { this.#route(rest); this.view.schedule(); }
+        if (route === 'sessions') { this.#route(rest); this.view.schedule(); this.view.layoutChanged(); }
       });
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
@@ -203,19 +203,36 @@ export class SessionsPage {
     if (already) { this.#route(rest); return; }
     if (!phone) {
       // From another page (Launch, say) a new entry, so back returns there.
-      this.shell.go('sessions', { rest, replace: onSessions });
+      const onSession = onSessions && this.shell.rest.length >= 2;
+      this.shell.go('sessions', { rest, replace: onSessions, state: onSession ? globalThis.history?.state ?? null : null });
       return;
     }
     // A phone's back from a session is always the list: one session replaces another, and from
     // another page (Launch, a notification's) the list goes in first.
     const onSession = onSessions && this.shell.rest.length >= 2;
     if (onSession) {
-      this.shell.go('sessions', { rest, replace: true });
+      this.shell.go('sessions', { rest, replace: true, state: globalThis.history?.state ?? null });
     } else {
-      if (!onSessions || this.shell.rest.length) { this.shell.go('sessions'); }
-      this.shell.go('sessions', { rest });
+      if (!onSessions) { this.shell.go('sessions'); }
+      this.shell.go('sessions', { rest, state: OVER_LIST });
     }
-    this.#pushed = globalThis.location?.hash ?? null;
+    // The row that had focus went with the list: the session's title has it now.
+    const title = card.els.titleText;
+    title.tabIndex = -1;
+    title.focus({ preventScroll: true });
+  }
+
+  // Whether this entry is a session's with the list beneath it (history.state, so it holds
+  // across a reload and the browser's back and forward).
+  #overList() { return globalThis.history?.state?.overList === true; }
+
+  // On a phone, a session's entry always has the list beneath it, so back from it is the list,
+  // not out of the app: an address opened directly, or a desktop's that became a phone's.
+  #listBeneath() {
+    if (!this.phone.matches || !this.#open || this.shell?.route !== 'sessions' || this.#overList()) { return; }
+    const rest = this.shell.rest;
+    this.shell.go('sessions', { replace: true });
+    this.shell.go('sessions', { rest, state: OVER_LIST });
   }
 
   // The address said which session, or none.
@@ -230,10 +247,10 @@ export class SessionsPage {
     } else {
       this.#want = null;
       this.#open = false;
-      this.#pushed = null;
     }
     this.#settleSelection();
     this.#drawPanes();
+    this.#listBeneath();
   }
 
   // What is selected, after the list or the address changed: the session the address names,
@@ -257,7 +274,7 @@ export class SessionsPage {
       // Named but gone, once its machine has sent its whole list: back to the list.
       if (this.hosts.link(hostId)?.client?.synced === true) {
         this.#want = null;
-        if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.shell.go('sessions', { replace: true }); return; }
+        if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.#back(); return; }
       } else {
         return;
       }
@@ -273,10 +290,10 @@ export class SessionsPage {
     }
   }
 
-  // On a phone, the pushed view goes back to the list: the entry it pushed, when there is one,
-  // so the browser's own back and this agree; otherwise the list replaces it.
+  // Back to the list: the entry beneath, when it is the list, so the browser's own back and this
+  // agree; otherwise the list replaces the session's entry.
   #back() {
-    if (this.#pushed && globalThis.location?.hash === this.#pushed && globalThis.history?.length > 1) {
+    if (this.#overList() && globalThis.history?.length > 1) {
       globalThis.history.back();
       return;
     }
@@ -286,12 +303,7 @@ export class SessionsPage {
   // The window crossed a width of §5.2. The session named stays selected; a phone that now shows
   // one gets an entry under it, so its back goes to the list rather than out of the app.
   #resized() {
-    if (this.phone.matches && this.#open && this.shell?.route === 'sessions' && !this.#pushed) {
-      const rest = this.shell.rest;
-      this.shell.go('sessions', { replace: true });
-      this.shell.go('sessions', { rest });
-      this.#pushed = globalThis.location?.hash ?? null;
-    }
+    this.#listBeneath();
     this.#settleSelection();
     this.view.layoutChanged();
     this.#drawPanes();
