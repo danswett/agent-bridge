@@ -546,6 +546,10 @@ static partial class SelfTest
         check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
         check(window.Search.XamlRoot is not null && window.Search.ActualWidth > 100 && FindAncestor<TitleBar>(window.Search) == bar, $"puts the search box in the title bar ({window.Search.ActualWidth:0} px wide)");
         check(window.RootElement is Grid { KeyboardAccelerators: var keys } && keys.Any(k => k.Key == Windows.System.VirtualKey.K && k.Modifiers == Windows.System.VirtualKeyModifiers.Control), "focuses search with Ctrl+K");
+        // #240: with any other theme, Windows App SDK repaints the caption buttons from a thread-pool
+        // thread on every colour change, and a high-contrast switch crashed the app in dcomp.dll.
+        check(window.AppWindow.TitleBar.PreferredTheme == Microsoft.UI.Windowing.TitleBarTheme.Legacy,
+            $"paints the caption buttons itself, on the UI thread, not through the title bar's PreferredTheme ({window.AppWindow.TitleBar.PreferredTheme})");
 
         var rail = window.Rail;
         var tags = rail.MenuItems.Concat(rail.FooterMenuItems).OfType<NavigationViewItem>().Select(i => i.Tag as string).ToList();
@@ -566,6 +570,10 @@ static partial class SelfTest
             var want = Hex(theme == ElementTheme.Dark ? accent["SystemAccentColorLight2"] : accent["SystemAccentColorDark1"]);
             var pill = Find<Microsoft.UI.Xaml.Shapes.Rectangle>(rail).FirstOrDefault(x => x.Name == "SelectionIndicator" && x.Opacity > 0);
             check(pill is { ActualWidth: 3, ActualHeight: 16 } && Colour(pill.Fill) == want, $"marks the page shown with a 3×16 Bridge pill in {theme} ({(pill is null ? "none" : $"{pill.ActualWidth}×{pill.ActualHeight} {Colour(pill.Fill)}")}, wanted {want})");
+            var caption = window.AppWindow.TitleBar;
+            var wanted = MainWindow.CaptionColours(theme);
+            check(wanted is { } c && caption.ButtonForegroundColor == c.Text && caption.ButtonInactiveForegroundColor == c.Inactive && caption.ButtonHoverBackgroundColor == c.Hover && caption.ButtonPressedBackgroundColor == c.Pressed,
+                $"draws the caption buttons in the design's {theme} text and fills ({caption.ButtonForegroundColor?.ToString() ?? "system"}, wanted {wanted?.Text.ToString() ?? "none"})");
             // A control that follows WinUI's accent: an accent button.
             var button = new Button { Content = "Bridge", Style = (Style)Application.Current.Resources["AccentButtonStyle"], Opacity = 0, IsHitTestVisible = false };
             var root = (Panel)window.RootElement;
@@ -769,6 +777,8 @@ static partial class SelfTest
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
             check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
+            var systemCaptions = await Until(() => window.AppWindow.TitleBar.ButtonForegroundColor is null, TimeSpan.FromSeconds(10));
+            check(systemCaptions, $"leaves the caption buttons in the system's colours in high contrast ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
             window.ShowPage("sessions");
         }
         finally
@@ -776,6 +786,13 @@ static partial class SelfTest
             await contrast.EndAsync();
             AppLog.Write("self-test: high contrast put back");
         }
+        // Back in the window's theme, repainted on the UI thread; and the app still running a moment
+        // after the switch, which is when the title bar's own repaint once crashed it (#240).
+        if (!contrast.TurnedOn) { return; }
+        var theme = window.RootElement.ActualTheme;
+        var back = await Until(() => !new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast
+            && MainWindow.CaptionColours(theme) is { } c && window.AppWindow.TitleBar.ButtonForegroundColor == c.Text, TimeSpan.FromSeconds(15));
+        check(back, $"draws the caption buttons in the {theme} theme again once high contrast is off ({window.AppWindow.TitleBar.ButtonForegroundColor?.ToString() ?? "system"})");
     }
 
     // Windows' high contrast for the self-test's pass, on CI only: a developer's own setting is
@@ -787,6 +804,8 @@ static partial class SelfTest
         bool changed;
 
         public bool On { get; private set; }
+        // On for the pass, and so off again after it.
+        public bool TurnedOn { get; private set; }
         public string How { get; private set; } = "";
 
         public static async Task<HighContrastPass> BeginAsync()
@@ -805,6 +824,7 @@ static partial class SelfTest
             var (set, setError) = await Task.Run(() => Set(flags | On_));
             pass.changed = set;
             pass.On = set;
+            pass.TurnedOn = set;
             pass.How = set ? "turned on for the pass" : $"not checked: turning it on failed ({setError})";
             return pass;
         }

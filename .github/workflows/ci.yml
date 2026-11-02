@@ -214,15 +214,8 @@ jobs:
           if ($release -ne 'release') { Write-Error "-p:AgentBridgeRelease=true built a $release host"; exit 1 }
       - name: The published app draws the demo's cards and answers one
         shell: pwsh
-        run: |
-          $result = "$env:RUNNER_TEMP/selftest/result.json"
-          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/selftest" | Out-Null
-          $p = Start-Process ${{ matrix.out }}/publish/AgentBridge.exe -ArgumentList '--self-test', $result -PassThru
-          $finished = $p.WaitForExit(180000)
-          Copy-Item "$env:LOCALAPPDATA/AgentBridge/app/*.log" "$env:RUNNER_TEMP/selftest" -ErrorAction SilentlyContinue
-          if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the self-test did not finish'; exit 1 }
-          if (Test-Path $result) { Get-Content $result } else { Write-Error 'the self-test wrote no result' }
-          exit $p.ExitCode
+        # build/app-self-test.ps1 says how the app ended when it did not end with 0 (#240).
+        run: ./build/app-self-test.ps1 -Exe ${{ matrix.out }}/publish/AgentBridge.exe -Result "$env:RUNNER_TEMP/selftest/result.json"
       - name: The installer installs per user, into its own channel and architecture, and the installed app starts
         # The Setup.exe a person downloads, run silently on this throwaway runner: per user, no
         # admin, into %LOCALAPPDATA%\AgentBridgeApp. A silent install starts nothing, so no host or
@@ -251,12 +244,8 @@ jobs:
             if ($machine -ne $expected[$file]) { Write-Error "$file is $machine, not $($expected[$file])"; $bad++ }
           }
           if ($bad) { exit 1 }
-          $result = "$logs/result.json"
-          $p = Start-Process "$root/current/AgentBridge.exe" -ArgumentList '--self-test', $result -PassThru
-          $finished = $p.WaitForExit(180000)
-          if (-not $finished) { Stop-Process -Id $p.Id; Write-Error 'the installed self-test did not finish'; exit 1 }
-          if (Test-Path $result) { Get-Content $result } else { Write-Error 'the installed self-test wrote no result' }
-          exit $p.ExitCode
+          ./build/app-self-test.ps1 -Exe "$root/current/AgentBridge.exe" -Result "$logs/result.json"
+          exit $LASTEXITCODE
       - name: The release would publish (dry run)
         # What the publish job would upload, publish and prune, against the repository's real
         # releases, with vpk reading the folder into a scratch feed. Read-only: nothing is uploaded.
