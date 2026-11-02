@@ -45,6 +45,15 @@ static class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(cards.Any(c => ById<FrameworkElement>(c, "Response") is MarkdownView { Children.Count: > 0 }), "renders a response's Markdown");
+            // Status is a glyph and words (docs/design/ui.md §2.2), the glyph drawn from the generated
+            // styles and named as its row reads (§9).
+            var glyphs = cards.Select(c => (c.Card, Glyph: ById<StatusGlyphView>(c, "StatusGlyph"))).ToList();
+            var unnamed = glyphs.Where(g => g.Glyph is null || g.Card is null || AutomationProperties.GetName(g.Glyph) != g.Card.GlyphLabel || Find<Microsoft.UI.Xaml.Shapes.Path>(g.Glyph).Count == 0).Select(g => g.Card?.Id ?? "?").ToList();
+            Check(glyphs.Count > 0 && unnamed.Count == 0, $"draws every card's status glyph, named with its state{(unnamed.Count > 0 ? $": not {string.Join(", ", unnamed)}" : "")}");
+            result["glyphs"] = glyphs.Select(g => $"{g.Card?.Glyph}{(g.Card?.Driven == true ? "+driven" : "")}: {g.Card?.StatusText}").ToList();
+            var navIcons = Find<ContentControl>(window.RootElement).Where(c => AutomationProperties.GetAutomationId(c) == "NavIcon").ToList();
+            Check(navIcons.Count >= 3 && navIcons.All(i => Find<Microsoft.UI.Xaml.Shapes.Path>(i).FirstOrDefault()?.Stroke is SolidColorBrush { Color.A: > 0 }),
+                $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
 
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));

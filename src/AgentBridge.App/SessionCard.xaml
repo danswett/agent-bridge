@@ -5,15 +5,8 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core">
-    <UserControl.Resources>
-        <!-- The PWA's glow (pwa/app.css .glow): a halo that breathes while the session works or
-             waits on you, purple while an agent drives it. Still, at 0.6, when Windows has
-             animations turned off. -->
-        <Storyboard x:Name="Pulse" RepeatBehavior="Forever" AutoReverse="True">
-            <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity" From="0.1" To="0.9" Duration="0:0:0.8" />
-        </Storyboard>
-    </UserControl.Resources>
-
+    <!-- Status is the glyph and its words (docs/design/ui.md §2), never the card's edge: the
+         coloured edges and the breathing glow are gone (#178). -->
     <Grid
         AllowDrop="True"
         DragOver="OnDragOver"
@@ -36,17 +29,7 @@
             AutomationProperties.HeadingLevel="Level3"
             Text="{x:Bind Card.GroupHeader, Mode=OneWay}"
             Visibility="{x:Bind local:Ui.Show(Card.HasGroupHeader), Mode=OneWay}" />
-        <Rectangle
-            Grid.Row="1"
-            x:Name="Glow"
-            Margin="-3"
-            RadiusX="16"
-            RadiusY="16"
-            StrokeThickness="4"
-            Opacity="0"
-            IsHitTestVisible="False"
-            Stroke="{x:Bind local:Ui.EdgeBrush(Card.View, Card.Driven), Mode=OneWay}" />
-        <Border Grid.Row="1" Background="{ThemeResource AbCard}" CornerRadius="14" Padding="16,12,16,12">
+        <Border Grid.Row="1" Background="{ThemeResource AbCard}" BorderBrush="{ThemeResource AbStroke2}" BorderThickness="1" CornerRadius="14" Padding="16,12,16,12">
             <StackPanel Spacing="6">
                 <!-- Header: the title folds the card. Its menu (right-click, press and hold, Shift+F10)
                      and Alt+Up/Down move and pin the card (#164). -->
@@ -94,17 +77,35 @@
                             Fill="{ThemeResource AbBridge}"
                             AutomationProperties.AutomationId="Unread"
                             Visibility="{x:Bind local:Ui.Show(Card.Unread), Mode=OneWay}" />
-                        <FontIcon
+                        <ContentControl
                             Grid.Column="3"
-                            FontSize="12"
+                            Width="20"
+                            Height="20"
                             VerticalAlignment="Center"
-                            Glyph="{x:Bind local:SessionCard.Chevron(Card.Folded), Mode=OneWay}" />
+                            Style="{StaticResource AbIconChevron}"
+                            Foreground="{ThemeResource AbText2}"
+                            RenderTransformOrigin="0.5,0.5">
+                            <!-- The design chevron points along the line; open, it points down into the card. -->
+                            <ContentControl.RenderTransform>
+                                <RotateTransform Angle="{x:Bind local:SessionCard.ChevronAngle(Card.Folded), Mode=OneWay}" />
+                            </ContentControl.RenderTransform>
+                        </ContentControl>
                     </Grid>
                 </Button>
                 <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Card.Meta, Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Ellipse Width="9" Height="9" VerticalAlignment="Center" Fill="{x:Bind local:Ui.DotBrush(Card.View), Mode=OneWay}" />
-                    <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.StatusText, Mode=OneWay}" AutomationProperties.AutomationId="Status" />
+                    <local:StatusGlyphView
+                        VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="StatusGlyph"
+                        Size="16"
+                        Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
+                        Driven="{x:Bind Card.Driven, Mode=OneWay}"
+                        Label="{x:Bind Card.GlyphLabel, Mode=OneWay}" />
+                    <TextBlock
+                        FontWeight="SemiBold"
+                        Foreground="{x:Bind local:Ui.WordsBrush(Card.StatusTone), Mode=OneWay}"
+                        Text="{x:Bind Card.StatusText, Mode=OneWay}"
+                        AutomationProperties.AutomationId="Status" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.SinceText, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind Card.UpdatedText, Mode=OneWay}" />
                     <TextBlock
@@ -116,7 +117,7 @@
                         AutomationProperties.AutomationId="Driver" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
-                    <ProgressRing Width="12" Height="12" IsActive="{x:Bind Card.HasTool, Mode=OneWay}" />
+                    <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" />
                     <TextBlock FontWeight="SemiBold" Text="{x:Bind Card.ToolName, Mode=OneWay}" />
                     <TextBlock Style="{StaticResource AbSecondaryText}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" MaxWidth="640" Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                 </StackPanel>
@@ -261,7 +262,7 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock Text="{x:Bind Mark}" AutomationProperties.Name="{x:Bind Status}" />
+                                            <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Glyph}" Label="{x:Bind Status}" />
                                             <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{x:Bind Name}" />
                                             <TextBlock Grid.Column="2" Style="{StaticResource AbSecondaryText}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Text="{x:Bind Summary}" />
                                             <TextBlock Grid.Column="3" Style="{StaticResource AbSecondaryText}" Text="{x:Bind When}" />
@@ -300,14 +301,6 @@
                 </StackPanel>
             </StackPanel>
         </Border>
-        <Rectangle
-            Grid.Row="1"
-            RadiusX="14"
-            RadiusY="14"
-            IsHitTestVisible="False"
-            Stroke="{x:Bind local:Ui.EdgeBrush(Card.View, Card.Driven), Mode=OneWay}"
-            StrokeThickness="{x:Bind local:Ui.StateThickness(Card.View), Mode=OneWay}"
-            StrokeDashArray="{x:Bind local:Ui.StateDash(Card.View), Mode=OneWay}" />
         <!-- A grip to drag the card to another place, shown while the pointer is over it, in Your
              order (#164). A mouse affordance: the keyboard and touch have Alt+Up/Down and the menu. -->
         <FontIcon

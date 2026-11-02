@@ -383,6 +383,9 @@ public sealed class DemoHost : IAsyncDisposable
                 Status = SessionStatus.Working,
                 StatusSince = now.AddMinutes(-6),
                 UpdatedAt = now.AddMinutes(-2),
+                // Launched by an agent: its card shows the driven diamond (ui.md §2.2 rule 7).
+                Driver = DriverKind.Agent,
+                DriverPrincipal = "homeassistant:demo",
                 Activity = new Activity { Response = "Building the release packages.", TurnCount = 12, CurrentTool = new ToolCall { Id = "t9", Name = "shell", Summary = "pwsh build/pack-app.ps1", Status = ToolStatus.Running, StartedAt = now.AddMinutes(-2) } },
             },
         ];

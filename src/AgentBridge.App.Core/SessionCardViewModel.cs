@@ -25,16 +25,15 @@ public sealed class CardContext
     public TimeProvider Time { get; init; } = TimeProvider.System;
 }
 
-public sealed record ToolRow(string Mark, string Status, string Name, string? Summary, string When);
+public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, string? Summary, string When);
 
-// One session's card (pwa/js/ui/session-card.js, which follows agent-ha-bridge's card): a
-// glow for what the session is doing, a header that stays when folded, and below it the
-// question, the response, reasoning, the last message, the reply box, the tool history, the
-// facts and End session.
+// One session's card (pwa/js/ui/session-card.js, which follows agent-ha-bridge's card): its
+// status as a glyph and words (docs/design/ui.md §2.2, StatusRules), a header that stays when
+// folded, and below it the question, the response, reasoning, the last message, the reply box,
+// the tool history, the facts and End session.
 public sealed class SessionCardViewModel : Observable
 {
     static readonly Dictionary<AgentKind, string> AgentNames = new() { [AgentKind.Copilot] = "Copilot", [AgentKind.Claude] = "Claude", [AgentKind.Codex] = "Codex", [AgentKind.Unknown] = "Agent" };
-    static readonly Dictionary<SessionStatus, string> StatusTexts = new() { [SessionStatus.Working] = "Working", [SessionStatus.Waiting] = "Waiting on you", [SessionStatus.Idle] = "Idle", [SessionStatus.Ending] = "Ending session…" };
 
     readonly CardContext ctx;
     Session session;
@@ -69,25 +68,20 @@ public sealed class SessionCardViewModel : Observable
     public string Title => string.IsNullOrEmpty(session.Title) ? "Untitled session" : session.Title;
     public string Meta => string.Join(" · ", new[] { ctx.ShowMachine() ? ctx.MachineName() : null, AgentName, session.Repository ?? Words.LastSegment(session.Cwd), session.Branch, session.Model }.Where(s => !string.IsNullOrEmpty(s)));
 
-    // What the card shows: the status, except that an idle session still waiting on work it
-    // started in the background is delegating, and one waiting on a prompt only the machine
-    // can answer says so.
-    public (string View, string Text) State
-    {
-        get
-        {
-            var b = session.Activity.Background;
-            if (session.Status == SessionStatus.Waiting && session.Question?.AnswerAtMachine == true) { return ("waiting", "Waiting at the machine"); }
-            if (session.Status != SessionStatus.Idle || b is null) { return (session.Status.ToString().ToLowerInvariant(), StatusTexts[session.Status]); }
-            return ("delegating", b.Agents > 0 ? "Waiting for background agents" : "Waiting for background commands");
-        }
-    }
+    // What the card says about the session: ui.md §2.2's glyph and words (StatusRules).
+    public StatusLine Line => StatusRules.For(session);
+    public (string View, string Text) State => (Line.View, Line.Text);
 
-    public string View => State.View;
-    public string StatusText => State.Text;
+    public string View => Line.View;
+    public string StatusText => Line.Text;
+    public StatusGlyph Glyph => Line.Glyph;
+    public StatusTone StatusTone => Line.Tone;
+    // The glyph's accessible name, as a row reads (ui.md §9).
+    public string GlyphLabel => Line.Label(Title, ctx.MachineName());
 
     // An agent launched it, or answered or replied to it, and nobody has taken it back since: the
-    // purple edge, said in words too. An older host never says so, and then it is the person's.
+    // violet diamond on the glyph (rule 7), said in words too. An older host never says so, and
+    // then it is the person's.
     public bool Driven => session.Driver == DriverKind.Agent;
     public string DriverText => Driven ? "Driven by an agent" : "";
     // Which agent, when the host knows ("homeassistant:<user id>").
@@ -98,6 +92,9 @@ public sealed class SessionCardViewModel : Observable
     public bool HasTool => session.Activity.CurrentTool is not null;
     public string ToolName => session.Activity.CurrentTool?.Name ?? "";
     public string ToolSummary => session.Activity.CurrentTool?.Summary ?? "";
+    // A running tool turns, as working does; a finished one is done or failed.
+    public StatusGlyph ToolGlyph => ToolGlyphOf(session.Activity.CurrentTool?.Status ?? ToolStatus.Running);
+    static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
 
     public string Response => session.Activity.Response ?? "";
     public bool HasResponse => !string.IsNullOrEmpty(session.Activity.Response);
@@ -301,8 +298,7 @@ public sealed class SessionCardViewModel : Observable
             var now = ctx.Time.GetUtcNow();
             foreach (var t in (full.Activity.History ?? []).TakeLast(50).Reverse())
             {
-                var mark = t.Status switch { ToolStatus.Running => "⟳", ToolStatus.Failed => "✗", _ => "✓" };
-                History.Add(new ToolRow(mark, t.Status.ToString().ToLowerInvariant(), t.Name, t.Summary, Words.Ago(t.StartedAt, now)));
+                History.Add(new ToolRow(ToolGlyphOf(t.Status), t.Status.ToString().ToLowerInvariant(), t.Name, t.Summary, Words.Ago(t.StartedAt, now)));
             }
             HistoryNote = History.Count == 0 ? "No tool calls yet." : "";
         }
