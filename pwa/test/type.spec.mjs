@@ -49,6 +49,27 @@ test('a branch in the meta line and a tool\'s name and arguments have the text f
   }
 });
 
+test('where a browser has no font-size-adjust, a branch and a tool\'s name and arguments keep the line height of the text around them', async ({ page }) => {
+  await openDemo(page);
+  // The size-scaling fallback, as a browser without font-size-adjust takes it (through the
+  // CSSOM: the page's policy allows no inline style element).
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll('.mono, .branch, .tool-name, .tool-summary')) {
+      el.style.setProperty('font-size-adjust', 'none', 'important');
+      el.style.setProperty('font-size', 'calc(1em * var(--ab-inline-mono-scale))', 'important');
+    }
+  });
+  const scale = await page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue('--ab-inline-mono-scale')));
+  for (const selector of ['.meta .branch', `.session[data-id="${CLAUDE}"] .tool-line .tool-name`, `.session[data-id="${CLAUDE}"] .tool-line .tool-summary`]) {
+    const [own, around, size, aroundSize] = await page.locator(selector).first().evaluate((el) => [
+      parseFloat(getComputedStyle(el).lineHeight), parseFloat(getComputedStyle(el.parentElement).lineHeight),
+      parseFloat(getComputedStyle(el).fontSize), parseFloat(getComputedStyle(el.parentElement).fontSize)]);
+    // It is the fallback being measured: the run's size is scaled.
+    if (scale !== 1) { expect(Math.abs(size - aroundSize * scale)).toBeLessThan(0.05); }
+    expect(Math.abs(own - around), `${selector}: line height ${own} beside ${around}`).toBeLessThan(0.05);
+  }
+});
+
 test('inline mono is set in Agent Bridge Mono at the weight of the text around it, with no spacing of its own', async ({ page }) => {
   await openDemo(page);
   const tool = page.locator(`.session[data-id="${CLAUDE}"] .tool-line .tool-name`);
