@@ -152,7 +152,7 @@
                                     AutomationProperties.AutomationId="MachinePicker"
                                     AutomationProperties.Name="Show sessions from"
                                     Header="Machines"
-                                    MinWidth="260"
+                                    HorizontalAlignment="Stretch"
                                     ItemsSource="{x:Bind ViewModel.Machines}"
                                     SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
                                     SelectionChanged="OnMachineChosen"

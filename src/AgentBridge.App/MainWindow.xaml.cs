@@ -23,6 +23,8 @@ public sealed partial class MainWindow : Window
     // Maximised when first shown, not when placed: maximising shows a window, and one started in the
     // background at sign-in must stay hidden.
     bool maximizeWhenShown;
+    // Whether the window was maximised before it was last minimised: what it comes back as.
+    bool wasMaximized;
 
     internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
@@ -218,6 +220,7 @@ public sealed partial class MainWindow : Window
     {
         if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
         if (args.DidPositionChange || args.DidSizeChange) { KeepSmallest(); }
+        if (AppWindow.Presenter is OverlappedPresenter { State: not OverlappedPresenterState.Minimized } shown) { wasMaximized = shown.State == OverlappedPresenterState.Maximized; }
         if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })
         {
             normal = new PixelRect(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
@@ -234,12 +237,14 @@ public sealed partial class MainWindow : Window
 
     void OnSaveSoon(DispatcherQueueTimer sender, object args) => SavePlacement();
 
-    // Also on hiding to the tray and on quitting. A minimised window keeps where it was before.
+    // Also on hiding to the tray and on quitting.
     internal void SavePlacement()
     {
-        if (placementFile is null || normal is not { } r || AppWindow.Presenter is not OverlappedPresenter p || p.State == OverlappedPresenterState.Minimized) { return; }
+        if (placementFile is null || normal is not { } r || AppWindow.Presenter is not OverlappedPresenter p) { return; }
+        // Minimised, it keeps the place and state it had before, which it comes back to.
+        var maximized = p.State == OverlappedPresenterState.Minimized ? wasMaximized : p.State == OverlappedPresenterState.Maximized;
         // A window started hidden in the tray keeps the maximised state it has yet to be shown in.
-        try { new WindowPlacement(r.X, r.Y, r.Width, r.Height, maximizeWhenShown || p.State == OverlappedPresenterState.Maximized).Save(placementFile); }
+        try { new WindowPlacement(r.X, r.Y, r.Width, r.Height, maximizeWhenShown || maximized).Save(placementFile); }
         // A nicety: the window opens at the first start's place instead.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"window placement not kept: {e.Message}"); }
     }
