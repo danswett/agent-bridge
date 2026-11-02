@@ -275,7 +275,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
                 say("usage: Claude Code's processes could not all be read; not starting a /usage probe");
                 return false;
             }
-            if (observed.Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
+            if (observed.Processes.Any(p => CommandLine.MayBeClaudeUsageProbe(p.CommandLine)))
             {
                 say("usage: a Claude Code /usage probe is already running here; not starting another");
                 return false;

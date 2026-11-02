@@ -320,6 +320,47 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Claude_probe_whose_path_ps_split_in_two_is_still_not_joined_by_a_second()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript(refresh: true);
+        // macOS's ps, flattened: an executable in a folder with a space in its name.
+        const string flattened = "/Volumes/Agent Tools/claude -p /usage --safe-mode --no-session-persistence --output-format json";
+        f.Processes.Run(AgentKind.Claude, 4242, flattened);
+        var claude = Claude();
+
+        await claude.CollectAsync();
+        await Settled(claude);
+
+        Assert.Empty(UsageProbesStarted);
+        // Still nobody's to exempt from discovery: that stays exact.
+        Assert.False(CommandLine.IsClaudeUsageProbe(flattened));
+    }
+
+    [Fact]
+    public async Task A_late_reading_Codex_gives_beside_a_slow_sign_in_service_is_kept()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s =>
+        {
+            s.Before["account/rateLimits/read"] = release.Task;
+            s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account()) : FakeAppServer.Error("workspace routing discovery timed out");
+        });
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+        await AdvanceUntil(time, () => log.Any(l => l.Contains("did not answer within", StringComparison.Ordinal)), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(70));
+
+        release.SetResult();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        var usage = (await codex.CollectAsync())!;
+        Assert.Equal((UsageSource.Api, 23.0), (usage.Source, usage.Windows[0].Percent));
+        Assert.Null(usage.AccountKey);
+    }
+
+    [Fact]
     public async Task No_Claude_probe_starts_while_the_machines_processes_cannot_be_listed()
     {
         ClaudeSaved(Now.AddMinutes(-20));
@@ -1154,7 +1195,8 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Contains("Upgrade: websocket", daemon.Request, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(5, daemon.Frames.Count);
         Assert.All(daemon.Frames, t => Assert.Equal(WebSocketMessageType.Text, t));
-        Assert.True(daemon.CloseReceived);
+        // Sent and not waited for, so it reaches the daemon in its own time.
+        await Until(() => daemon.CloseReceived);
         Assert.Empty(launcher.Started);
     }
 
@@ -1500,7 +1542,8 @@ public sealed class UsageProbeTests : IDisposable
 
         public string Request { get; private set; } = "";
         public List<WebSocketMessageType> Frames { get; } = [];
-        public bool CloseReceived { get; private set; }
+        volatile bool closeReceived;
+        public bool CloseReceived => closeReceived;
 
         async Task ServeAsync(FakeAppServer server)
         {
@@ -1520,7 +1563,7 @@ public sealed class UsageProbeTests : IDisposable
                 var got = await ws.ReceiveAsync(buffer, CancellationToken.None);
                 if (got.MessageType == WebSocketMessageType.Close)
                 {
-                    CloseReceived = true;
+                    closeReceived = true;
                     // Dropped, never answered.
                     connection.Shutdown(SocketShutdown.Both);
                     return null;

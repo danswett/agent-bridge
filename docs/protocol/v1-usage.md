@@ -259,7 +259,7 @@ refresh and locking, and runs no model turn.
   reading's key (none for a transcript reading); found only by the second `account/read`, the
   usage the probe read just before goes out as the reading, carrying that error (a later probe's
   too, should it find the same). An answer that comes after the 60 s the host waits to report
-  (below) still counts: a sign-out found then is a sign-out. No probe follows for 2 hours or
+  (below) still counts: a sign-out found then is a sign-out, and a reading found then is kept. No probe follows for 2 hours or
   until a Codex session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application
@@ -286,7 +286,8 @@ agent home on the machine: a lease file per agent home under the product's own f
 path followed, so a home and a link to it share one), shared by hosts serving different bridge profiles, is
 taken before the host looks at what runs and kept until the probe's process ends, even after the
 host stopped waiting for it. None starts beside a Claude probe already running on the machine (one
-left by a host that has since stopped), nor while the machine's Claude processes, any one's
+left by a host that has since stopped; any Claude process ending with the probe's options counts,
+whatever precedes them, since macOS's `ps` splits a path with a space), nor while the machine's Claude processes, any one's
 command line, or a node or bun runtime's, cannot be read to tell. A Claude probe is recognised only by exactly its own
 options, `-p /usage --safe-mode --no-session-persistence --output-format json` after the
 executable (or after a node or bun runtime and its script), so a real prompt that only quotes

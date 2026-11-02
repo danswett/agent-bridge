@@ -670,6 +670,24 @@ public static partial class CommandLine
         // Two words before the options only for a runtime and its script: `claude summarise -p
         // /usage ...` is a one-word prompt, flattened, ahead of options it quoted.
         if (first == 2 && !IsRuntime(arguments[0])) { return false; }
+        return ProbeOptions(arguments, first);
+    }
+
+    // Whether a Claude process may be a /usage probe, for not starting another beside it: one that
+    // ends with the probe's options, whatever comes before them. Broader than IsClaudeUsageProbe,
+    // which exempts a process from discovery: macOS's ps flattens an executable path with a space
+    // in it (`/Volumes/Agent Tools/claude`) into two words, and a probe left by a host that has
+    // stopped must still be seen. A real prompt ending so only puts the next probe off.
+    public static bool MayBeClaudeUsageProbe(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        return arguments.Count > 6 && ProbeOptions(arguments, arguments.Count - 6);
+    }
+
+    // The probe's four options, each once, from first to the end.
+    static bool ProbeOptions(IReadOnlyList<string> arguments, int first)
+    {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = first; i < arguments.Count; i++)
         {

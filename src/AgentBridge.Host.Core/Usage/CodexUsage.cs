@@ -140,7 +140,11 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     Apply(outcome);
                     // An answer after the report gave up: a sign-out or a reading still counts; a
                     // failure was already counted as the timeout.
-                    if (await run.Late is { Kind: not CodexProbeKind.Failed } late) { Apply(late); }
+                    if (await run.Late is { } late)
+                    {
+                        if (late.Kind != CodexProbeKind.Failed) { Apply(late); }
+                        else if (late.Reading is { } kept) { Keep(kept); }
+                    }
                     await run.Finished;
                 }
                 catch (Exception e)
@@ -158,6 +162,17 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     }
                 }
             });
+        }
+    }
+
+    // A reading that came with a failure already counted (the report's timeout): kept, without a
+    // second back-off, and the monitor woken to publish it.
+    void Keep(AgentUsage reading)
+    {
+        lock (gate)
+        {
+            if (probed is null || reading.MeasuredAt > probed.MeasuredAt) { probed = reading; }
+            finished = true;
         }
     }
 
