@@ -37,6 +37,7 @@ public sealed partial class SessionsPage : UserControl
             Session.Layout = Layout;
             value.PropertyChanged += OnMain;
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
+            value.Sessions.CollectionChanged += OnSessionsChanged;
             BuildMachineTabs();
             Bindings.Update();
             Measure();
@@ -97,6 +98,33 @@ public sealed partial class SessionsPage : UserControl
         if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
         if (args.InRecycleQueue) { row.Detach(); }
         else if (row.IsLoaded) { row.Attach(); }
+    }
+    // A row whose session leaves the list (its machine's tab, its end) can stay loaded in the
+    // list's panel, put aside for reuse without being told: it lets go of the session once the
+    // list has settled. A session moved (a remove and an insert) is listed again by then.
+    void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Move) { return; }
+        DispatcherQueue.TryEnqueue(ReleaseUnlisted);
+    }
+
+    void ReleaseUnlisted()
+    {
+        if (viewModel is null) { return; }
+        foreach (var row in RowsUnder(List))
+        {
+            if (row.Card is { } card && !viewModel.Sessions.Contains(card)) { row.Detach(); }
+        }
+    }
+
+    static IEnumerable<SessionRow> RowsUnder(DependencyObject node)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is SessionRow row) { yield return row; continue; }
+            foreach (var inner in RowsUnder(child)) { yield return inner; }
+        }
     }
     // Alt+Up and Alt+Down on a row move it within its group (#164).
     void OnListKey(object sender, KeyRoutedEventArgs e)
