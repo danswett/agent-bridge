@@ -28,6 +28,8 @@ static partial class SelfTest
         void Check(bool ok, string what) { (ok ? checks : failures).Add(what); }
         // A ThemeResource or StaticResource that resolves to nothing, in any theme: logged, and a
         // failure, since an installed app may die of it with nothing but 0xC000027B.
+        // Off by default: without it, the event is never raised and a failed reference passes.
+        Application.Current.DebugSettings.IsXamlResourceReferenceTracingEnabled = true;
         Application.Current.DebugSettings.XamlResourceReferenceFailed += (_, e) =>
         {
             AppLog.Write($"self-test: a XAML resource reference failed: {e.Message}");
@@ -392,12 +394,31 @@ static partial class SelfTest
                 window.ShowPage(tag);
                 await Task.Delay(500);
                 if (ById<FrameworkElement>(root, pane) is not { } page) { cut.Add($"{tag}: no page"); continue; }
-                foreach (var control in Find<Control>(page).Where(c => c is Button or ComboBox or TextBox or ToggleSwitch && Shown(c, page)))
+                // Every action a machine's row can offer, at once: the demo offers no updates, so
+                // Check and Install never show beside Show sessions on their own. Shown here, the
+                // row must wrap them, not run them off its edge.
+                var hidden = tag != "machines" ? [] : Find<Panel>(page).Where(p => AutomationProperties.GetAutomationId(p) == "MachineButtons")
+                    .SelectMany(p => p.Children.OfType<Button>()).Where(b => b.Visibility == Visibility.Collapsed).ToList();
+                foreach (var b in hidden) { b.Visibility = Visibility.Visible; }
+                try
                 {
-                    var right = control.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(control.ActualWidth, 0)).X;
-                    if (right > root.ActualWidth + 1) { cut.Add($"{tag}: {(AutomationProperties.GetAutomationId(control) is { Length: > 0 } id ? id : control.GetType().Name)} to {right:0}"); }
+                    if (hidden.Count > 0) { page.UpdateLayout(); }
+                    if (tag == "machines")
+                    {
+                        var most = Find<Panel>(page).Where(p => AutomationProperties.GetAutomationId(p) == "MachineButtons").Select(p => p.Children.OfType<Button>().Count(b => Shown(b, page))).DefaultIfEmpty().Max();
+                        check(most >= 4, $"draws a machine row with all its actions at once in a {DesignLayout.MinWidth:0} px window ({most} buttons)");
+                    }
+                    foreach (var control in Find<Control>(page).Where(c => c is Button or ComboBox or TextBox or ToggleSwitch && Shown(c, page)))
+                    {
+                        var right = control.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(control.ActualWidth, 0)).X;
+                        if (right > root.ActualWidth + 1) { cut.Add($"{tag}: {(AutomationProperties.GetAutomationId(control) is { Length: > 0 } id ? id : control.GetType().Name)} to {right:0}"); }
+                    }
+                    await Picture(root, Path.ChangeExtension(outFile, $".{tag}.narrow.png"));
                 }
-                await Picture(root, Path.ChangeExtension(outFile, $".{tag}.narrow.png"));
+                finally
+                {
+                    foreach (var b in hidden) { b.Visibility = Visibility.Collapsed; }
+                }
             }
             check(cut.Count == 0, $"keeps every control on every page inside a {DesignLayout.MinWidth:0} px window{(cut.Count > 0 ? $": not {string.Join(", ", cut)}" : "")}");
         }
