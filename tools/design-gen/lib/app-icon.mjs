@@ -51,12 +51,18 @@ export function appIconSpec(designDir) {
   const circles = parts(mark).map((p) => {
     if (p.tag !== 'circle') { throw new Error(`${markFile}: the app icon draws circles only, not <${p.tag}>`); }
     const [cx, cy, r] = ['cx', 'cy', 'r'].map((k) => Number(p.attrs[k] ?? 0));
-    const start = p.commands[0].p;
-    if (Math.abs(start[0] - (cx + r)) > 1e-9 || Math.abs(start[1] - cy) > 1e-9) { throw new Error(`${markFile}: the app icon draws circles without a transform`); }
+    // The circle as the sprite and the XAML draw it: from 3 o'clock to 9 o'clock and back.
+    // Both ends must be where the attributes put them, or a transform has moved the circle
+    // (a half turn about another point keeps neither; about its own centre, it swaps them).
+    const [start, half] = [p.commands[0].p, p.commands[1].p.slice(5)];
+    const near = ([x, y], [ex, ey]) => Math.abs(x - ex) < 1e-9 && Math.abs(y - ey) < 1e-9;
+    if (!near(start, [cx + r, cy]) || !near(half, [cx - r, cy])) { throw new Error(`${markFile}: the app icon draws circles without a transform`); }
     if (p.opacity !== 1) { throw new Error(`${markFile}: the app icon draws the mark opaque`); }
     for (const paint of ['fill', 'stroke']) {
       if (![undefined, 'none', 'currentColor'].includes(p.style[paint])) { throw new Error(`${markFile}: the mark draws in currentColor`); }
     }
+    const dashes = p.style['stroke-dasharray'];
+    if (p.style.stroke === 'currentColor' && dashes !== undefined && dashes !== 'none') { throw new Error(`${markFile}: the app icon draws solid strokes only, not stroke-dasharray="${dashes}"`); }
     return { cx, cy, r, fill: p.style.fill === 'currentColor', stroke: p.style.stroke === 'currentColor' ? Number(p.style['stroke-width'] ?? 1) : 0 };
   });
   return { colours, containers, mark: { size: mark.size, circles } };

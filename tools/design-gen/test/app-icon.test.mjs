@@ -57,8 +57,29 @@ test('an icon compressed differently but with the same pixels is not stale', () 
 
 test('a mark the rasterizer cannot draw exactly is refused rather than drawn wrong', () => {
   const root = copy('path');
-  writeFileSync(path.join(root, 'design', 'icons', 'mark.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path d="M4 4L44 44" fill="none" stroke="currentColor"/></svg>');
+  const mark = path.join(root, 'design', 'icons', 'mark.svg');
+  const original = readFileSync(mark, 'utf8');
+  writeFileSync(mark, '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path d="M4 4L44 44" fill="none" stroke="currentColor"/></svg>');
   assert.throws(() => staleAppIcons(root), /draws circles only, not <path>/);
+  // A half turn about a point beside the ring keeps where it starts but moves its centre.
+  writeFileSync(mark, original.replace('<circle cx="19"', '<circle transform="rotate(180 28.5 28)" cx="19"'));
+  assert.throws(() => staleAppIcons(root), /circles without a transform/);
+  writeFileSync(mark, original.replace('stroke-width="3.4"', 'stroke-width="3.4" stroke-dasharray="2 2"'));
+  assert.throws(() => staleAppIcons(root), /solid strokes only/);
+});
+
+test('a PNG cut short or failing its checksum is stale, and generating again replaces it', () => {
+  const root = copy('corrupt');
+  const file = path.join(root, 'pwa', 'icons', 'maskable-192.png');
+  const good = readFileSync(file);
+  writeFileSync(file, good.subarray(0, 20));
+  assert.deepEqual(staleAppIcons(root), ['pwa/icons/maskable-192.png']);
+  const flipped = Buffer.from(good);
+  flipped[good.length - 5] ^= 0xff; // IEND's CRC
+  writeFileSync(file, flipped);
+  assert.deepEqual(staleAppIcons(root), ['pwa/icons/maskable-192.png']);
+  writeAppIcons(root);
+  assert.deepEqual(staleAppIcons(root), []);
 });
 
 test('a plate the mark reaches under 3:1 against is refused', () => {

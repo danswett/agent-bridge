@@ -160,28 +160,33 @@ export function encodePng({ width, height, pixels }, { level = 9 } = {}) {
   return Buffer.concat([SIGNATURE, chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.concat(rows), { level })), chunk('IEND', Buffer.alloc(0))]);
 }
 
-// Only what encodePng writes, RGBA at 8 bits and not interlaced; anything else is null, which
-// the staleness check reports as stale.
+// Only what encodePng writes, RGBA at 8 bits and not interlaced; anything else, or a chunk cut
+// short or failing its CRC, is null, which the staleness check reports as stale. A corrupt file
+// must never pass for current because the pixels it happens to inflate to match.
 export function decodePng(buf) {
   if (buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) { return null; }
-  let at = 8, width = 0, height = 0;
+  let at = 8, width = 0, height = 0, ended = false;
   const idat = [];
-  while (at + 8 <= buf.length) {
+  while (!ended && at + 12 <= buf.length) {
     const len = buf.readUInt32BE(at);
+    if (at + 12 + len > buf.length) { return null; }
     const type = buf.toString('ascii', at + 4, at + 8);
     const data = buf.subarray(at + 8, at + 8 + len);
+    if (crc32(buf.subarray(at + 4, at + 8 + len)) !== buf.readUInt32BE(at + 8 + len)) { return null; }
     if (type === 'IHDR') {
+      if (len !== 13) { return null; }
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
       if (data[8] !== 8 || data[9] !== 6 || data[12] !== 0) { return null; }
     } else if (type === 'IDAT') {
       idat.push(data);
     } else if (type === 'IEND') {
-      break;
+      ended = true;
     }
     at += 12 + len;
   }
-  if (!width || !height) { return null; }
+  // No icon is larger than Apple's 1024; a bigger header is a corrupt one.
+  if (!ended || !width || !height || width > 4096 || height > 4096) { return null; }
   let raw;
   try { raw = inflateSync(Buffer.concat(idat)); } catch { return null; }
   const stride = width * 4;
