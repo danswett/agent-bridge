@@ -6,10 +6,16 @@ import Testing
 private actor FixtureHost {
     let stream = AsyncThrowingStream<BridgeEnvelope, any Error>.makeStream()
     let instance: String
+    let readOnlyReason: String?
+    let capabilities: [String]
     var loseReply: Bool
     var mutationIDs: [String] = []
-    init(instance: String = "run-1", loseReply: Bool = false) {
+    var requests: [BridgeRequest] = []
+    init(instance: String = "run-1", loseReply: Bool = false, readOnlyReason: String? = nil,
+         capabilities: [String] = ["sessions.read", "sessions.reply"])
+    {
         self.instance = instance; self.loseReply = loseReply
+        self.readOnlyReason = readOnlyReason; self.capabilities = capabilities
     }
 
     func connection() -> HostTransport {
@@ -22,10 +28,13 @@ private actor FixtureHost {
     }
 
     func send(_ request: BridgeRequest) throws -> BridgeEnvelope {
+        requests.append(request)
         let result: JSONValue
         switch request.op {
-        case "hello": result = .object(["protocol": .number(1), "capabilities": .array([.string("sessions.read"), .string("sessions.reply")]),
-                                        "machine": .object(["id": .string("fixture"), "name": .string("Fixture"), "instance": .string(instance)])])
+        case "hello":
+            var machine: [String: JSONValue] = ["id": .string("fixture"), "name": .string("Fixture"), "instance": .string(instance)]
+            machine["readOnly"] = readOnlyReason.map(JSONValue.string)
+            result = .object(["protocol": .number(1), "capabilities": .array(capabilities.map(JSONValue.string)), "machine": .object(machine)])
         case "sessions.subscribe": result = .object([:])
         case "session.reply":
             mutationIDs.append(request.data["request"]?.string ?? "missing")
@@ -102,4 +111,77 @@ private actor FixtureHost {
     #expect(attempt.uncertain)
     attempt.result = .object(["outcome": .string("accepted")])
     #expect(!attempt.uncertain)
+}
+
+@MainActor @Test(arguments: [false, true])
+func readOnlyReasonOverridesActionCapabilitiesButKeepsAdvertisedCapabilitiesAndReads(readOnly: Bool) async throws {
+    let actions = ["sessions.answer", "sessions.reply", "sessions.approve", "sessions.stop",
+                   "sessions.attach", "sessions.attach.blob", "sessions.attach.direct", "sessions.launch",
+                   "sessions.transfer", "sessions.transfer.serve", "launch.trust", "update"]
+    let reads = ["sessions.read", "usage", "usage.shared", "push"]
+    let fixture = FixtureHost(readOnlyReason: readOnly ? "This host is read-only." : nil, capabilities: actions + reads)
+    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await fixture.connection() }
+    defer { host.stop() }
+    host.start()
+    try await until { host.isLive }
+    #expect(host.capabilities == Set(actions + reads))
+    for capability in actions {
+        #expect(host.can(capability) == !readOnly)
+    }
+    for capability in reads {
+        #expect(host.can(capability))
+    }
+    #expect(!host.can("not.advertised"))
+}
+
+@MainActor @Test func readOnlyHostDoesNotRecordOrSendANewMutationOrConsumeItsDraft() async throws {
+    let fixture = FixtureHost(readOnlyReason: "This host is read-only.")
+    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await fixture.connection() }
+    defer { host.stop() }
+    host.start()
+    try await until { host.isLive }
+    host.replyDrafts["s1"] = "Continue"
+    var receipts = 0
+    host.onMutationResult = { _, _ in receipts += 1 }
+    let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
+    await host.perform(operation, slot: "s1", consumesReplyDraft: true)
+    #expect(host.attempts["s1"] == nil)
+    #expect(await fixture.mutationIDs.isEmpty)
+    #expect(host.replyDrafts["s1"] == "Continue")
+    #expect(receipts == 0)
+    // Read-only prevents mutations, not inspection or disposing of staged data.
+    for op in ["session.get", "usage.get", "launch.options", "attachment.discard"] {
+        _ = try await host.call(op)
+    }
+    #expect(await fixture.requests.suffix(4).map(\.op) == ["session.get", "usage.get", "launch.options", "attachment.discard"])
+}
+
+@MainActor @Test func readOnlyReconnectRetainsAnUncertainReplyUntilAnExplicitWritableRetry() async throws {
+    let first = FixtureHost(loseReply: true)
+    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await first.connection() }
+    defer { host.stop() }
+    host.start()
+    try await until { host.isLive }
+    host.replyDrafts["s1"] = "Continue"
+    let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
+    await host.perform(operation, slot: "s1", consumesReplyDraft: true)
+    let error = host.attempts["s1"]?.error
+    let second = FixtureHost(readOnlyReason: "This host is read-only.")
+    host.reconnect { await second.connection() }
+    try await until { host.isLive }
+    await host.retry("s1")
+    #expect(await second.mutationIDs.isEmpty)
+    #expect(host.attempts["s1"]?.operation == operation)
+    #expect(host.attempts["s1"]?.uncertain == true)
+    #expect(host.attempts["s1"]?.isSending == false)
+    #expect(host.attempts["s1"]?.error == error)
+    #expect(host.replyDrafts["s1"] == "Continue")
+    let third = FixtureHost()
+    host.reconnect { await third.connection() }
+    try await until { host.isLive }
+    #expect(await third.mutationIDs.isEmpty)
+    await host.retry("s1")
+    #expect(host.attempts["s1"]?.result?["outcome"] == .string("delivered"))
+    #expect(await first.mutationIDs == third.mutationIDs)
+    #expect(host.replyDrafts["s1"] == "")
 }
