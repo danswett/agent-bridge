@@ -42,10 +42,20 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         foreach (var d in differences)
         {
             string? known = null;
-            if (Explainable(d) && d.Kind == ShadowKinds.Compactions && ids.TryGetValue(d.Session!, out var cid)
+            if (Explainable(d) && d.Kind == ShadowKinds.MissingOnHost && ids.TryGetValue(d.Session!, out var gid)
+                && daemon.Sessions.TryGetValue(gid, out var gone) && !host.Sessions.ContainsKey(gid))
+            {
+                known = ReusedClaudePid(gid, gone, daemon, host);
+            }
+            else if (Explainable(d) && d.Kind == ShadowKinds.Compactions && ids.TryGetValue(d.Session!, out var cid)
                 && daemon.Sessions.TryGetValue(cid, out var dc) && host.Sessions.TryGetValue(cid, out var hc))
             {
                 known = CodexCompactions(cid, dc, hc);
+            }
+            else if (Explainable(d) && d.Kind is ShadowKinds.Status or ShadowKinds.Model && ids.TryGetValue(d.Session!, out var qid)
+                && daemon.Sessions.TryGetValue(qid, out var dq) && host.Sessions.TryGetValue(qid, out var hq) && dq.Agent == "claude" && hq.Agent == "claude")
+            {
+                known = ClaudeAnswerHeld(qid, dq, hq, d.Kind);
             }
             else if (Explainable(d) && ids.TryGetValue(d.Session!, out var id)
                 && daemon.Sessions.TryGetValue(id, out var ds) && host.Sessions.TryGetValue(id, out var hs)
@@ -77,7 +87,53 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
 
     static bool Explainable(ShadowDifference d) =>
         d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model
-            or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status or ShadowKinds.Compactions;
+            or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status or ShadowKinds.Compactions or ShadowKinds.MissingOnHost;
+
+    // agent-ha-bridge#290: on a resumed Claude session, the daemon can hold a question for a
+    // minute after its answer has landed ("answer unconfirmed", retried each pass), showing it
+    // waiting, and shows the launch's model alias (haiku) where the transcript names the model.
+    // Put down to that only while the daemon's armed question is a call in the session's own
+    // transcript (the one its registration names), and:
+    //   status: the transcript has that call's tool_result and, after it, a finished turn
+    //           (end_turn), and the host shows the session idle with no question;
+    //   model:  the daemon's model is a bare alias whose name is a part of the host's
+    //           claude-<...> model, and the transcript's latest model is the host's.
+    // Copilot's and Codex's, and any other Claude status or model, stay mismatches.
+    string? ClaudeAnswerHeld(string id, ShadowSession daemon, ShadowSession host, string kind)
+    {
+        if (daemon.Question?.CallId is not { Length: > 0 } call) { return null; }
+        if (kind == ShadowKinds.Status && (host.Status != "idle" || host.Question is not null)) { return null; }
+        if (kind == ShadowKinds.Model && !Alias(daemon.Model, host.Model)) { return null; }
+        if (paths.ClaudeRegistration(id)?.TranscriptPath is not { } transcript) { return null; }
+        var seen = ClaudeTurnEvidence.Read(transcript, call);
+        if (!seen.Asked) { return null; }
+        return kind switch
+        {
+            ShadowKinds.Status when seen.Answered && seen.EndedAfterAnswer => Issue(290),
+            ShadowKinds.Model when seen.LastModel is { } m && m == host.Model => Issue(290),
+            _ => null,
+        };
+    }
+
+    static bool Alias(string? daemon, string? host) =>
+        daemon is "haiku" or "sonnet" or "opus" && host is { } h && h.StartsWith("claude-", StringComparison.Ordinal)
+        && h.Split('-').Contains(daemon, StringComparer.Ordinal);
+
+    // agent-ha-bridge#289: a Claude registration counts as live while any Claude process has its
+    // pid, and an ended session's stays on disk, so a new Claude process that Windows gives the
+    // same pid brings the ended session back on the daemon's side. Put down to that only when the
+    // daemon's session the host does not have is Claude, and a Claude session that both sides have
+    // is registered under the same pid, more recently. Anything else missing stays a mismatch.
+    string? ReusedClaudePid(string id, ShadowSession gone, ShadowView daemon, ShadowView host)
+    {
+        if (gone.Agent != "claude" || paths.ClaudeRegistration(id) is not { } mine) { return null; }
+        foreach (var (other, s) in host.Sessions)
+        {
+            if (s.Agent != "claude" || string.Equals(other, id, StringComparison.OrdinalIgnoreCase) || !daemon.Sessions.ContainsKey(other)) { continue; }
+            if (paths.ClaudeRegistration(other) is { } theirs && theirs.ProcessId == mine.ProcessId && theirs.Updated > mine.Updated) { return Issue(289); }
+        }
+        return null;
+    }
 
     // agent-ha-bridge#279: the daemon counts no compaction for a Codex session (its Codex adapter's
     // CountCompactions is a fixed 0). Put down to that only when the daemon says 0 and the host's
@@ -907,6 +963,64 @@ public sealed partial class TranscriptEvidence(string path)
 
     [GeneratedRegex(@"\A<command with shellId: (\S+?) moved to background by the user[^\r\n]*>\z", RegexOptions.CultureInvariant)]
     private static partial Regex Moved();
+}
+
+// What a Claude transcript's last Tail bytes say about one question call: whether the assistant
+// asked it (a tool_use with that id), whether its tool_result is there (the answer landed),
+// whether a turn ended (an assistant end_turn) after that, and the latest model an assistant
+// message names (not Claude Code's own "<synthetic>" ones). Read whole each time it is needed,
+// which is only while a Claude status or model differs with a question armed; nothing is kept.
+public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAfterAnswer, string? LastModel)
+{
+    const int Tail = 512 * 1024;
+
+    public static ClaudeTurnEvidence Read(string path, string call)
+    {
+        var (asked, answered, ended) = (false, false, false);
+        string? model = null;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var from = Math.Max(0, stream.Length - Tail);
+            stream.Seek(from, SeekOrigin.Begin);
+            var bytes = new byte[stream.Length - from];
+            stream.ReadExactly(bytes);
+            var lines = Encoding.UTF8.GetString(bytes).Split('\n');
+            // A tail begun mid-line drops that fragment.
+            foreach (var raw in from > 0 ? lines.Skip(1) : lines)
+            {
+                var line = raw.TrimEnd('\r');
+                if (line.Length == 0 || !line.Contains(call, StringComparison.Ordinal) && !line.Contains("\"assistant\"", StringComparison.Ordinal)) { continue; }
+                JsonElement root;
+                try
+                {
+                    using var doc = JsonDocument.Parse(line);
+                    root = doc.RootElement.Clone();
+                }
+                catch (JsonException) { continue; }
+                if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) { continue; }
+                var type = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+                var content = message.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.Array ? c.EnumerateArray().ToList() : [];
+                if (type == "assistant")
+                {
+                    if (message.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } name && name != "<synthetic>") { model = name; }
+                    if (content.Any(x => Is(x, "tool_use", "id", call))) { asked = true; }
+                    if (answered && message.TryGetProperty("stop_reason", out var s) && s.ValueKind == JsonValueKind.String && s.GetString() == "end_turn") { ended = true; }
+                }
+                else if (type == "user" && content.Any(x => Is(x, "tool_result", "tool_use_id", call)))
+                {
+                    answered = true;
+                    ended = false;
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(false, false, false, null); }
+        return new(asked, answered, ended, model);
+    }
+
+    static bool Is(JsonElement item, string type, string idName, string id) =>
+        item.ValueKind == JsonValueKind.Object && item.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == type
+        && item.TryGetProperty(idName, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() == id;
 }
 
 // The compactions Codex wrote in one rollout: its top-level "compacted" lines, as CodexParser

@@ -732,4 +732,96 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Equal(length, new FileInfo(rollout).Length);
         Assert.Equal(0, count.Count());
     }
+
+    // Claude sessions as agent-ha-bridge's Claude hook registers them (agent-ha-bridge#289, #290).
+    const string Ended = "ccf05ae6-ac74-4e3c-adff-acac38854bbd", Running = "f06fdc33-5899-4111-b9f9-8f5d5540959b";
+
+    void ClaudeRegistration(string id, int pid, string updated, string? transcript = null)
+    {
+        var dir = Path.Combine(Paths.Runtime, "agent-bridge-claude");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, id + ".json"), JsonSerializer.Serialize(new { SessionId = id, ProcessId = pid, TranscriptPath = transcript ?? "", WorkingDirectory = @"C:\r", Updated = updated, HookStatus = "idle" }));
+    }
+
+    string? GhostKnown(bool hostHasRunning = true, string agent = "claude")
+    {
+        ShadowSession S(string id, string status) => new() { Id = id, Agent = agent == "claude" || id == Running ? "claude" : agent, Status = status };
+        var d = new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Ended] = S(Ended, "idle") with { Agent = agent }, [Running] = S(Running, "working") } };
+        var h = new ShadowView { Sessions = hostHasRunning ? new Dictionary<string, ShadowSession> { [Running] = S(Running, "working") } : [], SeesAgentHaBridge = true };
+        var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        return Assert.Single(differences, x => x.Kind == ShadowKinds.MissingOnHost && x.Session == ShadowHash.Session(Ended)).Known;
+    }
+
+    [Fact]
+    public void An_ended_Claude_session_back_on_the_daemon_is_put_down_to_a_reused_pid_only_when_a_newer_live_registration_has_its_pid()
+    {
+        ClaudeRegistration(Ended, 2988, "2026-11-02T10:43:30Z");
+        ClaudeRegistration(Running, 2988, "2026-11-02T14:49:50Z");
+        Assert.Equal("agent-ha-bridge#289", GhostKnown());
+
+        // Not when the host does not have the newer session either, nor for another agent.
+        Assert.Null(GhostKnown(hostHasRunning: false));
+        Assert.Null(GhostKnown(agent: "codex"));
+        // Not when the pids differ, or the one with that pid is the older registration.
+        ClaudeRegistration(Running, 2989, "2026-11-02T14:49:50Z");
+        Assert.Null(GhostKnown());
+        ClaudeRegistration(Running, 2988, "2026-11-02T09:00:00Z");
+        Assert.Null(GhostKnown());
+        // Nor when the missing session has no registration of its own.
+        ClaudeRegistration(Running, 2988, "2026-11-02T14:49:50Z");
+        File.Delete(Path.Combine(Paths.Runtime, "agent-bridge-claude", Ended + ".json"));
+        Assert.Null(GhostKnown());
+    }
+
+    const string Call = "toolu_01U43bXYZ";
+
+    string ClaudeTranscript(params object[] lines)
+    {
+        var path = Path.Combine(f.Root, "claude-projects", Running + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, string.Concat(lines.Select(l => JsonSerializer.Serialize(l) + "\n")));
+        ClaudeRegistration(Running, 11388, "2026-11-02T16:16:15Z", path);
+        return path;
+    }
+
+    static object Assistant(object[] content, string stop, string model = "claude-haiku-5-5") => new { type = "assistant", message = new { model, content, stop_reason = stop } };
+    static object AskCall => Assistant([new { type = "tool_use", id = Call, name = "AskUserQuestion" }], "tool_use");
+    static object Answer => new { type = "user", message = new { content = new object[] { new { type = "tool_result", tool_use_id = Call, content = "gamma" } } } };
+    static object EndTurn => Assistant([new { type = "text", text = "ok" }], "end_turn");
+
+    IReadOnlyList<ShadowDifference> HeldAnswer(string daemonModel = "haiku", string agent = "claude", string? call = Call)
+    {
+        var d = new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Running] = new() { Id = Running, Agent = agent, Status = "working", Model = daemonModel, Question = new ShadowQuestion { CallId = call } } } };
+        var h = new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Running] = new() { Id = Running, Agent = agent, Status = "idle", Model = "claude-haiku-5-5" } }, SeesAgentHaBridge = true };
+        return new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+    }
+
+    static string? KnownOf(IReadOnlyList<ShadowDifference> differences, string kind) => Assert.Single(differences, x => x.Kind == kind).Known;
+
+    [Fact]
+    public void A_Claude_answer_the_daemon_still_holds_is_put_down_to_it_only_once_the_transcript_has_the_answer_and_a_finished_turn()
+    {
+        ClaudeTranscript(AskCall, Answer, EndTurn);
+        var held = HeldAnswer();
+        Assert.Equal("agent-ha-bridge#290", KnownOf(held, ShadowKinds.Status));
+        Assert.Equal("agent-ha-bridge#290", KnownOf(held, ShadowKinds.Model));
+
+        // Still asking: the waiting is right, so the status stays a mismatch; the alias is the same either way.
+        ClaudeTranscript(AskCall);
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Equal("agent-ha-bridge#290", KnownOf(HeldAnswer(), ShadowKinds.Model));
+        // Answered, but the turn is still going.
+        ClaudeTranscript(AskCall, Answer);
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+
+        ClaudeTranscript(AskCall, Answer, EndTurn);
+        // Not a model the alias names, another agent, or a question the transcript never asked.
+        Assert.Null(KnownOf(HeldAnswer(daemonModel: "claude-haiku-4-5"), ShadowKinds.Model));
+        Assert.Null(KnownOf(HeldAnswer(daemonModel: "sonnet"), ShadowKinds.Model));
+        Assert.All(HeldAnswer(agent: "codex").Where(x => x.Kind is ShadowKinds.Status or ShadowKinds.Model), x => Assert.Null(x.Known));
+        Assert.All(HeldAnswer(call: "toolu_other").Where(x => x.Kind is ShadowKinds.Status or ShadowKinds.Model), x => Assert.Null(x.Known));
+        // Nor when the transcript's latest model is not the host's.
+        ClaudeTranscript(AskCall, Answer, Assistant([new { type = "text", text = "ok" }], "end_turn", "claude-sonnet-5"));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Model));
+    }
 }
