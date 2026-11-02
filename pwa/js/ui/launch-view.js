@@ -279,12 +279,16 @@ export class LaunchPanel {
   probeOthers(list) {
     this.#others = this.#target ? list.filter((o) => o.hostId !== this.#target.hostId) : [];
     for (const o of this.#others) { this.#probe(o.hostId, o.load); }
+    this.#armProbes();
+  }
+
+  #armProbes() {
     if (!this.#others.length) { this.#stopProbes(); return; }
     if (this.#probeTimer) { return; }
     this.#probeTimer = setTimeout(() => {
       this.#probeTimer = null;
-      if (globalThis.document?.visibilityState !== 'hidden') { for (const o of this.#others) { this.#probe(o.hostId, o.load, true); } }
-      this.probeOthers(this.#others);
+      for (const o of this.#others) { this.#probe(o.hostId, o.load, true); }
+      this.#armProbes();
     }, Math.max(LaunchPanel.recheckMs, 250));
   }
 
@@ -295,7 +299,8 @@ export class LaunchPanel {
   }
 
   #probe(hostId, load, due = false) {
-    if (!this.#target || hostId === this.#target.hostId) { return; }
+    // Nobody is looking at a hidden tab: its machines aren't asked until it shows again.
+    if (!this.#target || hostId === this.#target.hostId || globalThis.document?.visibilityState === 'hidden') { return; }
     const last = this.#probes.get(hostId);
     if (last && !due && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
     const token = ++this.#probeSeq;

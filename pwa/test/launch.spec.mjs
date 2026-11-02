@@ -660,6 +660,37 @@ test.describe('a folder-trust question', () => {
     await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-shadow']; m.launchOptions = { ...m.launchOptions, trust: [] }; });
     await expect(way).not.toHaveClass(/attention/, { timeout: 5000 });
   });
+  test('machines not picked are not asked for their lists while the tab is hidden', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.constructor.recheckMs = 300;
+      // Every reading of DEV-VM1 (shadow) as a machine not picked, counted.
+      const was = d.page.launchTarget.bind(d.page);
+      window.__reads = 0;
+      d.page.launchTarget = (id) => {
+        const t = was(id);
+        return id === 'demo-shadow' ? { ...t, load: () => { window.__reads += 1; return t.load(); } } : t;
+      };
+      const laptop = d.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__reads), { timeout: 5000 }).toBeGreaterThan(1);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(400);
+    const hidden = await page.evaluate(() => window.__reads);
+    await page.waitForTimeout(1500);
+    expect(await page.evaluate(() => window.__reads)).toBe(hidden);
+    // Shown again, they are.
+    await page.evaluate(() => { delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect.poll(() => page.evaluate(() => window.__reads), { timeout: 5000 }).toBeGreaterThan(hidden);
+  });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');
