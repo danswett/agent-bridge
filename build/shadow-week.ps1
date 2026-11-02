@@ -130,7 +130,9 @@ function Stop-ShadowBinProcess {
     foreach ($p in Get-Process -Name 'agent-bridge-host', 'agent-bridge-hostw' -ErrorAction SilentlyContinue) {
         $path = try { $p.Path } catch { $null }
         if ($path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-            if ($PSCmdlet.ShouldProcess("$($p.ProcessName) ($($p.Id))", 'stop')) { Stop-Process -Id $p.Id -Force }
+            # The task's launcher and the host it started often go together, so one can be gone by
+            # the time its turn comes; that is the outcome wanted, not a failed swap (seen on VM-M).
+            if ($PSCmdlet.ShouldProcess("$($p.ProcessName) ($($p.Id))", 'stop')) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
         }
     }
 }
