@@ -14,7 +14,8 @@ Implemented client workflows include:
 - Reconnecting session/usage/update subscriptions, sequence-gap recovery,
   canonical machine selection, offline roster and confirmed Forget.
 - Needs You, global search, persistent pins/order/unread state, ended sessions,
-  Markdown, attributed main-agent text, delegate summaries and recent tools.
+  Markdown, attributed main-agent text, recent tools, selectable delegate details,
+  nested/finished groups and draft-only requests to stop a delegate.
 - Capability-gated questions, replies, two-step stop, attachments and photos;
   launch/resume, signed folder trust and cross-machine copy/resume.
 - Usage across machines with a 14-day account-scoped cache, remote machine
