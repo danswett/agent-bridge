@@ -42,6 +42,9 @@ public sealed class ToastPlanner
         public HashSet<string> Notified = new(StringComparer.Ordinal);
         public string? FinishedKey;
         public (ToastKind Kind, DateTimeOffset At, string? Question)? Due;
+        // While a delegate's question is pending (NoteWait).
+        public bool WaitFromTurn;
+        public string? ResponseBeforeWait;
     }
 
     public ToastPlanner(IToastSink sink, TimeProvider? time = null)
@@ -75,9 +78,11 @@ public sealed class ToastPlanner
             if (!sessions.TryGetValue(s.Id, out var t))
             {
                 t = sessions[s.Id] = new Tracked { Last = s };
+                NoteWait(t, null, s);
                 if (s.Question is { } first) { t.Due = (ToastKind.Question, now + QuestionDelay, first.Id); }
                 continue;
             }
+            NoteWait(t, t.Last, s);
             t.Last = s;
             if (t.Shown is { } shown && s.Question?.Id != shown)
             {
@@ -102,6 +107,7 @@ public sealed class ToastPlanner
         }
         var before = t.Last;
         t.Last = s;
+        NoteWait(t, before, s);
         if (t.Shown is { } shown && s.Question?.Id != shown)
         {
             sink.Withdraw(TagOf(s.Id));
@@ -113,13 +119,31 @@ public sealed class ToastPlanner
             // pushed back by each change.
             if (t.Due is not { Kind: ToastKind.Question } d0 || d0.Question != q.Id) { t.Due = (ToastKind.Question, now + QuestionDelay, q.Id); }
         }
-        else if (before is not null && before.Status is SessionStatus.Working or SessionStatus.Waiting && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(s.Activity.Response))
+        else if (before is not null && EndsTurn(t, before, s) && s.Status == SessionStatus.Idle && !string.IsNullOrEmpty(MainResponse(s)))
         {
             t.Due = (ToastKind.Finished, now + FinishedDelay, null);
         }
         else if (t.Due is { Kind: ToastKind.Finished } && s.Status != SessionStatus.Idle) { t.Due = null; }
         else if (t.Due is { Kind: ToastKind.Question } d && s.Question?.Id != d.Question) { t.Due = null; }
     }
+
+    // A wait on a delegate's question (waitingOn) as it begins: whether the main agent's turn was
+    // running, and its own response then. Answering a delegate while the main agent stayed idle
+    // ends no turn (v1-sessions.md, Notifications, `finished`): its old response is not news.
+    static void NoteWait(Tracked t, Session? before, Session s)
+    {
+        if (s.Status != SessionStatus.Waiting || s.WaitingOn is null || before is { Status: SessionStatus.Waiting, WaitingOn: not null }) { return; }
+        // Waiting on its own question is mid-turn too: a delegate's question straight after it
+        // still belongs to that turn.
+        t.WaitFromTurn = before is { Status: SessionStatus.Working } or { Status: SessionStatus.Waiting, WaitingOn: null };
+        t.ResponseBeforeWait = MainResponse(before ?? s);
+    }
+
+    // A turn of the main agent's own ended: it was working, or waiting on its own question, or on
+    // a delegate's that it asked mid-turn or answered with new words of its own.
+    static bool EndsTurn(Tracked t, Session before, Session s) =>
+        before.Status == SessionStatus.Working
+        || before.Status == SessionStatus.Waiting && (before.WaitingOn is null || t.WaitFromTurn || MainResponse(s) != t.ResponseBeforeWait);
 
     // A session that ended keeps its finished toast: the response is still worth reading.
     public void Remove(string id)
@@ -156,8 +180,10 @@ public sealed class ToastPlanner
             }
             else
             {
-                var key = $"{s.Activity.TurnCount}|{s.Activity.Response}";
-                if (s.Status != SessionStatus.Idle || t.FinishedKey == key) { continue; }
+                var key = $"{s.Activity.TurnCount}|{MainResponse(s)}";
+                // The main agent's words may have gone in the wait (a delegate wrote last, or the
+                // budget left them out): an empty toast says nothing.
+                if (s.Status != SessionStatus.Idle || t.FinishedKey == key || string.IsNullOrEmpty(MainResponse(s))) { continue; }
                 t.FinishedKey = key;
                 if (!Enabled() || !FinishedEnabled() || WindowActive()) { continue; }
                 finished.Add(id);
@@ -167,6 +193,11 @@ public sealed class ToastPlanner
     }
 
     string TagOf(string sessionId) => Tag(sessionId, MachineKey);
+
+    // A finished turn is the main agent's, read from its own response: a delegate's latest text in
+    // the top-level field (activity.source) is never the preview, and a delegate finishing alone is
+    // never a finished turn (v1-sessions.md, Notifications, `finished`).
+    internal static string? MainResponse(Session s) => Attribution.MainVoiceOf(s).Response;
 
     // A session on another machine is tagged with that machine too.
     public static string Tag(string sessionId, string? machineKey) => Tag(machineKey is null ? sessionId : $"{machineKey}/{sessionId}");
@@ -238,7 +269,7 @@ public static partial class ToastXml
 
     public static string Finished(Session s, string? machine, string? machineKey = null)
     {
-        var preview = Plain(s.Activity.Response, 300);
+        var preview = Plain(ToastPlanner.MainResponse(s), 300);
         var b = Start(Args(machineKey, ("action", "open"), ("session", s.Id)), Title(s), $"{Machine(machine)}finished", preview);
         b.Append("</toast>");
         return b.ToString();

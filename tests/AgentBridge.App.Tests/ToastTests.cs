@@ -153,6 +153,69 @@ public sealed class ToastTests
     }
 
     [Fact]
+    public void A_finished_turn_previews_the_main_agents_own_words_never_a_delegates_and_a_delegate_alone_finishes_no_turn()
+    {
+        var p = Planner();
+        var byDelegate = new ActivitySource { Response = "agent-1" };
+        p.Upsert(Make.Session(status: SessionStatus.Working));
+        p.Upsert(Make.Session(turns: 2) with { Activity = new Activity { Response = "A delegate's findings.", TurnCount = 2, Source = byDelegate, Own = new OwnActivity { Response = "Started the delegates." } } });
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Equal("Started the delegates.", Xml(Assert.Single(sink.Shown)).Descendants("text").Last().Value);
+
+        // The main agent has no words of its own this turn: the delegate's are not news.
+        p.Upsert(Make.Session("s2", status: SessionStatus.Working));
+        p.Upsert(Make.Session("s2") with { Activity = new Activity { Response = "A delegate's findings.", Source = byDelegate } });
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+        Assert.Single(sink.Shown);
+    }
+
+    static Session AskedByDelegate(string id, string response) => Make.Session(id, question: Make.Choice() with { Agent = "agent-1" }, response: response) with { WaitingOn = "agent-1" };
+
+    [Fact]
+    public void Answering_a_delegates_question_ends_a_turn_only_if_the_main_agent_was_working_asking_or_wrote_since()
+    {
+        var p = Planner();
+        // Idle, then a delegate asks, answered within two seconds, and the main agent stays idle
+        // with the words it had: no turn ended.
+        p.Upsert(Make.Session("idle", response: "Old."));
+        p.Upsert(AskedByDelegate("idle", "Old."));
+        p.Upsert(Make.Session("idle", response: "Old."));
+        // Mid-turn, a delegate asks: answering it ends the turn.
+        p.Upsert(Make.Session("busy", status: SessionStatus.Working, response: "Old."));
+        p.Upsert(AskedByDelegate("busy", "Old."));
+        p.Upsert(Make.Session("busy", response: "Old."));
+        // Mid-turn, the main agent asks, and a delegate straight after: still that turn.
+        p.Upsert(Make.Session("asked", status: SessionStatus.Working, response: "Old."));
+        p.Upsert(Make.Session("asked", question: Make.Choice(), response: "Old."));
+        p.Upsert(AskedByDelegate("asked", "Old."));
+        p.Upsert(Make.Session("asked", response: "Old."));
+        // Idle, a delegate asks, and the main agent writes something new by the end.
+        p.Upsert(Make.Session("wrote", response: "Old."));
+        p.Upsert(AskedByDelegate("wrote", "Old."));
+        p.Upsert(Make.Session("wrote", response: "New."));
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+
+        Assert.Equal(["asked", "busy", "wrote"], sink.Shown.Select(n => n.Tag).Order());
+    }
+
+    [Fact]
+    public void A_finished_turn_whose_main_agent_words_are_gone_when_it_is_due_raises_nothing()
+    {
+        var p = Planner();
+        p.Upsert(Make.Session(status: SessionStatus.Working));
+        p.Upsert(Make.Session(response: "Done.", turns: 2));
+        // Before the toast is due, a delegate writes last and the budget leaves the main agent's out.
+        p.Upsert(Make.Session(turns: 2) with { Activity = new Activity { Response = "A delegate's findings.", TurnCount = 2, Source = new ActivitySource { Response = "agent-1" }, Own = new OwnActivity { ResponseTruncated = true } } });
+        clock.Advance(TimeSpan.FromSeconds(3));
+        p.Tick();
+
+        Assert.Empty(sink.Shown);
+    }
+
+    [Fact]
     public void A_single_choice_question_offers_its_options_as_buttons_with_a_box_for_other()
     {
         var xml = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Choice(other: true)), Caps, null), false));

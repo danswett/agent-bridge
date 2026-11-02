@@ -303,12 +303,14 @@ public sealed partial class NeedsYouEntry : Observable
         _ => false,
     });
 
-    // Who asked: null for the session's own question, else the delegate's name. One the list left out
-    // (the host's limit or the session budget) is still a delegate, just unnamed.
+    // Who asked: null for the session's own question, else the delegate's label with the word
+    // Delegate in front (DelegateLabel.Titled), so no name, look-alike letters and all, reads as
+    // "Main agent asks". One the list left out (the host's limit or the session budget) is still a
+    // delegate, just unnamed.
     public static string? DelegateOf(Session s)
     {
         if (s.Question is not { } q || (q.Agent ?? s.WaitingOn) is not { } id) { return null; }
-        return s.Subagents?.FirstOrDefault(a => a.Id == id)?.Name is { Length: > 0 } name ? name : "A delegate";
+        return s.Subagents?.FirstOrDefault(a => a.Id == id) is { Name.Length: > 0 } agent ? DelegateLabel.Titled(DelegateLabel.For(agent.Name, agent.Id)) : "A delegate";
     }
 
     // A question's first line of prose, never a line of code; one that is all code shows its first.

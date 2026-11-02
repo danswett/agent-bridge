@@ -9,7 +9,7 @@ public sealed record DetailRow(string Label, string Value, bool Mono = false, bo
     public string Tip => Value;
 }
 // What the window's panes show of a session (#180): its row in the list (§6.1), its header
-// (§6.2), its Details and its delegates' counts until U8 (#176) lists them.
+// (§6.2), its Details and its delegates' counts (Delegates lists them, §6.3).
 public sealed partial class SessionCardViewModel
 {
     bool selected;
@@ -42,24 +42,26 @@ public sealed partial class SessionCardViewModel
     // value again and lose a person's selection of a path or an id.
     public System.Collections.ObjectModel.ObservableCollection<DetailRow> Details { get; } = [];
 
-    void SyncDetails()
+    void SyncDetails() => SyncDetailRows(Details, CurrentDetails());
+
+    // Also the delegate inspector's: its Model can arrive after its Kind and ID rows.
+    internal static void SyncDetailRows(System.Collections.ObjectModel.ObservableCollection<DetailRow> rows, IReadOnlyList<DetailRow> want)
     {
-        var want = CurrentDetails();
         // A fact that has gone (Background at zero, For once idle) goes first, by label: inserting
         // before it instead made new copies of every row after it, the ID among them, and a
         // selection in one was lost to an ordinary update.
         var labels = want.Select(d => d.Label).ToHashSet();
-        for (var i = Details.Count - 1; i >= 0; i--)
+        for (var i = rows.Count - 1; i >= 0; i--)
         {
-            if (!labels.Contains(Details[i].Label)) { Details.RemoveAt(i); }
+            if (!labels.Contains(rows[i].Label)) { rows.RemoveAt(i); }
         }
         for (var i = 0; i < want.Count; i++)
         {
-            if (i < Details.Count && Details[i] == want[i]) { continue; }
-            if (i < Details.Count && Details[i].Label == want[i].Label) { Details[i] = want[i]; }
-            else { Details.Insert(i, want[i]); }
+            if (i < rows.Count && rows[i] == want[i]) { continue; }
+            if (i < rows.Count && rows[i].Label == want[i].Label) { rows[i] = want[i]; }
+            else { rows.Insert(i, want[i]); }
         }
-        while (Details.Count > want.Count) { Details.RemoveAt(Details.Count - 1); }
+        while (rows.Count > want.Count) { rows.RemoveAt(rows.Count - 1); }
     }
 
     List<DetailRow> CurrentDetails()
@@ -72,7 +74,7 @@ public sealed partial class SessionCardViewModel
         if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
         if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
         if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
-        // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
+        // The counts the host reports, beside the delegates the strip lists (or in place of them).
         if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
         if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
         if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
@@ -89,7 +91,8 @@ public sealed partial class SessionCardViewModel
     // says asked.
     public string AsksText => NeedsYouEntry.DelegateOf(session) is { } name ? $"{name} asks" : "Main agent asks";
 
-    // Until U8 (#176) lists delegates, the Delegates tab has only the counts the host reports.
+    // The counts the host reports: all a host that can't list its delegates (Claude, Codex, an older
+    // host: status rule 8) says of them, in the Delegates tab and in Details.
     public bool HasDelegates => session.Activity.Background is { } b && (b.Agents > 0 || b.Shells > 0);
     public string DelegatesText
     {

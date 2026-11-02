@@ -211,8 +211,8 @@ public sealed class NeedsYouTests : IAsyncLifetime
         await AskAsync("idle", Make.Approval("r3#d") with { Agent = "agent-7", AskedAt = Make.T0.AddMinutes(8) }, like);
         await Wait.UntilAsync(() => main.NeedsYou.Any(e => e.Card.Id == "idle"), "the entry");
         var entry = Entry("idle");
-        Assert.Equal("Read witness shell logic", entry.Delegate);
-        Assert.Equal("Copilot · Read witness shell logic asks · 2m", entry.Meta);
+        Assert.Equal("Delegate Read witness shell logic", entry.Delegate);
+        Assert.Equal("Copilot · Delegate Read witness shell logic asks · 2m", entry.Meta);
         Assert.Null(Entry("approval").Delegate);
     }
 
@@ -429,9 +429,9 @@ public sealed class NeedsYouTests : IAsyncLifetime
             Subagents = [new Subagent { Id = "agent-8", Kind = SubagentKind.Task, Status = SubagentStatus.Waiting, Name = "Check the fixtures" }],
             UpdatedAt = Make.T0.AddMinutes(9),
         });
-        await Wait.UntilAsync(() => entry.Delegate == "Check the fixtures", "the delegate's name");
+        await Wait.UntilAsync(() => entry.Delegate == "Delegate Check the fixtures", "the delegate's name");
         Assert.Same(entry, Entry("idle"));
-        Assert.Contains("Check the fixtures asks", TestUi.Read(() => entry.Meta));
+        Assert.Contains("Delegate Check the fixtures asks", TestUi.Read(() => entry.Meta));
     }
 
     [Fact]

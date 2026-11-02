@@ -215,7 +215,7 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         await host.SendAsync(Events.SessionUpsert, Make.Session("unlisted", question: Make.Choice(options: ["yes", "no"]) with { Agent = "a9" }, updated: Make.T0.AddMinutes(3)));
         await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Count == 4), "the questions");
 
-        Assert.Equal("Read the logs asks", Card("asking").AsksText);
+        Assert.Equal("Delegate Read the logs asks", Card("asking").AsksText);
         Assert.Equal("A delegate asks", Card("unlisted").AsksText);
     }
     [Fact]
@@ -225,8 +225,8 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Choice(options: ["yes", "no"]), updated: Make.T0.AddMinutes(2)) with { Subagents = subagents, WaitingOn = "a1" });
         await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
 
-        Assert.Equal("Read the logs asks", TestUi.Read(() => Card("asking").AsksText));
-        Assert.Equal("Read the logs", TestUi.Read(() => main.NeedsYou.Single(e => e.Card.Id == "asking").Card.Session is var s ? NeedsYouEntry.DelegateOf(s) : null));
+        Assert.Equal("Delegate Read the logs asks", TestUi.Read(() => Card("asking").AsksText));
+        Assert.Equal("Delegate Read the logs", TestUi.Read(() => main.NeedsYou.Single(e => e.Card.Id == "asking").Card.Session is var s ? NeedsYouEntry.DelegateOf(s) : null));
     }
 
     [Fact]

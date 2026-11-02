@@ -45,11 +45,12 @@ public static class StatusRules
         if (s.Status == SessionStatus.Ending) { return new(Ending, StatusGlyph.Ended, "ending", "Ending session…", StatusTone.Muted, false); }
         if (s.Status == SessionStatus.Waiting)
         {
-            // Rule 2: a delegate's question, named for the delegate. The session's own question
-            // wins over it at the host, which then sends no waitingOn.
+            // Rule 2: a delegate's question, named for the delegate after the word Delegate, which
+            // "Main agent asks" never has. The session's own question wins over it at the host,
+            // which then sends no waitingOn.
             if ((s.WaitingOn ?? q?.Agent) is { } asker)
             {
-                var name = s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name ?? "A delegate";
+                var name = s.Subagents?.FirstOrDefault(a => a.Id == asker) is { } agent ? DelegateLabel.Titled(DelegateLabel.For(agent.Name, agent.Id)) : "A delegate";
                 return new(2, StatusGlyph.Needs, "waiting", $"{name} asks{atMachine}", StatusTone.Needs, false);
             }
             var n = RunningDelegates(s);
@@ -58,7 +59,7 @@ public static class StatusRules
         if (s.Status == SessionStatus.Working)
         {
             var task = ForegroundTask(s);
-            return new(3, StatusGlyph.Working, "working", task is null ? "Working" : $"Working · task: {task.Name}", StatusTone.Plain, false);
+            return new(3, StatusGlyph.Working, "working", task is null ? "Working" : $"Working · task: {DelegateLabel.Titled(DelegateLabel.For(task.Name, task.Id))}", StatusTone.Plain, false);
         }
         var b = s.Activity.Background;
         if (b is { Agents: > 0 })

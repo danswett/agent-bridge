@@ -26,6 +26,14 @@ public static class Words
 
     public static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
 
+    // How long a tool call took, as a stopwatch reads (ui.md §6.3, the inspector's Tools, in
+    // tabular figures): "0:42", "4:02", "1:02:03".
+    public static string Clock(TimeSpan took)
+    {
+        var s = Math.Max(0, (long)Math.Floor(took.TotalSeconds));
+        return s < 3600 ? $"{s / 60}:{s % 60:00}" : $"{s / 3600}:{s / 60 % 60:00}:{s % 60:00}";
+    }
+
     // A row's age (ui.md §6.1, the mock-ups' "now", "32m", "10h"): how long since the session
     // last changed, in its largest whole unit.
     public static string Age(DateTimeOffset at, DateTimeOffset now)

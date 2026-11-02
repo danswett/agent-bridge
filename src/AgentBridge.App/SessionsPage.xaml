@@ -313,8 +313,8 @@
                 Visibility="{x:Bind local:Ui.Show(Layout.ShowEmpty), Mode=OneWay, FallbackValue=Collapsed}" />
         </Grid>
 
-        <!-- The inspector (§5.2): the session's Details and Tools until U8 (#176) puts its delegates
-             first; a section each, so delegates go above without laying these out again. -->
+        <!-- The inspector (§5.2, §6.3): the delegate selected in the session's strip, or with none the
+             session's Details and Tools. -->
         <ScrollViewer
             x:Name="Inspector"
             Grid.Column="2"
@@ -323,16 +323,23 @@
             BorderThickness="1,0,0,0"
             AutomationProperties.AutomationId="Inspector"
             Visibility="{x:Bind local:Ui.Show(Layout.ShowInspector), Mode=OneWay, FallbackValue=Collapsed}">
-            <StackPanel Padding="16,20,16,24" Spacing="24">
-                <StackPanel Spacing="8" AutomationProperties.AutomationId="InspectorDetails">
-                    <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level2" Text="Details" />
-                    <local:SessionDetails x:Name="InspectorDetails" Card="{x:Bind Layout.Selected, Mode=OneWay}" />
+            <Grid Padding="16,20,16,24">
+                <local:DelegateInspector
+                    x:Name="InspectorDelegate"
+                    BackLabel="Back to the session's details"
+                    Card="{x:Bind Layout.Selected, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegateInspector), Mode=OneWay, FallbackValue=Collapsed}" />
+                <StackPanel Spacing="24" Visibility="{x:Bind local:Ui.Show(Layout.ShowSessionInspector), Mode=OneWay, FallbackValue=Visible}">
+                    <StackPanel Spacing="8" AutomationProperties.AutomationId="InspectorDetails">
+                        <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level2" Text="Details" />
+                        <local:SessionDetails x:Name="InspectorDetails" Card="{x:Bind Layout.Selected, Mode=OneWay}" />
+                    </StackPanel>
+                    <StackPanel Spacing="8" AutomationProperties.AutomationId="InspectorTools" Visibility="{x:Bind local:Ui.Show(Layout.ShowToolsTab), Mode=OneWay, FallbackValue=Collapsed}">
+                        <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level2" Text="Tools" />
+                        <local:ToolList Card="{x:Bind Layout.Selected, Mode=OneWay}" />
+                    </StackPanel>
                 </StackPanel>
-                <StackPanel Spacing="8" AutomationProperties.AutomationId="InspectorTools" Visibility="{x:Bind local:Ui.Show(Layout.ShowToolsTab), Mode=OneWay, FallbackValue=Collapsed}">
-                    <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level2" Text="Tools" />
-                    <local:ToolList Card="{x:Bind Layout.Selected, Mode=OneWay}" />
-                </StackPanel>
-            </StackPanel>
+            </Grid>
         </ScrollViewer>
     </Grid>
 </UserControl>

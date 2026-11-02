@@ -22,6 +22,11 @@ public sealed class CardContext
     public IBlobStore? Blobs { get; init; }
     public string? BlobsFor { get; init; }
     public Func<string, Task<Session?>>? FetchDetail { get; init; }
+    // session.get { id, agent }: one delegate in full (Attribution.FetchDelegateAsync); null once
+    // it has gone. Throws as the connection does.
+    public Func<string, string, Task<Subagent?>>? FetchDelegate { get; init; }
+    // Where what a fetch brings back is applied: the UI thread. Inline when unset.
+    public IUiDispatcher? Ui { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
 }
 
@@ -57,11 +62,15 @@ public sealed partial class SessionCardViewModel : Observable
         this.session = session;
         this.ctx = ctx;
         folded = ctx.Folds.IsFolded(session.Id);
+        Delegates = new DelegatesViewModel(session, ctx, () => reply);
         ctx.Deliveries.Changed += OnDelivery;
         Update(session);
     }
 
     public Session Session => session;
+    // Its delegates (ui.md §6.3): the strip, the Delegates tab, the inspector and the
+    // conversation's one-line events.
+    public DelegatesViewModel Delegates { get; }
     public string Id => session.Id;
     public AgentKind Agent => session.Agent;
     public string AgentName => AgentNames.GetValueOrDefault(session.Agent, "Agent");
@@ -97,34 +106,36 @@ public sealed partial class SessionCardViewModel : Observable
     // The tool glyph's accessible name: the words beside it are the tool's name and summary, so
     // only the glyph says whether it is running, done or failed (ui.md §9), as a history row's does.
     public string ToolState => (session.Activity.CurrentTool?.Status ?? ToolStatus.Running).ToString().ToLowerInvariant();
-    static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
+    internal static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
 
     // The main agent's own words, which the session pane labels "Main agent" (§6.4). The top-level
     // text is whoever wrote last: where activity.source names a delegate for it, activity.own
     // carries the main agent's, and own's stands in when the top-level text is absent
-    // (docs/design/subagents.md, "New clients"). A delegate's words are U8's (#176).
+    // (docs/design/subagents.md, "New clients"; Attribution.MainVoiceOf, the PWA's rule). A
+    // delegate's words are only ever on its own row, strip item or inspector (Delegates).
+    MainVoice Voice => Attribution.MainVoiceOf(session);
     bool ResponseByDelegate => !string.IsNullOrEmpty(session.Activity.Source?.Response) || string.IsNullOrEmpty(session.Activity.Response);
     // Whether the host says whose the words are (pwa/js/attribution.js): source, own or a delegate
     // list. A host that doesn't (Claude and Codex until #84's later slices, an older host on another
     // machine) may send a delegate's words as the top-level response (v1-sessions.md), so they are
     // labelled with the agent's name, never "Main agent": a delegate's text, after reading something
     // untrusted, must not pass as the main agent's.
-    public bool Attributed => session.Activity.Source is not null || session.Activity.Own is not null || session.Subagents is not null || session.SubagentsMore > 0;
+    public bool Attributed => Voice.Attributed;
     public string Speaker => Attributed ? "Main agent" : AgentName;
-    public string Response => (ResponseByDelegate ? session.Activity.Own?.Response : session.Activity.Response) ?? "";
+    public string Response => Voice.Response ?? "";
     public bool HasResponse => Response.Length > 0;
-    public bool ResponseTruncated => (ResponseByDelegate ? session.Activity.Own?.ResponseTruncated : session.Activity.ResponseTruncated) == true && HasResponse;
+    public bool ResponseTruncated => Voice.ResponseTruncated;
     // The main agent had a response, but the session budget left it out to make room for its
     // delegates (own.response dropped, own.responseTruncated kept): said so, rather than looking
     // like no answer, and never filled with the delegate's text.
-    public bool ResponseDropped => ResponseByDelegate && !HasResponse && session.Activity.Own?.ResponseTruncated == true;
+    public bool ResponseDropped => Voice.ResponseDropped;
     // The label line shows for the main agent's words, or for the note that they were left out.
     public bool HasVoice => HasResponse || ResponseDropped;
     // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
     // which moves the session's updatedAt without touching the main agent's answer; else the
     // session's age, as on its row.
     public string ResponseAgeText => ResponseByDelegate && session.Activity.Own?.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : AgeText;
-    public string Reasoning => (!string.IsNullOrEmpty(session.Activity.Source?.Reasoning) ? session.Activity.Own?.Reasoning : session.Activity.Reasoning ?? session.Activity.Own?.Reasoning) ?? "";
+    public string Reasoning => Voice.Reasoning ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
     public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage);
@@ -217,6 +228,7 @@ public sealed partial class SessionCardViewModel : Observable
         synced = true;
         session = next;
         Sync();
+        Delegates.Update(next, ctx.Time.GetUtcNow());
         // A new question opens a folded card: it waits on you, and must not stay folded away.
         if (ctx.Folds.NoteQuestion(next.Id, next.Question?.Id) || first) { Set(ref folded, ctx.Folds.IsFolded(next.Id), nameof(Folded)); }
         RefreshTimes();
@@ -228,6 +240,7 @@ public sealed partial class SessionCardViewModel : Observable
     public void CapabilitiesChanged()
     {
         Sync();
+        Delegates.Update(session, ctx.Time.GetUtcNow());
         RaiseAll();
     }
 
@@ -325,6 +338,7 @@ public sealed partial class SessionCardViewModel : Observable
         Raise(nameof(AgeText));
         Raise(nameof(ResponseAgeText));
         SyncDetails();
+        Delegates.RefreshTimes(now);
     }
 
     // The tool history, from session.get, newest first.

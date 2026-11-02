@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.DelegateInspector"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- One delegate (docs/design/ui.md §6.3): its name and glyph; Status, Model, Kind and ID (mono);
+         its Task, its Latest words and its Reasoning, collapsed; its Tools, mono, a glyph per call and
+         how long each took in tabular figures; the delegates it started, each under its own parent;
+         and its one action, "Ask main agent to stop it", which fills the reply box and sends nothing.
+         Its words are its own, never the main agent's (§1 principle 3). In the inspector at three
+         panes, and pushed in the Delegates tab below that. -->
+    <StackPanel Spacing="20" AutomationProperties.AutomationId="DelegateInspector">
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Button
+                Style="{StaticResource AbIconButton}"
+                Margin="-8,0,0,0"
+                AutomationProperties.AutomationId="DelegateBack"
+                AutomationProperties.Name="{x:Bind BackLabel, Mode=OneWay}"
+                ToolTipService.ToolTip="{x:Bind BackLabel, Mode=OneWay}"
+                Click="OnBack">
+                <ContentControl Style="{StaticResource AbIconBack}" Width="16" Height="16" />
+            </Button>
+            <local:StatusGlyphView
+                Grid.Column="1"
+                VerticalAlignment="Center"
+                Size="16"
+                AutomationProperties.AutomationId="DelegateGlyph"
+                Glyph="{x:Bind Card.Delegates.Detail.Glyph, Mode=OneWay}"
+                Label="{x:Bind Card.Delegates.Detail.GlyphLabel, Mode=OneWay}" />
+            <!-- A fixed "Delegate" overline above the name: the main agent's words carry the label
+                 "Main agent", and no name a delegate gives itself can look like that here
+                 (DelegateLabel, ui.md §6.3). -->
+            <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="0">
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    Foreground="{ThemeResource AbText2}"
+                    AutomationProperties.AccessibilityView="Raw"
+                    AutomationProperties.AutomationId="DelegateOverline"
+                    Text="Delegate" />
+                <TextBlock
+                    Style="{StaticResource AbTypeRow}"
+                    FontWeight="SemiBold"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"
+                    AutomationProperties.HeadingLevel="Level2"
+                    AutomationProperties.AutomationId="DelegateName"
+                    AutomationProperties.Name="{x:Bind Card.Delegates.Detail.Heading, Mode=OneWay}"
+                    Text="{x:Bind Card.Delegates.Detail.Name, Mode=OneWay}" />
+            </StackPanel>
+        </Grid>
+
+        <ItemsControl ItemsSource="{x:Bind Card.Delegates.Detail.Properties, Mode=OneWay}" IsTabStop="False" AutomationProperties.AutomationId="DelegateProperties">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <StackPanel Spacing="4" />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="core:DetailRow">
+                    <Grid ColumnSpacing="12" AutomationProperties.Name="{x:Bind Label}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="84" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource AbTypeMeta}" LineHeight="20" Foreground="{ThemeResource AbText2}" Text="{x:Bind Label}" />
+                        <TextBlock
+                            Grid.Column="1"
+                            Style="{x:Bind local:SessionDetails.ValueStyle(Mono)}"
+                            TextTrimming="CharacterEllipsis"
+                            IsTextSelectionEnabled="True"
+                            ToolTipService.ToolTip="{x:Bind Tip}"
+                            AutomationProperties.AutomationId="{x:Bind local:DelegateInspector.ValueId(Label)}"
+                            Text="{x:Bind Value}" />
+                    </Grid>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock
+            Style="{StaticResource AbTypeMeta}"
+            Foreground="{ThemeResource AbText2}"
+            TextWrapping="Wrap"
+            AutomationProperties.AutomationId="DelegateNote"
+            AutomationProperties.LiveSetting="Polite"
+            Text="{x:Bind Card.Delegates.Detail.Note, Mode=OneWay}"
+            Visibility="{x:Bind local:Ui.Some(Card.Delegates.Detail.Note), Mode=OneWay, FallbackValue=Collapsed}" />
+
+        <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.HasTask), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level3" Text="Task" />
+            <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" AutomationProperties.AutomationId="DelegateTask" Text="{x:Bind Card.Delegates.Detail.Task, Mode=OneWay}" />
+        </StackPanel>
+
+        <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.HasLatest), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level3" Text="Latest" />
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                Foreground="{ThemeResource AbText2}"
+                TextWrapping="Wrap"
+                Text="Earlier text not shown: the response was longer than the machine sends."
+                Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.LatestTruncated), Mode=OneWay, FallbackValue=Collapsed}" />
+            <local:MarkdownView AutomationProperties.AutomationId="DelegateLatest" Markdown="{x:Bind Card.Delegates.Detail.Latest, Mode=OneWay}" />
+        </StackPanel>
+
+        <Expander
+            Header="Reasoning"
+            HorizontalAlignment="Stretch"
+            HorizontalContentAlignment="Stretch"
+            AutomationProperties.AutomationId="DelegateReasoning"
+            Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.HasReasoning), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Delegates.Detail.Reasoning, Mode=OneWay}" />
+        </Expander>
+
+        <StackPanel Spacing="8" AutomationProperties.AutomationId="DelegateTools" Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.HasTools), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level3" Text="Tools" />
+            <ItemsControl ItemsSource="{x:Bind Card.Delegates.Detail.Tools, Mode=OneWay}" IsTabStop="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Spacing="4" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="core:ToolRow">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:StatusGlyphView Margin="0,2,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Glyph}" Label="{x:Bind Status}" />
+                            <TextBlock Grid.Column="1" Style="{StaticResource InlineMonoMeta}" TextWrapping="Wrap" ToolTipService.ToolTip="{x:Bind Summary}">
+                                <Run Text="{x:Bind Name}" /><Run Text=" " /><Run Text="{x:Bind Summary}" Foreground="{ThemeResource AbText2}" />
+                            </TextBlock>
+                            <!-- How long it took, in the mono's tabular figures, so the column lines up. -->
+                            <TextBlock Grid.Column="2" Style="{StaticResource InlineMonoMeta}" Foreground="{ThemeResource AbText2}" AutomationProperties.AutomationId="DelegateToolTook" Text="{x:Bind When}" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </StackPanel>
+
+        <!-- The delegates it started, each under its own parent; opened in its place. -->
+        <StackPanel Spacing="4" Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.HasNested), Mode=OneWay, FallbackValue=Collapsed}">
+            <TextBlock Style="{StaticResource AbTypeSectionHeader}" Foreground="{ThemeResource AbText2}" AutomationProperties.HeadingLevel="Level3" Text="Nested" />
+            <ListView
+                Margin="-12,0,-12,0"
+                SelectionMode="None"
+                IsItemClickEnabled="True"
+                ItemClick="OnNested"
+                AutomationProperties.AutomationId="DelegateNested"
+                AutomationProperties.Name="Nested delegates"
+                ItemsSource="{x:Bind Card.Delegates.Detail.Nested, Mode=OneWay}">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="core:NestedDelegate">
+                        <Grid ColumnSpacing="8" Padding="0,6" Margin="{x:Bind local:DelegateInspector.IndentOf(Indent)}" AutomationProperties.Name="{x:Bind Item.Label, Mode=OneWay}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="14" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="14" Glyph="{x:Bind Item.Glyph, Mode=OneWay}" />
+                            <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" Text="{x:Bind Item.Name, Mode=OneWay}" />
+                            <TextBlock Grid.Column="2" Style="{StaticResource AbTypeMeta}" LineHeight="20" Foreground="{ThemeResource AbText2}" Text="{x:Bind Item.Time, Mode=OneWay}" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </StackPanel>
+
+        <!-- Its one action (§6.3, subagents.md §6): labelled with the main agent, as everything it does is. -->
+        <Button
+            HorizontalAlignment="Stretch"
+            MinHeight="32"
+            Content="Ask main agent to stop it"
+            AutomationProperties.AutomationId="AskToStop"
+            ToolTipService.ToolTip="Fills the reply box with a message to the main agent. Nothing is sent until you send it."
+            Visibility="{x:Bind local:Ui.Show(Card.Delegates.Detail.CanAskToStop), Mode=OneWay, FallbackValue=Collapsed}"
+            Click="OnAskToStop" />
+    </StackPanel>
+</UserControl>

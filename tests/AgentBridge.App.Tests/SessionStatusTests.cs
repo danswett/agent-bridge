@@ -71,18 +71,18 @@ public sealed class SessionStatusTests
     }
 
     [Fact]
-    public void Rule_2_a_delegates_question_reads_name_asks_named_from_the_delegate_list()
+    public void Rule_2_a_delegates_question_reads_Delegate_name_asks_named_from_the_delegate_list()
     {
         var s = Said(Example());
-        Assert.Equal((2, StatusGlyph.Needs, "Read witness shell logic asks", StatusTone.Needs), (s.Rule, s.Glyph, s.Text, s.Tone));
+        Assert.Equal((2, StatusGlyph.Needs, "Delegate Read witness shell logic asks", StatusTone.Needs), (s.Rule, s.Glyph, s.Text, s.Tone));
         // The question's agent names it as waitingOn does.
-        Assert.Equal("Read witness shell logic asks", Said(Example() with { WaitingOn = null }).Text);
+        Assert.Equal("Delegate Read witness shell logic asks", Said(Example() with { WaitingOn = null }).Text);
     }
 
     [Fact]
     public void Rule_2_a_delegates_question_only_the_machine_can_answer_reads_name_asks_answer_at_the_machine()
     {
-        Assert.Equal("Read witness shell logic asks · answer at the machine", Said(Example(atMachine: true)).Text);
+        Assert.Equal("Delegate Read witness shell logic asks · answer at the machine", Said(Example(atMachine: true)).Text);
     }
 
     [Fact]
@@ -99,9 +99,9 @@ public sealed class SessionStatusTests
     }
 
     [Fact]
-    public void Rule_3_a_foreground_task_agent_running_reads_Working_task_name()
+    public void Rule_3_a_foreground_task_agent_running_reads_Working_task_Delegate_name()
     {
-        Assert.Equal("Working · task: Bisect RestartAfterResume", Said(Session(SessionStatus.Working, subagents:
+        Assert.Equal("Working · task: Delegate Bisect RestartAfterResume", Said(Session(SessionStatus.Working, subagents:
         [
             Delegate("t2", SubagentKind.Task, parent: "t1", name: "Bisect RestartAfterResume"),
             Delegate("t1", SubagentKind.Task, name: "Find the flaky test"),
@@ -200,7 +200,7 @@ public sealed class SessionStatusTests
     public void The_glyph_is_named_with_its_state_as_a_row_reads_title_status_machine()
     {
         Assert.Equal("Plan Migration to Windows App, delegating to 2 agents, DEV-VM1", Said(ForRule(4)).Label("Plan Migration to Windows App", "DEV-VM1"));
-        Assert.Equal("Plan Migration to Windows App, Read witness shell logic asks, DEV-VM1", Said(ForRule(2)).Label("Plan Migration to Windows App", "DEV-VM1"));
+        Assert.Equal("Plan Migration to Windows App, Delegate Read witness shell logic asks, DEV-VM1", Said(ForRule(2)).Label("Plan Migration to Windows App", "DEV-VM1"));
         Assert.Equal("Plan Migration to Windows App, 1 background command, DEV-VM1", Said(ForRule(5)).Label("Plan Migration to Windows App", "DEV-VM1"));
         // The diamond is only a shape, so the name says it in words.
         Assert.Equal("Plan Migration to Windows App, working, driven by an agent, DEV-VM1", Said(ForRule(3) with { Driver = DriverKind.Agent }).Label("Plan Migration to Windows App", "DEV-VM1"));

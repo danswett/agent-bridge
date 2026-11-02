@@ -35,6 +35,7 @@ public sealed partial class SessionsPage : UserControl
             viewModel = value;
             Layout = new PaneLayoutViewModel(value);
             Session.Layout = Layout;
+            InspectorDelegate.Layout = Layout;
             value.PropertyChanged += OnMain;
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;

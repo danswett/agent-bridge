@@ -154,9 +154,16 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 
 - **Replies only ever go to the main agent.** No client offers to type to a sub-agent.
 - **No per-sub-agent Stop.** "Ask main agent to stop it" pre-fills a reply naming the
-  agent. End session ends everything.
+  agent by its id alone, never by its `name`. End session ends everything.
 - **No action may reach the main agent while appearing to target a sub-agent.** Every
   sub-agent action is labelled with "main agent".
+- **A sub-agent's `name` is its own words.** A prompt-injected sub-agent picks it, so clients
+  never show it as sent and never quote it into a reply. They show the safe label of
+  [ui.md §6.3](ui.md#63-delegates-84): bidi, zero-width and other invisible characters
+  removed, whitespace collapsed, cut to 60 characters, the id's start when nothing is left,
+  and `Delegate “<name>”` for a name that reads as "Main agent", look-alike letters included.
+  A line that says a sub-agent asks or works always puts the word "Delegate" before its label
+  ("Delegate *name* asks"), so no name, however spelt, reads as "Main agent asks".
 
 ## 7. Notifications and Home Assistant
 
