@@ -202,9 +202,10 @@ public sealed partial class SessionRow : UserControl
         Say(delta < 0 ? "Moved up" : "Moved down");
     }
 
-    // Where this row sits in its list's panel, which scrolling does not move.
+    // Where this row's glyph sits in its list's panel, which scrolling does not move: the glyph,
+    // not the row's top, since a group header moves from one row to another as rows move.
     (ListViewBase List, double Top)? Place() =>
-        Container is { } item && ItemsControl.ItemsControlFromItemContainer(item) is ListViewBase list && list.ItemsPanelRoot is { } panel ? (list, Motion.TopIn(item, panel)) : null;
+        Container is { } item && ItemsControl.ItemsControlFromItemContainer(item) is ListViewBase list && list.ItemsPanelRoot is { } panel ? (list, Motion.TopIn(RowGlyph, panel)) : null;
 
     // A moved row slides from where it was to its new place (ui.md §5.3, Reorder); the row it
     // passed takes its own place at once, as the list has no transitions of its own.
@@ -214,7 +215,8 @@ public sealed partial class SessionRow : UserControl
         Motion.AfterLayout(f.List, card, container =>
         {
             if (f.List.ItemsPanelRoot is not { } panel) { return; }
-            var delta = f.Top - Motion.TopIn(container, panel);
+            if (container is not ListViewItem { ContentTemplateRoot: SessionRow row }) { return; }
+            var delta = f.Top - Motion.TopIn(row.RowGlyph, panel);
             if (Math.Abs(delta) >= 1) { Motion.Slide(container, "Reorder", new System.Numerics.Vector2(0, (float)delta)); }
         });
     }
@@ -238,6 +240,8 @@ public sealed partial class SessionRow : UserControl
     // dropped here, so nothing else needs to travel in the data package.
     static string? dragging;
     static SessionCardViewModel? draggingCard;
+    // Where the pointer took hold, below the dragged row's glyph, so the row settles from under it.
+    static double grabbedAt;
 
     void OnPointerEntered(object sender, PointerRoutedEventArgs e) => Grip.Opacity = Card?.Row?.CanDrag == true ? 1 : 0;
     void OnPointerExited(object sender, PointerRoutedEventArgs e) => Grip.Opacity = 0;
@@ -247,6 +251,7 @@ public sealed partial class SessionRow : UserControl
         if (Card?.Row is not { CanDrag: true } row) { args.Cancel = true; return; }
         dragging = row.Key;
         draggingCard = Card;
+        grabbedAt = args.GetPosition(RowGlyph).Y;
         args.Data.RequestedOperation = DataPackageOperation.Move;
     }
 
@@ -265,7 +270,7 @@ public sealed partial class SessionRow : UserControl
         dragging = null;
         // Where the dropped row was let go: it settles from there into its place.
         var moved = draggingCard;
-        var at = Place() is { } here && here.List.ItemsPanelRoot is { } panel ? (here.List, e.GetPosition(panel).Y - ActualHeight / 2) : ((ListViewBase, double)?)null;
+        var at = Place() is { } here && here.List.ItemsPanelRoot is { } panel ? (here.List, e.GetPosition(panel).Y - grabbedAt) : ((ListViewBase, double)?)null;
         if (!row.Drop(key, after: e.GetPosition(this).Y > ActualHeight / 2)) { return; }
         if (moved is not null) { SlideFrom(moved, at); }
         Say("Moved");
