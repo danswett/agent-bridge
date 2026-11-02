@@ -743,10 +743,10 @@ public sealed class ShadowWitnessTests : IDisposable
         File.WriteAllText(Path.Combine(dir, id + ".json"), JsonSerializer.Serialize(new { SessionId = id, ProcessId = pid, TranscriptPath = transcript ?? "", WorkingDirectory = @"C:\r", Updated = updated, HookStatus = "idle" }));
     }
 
-    string? GhostKnown(bool hostHasRunning = true, string agent = "claude")
+    string? GhostKnown(bool hostHasRunning = true, string agent = "claude", string runningOnDaemon = "claude")
     {
         ShadowSession S(string id, string status) => new() { Id = id, Agent = agent == "claude" || id == Running ? "claude" : agent, Status = status };
-        var d = new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Ended] = S(Ended, "idle") with { Agent = agent }, [Running] = S(Running, "working") } };
+        var d = new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Ended] = S(Ended, "idle") with { Agent = agent }, [Running] = S(Running, "working") with { Agent = runningOnDaemon } } };
         var h = new ShadowView { Sessions = hostHasRunning ? new Dictionary<string, ShadowSession> { [Running] = S(Running, "working") } : [], SeesAgentHaBridge = true };
         var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
         return Assert.Single(differences, x => x.Kind == ShadowKinds.MissingOnHost && x.Session == ShadowHash.Session(Ended)).Known;
@@ -762,6 +762,8 @@ public sealed class ShadowWitnessTests : IDisposable
         // Not when the host does not have the newer session either, nor for another agent.
         Assert.Null(GhostKnown(hostHasRunning: false));
         Assert.Null(GhostKnown(agent: "codex"));
+        // Nor when the daemon does not have the newer session as Claude.
+        Assert.Null(GhostKnown(runningOnDaemon: "copilot"));
         // Not when the pids differ, or the one with that pid is the older registration.
         ClaudeRegistration(Running, 2989, "2026-11-02T14:49:50Z");
         Assert.Null(GhostKnown());
@@ -787,6 +789,12 @@ public sealed class ShadowWitnessTests : IDisposable
     static object Assistant(object[] content, string stop, string model = "claude-haiku-5-5") => new { type = "assistant", message = new { model, content, stop_reason = stop } };
     static object AskCall => Assistant([new { type = "tool_use", id = Call, name = "AskUserQuestion" }], "tool_use");
     static object Answer => new { type = "user", message = new { content = new object[] { new { type = "tool_result", tool_use_id = Call, content = "gamma" } } } };
+    static object Sidechain(object entry)
+    {
+        var o = JsonSerializer.SerializeToNode(entry)!.AsObject();
+        o["isSidechain"] = true;
+        return o;
+    }
     static object EndTurn => Assistant([new { type = "text", text = "ok" }], "end_turn");
 
     IReadOnlyList<ShadowDifference> HeldAnswer(string daemonModel = "haiku", string agent = "claude", string? call = Call)
@@ -820,6 +828,10 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Null(KnownOf(HeldAnswer(daemonModel: "sonnet"), ShadowKinds.Model));
         Assert.All(HeldAnswer(agent: "codex").Where(x => x.Kind is ShadowKinds.Status or ShadowKinds.Model), x => Assert.Null(x.Known));
         Assert.All(HeldAnswer(call: "toolu_other").Where(x => x.Kind is ShadowKinds.Status or ShadowKinds.Model), x => Assert.Null(x.Known));
+        // A sub-agent's (sidechain) finished turn is not the session's, nor is its model.
+        ClaudeTranscript(AskCall, Answer, Sidechain(Assistant([new { type = "text", text = "sub" }], "end_turn", "claude-sonnet-5")));
+        Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Status));
+        Assert.Equal("agent-ha-bridge#290", KnownOf(HeldAnswer(), ShadowKinds.Model));
         // Nor when the transcript's latest model is not the host's.
         ClaudeTranscript(AskCall, Answer, Assistant([new { type = "text", text = "ok" }], "end_turn", "claude-sonnet-5"));
         Assert.Null(KnownOf(HeldAnswer(), ShadowKinds.Model));

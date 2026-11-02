@@ -129,7 +129,8 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         if (gone.Agent != "claude" || paths.ClaudeRegistration(id) is not { } mine) { return null; }
         foreach (var (other, s) in host.Sessions)
         {
-            if (s.Agent != "claude" || string.Equals(other, id, StringComparison.OrdinalIgnoreCase) || !daemon.Sessions.ContainsKey(other)) { continue; }
+            if (s.Agent != "claude" || string.Equals(other, id, StringComparison.OrdinalIgnoreCase)
+                || !daemon.Sessions.TryGetValue(other, out var theirSide) || theirSide.Agent != "claude") { continue; }
             if (paths.ClaudeRegistration(other) is { } theirs && theirs.ProcessId == mine.ProcessId && theirs.Updated > mine.Updated) { return Issue(289); }
         }
         return null;
@@ -999,6 +1000,10 @@ public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAft
                 }
                 catch (JsonException) { continue; }
                 if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) { continue; }
+                // A sub-agent's (sidechain) or Claude Code's own (meta) entries are not the session's
+                // turn, as ClaudeParser.Apply has it: a sub-agent's end_turn or model says nothing
+                // about the main agent's (found in review).
+                if (Flag(root, "isSidechain") || Flag(root, "isMeta")) { continue; }
                 var type = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
                 var content = message.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.Array ? c.EnumerateArray().ToList() : [];
                 if (type == "assistant")
@@ -1017,6 +1022,8 @@ public sealed record ClaudeTurnEvidence(bool Asked, bool Answered, bool EndedAft
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(false, false, false, null); }
         return new(asked, answered, ended, model);
     }
+
+    static bool Flag(JsonElement root, string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
 
     static bool Is(JsonElement item, string type, string idName, string id) =>
         item.ValueKind == JsonValueKind.Object && item.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == type
