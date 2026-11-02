@@ -698,23 +698,7 @@ final class BridgeStore {
     }
 
     func sorted(_ entries: [SessionEntry]) -> [SessionEntry] {
-        entries.sorted { lhs, rhs in
-            if pinned.contains(lhs.id) != pinned.contains(rhs.id) {
-                return pinned.contains(lhs.id)
-            }
-            if sortOrder == "recent", lhs.session.updatedAt != rhs.session.updatedAt {
-                return (lhs.session.updatedAt ?? "") > (rhs.session.updatedAt ?? "")
-            }
-            if sortOrder == "machine", lhs.machineName != rhs.machineName {
-                return lhs.machineName.localizedStandardCompare(rhs.machineName) == .orderedAscending
-            }
-            let left = manualOrder.firstIndex(of: lhs.id) ?? Int.max
-            let right = manualOrder.firstIndex(of: rhs.id) ?? Int.max
-            if left != right {
-                return left < right
-            }
-            return lhs.id < rhs.id
-        }
+        SessionOrdering.sorted(entries, pinned: pinned, manualOrder: manualOrder, sortOrder: sortOrder)
     }
 
     private func loadPreferences() {
