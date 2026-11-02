@@ -49,17 +49,25 @@ const BLOCKS = new Set(['p', 'ul', 'ol', 'li', 'pre', 'blockquote', 'div', 'tabl
 const isNode = (n) => n && typeof n === 'object';
 const skipped = (n) => n.tag === 'pre' || n.tag === 'table' || n.attrs?.class === 'md-table';
 
-// The first line of the first block holding words, at any depth but never in code or a table: its
-// words up to a line break or a block nested in it.
+// A block's words up to its first line break, which can sit inside emphasis or a link's label, or
+// up to a block nested in it. Returns [words, whether it stopped].
+function head(children) {
+  let words = '';
+  for (const c of children ?? []) {
+    if (!isNode(c)) { words += c; continue; }
+    if (c.tag === 'br' || BLOCKS.has(c.tag)) { return [words, true]; }
+    const [inner, stopped] = head(c.children);
+    words += inner;
+    if (stopped) { return [words, true]; }
+  }
+  return [words, false];
+}
+
+// The first line of the first block holding words, at any depth but never in code or a table.
 function firstLine(nodes) {
   for (const n of nodes.filter(isNode)) {
     if (skipped(n)) { continue; }
-    const head = [];
-    for (const c of n.children ?? []) {
-      if (isNode(c) && (c.tag === 'br' || BLOCKS.has(c.tag))) { break; }
-      head.push(c);
-    }
-    const words = head.map(textOf).join('').replace(/\s+/g, ' ').trim();
+    const words = head(n.children)[0].replace(/\s+/g, ' ').trim();
     if (words) { return words; }
     const inner = firstLine((n.children ?? []).filter((c) => isNode(c) && BLOCKS.has(c.tag)));
     if (inner) { return inner; }
