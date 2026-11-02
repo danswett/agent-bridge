@@ -342,8 +342,9 @@ Under it:
 - The glyphs and the progress ring are still (§2.1, §9).
 
 The PWA's generated tokens do this by themselves: their reduced-motion block sets every
-duration to 0 or the cross-fade and every distance to 0. The platform transitions follow
-the setting already. The app's own animations check it and follow its changes, as the
+duration to 0 or the cross-fade, every distance to 0, and `--ab-motion-travel` (the scale
+for travel no distance token measures, such as the sheet's own height) to 0. The platform
+transitions follow the setting already. The app's own animations check it and follow its changes, as the
 status glyph does, and each entry's `AbMotion*Reduced` resource says which form it takes.
 
 The clients implement this after U5 and U6 (#232, phase 2). Each tests that reduced motion

@@ -96,6 +96,12 @@ test('no curve overshoots and no spring bounces', () => {
   }
   assert.throws(generateWith('overshoot', (t) => { t.motion.platform.windows.easing.decelerate = [0.34, 1.56, 0.64, 1]; }), /leaves 0-1/);
   assert.throws(generateWith('bounce', (t) => { t.motion.platform.apple.spring.fast.dampingFraction = 0.7; }), /bounces/);
+  assert.throws(generateWith('undamped', (t) => { delete t.motion.platform.apple.spring.fast.dampingFraction; }), /bounces/);
+});
+
+test('a duration in fractions of a millisecond is refused, since WinUI\'s TimeSpan form can\'t carry it', () => {
+  assert.throws(generateWith('fraction', (t) => { t.motion.platform.windows.duration.fast = 83.5; }), /duration\.fast must be a whole number of ms/);
+  assert.throws(generateWith('glyph-fraction', (t) => { t.motion.glyph.working.periodMs = 1200.5; }), /glyph\.working\.periodMs must be a whole number/);
 });
 
 test('the PWA\'s reduced-motion block redefines every motion duration and distance: 0, or the cross-fade for an entry that cross-fades', () => {
@@ -107,6 +113,7 @@ test('the PWA\'s reduced-motion block redefines every motion duration and distan
   assert.ok(timed.length > 30);
   assert.deepEqual(timed.filter((k) => !reduced.has(k)), [], 'every duration and distance is in the reduced block');
   for (const [k, v] of reduced) {
+    if (k === '--ab-motion-travel') { assert.equal(v, '0', 'travel no distance measures stays put'); continue; }
     if (k.endsWith('distance') || k.startsWith('--ab-motion-distance-')) { assert.equal(v, '0px', k); continue; }
     if (k === '--ab-motion-cross-fade') { assert.equal(v, crossFade); continue; }
     const entry = entries.find((id) => k.startsWith(`--ab-motion-${id.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase()}-`));
@@ -115,6 +122,8 @@ test('the PWA\'s reduced-motion block redefines every motion duration and distan
   }
   assert.equal(reduced.get('--ab-motion-push-duration'), crossFade);
   assert.equal(reduced.get('--ab-motion-reorder-duration'), '0ms');
+  assert.equal(root.get('--ab-motion-travel'), '1');
+  assert.equal(reduced.get('--ab-motion-sheet-duration'), crossFade, 'the sheet cross-fades, and travel is what keeps it from rising');
 });
 
 test('the app\'s motion resources parse, sit outside the theme dictionaries, and read as WinUI\'s TimeSpans and KeySplines', () => {

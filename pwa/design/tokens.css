@@ -115,6 +115,7 @@
   --ab-motion-distance-nudge: 4px;
   --ab-motion-distance-small: 12px;
   --ab-motion-distance-medium: 24px;
+  --ab-motion-travel: 1;
   --ab-motion-glyph-working-period: 1200ms;
   --ab-motion-glyph-delegating-period: 8000ms;
   --ab-motion-push-duration: 250ms;
@@ -253,6 +254,7 @@
     --ab-motion-distance-nudge: 0px;
     --ab-motion-distance-small: 0px;
     --ab-motion-distance-medium: 0px;
+    --ab-motion-travel: 0;
     --ab-motion-push-duration: 83ms;
     --ab-motion-push-distance: 0px;
     --ab-motion-push-exit-duration: 83ms;

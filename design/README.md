@@ -110,9 +110,12 @@ What the clients get:
   entry gets its own properties: `--ab-motion-<entry>-duration`, `-ease`, `-distance`,
   `-exit-duration` and `-exit-ease` (such as `--ab-motion-list-item-exit-duration`). The
   `prefers-reduced-motion: reduce` block sets every duration to `0ms` or, for an entry
-  marked `crossFade`, the cross-fade, and every distance to `0px`. So a rule written with
-  an entry's properties needs no reduced-motion rule of its own. A `0ms` transition never
-  runs, and fires no `transitionend`, so never wait for one.
+  marked `crossFade`, the cross-fade, and every distance to `0px`. Travel no distance token
+  measures, such as the sheet rising its own height, is scaled by `--ab-motion-travel`
+  (`1`, and `0` under reduced motion): `translateY(calc(100% * var(--ab-motion-travel)))`.
+  So a rule written with an entry's properties and `--ab-motion-travel` needs no
+  reduced-motion rule of its own. A `0ms` transition never runs, and fires no
+  `transitionend`, so never wait for one.
 - **Windows:** the same names as `AbMotion*` resources outside the theme dictionaries,
   such as `AbMotionFast`, `AbMotionEaseDecelerate`, `AbMotionDistanceSmall`,
   `AbMotionListItemExitDuration` and `AbMotionListItemReduced` (`CrossFade` or `Instant`).

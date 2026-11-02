@@ -16,7 +16,9 @@ const TYPES = { '.html': 'text/html', '.css': 'text/css', '.svg': 'image/svg+xml
 function serve() {
   const server = http.createServer((req, res) => {
     const file = path.join(root, decodeURIComponent(new URL(req.url, 'http://x').pathname));
-    if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end(); return; }
+    const rel = path.relative(root, file);
+    // Inside the checkout only: a prefix test would also pass a sibling such as ../agent-bridge-other.
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream' }).end(fs.readFileSync(file));
   });
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));

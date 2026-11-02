@@ -152,7 +152,8 @@ export function motion(tokens, platform) {
   const limit = m.limitMs;
   const durations = MOTION_DURATIONS.map((name) => {
     const ms = def.duration?.[name];
-    if (typeof ms !== 'number' || ms < 0) { throw new Error(`${where}.duration.${name} is missing`); }
+    // Whole milliseconds: WinUI's TimeSpan form has one fractional part, and CSS needs no more.
+    if (!Number.isInteger(ms) || ms < 0) { throw new Error(`${where}.duration.${name} must be a whole number of ms`); }
     if (ms > limit) { throw new Error(`${where}.duration.${name} is ${ms} ms, past motion.limitMs (${limit})`); }
     return { name, ms };
   });
@@ -165,7 +166,8 @@ export function motion(tokens, platform) {
   });
   const springs = Object.entries(def.spring ?? {}).filter(([k]) => !k.startsWith('$')).map(([name, s]) => {
     if (!(s.response > 0) || s.response * 1000 > limit) { throw new Error(`${where}.spring.${name}: response must be above 0 and within motion.limitMs`); }
-    if (s.dampingFraction < 1) { throw new Error(`${where}.spring.${name} bounces: dampingFraction must be at least 1`); }
+    // A missing damping fraction is SwiftUI's default, which bounces; undefined < 1 is false.
+    if (!Number.isFinite(s.dampingFraction) || s.dampingFraction < 1) { throw new Error(`${where}.spring.${name} bounces: dampingFraction must be at least 1`); }
     return { name, ...s };
   });
   const distances = Object.entries(m.distance).map(([name, px]) => ({ name, px }));
@@ -185,7 +187,10 @@ export function motion(tokens, platform) {
       reduced: e.reduced,
     };
   });
-  const glyphs = Object.entries(m.glyph).filter(([, g]) => typeof g === 'object').map(([name, g]) => ({ name, periodMs: g.periodMs }));
+  const glyphs = Object.entries(m.glyph).filter(([, g]) => typeof g === 'object').map(([name, g]) => {
+    if (!Number.isInteger(g.periodMs) || g.periodMs <= 0) { throw new Error(`motion.glyph.${name}.periodMs must be a whole number of ms`); }
+    return { name, periodMs: g.periodMs };
+  });
   return { limitMs: limit, glyphs, durations, easings, springs, distances, catalogue, crossFade: pick(durations, 'crossFade', 'duration') };
 }
 

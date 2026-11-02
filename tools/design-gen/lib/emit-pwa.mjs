@@ -94,6 +94,9 @@ function motionDecls(tokens, reduced) {
   for (const d of m.durations) { out.push([`--ab-motion-${cssCase(d.name)}`, reduced && d.name !== 'crossFade' ? '0ms' : ms(d)]); }
   if (!reduced) { for (const e of m.easings) { out.push([`--ab-motion-ease-${cssCase(e.name)}`, bezier(e)]); } }
   for (const d of m.distances) { out.push([`--ab-motion-distance-${cssCase(d.name)}`, reduced ? '0px' : `${d.px}px`]); }
+  // For travel no distance token measures, such as a sheet rising its own height:
+  // translateY(calc(100% * var(--ab-motion-travel))) stays put under reduced motion.
+  out.push(['--ab-motion-travel', reduced ? '0' : '1']);
   if (!reduced) { for (const g of m.glyphs) { out.push([`--ab-motion-glyph-${cssCase(g.name)}-period`, `${g.periodMs}ms`]); } }
   for (const c of m.catalogue) {
     const p = `--ab-motion-${cssCase(c.id)}`;
