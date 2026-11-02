@@ -174,7 +174,8 @@ every colour from the generated roles (#177).
   5. **What is mono:** commands, paths, agent and session ids, branch@SHA, and a tool's name with
      its arguments. **Text face:** repository, machine and model names, which people read as
      names.
-  A code block takes the same matched size as the reading text around it.
+  A code block is not inline: it stands on its own lines in the Code role (§4.3), and these
+  rules don't size it.
 
 ### 4.3 Ramps
 

@@ -14,8 +14,7 @@ async function openDemo(page) {
 
 // The x-height inline mono is drawn at, as a fraction of the size of the text around it: a
 // 1ex-wide probe in it (`ex` is the used font's own x-height, after any font-size-adjust),
-// over the surrounding font size. The design's ratio is the platform text face's, from
-// tokens.css, so this holds whatever face the test machine's system-ui happens to be.
+// over the surrounding font size; and a second probe in the text itself.
 async function monoX(page, selector) {
   return page.locator(selector).first().evaluate((el) => {
     const p = document.createElement('span');
@@ -25,7 +24,14 @@ async function monoX(page, selector) {
     const ex = p.getBoundingClientRect().width;
     p.remove();
     const target = Number(getComputedStyle(document.documentElement).getPropertyValue('--ab-inline-mono-x'));
-    return { ratio: ex / parseFloat(getComputedStyle(el.parentElement).fontSize), target };
+    // And the text face's own x-height beside it, whatever system-ui is on this machine.
+    const q = document.createElement('span');
+    q.style.display = 'inline-block';
+    q.style.width = '1ex';
+    el.parentElement.append(q);
+    const text = q.getBoundingClientRect().width;
+    q.remove();
+    return { ratio: ex / parseFloat(getComputedStyle(el.parentElement).fontSize), target, ex, text };
   });
 }
 
@@ -33,9 +39,13 @@ test('a branch in the meta line and a tool\'s name and arguments have the text f
   await openDemo(page);
   await expect(page.locator(`.session[data-id="${CLAUDE}"] .tool-line .tool-name`)).toHaveText('Bash');
   for (const selector of ['.meta .branch', `.session[data-id="${CLAUDE}"] .tool-line .tool-name`, `.session[data-id="${CLAUDE}"] .tool-line .tool-summary`]) {
-    const { ratio, target } = await monoX(page, selector);
+    const { ratio, target, ex, text } = await monoX(page, selector);
     expect(target, 'tokens.css names a ratio').toBeGreaterThan(0.4);
+    // The platform face's ratio, closely: what the design commits to on every machine.
     expect(Math.abs(ratio - target), `${selector}: x-height ${ratio.toFixed(4)} of the text size, not ${target}`).toBeLessThan(0.01);
+    // And the rendered text beside it, within a pixel (#215), even where the test machine's
+    // system-ui isn't the platform face the ratio is for (CI's Linux runner).
+    expect(Math.abs(ex - text), `${selector}: mono x-height ${ex} px beside text's ${text} px`).toBeLessThanOrEqual(1);
   }
 });
 

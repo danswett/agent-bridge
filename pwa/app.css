@@ -347,12 +347,12 @@ summary {
    face's (font-size-adjust, from the generated ratio for this platform; the generated scale
    where a browser has no font-size-adjust), at the same weight, baseline and line height. What
    is mono: commands, paths, ids, branch@SHA, a tool's name with its arguments, and code. */
-.mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md code {
+.mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md :not(pre) > code {
   font-family: var(--ab-font-mono); font-weight: inherit; letter-spacing: normal; line-height: inherit;
   font-size: calc(1em * var(--ab-inline-mono-scale));
 }
 @supports (font-size-adjust: ex-height 0.5) {
-  .mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md code {
+  .mono, .branch, .machine-id, .tool-name, .tool-summary, .trust-path, .md :not(pre) > code {
     font-size: 1em; font-size-adjust: ex-height var(--ab-inline-mono-x);
   }
 }
@@ -370,7 +370,7 @@ summary {
 .md pre { background: var(--ab-subtle); padding: 10px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--ab-stroke2); }
 /* Wrapped, not scrolled: a long command or a base64 blob breaks across lines on a phone
    rather than running off the side. pre-wrap keeps indentation; Copy takes the real text. */
-.md pre code { background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.md pre code { font: .86em var(--ab-font-mono); background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .md .md-code { position: relative; margin: 8px 0; }
 /* The code starts below the Copy button, so the button never covers its first line. */
 .md .md-code > pre { margin: 0; padding-top: var(--tap); }
