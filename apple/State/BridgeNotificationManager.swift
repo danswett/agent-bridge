@@ -91,7 +91,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             let authorization = await authorizationStatus()
             guard token == permissionGeneration else { return }
             let authorized: Bool = if authorization == .notDetermined {
-                try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                try await requestAuthorization()
             } else {
                 authorization == .authorized || authorization == .provisional
             }
@@ -133,6 +133,30 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             }
         }
         return UNAuthorizationStatus(rawValue: raw) ?? .denied
+    }
+
+    private func requestAuthorization() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+    }
+
+    private func submit(_ request: UNNotificationRequest) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            center.add(request) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     public func setForeground(_ value: Bool) {
@@ -230,7 +254,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             refreshCategories()
         }
         do {
-            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            try await submit(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
             if deliveryIdentifiers[notice.id] != identifier || !canDeliver(notice, generation: token) {
                 removeDelivery(notice.id, identifier: identifier)
             }
