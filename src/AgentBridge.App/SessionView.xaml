@@ -104,7 +104,12 @@
                     AutomationProperties.Name="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
                     ToolTipService.ToolTip="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
                     Click="OnPin">
-                    <ContentControl Style="{StaticResource AbIconPin}" Width="16" Height="16" Foreground="{x:Bind local:SessionView.PinBrush(Card.Pinned), Mode=OneWay}" />
+                    <!-- Bridge while pinned. Two icons, each in a ThemeResource, so either follows a theme
+                         change; a brush handed over by a function would keep the theme it was made in. -->
+                    <Grid>
+                        <ContentControl Style="{StaticResource AbIconPin}" Width="16" Height="16" Foreground="{ThemeResource AbText2}" Visibility="{x:Bind local:SessionView.Unpinned(Card.Pinned), Mode=OneWay, FallbackValue=Visible}" />
+                        <ContentControl Style="{StaticResource AbIconPin}" Width="16" Height="16" Foreground="{ThemeResource AbBridge}" Visibility="{x:Bind local:Ui.Show(Card.Pinned), Mode=OneWay, FallbackValue=Collapsed}" />
+                    </Grid>
                 </Button>
                 <Button
                     Style="{StaticResource AbIconButton}"
@@ -302,24 +307,27 @@
                         LostFocus="OnNotEditing"
                         Paste="OnPaste"
                         PreviewKeyDown="OnReplyKey" />
-                    <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False" Margin="8,0,0,0">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="core:ReplyAttachment">
-                                <!-- The name gives way, cut short with the whole of it in its tooltip, so Remove
-                                     stays in the box at the narrowest window. -->
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
-                                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
-                                    <Button Grid.Column="2" Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                    <!-- Many files scroll here, so the box and Send stay in a short window. -->
+                    <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False" Margin="8,0,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="core:ReplyAttachment">
+                                    <!-- The name gives way, cut short with the whole of it in its tooltip, so Remove
+                                         stays in the box at the narrowest window. -->
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
+                                        <Button Grid.Column="2" Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                     <Grid ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

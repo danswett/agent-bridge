@@ -223,8 +223,8 @@ public sealed partial class MainWindow : Window
 
     void OnWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
         if (args.DidVisibilityChange) { SyncSessionsOnScreen(); }
+        if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
         if (args.DidPositionChange || args.DidSizeChange) { KeepSmallest(); }
         if (AppWindow.Presenter is OverlappedPresenter { State: not OverlappedPresenterState.Minimized } shown) { wasMaximized = shown.State == OverlappedPresenterState.Maximized; }
         if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })

@@ -230,4 +230,19 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.Equal(quiet.GlyphLabel, TestUi.Read(() => quiet.RowLabel));
         Assert.True(TestUi.Read(() => quiet.ShowAge));
     }
+
+    [Fact]
+    public void Details_keep_their_rows_through_a_clock_tick_so_a_selected_path_or_id_stays_selected()
+    {
+        var busy = Card("busy");
+        var id = TestUi.Read(() => busy.Details.Single(d => d.Label == "ID"));
+        var touched = new List<string>();
+        ui.Post(() => busy.Details.CollectionChanged += (_, e) =>
+            touched.AddRange((e.NewItems?.Cast<DetailRow>() ?? []).Concat(e.OldItems?.Cast<DetailRow>() ?? []).Select(d => d.Label)));
+
+        ui.Post(busy.RefreshTimes);
+
+        Assert.Same(id, TestUi.Read(() => busy.Details.Single(d => d.Label == "ID")));
+        Assert.All(touched, label => Assert.Contains(label, new[] { "For", "Updated" }));
+    }
 }

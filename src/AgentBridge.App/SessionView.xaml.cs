@@ -65,12 +65,16 @@ public sealed partial class SessionView : UserControl
 
     public static string RemoveName(string name) => $"Remove {name}";
     public static string PinName(bool pinned) => pinned ? "Unpin" : "Pin";
-    public static Brush PinBrush(bool pinned) => Ui.Brush(pinned ? "AbBridge" : "AbText2");
     public static string WordsState(StatusTone tone) => $"Words{tone}";
+    public static Visibility Unpinned(bool pinned) => Ui.Show(!pinned);
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
     {
         if (attached && old is not null) { old.PropertyChanged -= OnCardChanged; }
+        // The box the person is typing in now belongs to the next session: the last one is no longer
+        // being edited, which would otherwise keep holding its list's order (MainViewModel.Rearrange).
+        if (old is not null) { old.Editing = false; }
+        if (card is not null) { card.Editing = ReplyBox.FocusState != FocusState.Unfocused; }
         if (card is not null)
         {
             if (attached) { card.PropertyChanged += OnCardChanged; }

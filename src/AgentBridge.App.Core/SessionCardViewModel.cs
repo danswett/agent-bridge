@@ -295,7 +295,7 @@ public sealed partial class SessionCardViewModel : Observable
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));
-        Raise(nameof(Details));
+        SyncDetails();
     }
 
     // The tool history, from session.get, newest first.

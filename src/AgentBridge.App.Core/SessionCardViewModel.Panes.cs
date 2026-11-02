@@ -37,29 +37,42 @@ public sealed partial class SessionCardViewModel
     // The header's one meta line after the glyph (§6.2): status, machine, repository.
     public string HeaderPlace => string.Join(" · ", new[] { Machine, Place }.Where(s => !string.IsNullOrEmpty(s)));
 
-    // Everything rows leave out (§6.1), for Details and the inspector.
-    public IReadOnlyList<DetailRow> Details
+    // Everything rows leave out (§6.1), for Details and the inspector. Kept, and changed a row at a
+    // time: the clock ticks every five seconds, and a list made afresh each time would draw every
+    // value again and lose a person's selection of a path or an id.
+    public System.Collections.ObjectModel.ObservableCollection<DetailRow> Details { get; } = [];
+
+    void SyncDetails()
     {
-        get
+        var want = CurrentDetails();
+        for (var i = 0; i < want.Count; i++)
         {
-            var now = ctx.Time.GetUtcNow();
-            var rows = new List<DetailRow> { new("Status", StatusText), new("Agent", AgentName) };
-            if (ctx.MachineName() is { Length: > 0 } m) { rows.Add(new("Machine", m)); }
-            if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
-            if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
-            if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
-            if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
-            if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
-            // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
-            if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
-            if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
-            if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
-            if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }
-            if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
-            rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
-            rows.Add(new("ID", session.Id, Mono: true));
-            return rows;
+            if (i < Details.Count && Details[i] == want[i]) { continue; }
+            if (i < Details.Count && Details[i].Label == want[i].Label) { Details[i] = want[i]; }
+            else { Details.Insert(i, want[i]); }
         }
+        while (Details.Count > want.Count) { Details.RemoveAt(Details.Count - 1); }
+    }
+
+    List<DetailRow> CurrentDetails()
+    {
+        var now = ctx.Time.GetUtcNow();
+        var rows = new List<DetailRow> { new("Status", StatusText), new("Agent", AgentName) };
+        if (ctx.MachineName() is { Length: > 0 } m) { rows.Add(new("Machine", m)); }
+        if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
+        if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
+        if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
+        if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
+        if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
+        // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
+        if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
+        if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
+        if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
+        if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }
+        if (View != "idle") { rows.Add(new("For", Words.Duration(session.StatusSince, now))); }
+        rows.Add(new("Updated", Words.Ago(session.UpdatedAt, now)));
+        rows.Add(new("ID", session.Id, Mono: true));
+        return rows;
     }
 
     // Who asks the question in the conversation (§6.4): the main agent, or the delegate the
