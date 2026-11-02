@@ -318,12 +318,17 @@ app.
 The **Agent usage** panel is agent-ha-bridge's usage card: one row per allowance, merged
 across every machine, fullest first, each window a bar with an even-pace mark, its amounts,
 when it resets and how old the reading is. Folded, it is one line of figures in their own
-colours; whether it is folded is remembered. It shows once any machine offers `usage`.
+colours; whether it is folded is remembered. It shows once any machine offers `usage`, or a
+reading is kept from an earlier visit. Each row says which machine read it (`read on Laptop`):
+a host that offers `usage.shared` is asked for the readings it keeps from the account's other
+machines too, and the last reading of each allowance is kept in IndexedDB for the signed-in
+account, so it outlives its machine going offline (#172); signing out deletes it.
 Each machine in the list says how many sessions it has, its version, and `(dev)` for a
 build from a working copy. The **Machines** panel folds the same way, to one line naming
 the machine being viewed ("Viewing all" with every machine) and how many are online; it
 starts open, and whether it is folded is remembered. Demo mode has usage too (`window.agentBridgeDemo.usage(report)`
-sends a new one; `?usage=0` plays a host without it).
+sends a new one; `?usage=0` plays a host without it; `?keep=1` keeps readings between visits,
+in the demo's own storage).
 
 ### Markdown
 

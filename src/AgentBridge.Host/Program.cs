@@ -337,6 +337,13 @@ async Task<int> ServeAsync()
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
     usageMonitor?.Start();
+    // Other machines' readings, asked of the account's other hosts and kept in the profile's own
+    // private folder, so an account's allowance is still shown once the machine that read it is
+    // offline (#172). Only where this machine reports usage itself.
+    var peerUsage = usageMonitor is null ? null
+        : PeerUsage.Load(Path.Combine(identity.Folder, "usage"), machine.Id, identity.Account?.AccountId, log: Log);
+    await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log);
+    usagePeers?.Start();
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
@@ -366,7 +373,7 @@ async Task<int> ServeAsync()
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there.
     var updates = new UpdateService(HostVersion(), Log) { ReadOnly = ServeReadOnly };
-    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log), launcher, transfers)
+    var service = new SessionService(source, machine, Log, answers, replies, push, attachments, stops, usageMonitor is null ? null : new UsageService(usageMonitor, Log, peerUsage), launcher, transfers)
     {
         Drivers = drivers,
         // Said in hello so a phone shows the machine read-only and why.
@@ -439,6 +446,9 @@ async Task<int> ServeAsync()
         },
         SignedIn = (result, relay) =>
         {
+            // Before anything says the new account: other machines' readings kept for the one before
+            // are never served under it, even while the relay reconnects.
+            peerUsage?.Bind(result.AccountId);
             identity.Save(result);
             File.WriteAllText(Path.Combine(identity.Folder, "relay.txt"), relay.ToString());
             signedInRelay = relay;
@@ -504,6 +514,7 @@ async Task<int> ServeAsync()
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
             transfers.Attach(relay, hub);
+            usagePeers?.Attach(relay, hub);
             trustAnswers.Attach(relay);
             updates.Attach(relay);
             Log($"connected as {relay.Login} on {relayUri.Host}{(reconnects > 0 ? $", reconnect {reconnects}" : "")}");
@@ -547,6 +558,7 @@ async Task<int> ServeAsync()
             connection = null;
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
+            usagePeers?.Attach(null, null);
             trustAnswers.Attach(null);
             updates.Attach(null);
         }
@@ -570,6 +582,7 @@ async Task<int> ServeAsync()
             catch (OperationCanceledException) { return false; }
             if (identity.ReloadAccount())
             {
+                peerUsage?.Bind(identity.Account!.AccountId);
                 signedInRelay = SavedRelay(identity) ?? signedInRelay;
                 PublishCredential();
                 Log($"signed in as {identity.Account!.Login} by another process");

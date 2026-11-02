@@ -31,7 +31,10 @@
                                         <TextBlock FontSize="16" FontWeight="SemiBold" Text="{x:Bind Label}" />
                                         <TextBlock VerticalAlignment="Center" Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
                                     </StackPanel>
-                                    <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Age}" Opacity="{x:Bind local:UsageView.AgeOpacity(Stale)}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Opacity="{x:Bind local:UsageView.AgeOpacity(Stale)}">
+                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Age}" />
+                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind ReadOn}" Visibility="{x:Bind local:Ui.Some(ReadOn)}" />
+                                    </StackPanel>
                                     <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource AbDanger}" Text="{x:Bind Error}" Visibility="{x:Bind local:Ui.Some(Error)}" />
                                     <ItemsControl ItemsSource="{x:Bind Windows}" IsTabStop="False">
                                         <ItemsControl.ItemsPanel>

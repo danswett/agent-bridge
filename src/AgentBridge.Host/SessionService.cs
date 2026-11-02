@@ -266,6 +266,7 @@ public sealed class SessionService
         // Web Push is for devices through the relay; an app on this machine has its own toasts.
         if (push is not null && channel is SecureChannel) { offered.Add(Capabilities.Push); }
         if (usage is not null) { offered.Add(UsageProtocol.Capability); }
+        if (usage?.Shares == true) { offered.Add(UsageProtocol.SharedCapability); }
         if (launcher?.Available == true) { offered.Add(LaunchProtocol.Capability); }
         if (TrustAnswers?.Available == true && channel is SecureChannel) { offered.Add(TrustProtocol.Capability); }
         if (Updates?.Offered(channel) == true) { offered.Add(UpdateProtocol.Capability); }

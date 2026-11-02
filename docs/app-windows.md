@@ -103,8 +103,11 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   is the pipe's alone, and a relay channel answers it with `unknown op`.
 * **On screen.** With more than one machine, a picker over the cards shows every machine or one
   of them, and each card starts with its machine's name. Usage merges every machine's
-  readings into one row per allowance, the freshest reading of each, as the PWA's does. A
-  toast for another machine's question says which machine, and its answer goes there.
+  readings into one row per allowance, the freshest reading of each, as the PWA's does, asks
+  each host for the readings it keeps from the account's other machines (`usage.shared`), and
+  keeps the last reading of each allowance between runs in `<profile>-usage.json`, so a reading
+  outlives its machine going offline; a row says `read on <machine>` unless this machine read it
+  (#172). A toast for another machine's question says which machine, and its answer goes there.
 
 ### Starting the host at logon: a scheduled task
 

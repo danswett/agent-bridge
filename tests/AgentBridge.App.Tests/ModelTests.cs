@@ -129,6 +129,112 @@ public sealed class UsageTests
         Assert.Equal([null, "timed out", "not signed in"], vm.Rows.Select(r => r.Error));
         Assert.True(vm.Rows.Single(r => r.Label == "Old").Stale);
     }
+
+    [Fact]
+    public void A_kept_reading_goes_once_it_is_two_weeks_old_and_signing_out_deletes_what_was_kept()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuk-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reading = Agent("Laptop", 30) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+            vm.Update(new UsageReport([reading]), account: "1");
+            Assert.True(File.Exists(file));
+
+            // The laptop is offline, and nothing has been heard since; the view redraws on its timer.
+            vm.Update(UsageReport.Empty, account: "1");
+            clock.Advance(TimeSpan.FromDays(13));
+            vm.Refresh();
+            Assert.Equal("read on Laptop", Assert.Single(vm.Rows).ReadOn);
+            clock.Advance(TimeSpan.FromDays(1));
+            vm.Refresh();
+            Assert.Empty(vm.Rows);
+
+            vm.Update(new UsageReport([reading with { MeasuredAt = clock.GetUtcNow() }]), account: "1");
+            vm.Update(UsageReport.Empty, account: "");
+            Assert.False(File.Exists(file));
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: null);
+            Assert.Empty(restarted.Rows);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void A_failure_kept_beside_a_reading_stands_once_the_reading_has_passed_two_weeks_on_redraw_and_after_a_restart()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuf-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reading = Agent("Laptop", 30, Now - UsageCache.Kept + TimeSpan.FromHours(1)) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+            var failed = Agent("Laptop", -1, Now.AddMinutes(-1), "rate limited") with { ReadBy = new UsageReader(new string('b', 32), "Desk") };
+            vm.Update(new UsageReport([reading, failed]), account: "1");
+            Assert.Equal((30d, "rate limited"), (Assert.Single(vm.Rows).Headline, vm.Rows[0].Error));
+
+            // Two hours on, nothing heard since: the reading has passed its two weeks, the failure has not.
+            clock.Advance(TimeSpan.FromHours(2));
+            vm.Refresh();
+            Assert.Equal((null, "rate limited"), (Assert.Single(vm.Rows).Headline, vm.Rows[0].Error));
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: "1");
+            Assert.Equal("rate limited", Assert.Single(restarted.Rows).Error);
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void A_machine_a_roster_leaves_out_stays_out_once_there_is_no_roster_until_one_lists_it_again()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var vm = new UsageViewModel(clock, new UsageCache(null, clock));
+        // Another host has not heard yet that the old laptop was forgotten, and passes its reading on.
+        var passedOn = new UsageReport([Agent("Laptop", 30) with { ReadBy = new UsageReader(new string('a', 32), "Old laptop") }]);
+        var desk = new string('d', 32);
+
+        vm.Update(passedOn, account: "1", members: new HashSet<string> { desk });
+        Assert.Empty(vm.Rows);
+        vm.Update(passedOn, account: "1", members: null);
+        Assert.Empty(vm.Rows);
+        vm.Update(passedOn, account: "1", members: new HashSet<string> { desk, new string('a', 32) });
+        Assert.Equal("read on Old laptop", Assert.Single(vm.Rows).ReadOn);
+    }
+
+    [Fact]
+    public void Every_allowance_reported_is_shown_though_only_thirty_two_are_kept()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "abuc-" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            var clock = new FakeTimeProvider(Now);
+            var vm = new UsageViewModel(clock, new UsageCache(file, clock));
+            var reader = new UsageReader(new string('a', 32), "Laptop");
+            vm.Update(new UsageReport([.. Enumerable.Range(0, 33).Select(i => Agent($"Account{i}", 10, Now.AddMinutes(-i)) with { ReadBy = reader })]), account: "1");
+            Assert.Equal(33, vm.Rows.Count);
+
+            var restarted = new UsageViewModel(clock, new UsageCache(file, clock));
+            restarted.Update(UsageReport.Empty, account: "1");
+            Assert.Equal(32, restarted.Rows.Count);
+            // The one read longest ago is the one not kept.
+            Assert.DoesNotContain(restarted.Rows, r => r.Detail.StartsWith("account32", StringComparison.Ordinal));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void A_reading_past_two_weeks_does_not_hide_a_current_failure_of_the_same_allowance()
+    {
+        var clock = new FakeTimeProvider(Now);
+        var vm = new UsageViewModel(clock, new UsageCache(null, clock));
+        var expired = Agent("Laptop", 30, Now.AddDays(-15)) with { ReadBy = new UsageReader(new string('a', 32), "Laptop") };
+        var failed = Agent("Laptop", -1, Now.AddMinutes(-1), "rate limited") with { ReadBy = new UsageReader(new string('b', 32), "Desk") };
+
+        vm.Update(new UsageReport([expired, failed]), account: "1");
+
+        Assert.Equal("rate limited", Assert.Single(vm.Rows).Error);
+    }
 }
 
 public sealed class WordsTests

@@ -27,6 +27,9 @@ public sealed class Machine : IAsyncDisposable
     public ToastPlanner? Toasts { get; }
     // What the relay's presence calls it, until its host says hello.
     public string? PresenceName { get; set; }
+    // The account (its id) the fleet listed it for, when known: its usage is that account's only
+    // (#172). Null for this machine, and for a machine from a link that does not say.
+    public string? ListedFor { get; set; }
 
     public string Name => Host.Hello?.Machine.Name ?? PresenceName ?? (IsLocal ? Environment.MachineName : "Another machine");
 
@@ -50,6 +53,9 @@ public interface IFleetLink : IAsyncDisposable
     // Changes when the account (or relay) the machines come from does: whatever was shown for
     // the one before goes, even while the new one is still connecting.
     int Account => 0;
+    // The account (its id) the hosts listed now come from, while connected; null when not known (a
+    // stand-in), which ties them to no account.
+    string? AccountId => null;
     // Raised on any thread when the state or the hosts change.
     event Action? Changed;
     void Start();
@@ -64,6 +70,9 @@ public interface IFleetLink : IAsyncDisposable
     // The account's machines that are offline, as the relay's roster remembers them; null while
     // the relay keeps none (an older relay), so none can be forgotten either.
     IReadOnlyList<KnownMachine>? Offline => null;
+    // Hosts and Offline as one reading of the relay: read apart, a machine coming online in between
+    // would be in neither, and look forgotten.
+    (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot => (Hosts, Offline);
     // Asks the relay to forget one of them: null when it has, or why not (OfflineMachineViewModel.Explain).
     Task<string?> ForgetAsync(string machineId, CancellationToken ct) => Task.FromResult<string?>("unsupported");
 
@@ -91,6 +100,9 @@ public sealed class Fleet : IAsyncDisposable
     readonly TimeProvider time;
     readonly Dictionary<string, Machine> machines = new(StringComparer.Ordinal);
     bool disposed;
+    // The offline list last read from a relay with a roster, for this account: a machine gone from
+    // the next one without coming online was forgotten.
+    IReadOnlyList<KnownMachine>? lastOffline;
     int account;
 
     public Fleet(IFleetLink link, MainViewModel main, IUiDispatcher ui, Func<FleetHost, Machine> create, TimeProvider? time = null)
@@ -195,19 +207,35 @@ public sealed class Fleet : IAsyncDisposable
         // published its presence would be taken, with the state read after, for every machine gone.
         var now = link.Account;
         var state = link.State;
-        var present = link.Hosts;
-        // Inside the same reading: one taken after the recheck could be a dropped link's null
-        // with the state still read as Connected, and clear the list it should keep.
-        var offline = link.Offline;
+        // The hosts and the offline list as one reading of the relay. Inside the same reading as the
+        // rest: an offline list taken after the recheck could be a dropped link's null with the
+        // state still read as Connected, and clear the list it should keep.
+        var (present, offline) = link.Snapshot;
+        var from = link.AccountId;
         var hosts = present.Where(h => h.Id != me).ToDictionary(h => h.Id, StringComparer.Ordinal);
         if (link.Account != now || link.State != state) { return; }
         var presence = string.Join(',', present.Select(h => h.Id).Order(StringComparer.Ordinal));
         if (presence != Presence) { Presence = presence; PresenceChanged?.Invoke(); }
+        // Another account's machines all go before this one's are listed: a device id in both would
+        // otherwise stay as it was, listed for the last account, with what it reported for that one.
+        var switched = now != account;
+        if (switched)
+        {
+            foreach (var (id, gone) in machines.ToList())
+            {
+                machines.Remove(id);
+                main.Remove(gone.Key);
+                _ = gone.DisposeAsync().AsTask();
+            }
+        }
         foreach (var (id, h) in hosts)
         {
             if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
             var m = create(h);
             m.PresenceName = h.Name;
+            // Each machine, not the fleet, carries its account: the last account's machines are
+            // still listed while the next one's are added, and leave one at a time.
+            m.ListedFor = from;
             machines[id] = m;
             main.Add(m);
             m.Host.Start();
@@ -216,12 +244,26 @@ public sealed class Fleet : IAsyncDisposable
         // it was. Otherwise the list is the answer: presence while connected, and none when there is
         // no account to find them through (signed out, refused), the account is another one now, or
         // another copy of the app shows them instead.
-        var switched = now != account;
         account = now;
         if (switched) { DropLoopback(); AccountChanged?.Invoke(); }
+        // The roster and presence of one reading: every machine the account has, online or not, so
+        // usage read by any other (forgotten while this app was closed, too) goes. None while there
+        // is no current one (reconnecting, elsewhere, refused): an old list would hide a machine that
+        // joined since, and the hosts already leave out what forgotten machines read.
+        main.Roster(state == FleetState.Connected && offline is not null ? [.. present.Select(h => h.Id), .. offline.Select(k => k.Id)] : null, from);
         if (state == FleetState.Connecting && !switched) { return; }
         // This machine's own host is never listed: the banner says when it is not running.
-        main.SetOffline(state == FleetState.Connected ? [.. (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id))] : [], ForgetAsync, time, fresh: switched);
+        var listed = state == FleetState.Connected ? (offline ?? []).Where(k => k.Id != me && !hosts.ContainsKey(k.Id)).ToList() : [];
+        main.SetOffline(listed, ForgetAsync, time, fresh: switched);
+        // A machine that leaves the offline list without coming online was forgotten, from this
+        // device or another (pwa/js/forget.js, vanished): only between two lists from a relay with a
+        // roster, of one account. Its usage readings go with it (#172).
+        if (state == FleetState.Connected && !switched && lastOffline is not null && offline is not null)
+        {
+            foreach (var id in lastOffline.Select(k => k.Id).Except(offline.Select(k => k.Id)).Where(id => !hosts.ContainsKey(id) && id != me)) { main.Forgotten(id); }
+        }
+        if (switched) { lastOffline = null; }
+        if (state == FleetState.Connected) { lastOffline = offline; }
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
             machines.Remove(id, out var gone);
@@ -288,7 +330,7 @@ public sealed class RelayFleetLink : IFleetLink
     volatile Current? current;
     volatile StateNow state = new(FleetState.SignedOut, null);
 
-    sealed record Current(RelayClient Relay, ChannelHub Hub);
+    sealed record Current(RelayClient Relay, ChannelHub Hub, string AccountId);
     sealed record StateNow(FleetState State, string? Detail);
 
     // claim: whether this copy of the app may hold the relay link, which one copy per person may
@@ -319,12 +361,29 @@ public sealed class RelayFleetLink : IFleetLink
     int accountGeneration;
     RelayAccount? tried;
     public int Account => Volatile.Read(ref accountGeneration);
+    public string? AccountId => current?.AccountId;
 
-    public IReadOnlyList<FleetHost> Hosts => current is { } c
-        ? [.. c.Relay.Presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))]
-        : [];
+    public IReadOnlyList<FleetHost> Hosts => current is { } c ? HostsOf(c, c.Relay.Presence) : [];
+
+    static IReadOnlyList<FleetHost> HostsOf(Current c, IReadOnlyList<PresenceEntry> presence) =>
+        [.. presence.Where(p => p.Kind == "host" && p.Id != c.Relay.DeviceId).Select(p => new FleetHost(p.Id, p.Name))];
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
+
+    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
+    // where those stores stay in order (x64), a machine coming online between the two reads is in
+    // one list or the other, never neither, which would read as forgotten. Should it be in neither
+    // anyway, it is online: its own report says it is the account's again (UsageCache.Present).
+    public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot
+    {
+        get
+        {
+            if (current is not { } c) { return ([], null); }
+            var known = c.Relay.Known;
+            Interlocked.MemoryBarrier();
+            return (HostsOf(c, c.Relay.Presence), known);
+        }
+    }
 
     // As a person's device (kind "app"), which the relay requires of a forget.
     public async Task<string?> ForgetAsync(string machineId, CancellationToken ct) =>
@@ -389,7 +448,7 @@ public sealed class RelayFleetLink : IFleetLink
                 await using var relay = await RelayClient.ConnectAsync(relayUri, a.Token, key, name, "app", ct);
                 var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options };
                 relay.PresenceChanged += _ => Changed?.Invoke();
-                current = new Current(relay, hub);
+                current = new Current(relay, hub, a.AccountId);
                 Set(FleetState.Connected, $"as {relay.Login}");
                 log($"connected to the relay as {relay.Login} ({Wire.DeviceId(key.Public)[..8]})");
                 backoff = TimeSpan.FromSeconds(1);
@@ -541,21 +600,7 @@ public static class UsageMerge
 {
     public static UsageReport Merge(IEnumerable<UsageReport> reports)
     {
-        var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
-        var order = new List<string>();
-        foreach (var a in reports.SelectMany(r => r.Agents))
-        {
-            var key = $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";
-            if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
-            if (a.Windows.Count > 0)
-            {
-                if (slot.Reading is null || slot.Reading.MeasuredAt < a.MeasuredAt) { slot.Reading = a; }
-            }
-            else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
-            slots[key] = slot;
-        }
-        var entries = order.Select(k => slots[k]).Select(s => s.Reading is not { } r ? s.Failure!
-            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r).ToList();
+        var entries = Combine(reports);
         // Two rows of one agent with no account to name either (Claude names none) would look
         // the same: a few characters of the key keep them apart, only when there is something
         // to keep apart.
@@ -566,4 +611,41 @@ public static class UsageMerge
         }
         return new UsageReport(entries);
     }
+
+    // One entry per allowance, as Merge, without the names it adds for showing them.
+    public static List<AgentUsage> Combine(IEnumerable<UsageReport> reports) =>
+        [.. Slots(reports).Select(s => s.Reading is not { } r ? s.Failure!
+            : s.Failure is { Error: { Length: > 0 } why } f && f.MeasuredAt > r.MeasuredAt ? r with { Error = why } : r)];
+
+    // Each allowance's latest reading, and its latest failure where that is newer, as separate
+    // entries with their own times: what is kept (#172). Combined into one, a failure's error would
+    // take the reading's time, and go with it at 14 days while the failure itself still stands.
+    public static List<AgentUsage> Latest(IEnumerable<UsageReport> reports) =>
+        [.. Slots(reports).SelectMany(s => s.Reading is not { } r ? [s.Failure!]
+            : s.Failure is { } f && f.MeasuredAt > r.MeasuredAt ? new[] { r, f } : [r])];
+
+    // Of two taken at the same moment, the one from the report given first.
+    static IEnumerable<(AgentUsage? Reading, AgentUsage? Failure)> Slots(IEnumerable<UsageReport> reports)
+    {
+        var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (var a in reports.SelectMany(r => r.Agents))
+        {
+            var key = UsageShare.Key(a);
+            if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
+            if (a.Windows.Count > 0)
+            {
+                if (slot.Reading is null || slot.Reading.MeasuredAt < a.MeasuredAt) { slot.Reading = a; }
+            }
+            else if (slot.Failure is null || slot.Failure.MeasuredAt < a.MeasuredAt) { slot.Failure = a; }
+            slots[key] = slot;
+        }
+        return order.Select(k => slots[k]);
+    }
+
+    // A machine's own readings, marked as taken by it, so a client can say where each one came from
+    // once they are merged and kept (#172). Readings it passed on from other machines already say.
+    public static UsageReport ReadOn(UsageReport report, MachineInfo? machine) => machine is null || report.Agents.All(a => a.ReadBy is not null)
+        ? report
+        : new UsageReport([.. report.Agents.Select(a => a.ReadBy is null ? a with { ReadBy = new UsageReader(machine.Id, machine.Name) } : a)]);
 }

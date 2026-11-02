@@ -37,6 +37,7 @@ export class HostClient {
   #snapshot = null;
   #resubscribing = null;
   #usageSubscribed = false;
+  #usageShared = false;
   #updateSubscribed = false;
   closed = false;
   synced = false;
@@ -172,13 +173,15 @@ export class HostClient {
     return this.request(Ops.sessionsSubscribe);
   }
 
-  // usage.get: the machine's latest usage report (docs/protocol/v1-usage.md).
-  async usage() { return readUsage(await this.request(USAGE.get)); }
+  // usage.get: the machine's latest usage report (docs/protocol/v1-usage.md). shared: with the
+  // readings it keeps from the account's other machines, where it offers usage.shared.
+  async usage({ shared = false } = {}) { return readUsage(await this.request(USAGE.get, shared ? { shared: true } : {})); }
 
   // usage.subscribe: the current report, then a 'usage' event with each new one.
-  async subscribeUsage() {
+  async subscribeUsage({ shared = false } = {}) {
     this.#usageSubscribed = true;
-    return readUsage(await this.request(USAGE.subscribe));
+    this.#usageShared = shared;
+    return readUsage(await this.request(USAGE.subscribe, shared ? { shared: true } : {}));
   }
 
   // update.get: what the machine's updater is doing (docs/protocol/v1-update.md).
@@ -275,7 +278,7 @@ export class HostClient {
     if (this.#resubscribing || this.closed) { return; }
     this.#emit('gap', { seq });
     // An update lost in the gap is replaced by the current report.
-    if (this.#usageSubscribed) { this.subscribeUsage().then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
+    if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared }).then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
     if (this.#updateSubscribed) { this.subscribeUpdate().then((r) => this.#emit('update', r), (e) => this.#emit('error', e)); }
     this.#resubscribing = this.subscribe()
       .catch((e) => this.#emit('error', e))

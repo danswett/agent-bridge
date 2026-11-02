@@ -19,6 +19,8 @@ public sealed class FleetTests : IAsyncLifetime
     readonly FakeFleetLink link = new();
     readonly FakeTimeProvider clock = new(Make.T0);
     readonly List<ToastNotice> shown = [];
+    // The usage this app keeps between runs (#172).
+    readonly string cacheFile = Path.Combine(Path.GetTempPath(), "abuc-" + Guid.NewGuid().ToString("N")[..8] + ".json");
     HostConnection local = null!;
     MainViewModel main = null!;
     Fleet fleet = null!;
@@ -39,7 +41,7 @@ public sealed class FleetTests : IAsyncLifetime
         remoteHost.Start();
         link.Endpoints["remote-id"] = remoteHost.Endpoint;
         local = localHost.Connect(ui);
-        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock));
+        main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel(clock, new UsageCache(cacheFile, clock)));
         fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }), clock);
         return Task.CompletedTask;
     }
@@ -67,6 +69,7 @@ public sealed class FleetTests : IAsyncLifetime
         await local.DisposeAsync();
         await localHost.DisposeAsync();
         await remoteHost.DisposeAsync();
+        File.Delete(cacheFile);
     }
 
     SessionCardViewModel? Card(string id)
@@ -412,6 +415,214 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_kept_reading_shows_with_its_age_and_the_machine_that_read_it_when_no_machine_offers_it()
+    {
+        // This machine's host is signed in to the account, reads its own Copilot, and the build
+        // server is the only one signed in to Claude.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        var copilot = new UsageReport([new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octo", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 10 }] }]);
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        localHost.On(UsageProtocol.Subscribe, _ => copilot);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        // Said again, in case either was subscribed before the test said what to answer.
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, copilot);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        await Wait.UntilAsync(() => main.Usage.Rows.Count == 2 && local.Status?.Account is not null, "both machines' usage, and this machine's account");
+        // Read as the UI thread would: the rows are redrawn on it whenever anything changes.
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        UsageRowViewModel Row(AgentKind agent) => OnUi(() => main.Usage.Rows.Single(r => r.Agent == agent));
+        await Wait.UntilAsync(() => Row(AgentKind.Claude).ReadOn == "read on Build server", "the build server's reading, marked as its");
+        // This machine's own reading needs no saying where it came from.
+        Assert.Null(Row(AgentKind.Copilot).ReadOn);
+
+        // The build server goes offline, and two hours pass.
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => main.AllMachines.Count == 1, "the build server to go");
+        clock.Advance(TimeSpan.FromHours(2));
+        ui.Post(main.Usage.Refresh);
+
+        var kept = Row(AgentKind.Claude);
+        Assert.Equal(("41%", "read on Build server", "2h ago", true), (kept.Windows[0].PercentText, kept.ReadOn, kept.Age, kept.Stale));
+
+        // And after the app restarts, before any machine has said anything.
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: null);
+        Assert.Equal([null, "read on Build server"], restarted.Rows.Select(r => r.ReadOn).Order());
+        // A device that has never seen an allowance shows nothing for it; another account sees none.
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Empty(restarted.Rows);
+
+        // Forgotten, the build server takes its reading with it, here and in what is kept.
+        Assert.Null(await link.ForgetAsync("remote-id", default));
+        await Wait.UntilAsync(() => main.Usage.Rows.Count == 1, "the forgotten machine's reading to go");
+        var afterwards = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        afterwards.Update(UsageReport.Empty, "host-id", account: null);
+        Assert.Equal(AgentKind.Copilot, Assert.Single(afterwards.Rows).Agent);
+    }
+
+    [Fact]
+    public async Task What_this_machines_host_passed_on_for_the_last_account_is_not_kept_for_the_next_before_it_reports_again()
+    {
+        static AgentUsage Copilot(DateTimeOffset at) => new() { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octo", Source = UsageSource.Api, MeasuredAt = at, Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 10 }] };
+        // This machine's host reads its own Copilot, and passes on a Claude reading taken on account 1's VM.
+        var passedOn = new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }], ReadBy = new UsageReader(new string('a', 32), "VM") };
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => new UsageReport([Copilot(Make.T0), passedOn]));
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([Copilot(Make.T0), passedOn]));
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2 && local.Status?.Account?.AccountId == "1", "both readings, for account 1");
+
+        // Signed in to account 2; the host's next report, without the VM's reading, has not come yet.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Select(r => r.Agent).ToList()) is [AgentKind.Copilot], "only this machine's own reading");
+        // Then it comes, and what it passes on now is account 2's.
+        var laptop = passedOn with { AccountKey = "c1a0de000002", ReadBy = new UsageReader(new string('b', 32), "Laptop") };
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([Copilot(Make.T0.AddMinutes(1)), laptop]));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2, "the laptop's reading, passed on for account 2");
+
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Equal([null, "read on Laptop"], restarted.Rows.Select(r => r.ReadOn).Order());
+    }
+
+    [Fact]
+    public async Task A_reading_past_two_weeks_on_one_machine_does_not_hide_a_current_failure_on_another()
+    {
+        var key = "c1a0de000000";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        var expired = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = key, Source = UsageSource.Api, MeasuredAt = Make.T0.AddDays(-15), Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        var failed = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = key, Source = UsageSource.None, MeasuredAt = Make.T0, Error = "rate limited" }]);
+        localHost.On(UsageProtocol.Subscribe, _ => expired);
+        remoteHost.On(UsageProtocol.Subscribe, _ => failed);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, expired);
+        await remoteHost.SendAsync(UsageProtocol.Update, failed);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.Error) == "rate limited", "the build server's failure");
+    }
+
+    [Fact]
+    public async Task A_reading_kept_from_a_machine_the_first_roster_does_not_list_goes()
+    {
+        // This machine's host once passed on a reading by a laptop; it has been forgotten since,
+        // while this app was closed, so no later list of offline machines will ever drop it.
+        var byGone = new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }], ReadBy = new UsageReader(new string('a', 32), "Old laptop") };
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => new UsageReport([byGone]));
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([byGone]));
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the laptop's reading, kept");
+        await localHost.SendAsync(UsageProtocol.Update, UsageReport.Empty);
+
+        // The relay's roster: the build server online, nothing offline.
+        link.Known = [];
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 0, "the forgotten laptop's reading to go");
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "1");
+        Assert.Empty(restarted.Rows);
+
+        // Another copy of the app takes the relay link: with no current roster, a machine that joins
+        // meanwhile is not held back by the old one.
+        link.Set(FleetState.Elsewhere);
+        var byNew = byGone with { AccountKey = "c1a0de000002", ReadBy = new UsageReader(new string('c', 32), "New desktop") };
+        await localHost.SendAsync(UsageProtocol.Update, new UsageReport([byNew]));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1, "the new machine's reading");
+    }
+
+    [Fact]
+    public async Task A_machine_listed_for_both_accounts_shows_its_usage_for_the_next_when_the_switch_is_first_seen_connected()
+    {
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        link.AccountId = "1";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the build server's reading, for account 1");
+
+        // Both this machine's host and the fleet are on account 2 by the time the fleet looks, and
+        // the build server is listed there too.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => local.Status?.Account?.AccountId == "2", "this machine's new account");
+        link.Switch(announce: false);
+        link.AccountId = "2";
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1, "the build server's reading, for account 2");
+    }
+
+    [Fact]
+    public async Task Other_machines_readings_are_not_kept_for_the_account_this_machine_switched_to_while_the_fleet_follows()
+    {
+        // Two other machines on account 1, each reading its own Claude account.
+        await using var second = new FakeHost();
+        second.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("second-id", "Laptop", "windows", "0.1.0"), [Capabilities.SessionsRead, UsageProtocol.Capability]));
+        second.Start();
+        link.Endpoints["second-id"] = second.Endpoint;
+        static UsageReport Claude(string key) => new([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = key, Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        link.AccountId = "1";
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => Claude("c1a0de000001"));
+        second.On(UsageProtocol.Subscribe, _ => Claude("c1a0de000002"));
+        await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"), ("second-id", "Laptop"));
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2 && local.Status?.Account?.AccountId == "1", "both machines' readings, for account 1");
+
+        // This machine's host signs in to account 2 before the fleet has followed it.
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("other", "2") };
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await Wait.UntilAsync(() => local.Status?.Account?.AccountId == "2", "this machine's new account");
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 0, "account 1's readings to go from view");
+        // Then the fleet follows: account 1's machines leave one at a time, and account 2 has none.
+        link.Switch();
+        await Wait.UntilAsync(() => OnUi(() => main.AllMachines.Count) == 1, "account 1's machines to go");
+        link.AccountId = "2";
+        link.Set(FleetState.Connected, ("host-id", "Test PC"));
+
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "2");
+        Assert.Empty(restarted.Rows);
+    }
+
+    [Fact]
+    public async Task A_machine_whose_channel_drops_keeps_its_name_on_what_it_read_shown_and_kept()
+    {
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.ReadOn) == "read on Build server" && local.Status?.Account?.AccountId == "1", "the build server's reading");
+
+        // Its channel drops: its hello goes, its last report stays.
+        await remoteHost.StopAsync();
+        await Wait.UntilAsync(() => OnUi(() => main.MachineOf("remote-id")?.Host.Hello) is null, "the build server's channel to drop");
+        Assert.Equal("read on Build server", OnUi(() => Assert.Single(main.Usage.Rows).ReadOn));
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "1");
+        Assert.Equal("read on Build server", Assert.Single(restarted.Rows).ReadOn);
+    }
+
+    [Fact]
     public async Task Usage_is_merged_across_machines()
     {
         var older = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "premium", Label = "Premium", Percent = 10 }] };
@@ -654,6 +865,7 @@ public sealed class FleetTests : IAsyncLifetime
         public event Action? Changed;
 
         public int Account { get; private set; }
+        public string? AccountId { get; set; }
 
         // Runs once, right after the next read of the hosts: for a change between two reads.
         public Action? AfterHostsRead { get; set; }

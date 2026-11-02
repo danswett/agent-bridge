@@ -86,4 +86,49 @@ public sealed class UsageContractTests
         Assert.All(fitted.Agents, a => Assert.True(a.Windows.Count <= UsageProtocol.MaxWindows));
         Assert.All(fitted.Agents, a => Assert.True(a.Error is null || System.Text.Encoding.UTF8.GetByteCount(a.Error) <= UsageProtocol.Error));
     }
+
+    [Fact]
+    public void A_shared_report_keeps_the_hosts_own_readings_first_and_drops_the_oldest_peer_readings_past_its_limits()
+    {
+        var at = new DateTimeOffset(2026, 10, 28, 20, 0, 0, TimeSpan.Zero);
+        var reader = new UsageReader(new string('a', 32), "Rehearsal VM");
+        AgentUsage Claude(int i, string? error = null, int windows = 1, string label = "Weekly") => new()
+        {
+            Agent = AgentKind.Claude, Label = "Claude Code", AccountKey = $"{i:x12}", Source = UsageSource.Api, MeasuredAt = at.AddHours(-i), Error = error, ReadBy = reader,
+            Windows = [.. Enumerable.Range(0, windows).Select(w => new UsageWindow { Key = $"w{w}", Label = label, Unit = label, Percent = i })],
+        };
+        var own = new UsageReport([
+            new AgentUsage { Agent = AgentKind.Copilot, Label = "GitHub Copilot", Account = "octo", Source = UsageSource.Api, MeasuredAt = at, Windows = [new UsageWindow { Key = "plan", Label = "Plan", Percent = 40 }] },
+            new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = at, Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 5 }] },
+        ]);
+        // Shuffled, so the order kept is the host's doing.
+        var peers = Enumerable.Range(1, 20).OrderBy(i => (i * 7) % 20).ToList();
+
+        var counted = UsageShare.Serve(own, peers.Select(i => Claude(i)));
+        Assert.Equal(UsageProtocol.MaxSharedAgents, counted.Agents.Count);
+        Assert.Equal(own.Agents, counted.Agents.Take(2));
+        Assert.Equal(Enumerable.Range(1, 14).Select(i => $"{i:x12}"), counted.Agents.Skip(2).Select(a => a.AccountKey));
+        Assert.Equal("Rehearsal VM", counted.Agents[2].ReadBy!.Name);
+
+        // Every field at its limit, in characters JSON escapes to six bytes each: fewer fit.
+        var escaped = new string('\u0001', 4000);
+        var heavy = UsageShare.Serve(own, peers.Select(i => Claude(i, escaped, windows: 9, label: escaped)));
+        Assert.True(ProtocolJson.ByteCount(heavy) <= UsageProtocol.MaxSharedReportBytes);
+        Assert.InRange(heavy.Agents.Count, 3, UsageProtocol.MaxSharedAgents - 1);
+        Assert.Equal(Enumerable.Range(1, heavy.Agents.Count - 2).Select(i => $"{i:x12}"), heavy.Agents.Skip(2).Select(a => a.AccountKey));
+        // A peer's error is passed on bounded, never expanded.
+        Assert.All(heavy.Agents.Skip(2), a => Assert.Equal(UsageProtocol.Error, System.Text.Encoding.UTF8.GetByteCount(a.Error!)));
+    }
+
+    [Fact]
+    public void A_reader_that_is_not_a_device_id_is_dropped_and_its_name_is_bounded_and_plain()
+    {
+        var a = new AgentUsage { Agent = AgentKind.Claude, Label = "Claude Code", Source = UsageSource.Api, MeasuredAt = DateTimeOffset.UnixEpoch };
+
+        Assert.Null(UsageProtocol.FitAgent(a with { ReadBy = new UsageReader("not-an-id", "VM") }).ReadBy);
+        var named = UsageProtocol.FitAgent(a with { ReadBy = new UsageReader(new string('b', 32), "VM\u001b[2J" + new string('n', 200)) }).ReadBy!;
+        Assert.Equal("VM[2J" + new string('n', UsageProtocol.ReaderName - 5), named.Name);
+        Assert.Contains("\"readBy\":{\"id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"name\":\"VM[2J",
+            JsonSerializer.Serialize(a with { ReadBy = named }, ProtocolJson.Options), StringComparison.Ordinal);
+    }
 }

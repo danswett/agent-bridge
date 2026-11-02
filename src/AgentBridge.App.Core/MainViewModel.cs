@@ -354,7 +354,74 @@ public sealed partial class MainViewModel : Observable
         OnHeldChanged();
     }
 
-    void UpdateUsage() => Usage.Update(machines.Count == 1 ? local.Host.Usage : UsageMerge.Merge(machines.Select(m => m.Host.Usage)));
+    // Each machine's readings marked with the machine that took them, merged, and kept between runs
+    // for the account this machine's host is signed in to (#172). Another machine's only while it
+    // was listed for that account: this machine's host can say it is signed in to another before
+    // the fleet has followed it, and the first account's readings would be kept as the next's.
+    // Every machine's entries go to the cache as they are, not combined here: it leaves out readings
+    // past their 14 days and forgotten machines' first, so neither can win over one that stands.
+    void UpdateUsage()
+    {
+        var account = host.Status is { } status ? status.Account?.AccountId ?? "" : null;
+        // This machine's host passes on other machines' readings for its account; when it names
+        // another, the report it sent before still holds the last account's until it sends the next
+        // (paced, so up to 15 s later). Its own readings stand meanwhile; those it passed on wait.
+        if (account is { Length: > 0 })
+        {
+            if (usageAccount is not null && usageAccount != account) { heldOver = host.Usage; }
+            usageAccount = account;
+        }
+        if (heldOver is not null && !ReferenceEquals(heldOver, host.Usage)) { heldOver = null; }
+        Usage.Present(machines.Select(m => m.Host.Hello?.Machine.Id).OfType<string>());
+        Usage.Update(
+            new UsageReport([.. machines
+                .Where(m => m.IsLocal || account is not { Length: > 0 } || m.ListedFor is null || m.ListedFor == account)
+                .SelectMany(m => UsageMerge.ReadOn(
+                    m.IsLocal && heldOver is not null ? new UsageReport([.. m.Host.Usage.Agents.Where(a => a.ReadBy is null)]) : m.Host.Usage,
+                    Reader(m)).Agents.Where(a => a.ReadBy is not null))]),
+            LocalMachineId,
+            account,
+            roster is { } r && account is { Length: > 0 } && (r.From is null || r.From == account) ? r.Members : null);
+    }
+
+    // Which machine a machine's own readings were taken by. Its hello says, while connected; a
+    // channel that has dropped clears that but keeps the last report, which is still that machine's:
+    // its relay device id (or, for this one, its own), so a reading kept is never left unattributed,
+    // unshown as "read on" and beyond a forget. None known: its own readings are left out.
+    MachineInfo? Reader(Machine m) => m.Host.Hello?.Machine
+        ?? ((m.IsLocal ? LocalMachineId : m.Key) is { } id ? new MachineInfo(id, m.Name, "", "") : null);
+
+    // The account usage was last kept for, and this machine's host's report from before it named
+    // the one it is on now (UpdateUsage).
+    string? usageAccount;
+    UsageReport? heldOver;
+    // The account's machines as the relay's roster last had them, online or not, and the account
+    // that roster is of (null: a link that does not say).
+    (IReadOnlySet<string> Members, string? From)? roster;
+
+    // On the UI thread, from the fleet, whenever it lists the account's machines: what was read by
+    // any machine not in a relay's roster was read by one forgotten, perhaps while this app was
+    // closed, and is shown and kept no more (#50, #172). members: null while there is no current
+    // roster, which then holds nothing back.
+    internal void Roster(IEnumerable<string>? members, string? from)
+    {
+        if (members is null)
+        {
+            if (roster is null) { return; }
+            roster = null;
+            UpdateUsage();
+            return;
+        }
+        var next = new HashSet<string>(members, StringComparer.Ordinal);
+        if (LocalMachineId is { } me) { next.Add(me); }
+        if (roster is { } r && r.From == from && r.Members.SetEquals(next)) { return; }
+        roster = (next, from);
+        UpdateUsage();
+    }
+
+    // On the UI thread, from the fleet: a machine forgotten from the account's roster, from this
+    // device or another, takes its usage readings with it (#50, #172).
+    internal void Forgotten(string machineId) => Usage.Forget(machineId);
 
     void OnUpsert(Machine m, Session s)
     {

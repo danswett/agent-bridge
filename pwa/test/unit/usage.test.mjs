@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, isStale, amount, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -129,6 +129,136 @@ test('the book keeps each machine latest report and tells listeners', () => {
   book.clear();
   assert.equal(book.size, 0);
   assert.equal(heard, 4);
+});
+
+const claude = (extra = {}) => ({ agent: 'claude', label: 'Claude Code', accountKey: '3f9a2c71b0de', plan: 'max', source: 'api', measuredAt: iso(-H), windows: [{ key: 'weekly_all', label: 'Weekly', percent: 41.3 }], ...extra });
+
+test('a kept reading outlives the machine that read it, saying which machine that was, and nothing is kept that was never seen', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [], save: (e) => { kept = e; } });
+  book.set('vm-id', { agents: [claude()] }, 'Rehearsal VM');
+  book.set('desk-id', { agents: [reading()] }, 'Desk');
+  assert.deepEqual(kept.map((e) => [e.agent, e.readBy.name]).sort(), [['claude', 'Rehearsal VM'], ['copilot', 'Desk']]);
+
+  // Another visit: no machine has said anything yet, and the VM never will.
+  const later = new UsageBook({ now: () => NOW + 2 * H });
+  later.useCache({ entries: JSON.parse(JSON.stringify(kept)), save: () => {} });
+  assert.equal(later.size, 0);
+  assert.equal(later.empty, false);
+  const row = later.entries().find((e) => e.agent === 'claude');
+  assert.deepEqual([row.windows[0].percent, readOn(row), ago(row.at, NOW + 2 * H), isStale(row.at, NOW + 2 * H)], [41.3, 'read on Rehearsal VM', '3h ago', true]);
+  assert.deepEqual(new UsageBook().entries(), []);
+});
+
+test('a reading a host passed on keeps the machine that took it, and a kept one a fortnight old goes', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  book.useCache({ entries: [claude({ accountKey: 'aaaabbbbcccc', measuredAt: iso(-15 * 24 * H), readBy: { id: 'old', name: 'Old' } })], save: (e) => { kept = e; } });
+  book.set('desk-id', { agents: [claude({ readBy: { id: 'a'.repeat(32), name: 'Rehearsal VM' } })] }, 'Desk');
+  assert.deepEqual(book.entries().map(readOn), ['read on Rehearsal VM']);
+  assert.deepEqual(kept.map((e) => e.accountKey), ['3f9a2c71b0de']);
+});
+
+test('a kept reading is not shown once it is two weeks old, though nothing has been heard since', () => {
+  let now = NOW;
+  const book = new UsageBook({ now: () => now });
+  book.useCache({ entries: [claude({ measuredAt: iso(-13 * 24 * H), readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: () => {} });
+  assert.equal(book.entries().length, 1);
+  now += 2 * 24 * H;
+  assert.deepEqual(book.entries(), []);
+  assert.equal(book.empty, true);
+});
+
+test('a forgotten machine takes what it read with it, even where another host passes it on, and signing out keeps nothing', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  const byVm = { readBy: { id: 'vm-id', name: 'Rehearsal VM' } };
+  book.useCache({ entries: [claude(byVm)], save: (e) => { kept = e; } });
+  book.set('desk-id', { agents: [reading()] }, 'Desk');
+  book.delete('vm-id', { forget: true });
+  assert.deepEqual(book.entries().map((e) => e.agent), ['copilot']);
+  assert.deepEqual(kept.map((e) => e.agent), ['copilot']);
+  // The desk has not heard yet, and passes the VM's reading on.
+  book.set('desk-id', { agents: [reading(), claude(byVm)] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.agent), ['copilot']);
+  assert.deepEqual(kept.map((e) => e.agent), ['copilot']);
+  // Back, and the account's again.
+  book.set('vm-id', { agents: [claude()] }, 'Rehearsal VM');
+  assert.deepEqual(book.entries().map((e) => e.agent).sort(), ['claude', 'copilot']);
+  book.clear();
+  assert.equal(book.empty, true);
+  const before = kept;
+  book.set('vm-id', { agents: [claude({ accountKey: 'aaaabbbbcccc' })] }, 'Rehearsal VM');
+  assert.equal(kept, before);
+});
+
+test('a reading past two weeks does not hide a current failure of the same allowance, shown or kept', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  book.useCache({ entries: [], save: (e) => { kept = e; } });
+  // A host still passes on a reading taken a fortnight and a day ago; another has just failed to read.
+  book.set('laptop-id', { agents: [claude({ measuredAt: iso(-15 * 24 * H), readBy: { id: 'vm-id', name: 'Rehearsal VM' } })] }, 'Laptop');
+  book.set('desk-id', { agents: [claude({ windows: [], source: 'none', measuredAt: iso(-60000), error: 'rate limited' })] }, 'Desk');
+  assert.deepEqual(book.entries().map((e) => e.error), ['rate limited']);
+  assert.deepEqual(kept.map((e) => e.error), ['rate limited']);
+});
+
+test('a machine forgotten while what was kept is being read is not brought back by it, and the store hears it went', () => {
+  const book = new UsageBook({ now: () => NOW });
+  let kept = null;
+  book.delete('vm-id', { forget: true });
+  book.useCache({ entries: [claude({ readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: (e) => { kept = e; } });
+  assert.deepEqual(book.entries(), []);
+  assert.deepEqual(kept, []);
+});
+
+test('a machine forgotten while the page was closed goes once the roster is known, whichever comes first', () => {
+  const byGone = { readBy: { id: 'gone-id', name: 'Old laptop' } };
+  const byVm = { readBy: { id: 'vm-id', name: 'Rehearsal VM' } };
+  for (const rosterFirst of [false, true]) {
+    const book = new UsageBook({ now: () => NOW });
+    let kept = null;
+    if (rosterFirst) { book.roster(['desk-id', 'vm-id']); }
+    book.useCache({ entries: [claude(byGone), claude({ ...byVm, accountKey: 'aaaabbbbcccc' })], save: (e) => { kept = e; } });
+    if (!rosterFirst) { book.roster(['desk-id', 'vm-id']); }
+    assert.deepEqual(book.entries().map(readOn), ['read on Rehearsal VM']);
+    assert.deepEqual(kept.map(readOn), ['read on Rehearsal VM']);
+  }
+  // A relay without a roster says nothing either way.
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [claude(byGone)], save: () => {} });
+  book.roster(null);
+  assert.equal(book.entries().length, 1);
+});
+
+test('a failure kept beside a reading keeps its own time, and stands once the reading has passed two weeks', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [], save: (e) => { kept = e; } });
+  book.set('vm-id', { agents: [claude({ measuredAt: iso(-14 * 24 * H + H) })] }, 'Rehearsal VM');
+  book.set('desk-id', { agents: [claude({ windows: [], source: 'none', measuredAt: iso(-60000), error: 'rate limited' })] }, 'Desk');
+  assert.deepEqual(kept.map((e) => [hasWindows(e), e.measuredAt]), [[true, iso(-14 * 24 * H + H)], [false, iso(-60000)]]);
+
+  // Two hours on, another visit: the reading has gone, its failure has not.
+  const later = new UsageBook({ now: () => NOW + 2 * H });
+  later.useCache({ entries: JSON.parse(JSON.stringify(kept)), save: () => {} });
+  assert.deepEqual(later.entries().map((e) => e.error), ['rate limited']);
+});
+
+const hasWindows = (e) => e.windows.length > 0;
+
+test('a machine a roster leaves out stays out once there is no roster, until one lists it again', () => {
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [], save: () => {} });
+  // The desk has not heard yet that the old laptop was forgotten, and passes its reading on.
+  book.set('desk-id', { agents: [claude({ readBy: { id: 'gone-id', name: 'Old laptop' } })] }, 'Desk');
+  book.roster(['desk-id']);
+  assert.deepEqual(book.entries(), []);
+  book.roster(null);
+  assert.deepEqual(book.entries(), []);
+  book.roster(['desk-id', 'gone-id']);
+  assert.deepEqual(book.entries().map(readOn), ['read on Old laptop']);
 });
 
 test('a machine whose discovery is held says so on its status line, as agent-ha-bridge did', () => {
