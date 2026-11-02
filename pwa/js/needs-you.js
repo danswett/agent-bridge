@@ -153,8 +153,12 @@ export function wholePrompt(q) {
 // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
 // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
 // of the command), private-use and unassigned code points, lone surrogates, and the line and
-// paragraph separators.
-const HIDDEN_CLASS = '[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029]|[^\\P{Cc}\\n\\t]';
+// paragraph separators; and every default-ignorable code point, drawn as nothing though it is
+// there: variation selectors (which can make one name look like another), the combining grapheme
+// joiner, Hangul fillers, tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point).
+const IGNORABLE = '\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFF8'
+  + '\\u{1BCA0}-\\u{1BCA3}\\u{1D173}-\\u{1D17A}\\u{E0000}-\\u{E0FFF}';
+const HIDDEN_CLASS = `[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029${IGNORABLE}]|[^\\P{Cc}\\n\\t]`;
 const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
 const HIDDEN_ALL = new RegExp(HIDDEN_CLASS, 'gu');
 // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
