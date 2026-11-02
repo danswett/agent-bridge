@@ -78,6 +78,7 @@ struct SessionDetail: View {
                         DisclosureGroup("\(delegateGroups.finished.count) finished", isExpanded: $finishedExpanded) {
                             DelegateRows(entries: delegateGroups.finished, all: session.delegates, onSelect: selectDelegate)
                         }
+                        .textSelection(.disabled)
                     }
                     if session.delegatesMore > 0 {
                         Text("\(session.delegatesMore) more delegates not listed by the host.").font(.caption).foregroundStyle(.secondary)
