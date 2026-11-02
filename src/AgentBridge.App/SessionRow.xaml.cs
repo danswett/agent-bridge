@@ -61,7 +61,7 @@ public sealed partial class SessionRow : UserControl
         ShowWords();
     }
 
-    void Attach()
+    internal void Attach()
     {
         if (attached) { return; }
         attached = true;
@@ -73,7 +73,7 @@ public sealed partial class SessionRow : UserControl
         TakeFocus();
     }
 
-    void Detach()
+    internal void Detach()
     {
         if (!attached) { return; }
         attached = false;

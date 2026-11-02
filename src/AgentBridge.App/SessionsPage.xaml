@@ -149,6 +149,7 @@
                 AutomationProperties.Name="Sessions"
                 ItemsSource="{x:Bind ViewModel.Sessions, Mode=OneWay}"
                 SelectionChanged="OnRowChosen"
+                ContainerContentChanging="OnRowRecycled"
                 PreviewKeyDown="OnListKey"
                 ContextRequested="OnListMenu">
                 <ListView.ItemContainerStyle>
@@ -187,11 +188,11 @@
         </Grid>
 
         <!-- The session (§6.2, §6.4, §6.5), or what to do with nothing chosen. -->
-        <Grid x:Name="SessionPane" Grid.Column="1" AutomationProperties.AutomationId="SessionPane">
+        <Grid x:Name="SessionPane" Grid.Column="1" AutomationProperties.AutomationId="SessionPane" Visibility="{x:Bind local:Ui.Show(Layout.ShowSession), Mode=OneWay, FallbackValue=Collapsed}">
             <local:SessionView
                 x:Name="Session"
                 Card="{x:Bind Layout.Selected, Mode=OneWay}"
-                Visibility="{x:Bind local:Ui.Show(Layout.ShowSession), Mode=OneWay, FallbackValue=Collapsed}" />
+                Visibility="{x:Bind local:Ui.Some(Layout.Selected), Mode=OneWay, FallbackValue=Collapsed}" />
             <TextBlock
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
