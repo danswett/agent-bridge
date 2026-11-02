@@ -113,9 +113,16 @@ struct AttachmentComposer: View {
                 let file = try await uploader.upload(file: imported.url, existingCount: count, endpoint: endpoint) { update in
                     await MainActor.run { message = update.message; fraction = update.fraction }
                 }
-                try Task.checkCancellation()
-                guard host.connectionID == connection else { throw BridgeOperationError("The machine connection changed. Attach the file again.") }
-                attachments.append((file.id, file.name + (file.resized ? " (resized)" : "")))
+                do {
+                    try Task.checkCancellation()
+                    guard host.connectionID == connection else { throw BridgeOperationError("The machine connection changed. Attach the file again.") }
+                    attachments.append((file.id, file.name + (file.resized ? " (resized)" : "")))
+                } catch {
+                    // The view can disappear after upload completion but before taking
+                    // ownership of the staged ID. Do not leave that file behind.
+                    try? await Task { try await uploader.discard(id: file.id, endpoint: endpoint) }.value
+                    throw error
+                }
             } catch is CancellationError {
                 error = nil
             } catch { self.error = error.localizedDescription }
