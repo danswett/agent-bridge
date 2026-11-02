@@ -1,9 +1,10 @@
 namespace AgentBridge.App.Core;
 
 // The title bar's search box (ui.md §7, §9: Ctrl+K focuses it): the sessions whose title,
-// repository, branch, agent or machine hold every word typed, in the order the list shows
-// them, titles that start with the query first. Every machine's, whatever the picker shows:
-// opening one the picker hides shows every machine again (Open).
+// repository, branch, agent or machine hold every word typed, titles that start with the query
+// first, then the most recently updated. Every machine's, whatever the tabs show, and in an order
+// that does not depend on them: listed rows first once let the cap drop a newer match the tabs
+// hid. Opening one the tabs hide shows every machine again (Open).
 public sealed partial class MainViewModel
 {
     public IReadOnlyList<SearchHit> Search(string? query, int most = 8)
@@ -11,7 +12,7 @@ public sealed partial class MainViewModel
         var words = (query ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (words.Length == 0) { return []; }
         var several = machines.Count > 1;
-        var listed = Sessions.Concat(byId.Values.Except(Sessions)).ToList();
+        var listed = byId.Values.OrderByDescending(c => c.Session.UpdatedAt).ThenBy(c => c.Title, StringComparer.CurrentCulture).ThenBy(c => c.Id, StringComparer.Ordinal).ToList();
         var hits = new List<(SearchHit Hit, bool Prefix)>();
         foreach (var card in listed)
         {

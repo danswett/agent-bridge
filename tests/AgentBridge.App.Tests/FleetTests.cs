@@ -144,6 +144,24 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Search_finds_the_same_sessions_in_the_same_order_whichever_machine_the_tabs_show_newest_first()
+    {
+        await BothMachinesAsync();
+        await localHost.SendAsync(Events.SessionUpsert, Make.Session("here-deploy", title: "Deploy notes", updated: Make.T0.AddMinutes(1)));
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-deploy", title: "Deploy notes", updated: Make.T0.AddMinutes(5)));
+        await Wait.UntilAsync(() => Card("here-deploy") is not null && Card("there-deploy") is not null, "both deploy sessions");
+
+        List<string> Found(string? key)
+        {
+            ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == key));
+            // The newest match, whatever the tabs left listed: a cap once dropped a newer one hidden by them.
+            return TestUi.Read(() => main.Search("deploy", most: 1).Select(h => h.SessionId).ToList());
+        }
+
+        var keys = TestUi.Read(() => main.Machines.Select(m => m.Key).ToList());
+        Assert.All(keys, key => Assert.Equal(["there-deploy"], Found(key)));
+    }
+    [Fact]
     public async Task A_machine_that_leaves_takes_its_cards_with_it_but_a_relay_that_drops_for_a_moment_does_not()
     {
         await BothMachinesAsync();
