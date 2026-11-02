@@ -213,11 +213,19 @@ Sections, top to bottom:
 
 1. **Needs you · N** (#165): one entry per pending question across machines, oldest first.
    - Each entry shows: the session title, the question's first line or the approval's
-     action, and its age.
+     action, and its age; the machine (once more than one is shown) and the agent; and for
+     a delegate's question, "*Delegate name* asks" (§2.2 rule 2).
    - Approvals (`kind: approval`, not `answerAtMachine`) can be answered inline: "Approve
-     once" (Bridge) and "Deny" (secondary).
+     once" (Bridge) and "Deny" (secondary). They are the card's own buttons: the same
+     request, progress and outcomes. The action is the whole prompt, drawn as the card
+     draws it with code literal, since Approve once allows all of it; one too long to show
+     whole (an edit's diff, a long command), with a table, or from an agent whose prompt
+     can reach the host cut short (Codex, today; only Copilot's are whole and literal)
+     opens the session instead.
    - Forms open the session. `answerAtMachine` entries say so and have no controls.
    - The lane references sessions; it never moves their rows.
+   - Its count is the app's badge: the Windows app's tray and Sessions badge, and the PWA's
+     app badge where the browser has one.
 2. **Pinned.**
 3. **Sessions,** in your order (#164).
 4. **Ended · N,** collapsed.

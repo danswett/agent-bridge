@@ -302,3 +302,25 @@ export function draftText(question, state) {
   }
   return bits.join('\n');
 }
+
+// What a form's state sends, checked as the host will check it: { answer } to submit, or
+// { problem, field } to show, with the field it is about ('' for a question without fields,
+// null for none). The request id is a stand-in the same length as the UUID the service gives
+// it, so the 16 KiB check counts the same bytes. The card's form and the Needs you lane (#165)
+// both answer through this, so a tap in either sends the same request.
+export function prepareAnswer(question, state, sessionId) {
+  const { answer, problems } = buildAnswer(question, state);
+  if (problems.length) { return { answer: null, problem: problems[0].message, field: problems[0].field }; }
+  const data = answerRequest({ sessionId, questionId: question.id, request: '00000000-0000-4000-8000-000000000000', answer });
+  const problem = checkAnswer(question, data);
+  if (problem) { return { answer: null, problem, field: problemField(question, problem) ?? (question.fields.length === 0 ? '' : null) }; }
+  return { answer, problem: null, field: null };
+}
+
+// A tap question's state with one option chosen, as a tap on that option leaves it.
+export function tapState(question, value) {
+  const state = initialState(question);
+  const name = question.fields[0].name;
+  state[name] = { ...state[name], selected: value, otherChosen: false };
+  return state;
+}
