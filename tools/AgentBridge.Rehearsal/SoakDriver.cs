@@ -331,10 +331,15 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         var seen = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var asked = false;
         var sawWork = false;
+        var sawCard = false;
+        var begun = now();
         while (now() < until)
         {
             await wait(TimeSpan.FromSeconds(3), ct);
             var status = (await ha.StateAsync($"sensor.{node}_status", ct))?.State ?? "gone";
+            // A launched session's card appears a few seconds after the launch says it started.
+            if (status is "gone" && !sawCard && now() < begun + TimeSpan.FromMinutes(2)) { continue; }
+            sawCard = true;
             if (status is "gone" or "unavailable" or "ended")
             {
                 record.Problems.Add($"the session went ({status}) during turn {record.Turns}");

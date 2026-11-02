@@ -18,8 +18,10 @@
                installed (build/shadow-week.ps1 -Install, or -Update once installed); the driver
                (agent-bridge-rehearsal) built from -DriverRef; the app's own host stopped, so
                only agent-ha-bridge and the shadow host are left to compare (-KeepAppHost to leave it).
+               With -DriverOnly, only a new driver build (between -Stop and -Start).
     -Start     The driver as a logon task of `rehearsal` (agent-bridge-rehearsal soak run), and
-               auto-shutdown off for both VMs, so the soak runs through the night.
+               auto-shutdown off for both VMs, so the soak runs through the night. -Fresh starts the
+               episodes again from the first, rather than carrying on from soak.json.
     -Status    What the driver has done, its log's end, and `shadow summary --gate`.
     -Collect   A session's raw transcripts, zipped on VM-M and copied here in run-command-sized
                pieces, then unzipped into -OutDir.
@@ -59,7 +61,9 @@ param(
     [Parameter(ParameterSetName = 'Prepare')][ValidatePattern('^[A-Za-z0-9._/-]+$')][string] $HostRef = 'main',
     [Parameter(ParameterSetName = 'Prepare')][ValidatePattern('^[A-Za-z0-9._/-]+$')][string] $DriverRef = 'main',
     [Parameter(ParameterSetName = 'Prepare')][switch] $KeepAppHost,
+    [Parameter(ParameterSetName = 'Prepare')][switch] $DriverOnly,
 
+    [Parameter(ParameterSetName = 'Start')][switch] $Fresh,
     [Parameter(ParameterSetName = 'Start')][ValidateRange(1, 500)][int] $Count = 66,
     [Parameter(ParameterSetName = 'Start')][ValidateRange(1, 240)][int] $EveryMinutes = 22,
     [Parameter(ParameterSetName = 'Start')][int] $RestartDaemonAt = 20,
@@ -111,6 +115,18 @@ function Get-Checkout([string] $Dir, [string] $Commit) {
     if ($head -ne $Commit) { throw "$Dir is at $head, not $Commit" }
 }
 '@.Replace('__REPO__', $repoUrl)
+
+if ($Prepare -and $DriverOnly) {
+    # A new driver build only, between episodes: -Stop first, -Start after.
+    $driverCommit = Get-RefCommit $DriverRef
+    Invoke-Guest M -AsDesktopUser -TimeoutMinutes 20 -Script ($dotnetEnv + @'
+Get-Checkout '__SOAK__\driver' '__DRIVER__'
+dotnet publish '__SOAK__\driver\tools\AgentBridge.Rehearsal' -c Release -r win-x64 --self-contained -o '__SOAK__\tool' --nologo -v q 2>&1 | Select-Object -Last 2
+if ($LASTEXITCODE) { throw 'publishing the driver failed' }
+"driver at __DRIVER__"
+'@).Replace('__SOAK__', $soak).Replace('__DRIVER__', $driverCommit) | Write-Output
+    return
+}
 
 if ($Prepare) {
     $hostCommit = Get-RefCommit $HostRef
@@ -226,10 +242,11 @@ $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -Ru
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $trigger.Delay = 'PT3M'
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+if ('__FRESH__' -eq 'True') { Remove-Item '__SOAK__\state\soak.json' -ErrorAction SilentlyContinue }
 Register-ScheduledTask -TaskName 'AgentBridgeSoakDriver' -Action $action -Principal $principal -Trigger $trigger -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName 'AgentBridgeSoakDriver'
 'driver started: ' + (Get-ScheduledTask -TaskName 'AgentBridgeSoakDriver').State
-'@.Replace('__SOAK__', $soak).Replace('__ARGS__', $line) | Write-Output
+'@.Replace('__SOAK__', $soak).Replace('__ARGS__', $line).Replace('__FRESH__', [string][bool]$Fresh) | Write-Output
     return
 }
 
