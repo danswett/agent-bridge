@@ -774,8 +774,8 @@ deleted. Every probe ran the five spike messages with no model turn and no `thre
 - **Closing stdin before the responses loses rotations.** Wait for them all.
 - **Once the probe has waited, Codex's own start-up timeouts decide whether a rotated
   token is lost, not the grace period.** They apply to every `codex app-server` start.
-- **The grace period stays**, for one refresher these runs didn't exercise (see What this
-  decides).
+- **The grace period stays**, for two refresh paths these runs didn't exercise (see What
+  this decides).
 
 ### How it was run
 
@@ -888,11 +888,15 @@ said "Logged in using ChatGPT", which confirms X-5.
     teardown. No run held the token response for that case.
 - **The cloud-config background refresher also takes `auth()` on its own timer**
   (`cloud-config/src/service.rs:433-447`): 15 min after start, or 5 s after a start-up
-  timeout. A short probe meets it only after a start-up timeout, which means the token
-  endpoint is already too slow.
-  - Its refresh is bounded by the same 20 s limit, which cut it off in (a) and (b).
-  - So it can still be running when stdin closes, but only when rotations are being lost
-    anyway.
+  timeout. A short probe meets it only after a start-up timeout.
+  - In (a) and (b) the start-up timeout came from the held token response, and the
+    refresher's own 20 s limit cut its refresh off too.
+  - **The start-up load also covers reading the cache and fetching the bundle, with
+    retries** (`:129-189`). So a stalled bundle fetch with a fast token endpoint can also
+    trigger the 5 s retry, without losing a rotation. A refresh by that retry could then
+    cross the probe's responses.
+  - **That slow-bundle, fast-token case is another shutdown case these runs didn't
+    exercise.** The account here (Plus) may not fetch a managed bundle at all.
 - **In the runs that waited for all their responses, the lost refreshes were cancelled by
   Codex's own timeouts:** 20 s for cloud config at start-up, and 15 s for routing
   discovery. There the stdin timing made no difference: in (c2), (i) and (ii) gave
@@ -900,7 +904,7 @@ said "Logged in using ChatGPT", which confirms X-5.
   refresh was cut off by the 30 s drain after EOF, and (b) saved that same rotation by
   waiting.
 - **So keep the grace period.** It changed nothing in any run here, but it covers the
-  catalogue case above, as long as the token endpoint answers within it. X-4's rule
+  two untested cases above, as long as the token endpoint answers within it. X-4's rule
   stands: wait for all the responses, then at least 20 s, then close stdin.
 - **The remaining risk is a slow token endpoint**, more than 15 to 20 s, while a refresh is
   due. That loses the rotation on any app-server start, including the user's own. Each
@@ -915,8 +919,9 @@ said "Logged in using ChatGPT", which confirms X-5.
   consecutive 401.
 - "A background refresh can then still be running after both responses arrive": not
   observed in any run where the probe waited for its responses. Each refresher seen is
-  awaited by `initialize`, the usage read or `account/read`. The one candidate left is
-  the model catalogue's detached `auth()`, and it was not exercised with a held token.
+  awaited by `initialize`, the usage read or `account/read`. Two candidates remain,
+  neither exercised: the model catalogue's detached `auth()`, and the cloud-config retry
+  after a slow bundle fetch.
 - Add the start-up cloud-config refresh, bounded by 20 s, to "What could still be
   refreshing". It's the first caller when a refresh is due, and the most likely place to
   lose a rotation.
