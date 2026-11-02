@@ -37,7 +37,9 @@ question preview; full forms, Other answers and more than three choices open the
 session. Free-text answers and replies use native text-input actions. Delegate-only waits do not reannounce an unchanged old main-agent response,
 including after reconnect. Every press
 is single-use and revalidates the account, current subscription, a fresh
-`session.get`, capabilities and connection before sending. Stale/offline actions
+`session.get`, capabilities and connection before sending. Notification reply text
+does not consume the saved workbench draft, including after an explicit retry.
+Stale/offline actions
 show a Not sent receipt and never queue a later mutation. Windows can act directly
 from a background tray process; iOS background delivery is the dependency below.
 

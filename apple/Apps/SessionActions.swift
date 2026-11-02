@@ -173,7 +173,7 @@ struct SessionActions: View {
             let operation = try BridgeSessionOperations.reply(sessionID: sessionID, text: replyText.wrappedValue, attachments: attachments.map(\.0),
                                                               hasQuestion: session?.question != nil, capabilities: host.capabilities)
             Task {
-                await host.perform(operation, slot: slot)
+                await host.perform(operation, slot: slot, consumesReplyDraft: true)
                 guard host.attempts[slot]?.operation.requestID == operation.requestID else { return }
                 removeSubmittedReplyAttachments()
             }
