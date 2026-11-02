@@ -31,7 +31,9 @@ the connected host offers them, such as a capable remote Windows host.
 - Local and encrypted remote fleet feeds; reconnect, snapshots and sequence-gap
   recovery; explicit offline state and canonical local/remote machine identity.
 - Global search, Needs You, pins, persistent manual/recent/machine order, unread
-  state, recently ended sessions, Markdown, reasoning, recent tools and delegates.
+  state, recently ended sessions, Markdown, reasoning and recent tools. Delegate
+  details show task/latest text, reasoning, tool durations, nesting and finished
+  groups; a stop request prepares an ID-only reply without sending it.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
   sends a fresh press.

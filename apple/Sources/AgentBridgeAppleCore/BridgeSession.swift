@@ -15,6 +15,7 @@ public struct BridgeSession: Identifiable, Sendable, Equatable {
     public let question: JSONValue?
     public let delegates: [BridgeDelegate]
     public let waitingOn: String?
+    public let delegatesMore: Int
 
     public init?(json: JSONValue) {
         guard let id = json["id"]?.string, !id.isEmpty else { return nil }
@@ -35,6 +36,8 @@ public struct BridgeSession: Identifiable, Sendable, Equatable {
         var seen = Set<String>()
         delegates = (json["subagents"]?.array ?? []).compactMap(BridgeDelegate.init(json:)).filter { seen.insert($0.id).inserted }
         waitingOn = json["waitingOn"]?.string ?? question?["agent"]?.string
+        let more = json["subagentsMore"]?.number ?? 0
+        delegatesMore = more.isFinite ? Int(min(1_000_000, max(0, more))) : 0
     }
 
     /// A delegate's latest text must never replace the main agent's conversation.
@@ -47,18 +50,18 @@ public struct BridgeSession: Identifiable, Sendable, Equatable {
     }
 
     public var responseTruncated: Bool {
-        if activity?["source"]?["response"]?.string != nil {
+        if activity?["source"]?["response"]?.string?.isEmpty == false || activity?["response"]?.string?.isEmpty != false {
             return activity?["own"]?["responseTruncated"]?.bool ?? false
         }
-        return activity?["responseTruncated"]?.bool ?? activity?["own"]?["responseTruncated"]?.bool ?? false
+        return activity?["responseTruncated"]?.bool ?? false
     }
 
     private func ownText(_ key: String) -> String? {
         let own = activity?["own"]?[key]?.string
-        if activity?["source"]?[key]?.string != nil {
+        if activity?["source"]?[key]?.string?.isEmpty == false {
             return own
         }
-        return activity?[key]?.string ?? own
+        return activity?[key]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? own
     }
 
     public var backgroundAgents: Int {
@@ -80,7 +83,7 @@ public struct BridgeSession: Identifiable, Sendable, Equatable {
         }
         if question != nil {
             if let waitingOn {
-                let name = delegates.first { $0.id == waitingOn }?.name ?? "A delegate"
+                let name = delegates.first { $0.id == waitingOn }.map { BridgeDelegateLabel.titled($0.name) } ?? "A delegate"
                 return "\(name) asks"
             }
             return "Waiting on you"
