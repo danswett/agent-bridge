@@ -29,31 +29,57 @@ export function plainLine(text, max = LINE_MAX) {
 }
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-const CONTAINER = /^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+/;
 // Whether line closes a fence opened by `open` (its first match): the same character, at least as
 // many, and nothing after them.
 const closes = (open, line) => new RegExp(`^ {0,3}${open[0] === '`' ? '`' : '~'}{${open.length},}\\s*$`).test(line);
 
 // The line an entry shows: a question's first line of prose, never a line of code. A question that
-// is all code shows its first line.
+// is all code shows its first line. Where the prose starts is the parser's to say, as it draws the
+// card: scanning lines for fences missed them in nested quotes and lists.
 export function questionLine(q) {
-  let open = null;
-  let code = null;
   // Any line ending the renderer breaks on: a bare CR too.
-  for (const raw of (q?.message ?? '').split(/\r\n?|\n/)) {
-    // A fence in a quote or a list item is a fence too: read past their markers.
-    const l = raw.replace(CONTAINER, '');
-    if (open) {
-      if (closes(open, l)) { open = null; } else if (l.trim()) { code ??= l; }
-      continue;
-    }
-    const m = FENCE.exec(l);
-    if (m) { open = m[1]; continue; }
-    const line = plainLine(raw);
-    if (line) { return line; }
-  }
-  return plainLine(code ?? '');
+  const nodes = parseMarkdown((q?.message ?? '').replace(/\r\n?/g, '\n'));
+  const prose = firstLine(nodes);
+  if (prose) { return cut(prose); }
+  const code = firstPre(nodes);
+  return cut(code ? textOf(code).split('\n').find((l) => l.trim()) ?? '' : '');
 }
+
+const BLOCKS = new Set(['p', 'ul', 'ol', 'li', 'pre', 'blockquote', 'div', 'table', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+const isNode = (n) => n && typeof n === 'object';
+const skipped = (n) => n.tag === 'pre' || n.tag === 'table' || n.attrs?.class === 'md-table';
+
+// The first line of the first block holding words, at any depth but never in code or a table: its
+// words up to a line break or a block nested in it.
+function firstLine(nodes) {
+  for (const n of nodes.filter(isNode)) {
+    if (skipped(n)) { continue; }
+    const head = [];
+    for (const c of n.children ?? []) {
+      if (isNode(c) && (c.tag === 'br' || BLOCKS.has(c.tag))) { break; }
+      head.push(c);
+    }
+    const words = head.map(textOf).join('').replace(/\s+/g, ' ').trim();
+    if (words) { return words; }
+    const inner = firstLine((n.children ?? []).filter((c) => isNode(c) && BLOCKS.has(c.tag)));
+    if (inner) { return inner; }
+  }
+  return null;
+}
+
+function firstPre(nodes) {
+  for (const n of nodes.filter(isNode)) {
+    if (n.tag === 'pre') { return n; }
+    const inner = firstPre(n.children ?? []);
+    if (inner) { return inner; }
+  }
+  return null;
+}
+
+const cut = (line, max = LINE_MAX) => {
+  const l = line.replace(/\s+/g, ' ').trim();
+  return l.length > max ? `${l.slice(0, max - 1).trimEnd()}\u2026` : l;
+};
 
 // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
 // allowed: prose, then at most one fenced block, which ends the prompt and holds the command

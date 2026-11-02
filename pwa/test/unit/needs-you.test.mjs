@@ -63,6 +63,9 @@ test('a question that opens with a fenced example shows the question after it, n
   // A fence in a quote or a list item is skipped too.
   assert.equal(questionLine({ kind: 'form', message: '> ```\n> port: 8080\n> ```\n\nWhich option?' }), 'Which option?');
   assert.equal(questionLine({ kind: 'form', message: '- ```\n  port: 8080\n  ```\n\nWhich option?' }), 'Which option?');
+  // Nested lists, and a quote marker that is code, as the renderer reads them.
+  assert.equal(questionLine({ kind: 'form', message: '- - ```\n    example\n    ```\n\nWhich option?' }), 'Which option?');
+  assert.equal(questionLine({ kind: 'form', message: '~~~\n> ~~~\nexample\n~~~\nAfter' }), 'After');
 });
 
 test('an approval whose prompt a fence or a link could make draw differently from what it allows opens its session', () => {
