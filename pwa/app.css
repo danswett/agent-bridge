@@ -267,7 +267,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .route-sessions:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .sessions:not([hidden]) { display: grid; grid-template-columns: clamp(264px, 26vw, 320px) minmax(0, 1fr); flex: 1; min-height: 0; }
   .list-pane { min-height: 0; overflow: auto; padding: var(--ab-space-5) var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
-  .list-pane > :not(.session-list) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
+  .list-pane > :not(.session-list, .needs-you) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
   .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .session-views { flex: 1; min-height: 0; }
   .session-header .back, .session-header .more { display: none; }

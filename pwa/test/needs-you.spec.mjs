@@ -3,6 +3,7 @@
 // exactly as the card's buttons do; forms opening their session; prompts only the machine can
 // answer saying so; delegates named; and the app badge carrying the count.
 import { test, expect } from '@playwright/test';
+import { open } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CODEX = '019a1b2c-codex-example';
@@ -16,7 +17,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const lane = (page) => page.locator('#needs-you');
 const entries = (page) => lane(page).locator('.needs-entry');
 const entryFor = (page, id, host = 'demo') => lane(page).locator(`.needs-entry[data-host-id="${host}"][data-id="${id}"]`);
-const card = (page, id, host = 'demo') => page.locator(`.session[data-host-id="${host}"][data-id="${id}"]`);
+// The session's view (ui.md §5.2), where its question and the card's own buttons are.
+const card = (page, id, host = 'demo') => page.locator(`.session-view[data-host-id="${host}"][data-id="${id}"]`);
 const rows = (page) => page.locator('#session-list > .session').evaluateAll((cs) => cs.map((c) => `${c.dataset.hostId}/${c.dataset.id}`));
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.answerLog);
 const script = (page, ...outcomes) => page.evaluate((o) => window.agentBridgeDemo.script(...o), outcomes);
@@ -237,7 +239,9 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await openDemo(page);
     await script(page, 'stale');
     const e = await ask(page, LAND, permission());
+    await open(page, LAND);
     await card(page, LAND).locator('.question .choice[data-value="approve"]').click();
+    await card(page, LAND).locator('.back').click();
     await expect(e.locator('.needs-status')).toHaveText('Already answered or gone: the session is no longer asking this.');
     await expect(e.getByRole('button', { name: /^Approve once/ })).toHaveAttribute('aria-pressed', 'true');
   });
@@ -252,11 +256,10 @@ test.describe('what an entry offers', () => {
     await expect(e).toHaveAttribute('data-mode', 'open');
     await expect(e.locator('.needs-line')).toHaveText('Which database?');
     await expect(e.locator('.needs-actions')).toHaveCount(0);
-    await card(page, LAND).locator('.fold').click();
-    await expect(card(page, LAND).locator('.fold')).toHaveAttribute('aria-expanded', 'false');
+    await expect(card(page, LAND)).toBeHidden();
     await e.getByRole('button', { name: /open the session/ }).tap();
-    await expect(card(page, LAND).locator('.fold')).toHaveAttribute('aria-expanded', 'true');
-    await expect(card(page, LAND).locator('.fold')).toBeFocused();
+    await expect(card(page, LAND)).toBeVisible();
+    await expect(card(page, LAND).locator('.session-title')).toBeFocused();
     await expect(card(page, LAND).locator('.question')).toBeInViewport();
   });
 
