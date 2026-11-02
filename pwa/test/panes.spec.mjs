@@ -54,6 +54,23 @@ test('at 1440 px three panes: the list at 320, the session, and the inspector at
   expect(await overflow(page)).toBeLessThanOrEqual(0);
 });
 
+for (const width of [900, 1440]) {
+  test(`at ${width} px the reply box is at the foot of the session pane, and the panes reach it too`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openDemo(page);
+    const v = await open(page, CLAUDE);
+    const pane = await box(page.locator('#session-pane'));
+    const reply = await box(v.locator('.reply-slot'));
+    const conversation = await box(v.locator('.conversation'));
+    expect(Math.abs(reply.y + reply.height - (pane.y + pane.height))).toBeLessThanOrEqual(1);
+    expect(Math.abs(conversation.y + conversation.height - (pane.y + pane.height))).toBeLessThanOrEqual(1);
+    if (width >= 1280) {
+      const inspector = await box(v.locator('.inspector'));
+      expect(Math.abs(inspector.y + inspector.height - (pane.y + pane.height))).toBeLessThanOrEqual(1);
+    }
+  });
+}
+
 test('at 900 px two panes: the list and the session, with Conversation and Tools as tabs and Details in the header', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 900 });
   await openDemo(page);
@@ -283,6 +300,21 @@ for (const width of [390, 900, 1440]) {
     expect(await overflow(page)).toBeLessThanOrEqual(0);
   });
 }
+
+test('on a phone a short repository in the header moves to the next line whole, not split at its hyphen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  // "Working · Demo machine · agent-bridge" is a little wider than the header at 390.
+  const repo = v.locator('.meta-facts .repo');
+  await expect(repo).toHaveText('agent-bridge');
+  const lines = await repo.evaluate((e) => {
+    const r = document.createRange();
+    r.selectNodeContents(e);
+    return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size;
+  });
+  expect(lines).toBe(1);
+});
 
 test('a folder\'s path in Details is mono, on one line, and gives up its middle rather than a word', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

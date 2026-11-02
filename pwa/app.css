@@ -230,6 +230,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
 .session-pane { display: none; }
 .session-view:not([hidden]) { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
 .view-body { min-height: 0; }
+/* The body keeps the third row even while the tabs are hidden (three panes), or it takes the
+   tabs' auto row and the reply box floats halfway up an empty pane. */
+.session-view > .view-body { grid-row: 3; }
 .no-session { margin: auto; color: var(--ab-text2); }
 @media (max-width: 759px) {
   body[data-page="sessions"][data-session-open="true"] .list-pane { display: none; }
@@ -647,6 +650,9 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 /* The machine in text colour: Bridge is for actions and selection (§3, #214). */
 .session-machine, .machine-label { color: inherit; }
 .session-machine { color: var(--ab-text); }
+/* A repository moves to the next line whole ("agent-" then "bridge" is two names), and breaks
+   inside only when it is longer than the line. */
+.meta-facts .repo { display: inline-block; max-width: 100%; }
 
 /* Conversation and Tools, where the inspector isn't a pane of its own. */
 .view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
