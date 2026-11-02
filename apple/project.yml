@@ -1,0 +1,30 @@
+name: AgentBridgeApple
+options:
+  bundleIdPrefix: dev.agentbridge
+settings:
+  SWIFT_VERSION: 6.0
+  IPHONEOS_DEPLOYMENT_TARGET: '18.0'
+  MACOSX_DEPLOYMENT_TARGET: '15.0'
+packages:
+  AgentBridgeAppleCore:
+    path: .
+targets:
+  AgentBridgeMac:
+    type: application
+    platform: macOS
+    sources: [Apps, Transport]
+    dependencies:
+      - package: AgentBridgeAppleCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.agentbridge.mac
+      GENERATE_INFOPLIST_FILE: YES
+  AgentBridgeMobile:
+    type: application
+    platform: iOS
+    sources: [Apps, Transport]
+    dependencies:
+      - package: AgentBridgeAppleCore
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: dev.agentbridge.mobile
+      GENERATE_INFOPLIST_FILE: YES
+      TARGETED_DEVICE_FAMILY: '1,2'
