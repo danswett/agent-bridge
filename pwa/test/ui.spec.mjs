@@ -190,10 +190,10 @@ test('a session an agent drives has a purple edge, steady while idle and breathi
     return getComputedStyle(e).borderTopColor;
   });
   const glow = () => c.locator('.glow').evaluate((e) => ({ animation: getComputedStyle(e).animationName, shadow: getComputedStyle(e).boxShadow }));
-  // The palette's own purple.
+  // The agent role's colour.
   const purple = await page.evaluate(() => {
     const probe = document.createElement('i');
-    probe.style.color = 'var(--agent)';
+    probe.style.color = 'var(--ab-agent)';
     document.body.append(probe);
     const colour = getComputedStyle(probe).color;
     probe.remove();

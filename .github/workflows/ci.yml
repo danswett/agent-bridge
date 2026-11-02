@@ -330,6 +330,21 @@ jobs:
         working-directory: spikes
         run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
 
+  design:
+    # The design language (design/README.md): every client's generated copy matches design/,
+    # so a token or SVG changed without regenerating fails here, and every theme meets the
+    # contrast rules in design/tokens.json.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Every generated file matches design/
+        run: node tools/design-gen/generate.mjs --check
+      - name: Contrast, the SVG subset and the generated files
+        run: node --test "tools/design-gen/test/*.test.mjs"
+
   pwa:
     # The product PWA: unit tests in Node, then Chromium and WebKit against the published
     # build (with its CSP) in demo mode and end to end through the dev stack's relay.

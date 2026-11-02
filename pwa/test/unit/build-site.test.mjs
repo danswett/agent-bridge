@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSite, contentSecurityPolicy } from '../../tools/build-site.mjs';
@@ -13,7 +13,7 @@ const sw = (dir) => readFileSync(path.join(dir, 'sw.js'), 'utf8');
 // A copy of the app to change, so the real one is never touched.
 function appCopy(name) {
   const root = out(name);
-  for (const f of ['index.html', 'app.css', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures']) {
+  for (const f of ['index.html', 'app.css', 'design', 'sw.js', 'manifest.webmanifest', 'icon.svg', 'js', 'fixtures']) {
     cpSync(path.join(pwa, f), path.join(root, f), { recursive: true });
   }
   return root;
@@ -53,4 +53,21 @@ test('the page may reach the relay and the one storage account its blob store us
   for (const bad of ['https://evil.example', 'http://acct.blob.core.windows.net', 'https://acct.blob.core.windows.net/path', "https://acct.blob.core.windows.net; script-src *"]) {
     assert.throws(() => contentSecurityPolicy('https://relay.example', [bad]), /--blob-origin must be an origin/);
   }
+});
+
+test('the built site carries the monospace\'s six WOFF2s and their OFL licence, and keeps every shell file offline', () => {
+  const site = buildSite({ out: out('fonts') });
+  const fonts = readdirSync(path.join(site, 'design', 'fonts')).sort();
+  assert.equal(fonts.filter((f) => f.endsWith('.woff2')).length, 6);
+  assert.ok(fonts.includes('OFL.txt'), 'the licence travels with the fonts');
+  const shell = [...sw(site).matchAll(/'\.\/([^']*)'/g)].map((m) => m[1]).filter(Boolean);
+  // A shell file the site lacks fails the worker's install, so the app never works offline.
+  assert.deepEqual(shell.filter((f) => !existsSync(path.join(site, f))), []);
+  assert.deepEqual(fonts.filter((f) => f.endsWith('.woff2') && !shell.includes(`design/fonts/${f}`)), []);
+  // Every face tokens.css asks for is there.
+  const css = readFileSync(path.join(site, 'design', 'tokens.css'), 'utf8');
+  const faces = [...css.matchAll(/url\("(fonts\/[^"]+)"\)/g)].map((m) => m[1]);
+  assert.equal(faces.length, 6);
+  assert.deepEqual(faces.filter((f) => !existsSync(path.join(site, 'design', f))), []);
+  rmSync(scratch, { recursive: true, force: true });
 });
