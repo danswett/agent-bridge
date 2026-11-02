@@ -290,6 +290,44 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task No_Claude_probe_starts_beside_a_node_runtime_whose_command_line_cannot_be_read()
+    {
+        ClaudeSaved(Now.AddMinutes(-20));
+        ClaudeScript(refresh: true);
+        // An npm install's probe left by a host that has since stopped, read this time as a bare node.
+        f.Processes.Run(AgentKind.Claude, 4400, "node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js -p /usage --safe-mode --no-session-persistence --output-format json");
+        f.Processes.Unidentify(AgentKind.Claude, 4400);
+        var claude = Claude();
+
+        await claude.CollectAsync();
+        await Settled(claude);
+
+        Assert.Empty(UsageProbesStarted);
+    }
+
+    [Fact]
+    public async Task Usage_polling_set_to_two_minutes_still_has_an_agent_asked_only_for_a_reading_15_minutes_old()
+    {
+        ClaudeScript(refresh: true);
+        var options = new UsageOptions
+        {
+            CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, ClaudeAccountPath = AccountPath, CodexHome = f.CodexHome,
+            Interval = TimeSpan.FromMinutes(2), IdleInterval = TimeSpan.FromMinutes(2),
+        };
+
+        ClaudeSaved(Now.AddMinutes(-3));
+        var claude = new ClaudeUsageCollector(options, time, Probes(), Log);
+        await claude.CollectAsync();
+        await Settled(claude);
+        Assert.Empty(UsageProbesStarted);
+
+        ClaudeSaved(Now.AddMinutes(-16));
+        await claude.CollectAsync();
+        await Settled(claude);
+        Assert.Single(UsageProbesStarted);
+    }
+
+    [Fact]
     public async Task A_host_serving_another_profile_starts_no_Claude_probe_while_the_first_ones_runs_even_past_its_timeout()
     {
         ClaudeSaved(Now.AddMinutes(-20));
@@ -453,6 +491,40 @@ public sealed class UsageProbeTests : IDisposable
 
         Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
         Assert.Null(outcome.Reading!.AccountKey);
+    }
+
+    [Fact]
+    public async Task A_switch_and_back_withholds_the_key_when_an_unreadable_runtime_appears_during_the_probe()
+    {
+        AppServer();
+        var looks = 0;
+        f.Processes.Queried = agent =>
+        {
+            // Added as the watch starts looking, and seen as unreadable by its later looks.
+            if (agent == AgentKind.Codex && ++looks == 2)
+            {
+                f.Processes.Run(AgentKind.Codex, 9101, "node codex.js login");
+                f.Processes.Unidentify(AgentKind.Codex, 9101);
+            }
+        };
+
+        var outcome = await RunToEnd(CodexProbe().Start());
+
+        Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
+        Assert.Null(outcome.Reading!.AccountKey);
+    }
+
+    [Fact]
+    public async Task No_standalone_app_server_starts_beside_a_runtime_whose_command_line_cannot_be_read()
+    {
+        AppServer();
+        f.Processes.Run(AgentKind.Codex, 9102, "node codex.js");
+        f.Processes.Unidentify(AgentKind.Codex, 9102);
+
+        var outcome = await CodexProbe().Start().Reported.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(CodexProbeKind.Skipped, outcome.Kind);
+        Assert.Empty(launcher.Started);
     }
 
     [Fact]

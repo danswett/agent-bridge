@@ -125,7 +125,8 @@ Agent-ha-bridge's usage card, kept exactly:
   keyed and keyless readings of an agent are never shown side by side: whichever it took last stands
   for that machine, the other is left out, so Codex alternating between a probe's keyed reading and
   its transcripts' keyless ones is still one row. A failure is held to the same rule: one older than
-  that machine's last reading of the other kind is left out, and one newer still shows.
+  that machine's last reading of the other kind is left out, and one newer still shows. Two
+  readings of the two kinds measured at the same moment go to the one reported first.
 * **Rows in order of the fullest window**, highest first. The folded summary is
   `GitHub Copilot 79% · Claude Code 12%`, each figure in its own colour.
 * **Colour by percent:** 90 and up critical (red), 75 and up warning (amber), else normal.
@@ -232,14 +233,16 @@ refresh and locking, and runs no model turn.
   * the managed daemon running: a WebSocket on its control socket
     (`<CODEX_HOME>/app-server-control/app-server-control.sock`, path `/`), one message per text
     frame, ended with a close frame that is not waited for, since the daemon never answers one;
-  * a Codex session without the daemon: nothing, and its transcripts are fresh anyway.
+  * a Codex session without the daemon, or a runtime (node, bun) whose command line could not be
+    read: nothing, and its transcripts are fresh anyway.
 
   It sends `initialize`, `initialized`, `account/read {refreshToken: false}`,
   `account/rateLimits/read {excludeResetCreditDetails: true}` and `account/read` again, each after
   the last has answered, and never `thread/*` or `turn/*`. The reading's `accountKey` is set only
   when the login held steady across it: the same email in both `account/read` answers, a workspace
   `accountId` and a non-null `ordinaryUsageAllowed` on the snapshot, the standalone route, and no
-  other Codex process seen from just before the first `account/read` to just after the second.
+  other Codex process, or unreadable runtime, seen from just before the first `account/read` to
+  just after the second.
   A daemon-route reading never has one: another client can switch the daemon's login unseen.
   An API-key login, another provider or no `codex` falls back to the transcripts with no error,
   and clears an earlier sign-out failure.
@@ -265,14 +268,15 @@ times, 400 ms and 800 ms apart, for network failures, timeouts (15 s), 408, 429 
 other refusal is an answer and is not retried.
 
 An agent is asked to read its own allowance only once the newest reading is 15 minutes old (the
-idle pace), at most every 15 minutes while no session of it is open here and every 5 while one is,
-and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
+idle pace, or `usage.idleIntervalSeconds` when that is longer: a shorter one only paces reading
+what the agents saved), at most every 15 minutes while no session of it is open here and every 5
+while one is, and only at the idle pace while agent-ha-bridge's daemon runs for the user. One runs at a time per
 agent home on the machine: a lease file per agent home under the product's own folder
 (`usage-probes/<agent>-<digest>.lock`), shared by hosts serving different bridge profiles, is
 taken before the host looks at what runs and kept until the probe's process ends, even after the
 host stopped waiting for it. None starts beside a Claude probe already running on the machine (one
-left by a host that has since stopped), nor while the machine's Claude processes, or any one's
-command line, cannot be read to tell. A Claude probe is recognised only by exactly its own
+left by a host that has since stopped), nor while the machine's Claude processes, any one's
+command line, or a node or bun runtime's, cannot be read to tell. A Claude probe is recognised only by exactly its own
 options, `-p /usage --safe-mode --no-session-persistence --output-format json` after the
 executable, so a real prompt that only quotes them still holds discovery. After a
 failure or a rate-limited answer the next waits 15 minutes, then 30, 60 and at most 2 hours, until

@@ -88,7 +88,8 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
                 reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "the codex processes could not be listed"));
                 return;
             }
-            if (observed.Processes.Count == 0)
+            // A runtime (node, bun) whose command line could not be read may be Codex's own.
+            if (observed.Processes.Count == 0 && observed.Unidentified.Count == 0)
             {
                 handed = true;
                 await StandaloneAsync(exe, reported, answered, lease);
@@ -103,7 +104,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             }
             if (daemon is null)
             {
-                reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "a Codex session is running here without the managed daemon"));
+                reported.TrySetResult(new(CodexProbeKind.Skipped, Why: "Codex, or a runtime that could not be read, is running here without the managed daemon"));
                 return;
             }
             await DaemonAsync(daemon, reported);
@@ -443,7 +444,7 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
         try
         {
             var observed = probes.Processes.Observe(AgentKind.Codex);
-            if (!observed.Listed || observed.Processes.Any(p => !Own(p.Id))) { seen = true; }
+            if (!observed.Listed || observed.Processes.Any(p => !Own(p.Id)) || observed.Unidentified.Any(p => !Own(p.Id))) { seen = true; }
         }
         catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException) { seen = true; }
     }

@@ -806,14 +806,25 @@ public static class UsageMerge
     // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
     // kept apart they were one allowance shown twice, the older of the two going stale beside it.
     // A failure is held to the same rule: a sign-out older than the other kind's last reading is
-    // history, and one newer than it still stands.
+    // history, and one newer than it still stands. Readings of the two kinds measured at the same
+    // moment go to whichever was reported first, as two readings of one account do.
     static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
     {
         static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
-        var readings = all.Where(a => a.Windows.Count > 0).ToList();
-        var keyless = readings.Where(UsageShare.Keyless).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
-        var keyed = readings.Where(a => !UsageShare.Keyless(a)).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
-        return all.Where(a => !(UsageShare.Keyless(a) ? keyed : keyless).TryGetValue(Of(a), out var other) || a.MeasuredAt >= other);
+        var newest = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        for (var i = 0; i < all.Count; i++)
+        {
+            var a = all[i];
+            if (a.Windows.Count == 0) { continue; }
+            var kind = (Of(a), UsageShare.Keyless(a));
+            if (!newest.TryGetValue(kind, out var n) || a.MeasuredAt > n.At) { newest[kind] = (a.MeasuredAt, i); }
+        }
+        return all.Where((a, i) =>
+        {
+            if (!newest.TryGetValue((Of(a), !UsageShare.Keyless(a)), out var other)) { return true; }
+            if (a.Windows.Count == 0) { return a.MeasuredAt > other.At; }
+            return a.MeasuredAt > other.At || (a.MeasuredAt == other.At && i < other.Order);
+        });
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

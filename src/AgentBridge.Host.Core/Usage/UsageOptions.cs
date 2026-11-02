@@ -72,9 +72,13 @@ public sealed class UsageOptions
     public int CodexFiles { get; init; } = 5;
 
     // Asking the agents themselves for a reading (#200, spike #197). A probe is due only once the
-    // newest reading is IdleInterval old, at most every IdleInterval with no session of the agent
-    // open here and every ProbeBusyInterval with one.
+    // newest reading is ProbeIdle old, at most every ProbeIdle with no session of the agent open here
+    // and every ProbeBusyInterval with one. ProbeIdle is IdleInterval but never under 15 minutes:
+    // usage.idleIntervalSeconds may be as short as 2 minutes for reading what the agents saved,
+    // and an agent started that often would be the very load the probes were paced to avoid.
     public TimeSpan ProbeBusyInterval { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan ProbeIdleMinimum { get; init; } = TimeSpan.FromMinutes(15);
+    public TimeSpan ProbeIdle => IdleInterval > ProbeIdleMinimum ? IdleInterval : ProbeIdleMinimum;
 
     // After a failed or rate-limited probe: this, doubling with each failure in a row, at most
     // ProbeBackoffMax. A sign-out holds the probes for ProbeBackoffMax.

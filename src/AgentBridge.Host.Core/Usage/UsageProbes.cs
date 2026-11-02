@@ -111,12 +111,12 @@ internal sealed class ProbePace(UsageOptions options)
     public int Failures;
     public DateTimeOffset NotBefore = DateTimeOffset.MinValue;
 
-    public TimeSpan Gap(bool busy) => busy ? options.ProbeBusyInterval : options.IdleInterval;
+    public TimeSpan Gap(bool busy) => busy ? options.ProbeBusyInterval : options.ProbeIdle;
 
     // The earliest a probe may start, given the reading it would refresh.
     public DateTimeOffset DueAt(DateTimeOffset? readingAt, bool busy)
     {
-        var stale = readingAt is { } at ? at + options.IdleInterval : DateTimeOffset.MinValue;
+        var stale = readingAt is { } at ? at + options.ProbeIdle : DateTimeOffset.MinValue;
         var gap = LastStarted == DateTimeOffset.MinValue ? DateTimeOffset.MinValue : LastStarted + Gap(busy);
         return Max(Max(stale, gap), NotBefore);
     }

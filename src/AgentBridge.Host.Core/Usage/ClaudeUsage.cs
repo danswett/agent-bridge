@@ -248,7 +248,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             // this one before a restart, may have left one running. A list that could not be read, or
             // a Claude process whose command line could not be, cannot show there is none.
             var observed = probes.Processes.Observe(AgentKind.Claude);
-            if (!observed.Listed || observed.Processes.Any(p => p.CommandLine is null))
+            if (!observed.Listed || observed.Processes.Any(p => p.CommandLine is null) || observed.Unidentified.Count > 0)
             {
                 say("usage: Claude Code's processes could not all be read; not starting a /usage probe");
                 return false;

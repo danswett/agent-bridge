@@ -71,6 +71,15 @@ test('a machines older keyless sign-out is dropped once it gives a newer keyed r
   assert.ok(later.some((r) => r.error === 'Codex needs signing in again on this machine'));
 });
 
+test('one machines keyed and keyless readings taken at the same moment are one row, the first reported', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const transcript = { agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };
+  const probe = { ...transcript, accountKey: 'c0dec0dec0de', source: 'api' };
+  assert.deepEqual(mergeUsage([{ agents: [transcript] }, { agents: [probe] }].map(readUsage)).map((r) => r.source), ['transcript']);
+  assert.deepEqual(mergeUsage([{ agents: [probe] }, { agents: [transcript] }].map(readUsage)).map((r) => r.source), ['api']);
+  assert.equal(latestUsage([{ agents: [probe, transcript] }].map(readUsage)).length, 1);
+});
+
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {
   // DSWETT-DEV-VM1 is signed in as octo and lists dswett_microsoft as a further account; the
   // laptop is signed in as dswett_microsoft itself, and its failed read lends the row its error.

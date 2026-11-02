@@ -1206,6 +1206,22 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Contains(UsageMerge.Merge([new UsageReport([later]), new UsageReport([probe])]).Agents, a => a.Error == later.Error);
     }
 
+    [Fact]
+    public void One_machines_keyed_and_keyless_readings_taken_at_the_same_moment_are_one_row_the_first_reported()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var transcript = new AgentUsage
+        {
+            Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, ReadBy = vm,
+            Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }],
+        };
+        var probe = transcript with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+
+        Assert.Equal(UsageSource.Transcript, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe])]).Agents).Source);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Source);
+        Assert.Single(UsageMerge.Latest([new UsageReport([probe, transcript])]));
+    }
+
     OfflineMachineViewModel[] Offline()
     {
         OfflineMachineViewModel[] now = [];
