@@ -267,7 +267,9 @@ export class LaunchPanel {
     const name = this.#target?.machineName;
     const waiting = !this.#target?.inspectOnly || this.#trustQuestions().length > 0;
     this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? (waiting ? `Waiting on ${name}` : `Nothing waiting on ${name}`) : name ? `Start a session on ${name}` : 'Start a session';
-    if (this.#target) { this.#asks.set(this.#target.hostId, !!this.#target.inspectOnly && waiting); }
+    // Known only once its list has been read: a machine picked again whose list is still coming,
+    // or could not be read, keeps what was last seen.
+    if (this.#target && (this.#options || !this.#target.inspectOnly)) { this.#asks.set(this.#target.hostId, !!this.#target.inspectOnly && waiting); }
     this.waiting([...this.#asks.values()].some(Boolean));
   }
 

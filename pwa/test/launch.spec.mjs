@@ -577,6 +577,13 @@ test.describe('a folder-trust question', () => {
     await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
     await expect(way).toHaveClass(/attention/);
     await expect(way).toHaveAttribute('aria-label', 'Launch, a question is waiting');
+    // Picked again, its list unreadable this time: what was last seen still holds.
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.launchPanel.setTarget({ ...d.page.launchTarget('demo-shadow'), load: () => Promise.reject(new Error('the channel closed')) });
+    });
+    await page.waitForTimeout(200);
+    await expect(way).toHaveClass(/attention/);
   });
 
   test('a machine shown for its question whose list could not be read is asked again when it reconnects', async ({ page }) => {
