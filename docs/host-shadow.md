@@ -310,7 +310,10 @@ from an agent session, and the #67 guard does not stand in its way.
 * **`-Prepare`** starts VM-W's Mosquitto (agent-ha-bridge publishes through Home Assistant's
   MQTT; a container stopped by hand stayed stopped across a restart), keeps VM-M's tunnel to
   VM-W's Home Assistant up as a logon task, checks agent-ha-bridge is beating and pointed at the
-  tunnel, installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
+  tunnel, and raises its `newSession.worktreeLimit` to 30 and lowers `worktreeIdleHours` to 1
+  (every launch into the isolated workspace makes a worktree, and at the defaults a launch every
+  22 minutes reached the cap of 10 in under four hours, so launches were refused; the old config
+  is kept as `config.json.pre-soak`). It installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
   the driver from `-DriverRef`, each checked out at the exact commit. It stops the app's own host,
   whose Home Assistant connector would wake while the daemon restarts; `-Finish` starts it again.
   `-DriverOnly` rebuilds the driver alone, between `-Stop` and `-Start`.

@@ -14,7 +14,9 @@
     -Prepare   VM-W: Mosquitto running (the disposable instance's MQTT, which agent-ha-bridge
                publishes through). VM-M: the tunnel to VM-W's Home Assistant as a logon task of
                `rehearsal`; agent-ha-bridge checked (installed, daemon beating, pointed at
-               127.0.0.1); the .NET SDK for `rehearsal`; the shadow host built from -HostRef and
+               127.0.0.1, with newSession.worktreeLimit 30 and worktreeIdleHours 1 so the
+               soak's launches are not refused at the worktree cap; the old config is kept as
+               config.json.pre-soak); the .NET SDK for `rehearsal`; the shadow host built from -HostRef and
                installed (build/shadow-week.ps1 -Install, or -Update once installed); the driver
                (agent-bridge-rehearsal) built from -DriverRef; the app's own host stopped, so
                only agent-ha-bridge and the shadow host are left to compare (-KeepAppHost to leave it).
@@ -185,6 +187,23 @@ if ($beat -gt 120) { throw "agent-ha-bridge $version has not beaten for $([int]$
 $h = @{ Authorization = 'Bearer ' + (Get-Content C:\rehearsal\ha.token -Raw).Trim() }
 $slug = (($env:COMPUTERNAME.ToLowerInvariant() -replace '[^a-z0-9]+', '_').Trim('_'))
 "online in Home Assistant: " + (Invoke-RestMethod "http://127.0.0.1:8123/api/states/binary_sensor.agent_bridge_${slug}_online" -Headers $h).state
+
+# Each launch into the isolated workspace makes a worktree, and agent-ha-bridge reclaims a
+# finished one only after newSession.worktreeIdleHours (12) under a cap of worktreeLimit (10):
+# a launch every 22 minutes reached the cap in under four hours and was refused. The trees stay
+# protected by every other cleanup check; only the age and the cap are loosened, on VM-M only.
+$n = $config.newSession
+$loosened = $false
+foreach ($kv in @(@('worktreeLimit', 30), @('worktreeIdleHours', 1))) {
+    $cur = $n.PSObject.Properties[$kv[0]]
+    if ($null -eq $cur) { $n | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1]; $loosened = $true }
+    elseif ($cur.Value -ne $kv[1]) { $cur.Value = $kv[1]; $loosened = $true }
+}
+if ($loosened) {
+    Copy-Item "$ahb\config.json" "$ahb\config.json.pre-soak" -Force
+    [IO.File]::WriteAllText("$ahb\config.json", ($config | ConvertTo-Json -Depth 64), [Text.UTF8Encoding]::new($false))
+}
+"worktrees: limit $($n.worktreeLimit), reclaimed after $($n.worktreeIdleHours) h"
 
 if (-not ((& "$HOME\.dotnet\dotnet.exe" --list-sdks 2>$null) -match '^10\.')) {
     $inst = Join-Path $env:LOCALAPPDATA 'dotnet-install.ps1'
