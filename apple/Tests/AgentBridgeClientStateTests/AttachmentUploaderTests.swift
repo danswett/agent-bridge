@@ -65,6 +65,54 @@ private actor UploadProgressFixture {
     }
 }
 
+private actor UploadResponseGate {
+    private var entered = false
+    private var entryWaiter: CheckedContinuation<Void, Never>?
+    private var responseWaiter: CheckedContinuation<Void, Never>?
+    private(set) var requestWasCancelled = false
+
+    func holdResponse() async {
+        entered = true
+        entryWaiter?.resume()
+        entryWaiter = nil
+        await withCheckedContinuation { responseWaiter = $0 }
+        requestWasCancelled = Task.isCancelled
+    }
+
+    func waitForRequest() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryWaiter = $0 }
+    }
+
+    func releaseResponse() {
+        responseWaiter?.resume(); responseWaiter = nil
+    }
+}
+
+@Test(arguments: ["attachment.start", "attachment.chunk"])
+func cancellingAnUploadDoesNotCancelItsInFlightSharedChannelRequest(heldOperation: String) async throws {
+    let file = try uploadFile(Data(repeating: 42, count: 100))
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let fixture = UploadFixture()
+    let gate = UploadResponseGate()
+    await fixture.configure(honorCancellation: true)
+    let endpoint = BridgeAttachmentUploadEndpoint(capabilities: ["sessions.reply", "sessions.attach"], isLocal: true,
+                                                  validateConnection: { try await fixture.validate() }, send: { operation in
+                                                      let result = try await fixture.send(operation)
+                                                      if operation.op == heldOperation {
+                                                          await gate.holdResponse()
+                                                      }
+                                                      return result
+                                                  }, uploadBlob: { _, _ in UUID() })
+    let task = Task { try await BridgeAttachmentUploader().upload(file: file, existingCount: 0, endpoint: endpoint) }
+    await gate.waitForRequest()
+    task.cancel()
+    await gate.releaseResponse()
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await !gate.requestWasCancelled)
+    #expect(await fixture.operations.last == "attachment.discard")
+}
+
 @Test func fastAttachmentAcknowledgmentsDoNotFloodTheUIWithProgressUpdates() async throws {
     let file = try uploadFile(Data(repeating: 42, count: 300_000))
     defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
