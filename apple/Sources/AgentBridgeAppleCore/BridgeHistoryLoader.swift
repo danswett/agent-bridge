@@ -5,25 +5,38 @@ import Observation
 /// invalidates its result without cancelling a shared host connection.
 @MainActor @Observable
 public final class BridgeHistoryLoader {
+    public enum Subject: Sendable { case session, delegate }
     public private(set) var value: JSONValue?
     public private(set) var isLoading = false
     public private(set) var hasLoaded = false
     public private(set) var error: String?
     public private(set) var loadedAt: Date?
+    public private(set) var isMissing = false
+    public var shouldRetry: Bool {
+        error != nil && !isMissing
+    }
 
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var pending: (@MainActor () async throws -> JSONValue)?
+    private struct Pending {
+        let load: @MainActor () async throws -> JSONValue
+        let onValue: @MainActor (JSONValue) -> Void
+    }
+
+    @ObservationIgnored private var pending: Pending?
+    @ObservationIgnored private let subject: Subject
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var sessionID: String?
     @ObservationIgnored private var active = false
 
-    public init() {}
+    public init(subject: Subject = .session) {
+        self.subject = subject
+    }
 
     public func activate(sessionID: String) {
         generation = UUID()
         active = true
         if self.sessionID != sessionID {
-            value = nil; error = nil; loadedAt = nil; hasLoaded = false
+            value = nil; error = nil; loadedAt = nil; hasLoaded = false; isMissing = false
         }
         self.sessionID = sessionID
     }
@@ -35,8 +48,14 @@ public final class BridgeHistoryLoader {
     }
 
     public func refresh(load: @escaping @MainActor (String) async throws -> JSONValue) {
+        refresh(load: load, onValue: { _ in })
+    }
+
+    public func refresh(load: @escaping @MainActor (String) async throws -> JSONValue,
+                        onValue: @escaping @MainActor (JSONValue) -> Void)
+    {
         guard active, let sessionID else { return }
-        pending = { try await load(sessionID) }
+        pending = Pending(load: { try await load(sessionID) }, onValue: onValue)
         guard task == nil else { return }
         isLoading = true
         task = Task { await drain() }
@@ -48,22 +67,26 @@ public final class BridgeHistoryLoader {
             let token = generation
             let expected = sessionID
             error = nil
+            isMissing = false
             do {
-                let response = try await request()
+                let response = try await request.load()
                 guard active, token == generation else { continue }
                 if response["missing"]?.bool == true {
                     value = nil
-                    error = "This session has ended."
+                    isMissing = true
+                    error = subject == .session ? "This session has ended." : "This delegate is no longer available."
+                    request.onValue(response)
                 } else if response["id"]?.string != expected {
-                    error = "The host returned details for a different session."
+                    error = subject == .session ? "The host returned details for a different session." : "The host returned details for a different delegate."
                 } else {
                     value = response
                     loadedAt = .now
+                    request.onValue(response)
                 }
                 hasLoaded = true
             } catch {
                 guard active, token == generation else { continue }
-                self.error = "Couldn’t load tool history: \(error.localizedDescription)"
+                self.error = "Couldn’t load \(subject == .session ? "tool history" : "delegate details"): \(error.localizedDescription)"
             }
         }
         isLoading = false
