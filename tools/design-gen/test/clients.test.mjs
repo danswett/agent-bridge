@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { repoRoot } from '../generate.mjs';
 
@@ -34,4 +34,11 @@ test('the PWA loads the generated tokens before its own stylesheet, and keeps th
   const tokens = html.indexOf('href="design/tokens.css"');
   assert.ok(tokens > 0 && tokens < html.indexOf('href="app.css"'));
   assert.match(read('pwa/sw.js'), /'\.\/design\/tokens\.css', '\.\/design\/sprite\.svg'/);
+});
+
+test('no colour copied by hand while the generator was missing is left in the PWA', () => {
+  // U1 (#164) marked its stand-ins TODO(#177); the generated tokens replace them.
+  const files = ['pwa/app.css', 'pwa/index.html', ...readdirSync(path.join(repoRoot, 'pwa/js'), { recursive: true })
+    .map((f) => `pwa/js/${String(f).split(path.sep).join('/')}`).filter((f) => f.endsWith('.js'))];
+  assert.deepEqual(files.filter((f) => read(f).includes('TODO(#177)')), []);
 });
