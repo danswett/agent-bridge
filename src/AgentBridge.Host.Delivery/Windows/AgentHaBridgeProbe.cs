@@ -65,6 +65,79 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
         return tasks is null ? "whether agent-ha-bridge's own Dev Box keep-awake is on could not be checked, so this host stands back rather than be a second writer to the schedule" : null;
     }
 
+    // For as long as a pass of this host's runs, the mutex each of agent-ha-bridge's keep-awake
+    // passes takes (Local\<its task name>) for every keep-awake task registered here, so that a
+    // pass of it started meanwhile (a rollback re-enables and starts its task) finds one running
+    // and exits without a cloud call, as its own second pass would. Null when a pass of it holds
+    // one now, or the scheduler cannot be read.
+    public IDisposable? HoldKeepAwake() =>
+        KeepAwakeTasks() is { } tasks ? HoldMutexes([.. tasks.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)]) : null;
+
+    // A mutex belongs to the thread that took it and a pass awaits across threads, so they are
+    // taken, held and let go on a thread of their own.
+    internal static IDisposable? HoldMutexes(IReadOnlyList<string> names)
+    {
+        if (names.Count == 0) { return new Held(null, null); }
+        var taken = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim();
+        var thread = new Thread(() =>
+        {
+            var held = new List<Mutex>();
+            try
+            {
+                foreach (var name in names)
+                {
+                    Mutex mutex;
+                    // One that exists under an owner that will not share it is a pass of someone's.
+                    try { mutex = new Mutex(false, @"Local\" + name); }
+                    catch (Exception e) when (e is UnauthorizedAccessException or IOException or WaitHandleCannotBeOpenedException) { taken.TrySetResult(false); return; }
+                    bool got;
+                    try { got = mutex.WaitOne(0); }
+                    catch (AbandonedMutexException) { got = true; }
+                    if (!got) { mutex.Dispose(); taken.TrySetResult(false); return; }
+                    held.Add(mutex);
+                }
+                taken.TrySetResult(true);
+                release.Wait();
+            }
+            catch (Exception e) { taken.TrySetException(e); }
+            finally
+            {
+                foreach (var mutex in held)
+                {
+                    mutex.ReleaseMutex();
+                    mutex.Dispose();
+                }
+            }
+        }) { IsBackground = true, Name = "keep-awake mutexes" };
+        thread.Start();
+        bool ok;
+        try { ok = taken.Task.GetAwaiter().GetResult(); }
+        catch
+        {
+            thread.Join();
+            release.Dispose();
+            throw;
+        }
+        if (ok) { return new Held(release, thread); }
+        thread.Join();
+        release.Dispose();
+        return null;
+    }
+
+    sealed class Held(ManualResetEventSlim? release, Thread? thread) : IDisposable
+    {
+        int disposed;
+
+        public void Dispose()
+        {
+            if (release is null || Interlocked.Exchange(ref disposed, 1) == 1) { return; }
+            release.Set();
+            thread!.Join();
+            release.Dispose();
+        }
+    }
+
     // Whether that installation's daemon itself was seen running: unlike Active, not knowing is not
     // a yes here, and nor is its supervisor or task alone (either can run while the daemon fails
     // to start), nor another installation's daemon. Rollback is done only once it has seen this

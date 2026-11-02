@@ -250,9 +250,10 @@ public sealed class SettingsViewModel : Observable
     // sessions it runs. Applies at once.
     public bool ShowDevBox => Status?.DevBox is not null;
 
-    // While changes are on their way, the last one asked for (1 on, 0 off, -1 none), so a switch
-    // turned on and straight back off is not taken for no change (the host's status still says
-    // off) and left on. Sent one at a time, each with what was asked last.
+    // While changes are on their way, and until the host's status says what it last acknowledged,
+    // the value asked for (1 on, 0 off, -1 none): otherwise a switch turned on and straight back
+    // off, or off again after the reply but before its status event, is taken for no change and
+    // left on. Sent one at a time, each with what was asked last.
     int keepAwakeWanted = -1;
     int keepAwakePending;
     readonly SemaphoreSlim keepAwakeGate = new(1, 1);
@@ -268,17 +269,35 @@ public sealed class SettingsViewModel : Observable
             _ = RunAsync(async () =>
             {
                 await keepAwakeGate.WaitAsync();
+                SettingsResult? saved = null;
                 try
                 {
-                    if (Volatile.Read(ref keepAwakeWanted) is var w and >= 0) { await host.CallAsync(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: w == 1)); }
+                    if (Volatile.Read(ref keepAwakeWanted) is var w and >= 0)
+                    {
+                        saved = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: w == 1));
+                    }
                 }
                 finally
                 {
                     keepAwakeGate.Release();
-                    // The last one in: the switch shows what the host has now.
-                    if (Interlocked.Decrement(ref keepAwakePending) == 0) { Volatile.Write(ref keepAwakeWanted, -1); }
+                    // The last one in: the switch shows what the host acknowledged until its status
+                    // says so too, or the host's word when nothing was acknowledged.
+                    if (Interlocked.Decrement(ref keepAwakePending) == 0)
+                    {
+                        Volatile.Write(ref keepAwakeWanted, saved is null ? -1 : saved.Settings.DevBoxKeepAwake ? 1 : 0);
+                        CaughtUp();
+                    }
                 }
             });
+        }
+    }
+
+    // The host's status now says what it acknowledged: from here the switch follows the host.
+    void CaughtUp()
+    {
+        if (Volatile.Read(ref keepAwakePending) == 0 && Status?.Settings.DevBoxKeepAwake is { } now && Volatile.Read(ref keepAwakeWanted) == (now ? 1 : 0))
+        {
+            Volatile.Write(ref keepAwakeWanted, -1);
         }
     }
 
@@ -331,6 +350,7 @@ public sealed class SettingsViewModel : Observable
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
         if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
+        CaughtUp();
         DrawDevices();
         RaiseAll();
     }

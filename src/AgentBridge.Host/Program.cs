@@ -664,7 +664,10 @@ KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
     FindIdentity = FindDevBox,
     Token = new AzCliToken(new BatchFileRunner(new CommandRunner()), AzCliToken.Find),
     Http = http,
-    Lock = new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+    Lock = OperatingSystem.IsWindows()
+        ? new KeepAwakeLocks(new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+            new DelegateKeepAwakeLock(() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().HoldKeepAwake() : null))
+        : new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
     AgentHaBridgeKeepAwake = KeepAwakeOwner,
 }, Log);
 

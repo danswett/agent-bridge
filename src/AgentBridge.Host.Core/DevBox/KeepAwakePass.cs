@@ -74,8 +74,11 @@ public static class KeepAwakePass
             // whole pass down on 15 of 24 passes on 2026-10-02/03, so a Dev Box simply still
             // connected looked exactly like an expired login.
             if (scheduled is not { } at) { continue; }
-            var hoursAway = Math.Round((at - now).TotalHours, 2);
-            if (hoursAway > ActionableHours)
+            // Compared unrounded, shown rounded: agent-ha-bridge rounded first, so a stop 24 h and a
+            // few seconds away read as 24, both levers were refused, and it reported blocked.
+            var away = (at - now).TotalHours;
+            var hoursAway = Math.Round(away, 2);
+            if (away > ActionableHours)
             {
                 outcomes.Add(new(KeepAwakeResult.Safe, $"'{name}' is {Hours(hoursAway)}h away (> 24h); already safe"));
                 continue;

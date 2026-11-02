@@ -151,6 +151,12 @@ public sealed class DevBoxTests : IDisposable
         Assert.Equal(HttpMethod.Get, call.Method);
         Assert.Equal("https://tenant-fake-dc.westus3.devcenter.azure.com/projects/FakeProject/users/me/devboxes/fake-box/actions?api-version=2024-02-01", call.Uri);
         Assert.Equal(Token, call.Token);
+
+        // Just past 24 hours is past it, though it rounds to 24.00: neither lever would be accepted,
+        // and trying both would report a false blocked.
+        var edge = new FakeDevCenter { Answer = Serving(Actions(Stop("2026-10-01T22:00:10Z"))) };
+        Assert.Equal(KeepAwakeResult.Safe, (await Pass(edge)).Outcome);
+        Assert.Empty(edge.Posts);
     }
 
     [Fact]
@@ -399,6 +405,32 @@ public sealed class DevBoxTests : IDisposable
         Assert.Single(dc.Calls, c => c.Method == HttpMethod.Get);
         // Once it is done, the next pass runs.
         Assert.Equal(KeepAwakeResult.Skipped, (await second.PassAsync()).Outcome);
+    }
+
+    [Fact]
+    public async Task A_pass_takes_every_lock_or_none_and_lets_go_of_those_it_took()
+    {
+        var dc = new FakeDevCenter { Answer = Serving(Actions()) };
+        var file = new FileKeepAwakeLock(Path.Combine(root, "devbox-keepawake.lock"));
+        IDisposable? legacyPass = null;
+        var service = new KeepAwakeService(new KeepAwakeOptions
+        {
+            Settings = new DevBoxSettings { KeepAwake = true },
+            FindIdentity = () => (Box, null),
+            Token = new FakeToken(),
+            Http = dc,
+            // As the host holds agent-ha-bridge's pass mutex: unavailable while a pass of it runs.
+            Lock = new KeepAwakeLocks(file, new DelegateKeepAwakeLock(() => legacyPass is null ? new MemoryStream() : null)),
+        }, log.Add);
+
+        legacyPass = new MemoryStream();
+        Assert.Equal(KeepAwakeResult.Busy, (await service.PassAsync()).Outcome);
+        Assert.Empty(dc.Calls);
+        // The lock file was let go again, not held by the pass that did not run.
+        using (var free = file.TryTake()) { Assert.NotNull(free); }
+
+        legacyPass = null;
+        Assert.Equal(KeepAwakeResult.NoAction, (await service.PassAsync()).Outcome);
     }
 
     [Fact]

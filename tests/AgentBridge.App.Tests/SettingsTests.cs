@@ -153,15 +153,18 @@ public sealed class SettingsTests : IAsyncLifetime
         settings.DevBoxKeepAwake = true;
         await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "host.settings");
         Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("devBoxKeepAwake").GetBoolean());
-        // Turned on and straight back off before the host's status says either: off is what is
-        // kept, not lost as no change.
-        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
-        await host.SendAsync(HostOps.StatusEvent, host.Status);
-        await Wait.UntilAsync(() => !settings.DevBoxKeepAwake, "the host's word");
+        // Acknowledged, but the host's status event has not come yet: the switch says on, and
+        // turning it off then is a change, not lost as none.
+        Assert.True(settings.DevBoxKeepAwake);
+        settings.DevBoxKeepAwake = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2 && !settings.Busy, "the change back");
+        Assert.False(host.Sent(HostOps.Settings)[1].GetProperty("devBoxKeepAwake").GetBoolean());
+        // Turned on and straight back off before either is answered: off is what is kept.
         settings.DevBoxKeepAwake = true;
         settings.DevBoxKeepAwake = false;
-        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 3 && !settings.Busy, "both changes");
-        Assert.False(host.Sent(HostOps.Settings)[2].GetProperty("devBoxKeepAwake").GetBoolean());
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 4 && !settings.Busy, "both changes");
+        Assert.False(host.Sent(HostOps.Settings)[3].GetProperty("devBoxKeepAwake").GetBoolean());
+        Assert.False(settings.DevBoxKeepAwake);
 
         // A pass that failed is said in words a person can act on.
         host.Status = FakeHost.StatusOf() with

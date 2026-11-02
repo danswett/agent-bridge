@@ -3,7 +3,9 @@ namespace AgentBridge.Host.Core.DevBox;
 // One pass at a time, across every profile and process of this user: two hosts (a profile beside
 // the default one, say) each moving the same Dev Box's schedule would be two writers to it. A
 // lock file rather than agent-ha-bridge's named mutex, because a mutex belongs to the thread that
-// took it and a pass awaits across threads. Taken without waiting: a pass that finds one running
+// took it and a pass awaits across threads; on Windows the host also holds agent-ha-bridge's own
+// pass mutexes (AgentHaBridgeProbe.HoldKeepAwake), so a pass of its task started meanwhile, by a
+// rollback say, exits without a cloud call. Taken without waiting: a pass that finds one running
 // has nothing left to do.
 public interface IKeepAwakeLock
 {
@@ -27,6 +29,49 @@ public sealed class FileKeepAwakeLock(string path) : IKeepAwakeLock
     static bool Held(IOException e) => OperatingSystem.IsWindows()
         ? e.HResult is unchecked((int)0x80070020) or unchecked((int)0x80070021)
         : e.HResult is 11 or 35;
+}
+
+// Several locks taken as one: all of them, or none (those taken are let go), in order.
+public sealed class KeepAwakeLocks(params IKeepAwakeLock[] locks) : IKeepAwakeLock
+{
+    public IDisposable? TryTake()
+    {
+        var taken = new List<IDisposable>();
+        try
+        {
+            foreach (var l in locks)
+            {
+                if (l.TryTake() is not { } held)
+                {
+                    Release(taken);
+                    return null;
+                }
+                taken.Add(held);
+            }
+        }
+        catch
+        {
+            Release(taken);
+            throw;
+        }
+        return new All(taken);
+    }
+
+    static void Release(List<IDisposable> taken)
+    {
+        for (var i = taken.Count - 1; i >= 0; i--) { taken[i].Dispose(); }
+        taken.Clear();
+    }
+
+    sealed class All(List<IDisposable> taken) : IDisposable
+    {
+        public void Dispose() => Release(taken);
+    }
+}
+
+public sealed class DelegateKeepAwakeLock(Func<IDisposable?> take) : IKeepAwakeLock
+{
+    public IDisposable? TryTake() => take();
 }
 
 // What the keep-awake needs from the machine, so tests stand in for all of it.
@@ -189,7 +234,7 @@ public sealed class KeepAwakeService : IAsyncDisposable
             {
                 return Record(new(KeepAwakeResult.Failed, $"the keep-awake lock could not be taken ({e.Message}); no Dev Center call was made"));
             }
-            if (held is null) { return Record(new(KeepAwakeResult.Busy, "another keep-awake pass is running; no Dev Center call was made")); }
+            if (held is null) { return Record(new(KeepAwakeResult.Busy, "another keep-awake pass is running (this host's or agent-ha-bridge's); no Dev Center call was made")); }
         }
         using (held)
         {

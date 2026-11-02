@@ -43,4 +43,28 @@ public sealed class AgentHaBridgeProbeTests
 
         Assert.Contains($"{name} (a pass is running)", new AgentHaBridgeProbe().KeepAwakeActive());
     }
+
+    // A rollback re-enables and starts agent-ha-bridge's keep-awake task, perhaps while a pass of
+    // this host's is in flight: holding that task's own pass mutex makes its pass exit untouched,
+    // as its own second pass would, and one of its passes already running keeps the host's out.
+    [Fact]
+    public async Task A_pass_of_the_hosts_holds_agent_ha_bridges_pass_mutex_and_none_starts_while_one_of_its_runs()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var name = "AgentBridgeDevBoxKeepAwake_" + Guid.NewGuid().ToString("N");
+
+        using (var held = AgentHaBridgeProbe.HoldMutexes([name]))
+        {
+            Assert.NotNull(held);
+            // agent-ha-bridge's worker: Mutex(false, Local\<task>).WaitOne(0), on a thread of its own.
+            Assert.False(await Task.Run(() => { using var m = new Mutex(false, @"Local\" + name); return m.WaitOne(0); }));
+        }
+        using (var legacy = new Mutex(true, @"Local\" + name))
+        {
+            Assert.Null(AgentHaBridgeProbe.HoldMutexes([name]));
+            legacy.ReleaseMutex();
+        }
+        using var free = AgentHaBridgeProbe.HoldMutexes([name]);
+        Assert.NotNull(free);
+    }
 }
