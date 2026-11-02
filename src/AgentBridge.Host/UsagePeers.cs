@@ -24,6 +24,8 @@ public sealed class UsagePeers : IAsyncDisposable
     readonly TimeProvider time;
     readonly Dictionary<string, DateTimeOffset> asked = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTimeOffset> seen = new(StringComparer.Ordinal);
+    // The link seen was recorded on.
+    Link? seenOn;
     readonly Dictionary<string, string> said = new(StringComparer.Ordinal);
     readonly SemaphoreSlim pass = new(1, 1);
     readonly SemaphoreSlim wake = new(0, 1);
@@ -93,6 +95,9 @@ public sealed class UsagePeers : IAsyncDisposable
         {
             store.Prune();
             if (Volatile.Read(ref link) is not { } l) { return 0; }
+            // A new link (a reconnect): every host on it has appeared anew, so each is asked once
+            // the minimum gap since it was last asked allows, not at the next five minutes.
+            if (!ReferenceEquals(seenOn, l)) { seen.Clear(); seenOn = l; }
             ForgetGone(l.Relay);
             var now = time.GetUtcNow();
             var hosts = l.Relay.Presence.Where(p => p.Kind == HostKind && p.Id != me && p.Id != l.Relay.DeviceId).ToList();

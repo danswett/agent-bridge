@@ -378,11 +378,18 @@ public sealed partial class MainViewModel : Observable
                 .Where(m => m.IsLocal || account is not { Length: > 0 } || m.ListedFor is null || m.ListedFor == account)
                 .SelectMany(m => UsageMerge.ReadOn(
                     m.IsLocal && heldOver is not null ? new UsageReport([.. m.Host.Usage.Agents.Where(a => a.ReadBy is null)]) : m.Host.Usage,
-                    m.Host.Hello?.Machine).Agents)]),
+                    Reader(m)).Agents.Where(a => a.ReadBy is not null))]),
             LocalMachineId,
             account,
             roster is { } r && account is { Length: > 0 } && (r.From is null || r.From == account) ? r.Members : null);
     }
+
+    // Which machine a machine's own readings were taken by. Its hello says, while connected; a
+    // channel that has dropped clears that but keeps the last report, which is still that machine's:
+    // its relay device id (or, for this one, its own), so a reading kept is never left unattributed,
+    // unshown as "read on" and beyond a forget. None known: its own readings are left out.
+    MachineInfo? Reader(Machine m) => m.Host.Hello?.Machine
+        ?? ((m.IsLocal ? LocalMachineId : m.Key) is { } id ? new MachineInfo(id, m.Name, "", "") : null);
 
     // The account usage was last kept for, and this machine's host's report from before it named
     // the one it is on now (UpdateUsage).

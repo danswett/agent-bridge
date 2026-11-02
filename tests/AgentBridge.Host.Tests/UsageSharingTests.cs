@@ -214,6 +214,21 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_peer_on_a_new_connection_is_asked_once_a_minute_has_passed_not_at_the_next_five()
+    {
+        var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
+        var vm = await HostAsync("Rehearsal VM", [() => Claude(41.3, Now)]);
+        await SeeAsync(desk.Device, vm.Device.Id);
+        Assert.Equal(1, await desk.Peers.PassAsync());
+
+        // The desk's relay connection is made again; the VM is there on the new one.
+        time.Advance(TimeSpan.FromMinutes(2));
+        desk.Peers.Attach(desk.Device.Relay, desk.Device.Hub);
+        Assert.Equal(1, await desk.Peers.PassAsync());
+        Assert.Equal(0, await desk.Peers.PassAsync());
+    }
+
+    [Fact]
     public void A_newer_reading_from_any_host_replaces_an_older_one_and_an_error_never_replaces_a_fresher_success()
     {
         var store = PeerUsage.Load(null, Id('d'), "1", time);

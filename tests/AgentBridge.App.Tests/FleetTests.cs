@@ -601,6 +601,28 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_machine_whose_channel_drops_keeps_its_name_on_what_it_read_shown_and_kept()
+    {
+        var claude = new UsageReport([new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "c1a0de000000", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "week", Label = "Week", Percent = 41 }] }]);
+        localHost.Status = FakeHost.StatusOf(RelayState.Connected) with { Account = new HostAccount("octo", "1") };
+        localHost.On(UsageProtocol.Subscribe, _ => UsageReport.Empty);
+        remoteHost.On(UsageProtocol.Subscribe, _ => claude);
+        await BothMachinesAsync();
+        await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        await remoteHost.SendAsync(UsageProtocol.Update, claude);
+        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.ReadOn) == "read on Build server" && local.Status?.Account?.AccountId == "1", "the build server's reading");
+
+        // Its channel drops: its hello goes, its last report stays.
+        await remoteHost.StopAsync();
+        await Wait.UntilAsync(() => OnUi(() => main.MachineOf("remote-id")?.Host.Hello) is null, "the build server's channel to drop");
+        Assert.Equal("read on Build server", OnUi(() => Assert.Single(main.Usage.Rows).ReadOn));
+        var restarted = new UsageViewModel(clock, new UsageCache(cacheFile, clock));
+        restarted.Update(UsageReport.Empty, "host-id", account: "1");
+        Assert.Equal("read on Build server", Assert.Single(restarted.Rows).ReadOn);
+    }
+
+    [Fact]
     public async Task Usage_is_merged_across_machines()
     {
         var older = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Source = UsageSource.Api, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "premium", Label = "Premium", Percent = 10 }] };
