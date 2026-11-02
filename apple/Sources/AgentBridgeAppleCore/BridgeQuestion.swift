@@ -168,7 +168,7 @@ public struct BridgeQuestion: Identifiable, Sendable, Equatable {
                 throw BridgeOperationError("A permission prompt accepts only Approve once or Deny.")
             }
         }
-        try BridgeOperationValidation.encodedSize(data, maximum: 16 * 1024)
+        try BridgeAnswerJSONSize.validate(data)
         return BridgeOperation(op: "session.answer", data: data, requestID: requestID)
     }
 }
