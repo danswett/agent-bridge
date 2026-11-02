@@ -560,8 +560,9 @@ public sealed class AutoUpdater
         Changed();
     }
 
-    // Why the host may not be stopped for the install yet, or null. An older host does not know the
-    // op and runs no such probe; a host that does not answer is waited for, not stopped under it.
+    // Why the host may not be stopped for the install yet, or null. Only an older host's "unknown
+    // op" counts as nothing to wait for: it runs no such probe. A refusal, or a host that does not
+    // answer, is waited for, not stopped under it.
     async Task<string?> ProbeBusyAsync()
     {
         try
@@ -569,10 +570,10 @@ public sealed class AutoUpdater
             var held = await host.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: TimeSpan.FromSeconds(10));
             return held.Busy ? held.Why ?? "a usage probe on the host is finishing" : null;
         }
-        catch (HostErrorException) { return null; }
+        catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return null; }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            return $"the host's usage probes could not be asked about: {e.Message}";
+            return $"the host could not say whether a usage probe it started is still finishing: {e.Message}";
         }
     }
 

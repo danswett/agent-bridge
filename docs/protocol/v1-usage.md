@@ -297,7 +297,8 @@ E4). So the host never kills a probe:
   host, so the host is never stopped under it (#238). The app asks the host to hold its probes
   (`host.probes.hold`, [local-pipe.md](local-pipe.md)) before every stop, restart and update: no
   standalone probe starts for the next 15 minutes, and the app waits until any running one has
-  had its answers and its grace, at most 11 minutes, before it stops the host. An update waits
+  had its answers and its grace, at most 11 minutes, before it stops the host; a host that cannot
+  say, or is still busy then, is not stopped (nor ended) at all. An update waits
   for it however long it has waited already, a forced one at six hours too. A host restarting
   itself (`host.restart`) waits the same way, at most 90 s, before it starts its replacement. A
   host stopped by anything else holds its probes and waits for the answers and the grace, at most

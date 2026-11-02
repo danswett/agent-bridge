@@ -504,8 +504,9 @@ public sealed class HostManager
     // Before the host is stopped, by a person, an update or anything else here: it starts no probe
     // whose process goes with it, and one running is let finish its answers and the grace after
     // them. Velopack ends whatever still runs from the package once the 10 s after Stop are up, so
-    // waiting is done here, while the host runs, never after. An older host does not know the op
-    // and runs no such probe; a refusal is the stop's to report.
+    // waiting is done here, while the host runs, never after. Only an older host's "unknown op"
+    // lets the stop go on unconfirmed (it runs no such probe); a host that cannot say, or that is
+    // still busy at ProbeWait, is not stopped at all, and never reaches the kill below.
     async Task ProbesDoneAsync(LocalChannel ch, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + ProbeWait;
@@ -513,8 +514,17 @@ public sealed class HostManager
         {
             ProbeHoldResult held;
             try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, ct: ct); }
-            catch (HostErrorException) { return; }
-            if (!held.Busy || DateTime.UtcNow >= deadline) { return; }
+            catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return; }
+            catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
+            catch (Exception e) when (e is IOException or TimeoutException)
+            {
+                throw new HostBusyException($"the host could not say whether a usage probe it started is still finishing, so it was not stopped: {e.Message}");
+            }
+            if (!held.Busy) { return; }
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new HostBusyException($"the host was not stopped: {held.Why ?? "a usage probe it started is still finishing"}, {ProbeWait.TotalMinutes:0} minutes on; try again later");
+            }
             await Task.Delay(ProbePoll, ct);
         }
     }
@@ -647,6 +657,9 @@ public sealed class WindowsLogonTasks : ILogonTasks
 
 // The host answered a stop or restart with no, and is still running.
 public sealed class HostRefusedException(string reason) : InvalidOperationException(reason);
+
+// The host was not stopped: a usage probe tied to it is still finishing, or it could not say (#238).
+public sealed class HostBusyException(string reason) : InvalidOperationException(reason);
 
 // Another update (Settings', or the automatic one) is stopping the host or being applied.
 public sealed class UpdateUnderWayException() : InvalidOperationException("an update is already being installed");

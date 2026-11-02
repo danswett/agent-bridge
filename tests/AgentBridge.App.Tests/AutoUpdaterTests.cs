@@ -207,6 +207,26 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_host_that_cannot_confirm_its_usage_probe_is_done_is_neither_asked_to_stop_nor_ended()
+    {
+        await StartAsync();
+
+        // Still finishing when the wait is up.
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => manager.StopAsync());
+        Assert.Contains("Codex's app-server is still finishing", busy.Message, StringComparison.Ordinal);
+
+        // Or failing the question.
+        host.On(HostOps.ProbeHold, _ => throw new InvalidOperationException("the probes could not be looked at"));
+        await Assert.ThrowsAsync<HostRefusedException>(() => manager.StopAsync());
+
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_read_only_host_beside_a_running_agent_ha_bridge_updates_when_idle_like_any_other()
     {
         var status = FakeHost.StatusOf(agentHaBridge: "agent-ha-bridge's daemon is running") with

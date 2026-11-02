@@ -348,7 +348,9 @@ into one folder with one version. An app update is a host update, so they never 
   restart), the app asks it to hold its usage probes (`host.probes.hold`) and waits until no
   Codex app-server it started to read Codex's allowance is still answering or in its grace
   (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
-  out. An install that is due waits a tick at a time for that, the six-hour one too, and the host
+  out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
+  the stop fails and says why. An install that is due waits a tick at a time for that, the
+  six-hour one too, and the host
   starts no new probe meanwhile.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
