@@ -138,9 +138,10 @@ export class SessionListView {
           card.update(s);
         }
         card.setPinned(isPinned);
-        if (!keep(entry)) { continue; }
-        // On screen, its news is seen as it comes; otherwise its row gets the dot.
+        // On screen, its news is seen as it comes; otherwise its row gets the dot. A session's
+        // view stays on screen while search hides its row, so this comes before search's say.
         if (card.selected && this.viewing()) { this.order.markSeen(key, s.updatedAt); }
+        if (!keep(entry)) { continue; }
         card.setUnread(this.order.unread(key, s.updatedAt));
         want.push(card.element);
         shown += 1;

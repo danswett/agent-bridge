@@ -444,6 +444,25 @@ test('an address naming a session that has not arrived yet shows no other sessio
   await expect(view(page, 'demo-arriving')).toBeVisible();
 });
 
+test('news a session\'s view showed while search hid its row gets no dot once search lets the row back', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  await open(page, CODEX);
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('relay');
+  await expect(row(page, CODEX)).toHaveCount(0);
+  await expect(view(page, CODEX)).toBeVisible();
+  // It changes while its view is the one on screen.
+  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Shown as it came.' } });
+  await expect(view(page, CODEX).locator('.response')).toContainText('Shown as it came.');
+  // Another chosen from the search, then search cleared.
+  await page.locator('.session .row-main').first().click();
+  await expect(view(page, CODEX)).toBeHidden();
+  await page.locator('#search').fill('');
+  await expect(row(page, CODEX)).toBeVisible();
+  await expect(row(page, CODEX).locator('.unread-dot')).toHaveCount(0);
+});
+
 test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the phone', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openDemo(page);
