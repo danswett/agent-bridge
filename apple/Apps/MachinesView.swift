@@ -66,7 +66,7 @@ struct MachinesView: View {
             .sheet(item: $usageHost) { host in
                 NavigationStack {
                     UsageView(report: host.usage, machineName: host.name, status: host.status,
-                              onRefresh: host.can("usage") ? { @MainActor @Sendable in await Task { await host.refreshUsage() }.value } : nil)
+                              onRefresh: usageRefresh(for: host))
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { usageHost = nil } } }
                 }
                 #if os(macOS)
@@ -77,6 +77,14 @@ struct MachinesView: View {
         #if os(macOS)
         .frame(minWidth: 500, idealWidth: 620, minHeight: 500, idealHeight: 700)
         #endif
+    }
+
+    private func usageRefresh(for host: HostStore) -> (@MainActor () async -> Void)? {
+        guard host.can("usage") else { return nil }
+        return {
+            let request = Task<Void, Never> { @MainActor in await host.refreshUsage() }
+            await request.value
+        }
     }
 }
 
@@ -197,7 +205,10 @@ private struct MachineUpdateView: View {
                             requestTask = nil
                         }
                     }
-                    .disabled(!host.can("update") || attempt.hostInstance != host.instance || requestTask != nil)
+                    .disabled(!host.can("update") || !attempt.canRetry || attempt.hostInstance != host.instance || requestTask != nil)
+                    if !attempt.canRetry {
+                        Text("The retry window ended. Check the update at the machine.").font(.caption).foregroundStyle(.secondary)
+                    }
                 } else if let result = attempt.result {
                     Text(result["outcome"]?.string == "accepted"
                         ? "Request accepted. The machine will report its progress here."
