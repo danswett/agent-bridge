@@ -19,6 +19,9 @@ public sealed class MachineChoice : Observable
     // Null for every machine.
     public string? Key { get; }
     public string Label { get => label; internal set => Set(ref label, value); }
+    // The machine tabs' words (ui.md §6.1): All, or the machine's name.
+    public string Short { get => shortLabel; internal set => Set(ref shortLabel, value); }
+    string shortLabel = "";
     public override string ToString() => label;
 }
 
@@ -71,6 +74,8 @@ public sealed partial class MainViewModel : Observable
         {
             if (value is null || !Set(ref selected, value)) { return; }
             Refilter();
+            // The session open stays open only while its row is listed.
+            if (open is not null && !Visible(open)) { Selected = null; }
             Raise(nameof(Empty));
             Raise(nameof(EmptyText));
         }
@@ -141,6 +146,7 @@ public sealed partial class MainViewModel : Observable
             if (at != i) { OfflineMachines.Move(at, i); }
         }
         Raise(nameof(ShowOfflineMachines));
+        SyncMachineRows();
     }
 
     // The account's other machines whose updates can be seen and asked for (#51): those whose
@@ -149,7 +155,17 @@ public sealed partial class MainViewModel : Observable
     public bool ShowMachineUpdates => MachineUpdates.Count > 0;
     public bool CanCheckAll => MachineUpdates.Any(u => u.CanCheck) || CheckLocal is not null;
     // This machine's own check, for Check all: its updater's, which Settings shows. Set by the app.
-    public Action? CheckLocal { get; set; }
+    public Action? CheckLocal
+    {
+        get => checkLocal;
+        set
+        {
+            checkLocal = value;
+            Raise(nameof(CanCheckAll));
+            SyncMachineRows();
+        }
+    }
+    Action? checkLocal;
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
     // Check all: every machine listed, and this one.
@@ -175,6 +191,7 @@ public sealed partial class MainViewModel : Observable
         else { row.Changed(); }
         Raise(nameof(ShowMachineUpdates));
         Raise(nameof(CanCheckAll));
+        SyncMachineRows();
     }
 
     // What the Sessions page says about the account's other machines, when there is something.
@@ -249,6 +266,7 @@ public sealed partial class MainViewModel : Observable
         if (MachineOf(key) is not { IsLocal: false } m) { return; }
         foreach (var (id, card) in byId.Where(p => owner[p.Value] == m).ToList())
         {
+            Deselect(card);
             byId.Remove(id);
             owner.Remove(card);
             card.Detach();
@@ -291,12 +309,14 @@ public sealed partial class MainViewModel : Observable
     {
         foreach (var choice in Machines)
         {
-            if (choice.Key is null) { choice.Label = "All machines"; continue; }
+            if (choice.Key is null) { choice.Label = "All machines"; choice.Short = "All"; continue; }
             if (MachineOf(choice.Key) is not { } m) { continue; }
+            choice.Short = m.Name;
             var count = byId.Values.Count(c => owner[c] == m);
             var state = m.Host.State == LinkState.Connected ? Words.Plural(count, "session", "sessions") : "connecting…";
             choice.Label = $"{m.Name}{(m.IsLocal ? " (this machine)" : "")} · {state}";
         }
+        SyncMachineRows();
     }
 
     // A toast or the tray asked for this session: the window shows it.
@@ -322,7 +342,7 @@ public sealed partial class MainViewModel : Observable
         launchOpens.Remove(wanted);
         // A card the picker hides is shown: it is what was asked for.
         if (!Visible(card)) { SelectedMachine = Machines[0]; }
-        card.Folded = false;
+        Selected = card;
         OpenRequested?.Invoke(card);
     }
 
@@ -450,6 +470,7 @@ public sealed partial class MainViewModel : Observable
     void OnRemoved(Machine m, string id)
     {
         if (!byId.Remove(CardKey(m.Key, id), out var card)) { return; }
+        Deselect(card);
         owner.Remove(card);
         card.Detach();
         Sessions.Remove(card);

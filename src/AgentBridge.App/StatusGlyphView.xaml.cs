@@ -32,7 +32,7 @@ public sealed partial class StatusGlyphView : UserControl
     {
         InitializeComponent();
         Loaded += (_, _) => { Listen(); role = null; Apply(); };
-        // Loaded and Unloaded can come in either order when a control is moved (SessionCard).
+        // Loaded and Unloaded can come in either order when a control is moved (SessionRow).
         Unloaded += (_, _) => { if (!IsLoaded) { Unlisten(); Stop(); } };
         // The setters' ThemeResources are read as a state is entered: entered again, they are the
         // new theme's.

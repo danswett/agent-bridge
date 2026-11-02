@@ -22,6 +22,16 @@
             <Style x:Key="AbSectionTitle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
                 <Setter Property="Margin" Value="0,12,0,4" />
             </Style>
+            <!-- A subtle icon button for a header's actions (ui.md §7): 32×32, the desktop's smallest
+                 target (§9), no fill until the pointer is over it. Its icon is a design icon at 16. -->
+            <Style x:Key="AbIconButton" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                <Setter Property="Width" Value="32" />
+                <Setter Property="Height" Value="32" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorTransparentBrush}" />
+                <Setter Property="CornerRadius" Value="{StaticResource AbRadiusControl}" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

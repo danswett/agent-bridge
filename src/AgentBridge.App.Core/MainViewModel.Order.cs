@@ -62,19 +62,7 @@ public sealed partial class MainViewModel
         return true;
     }
 
-    void Hook(SessionCardViewModel card)
-    {
-        card.Row = new RowActions(this, card);
-        // Opened, its news has been seen.
-        card.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(SessionCardViewModel.Folded) && !card.Folded && owner.ContainsKey(card))
-            {
-                Order.MarkSeen(KeyOf(card), card.Session.UpdatedAt);
-                card.Unread = false;
-            }
-        };
-    }
+    void Hook(SessionCardViewModel card) => card.Row = new RowActions(this, card);
 
     // The cards shown, in order, with the group headers, the dots and the Ended group. Rows move
     // only when the arrangement says so, and an update never moves one while someone types in any
@@ -99,7 +87,8 @@ public sealed partial class MainViewModel
         {
             c.Pinned = pins.Contains(c);
             var key = KeyOf(c);
-            if (!c.Folded) { Order.MarkSeen(key, c.Session.UpdatedAt); }
+            // The row open in the session pane sees its news as it comes (ui.md §6.1, Unread).
+            if (c == open) { Order.MarkSeen(key, c.Session.UpdatedAt); }
             c.Unread = Order.Unread(key, c.Session.UpdatedAt);
         }
         // Headings by the order on screen, which a held update leaves as it was.

@@ -133,6 +133,34 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal(["here"], main.Sessions.Select(c => c.Id));
     }
 
+    [Fact]
+    public async Task With_more_than_one_machine_a_row_names_its_machine_and_the_tabs_name_each_machine_short()
+    {
+        await BothMachinesAsync();
+        var there = Card("there")!;
+
+        Assert.Equal("Build server", TestUi.Read(() => there.RowPlace));
+        Assert.EndsWith(" · Build server", TestUi.Read(() => there.RowFacts));
+        Assert.StartsWith("Build server · ", TestUi.Read(() => there.HeaderPlace));
+        Assert.Equal(["All", "Test PC", "Build server"], TestUi.Read(() => main.Machines.Select(m => m.Short).ToList()));
+    }
+
+    [Fact]
+    public async Task A_machine_tab_that_hides_the_open_session_closes_it_and_one_that_still_lists_it_keeps_it_open()
+    {
+        await BothMachinesAsync();
+        ui.Post(() => main.Selected = main.AllCards.Single(c => c.Id == "there"));
+
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
+        Assert.Equal("there", TestUi.Read(() => main.Selected?.Id));
+        ui.Post(() => main.SelectedMachine = main.Machines[0]);
+        Assert.Equal("there", TestUi.Read(() => main.Selected?.Id));
+
+        ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key is not null && m.Key != "remote-id"));
+        Assert.Null(TestUi.Read(() => main.Selected));
+        Assert.False(TestUi.Read(() => Card("there")!.Selected));
+    }
+
     [Theory]
     [InlineData(FleetState.SignedOut)]
     [InlineData(FleetState.Refused)]
@@ -659,6 +687,55 @@ public sealed class FleetTests : IAsyncLifetime
         return now;
     }
 
+    MachineRowViewModel[] Rows() => TestUi.Read(() => main.MachineRows.ToArray());
+
+    [Fact]
+    public async Task The_machines_page_lists_this_machine_then_the_others_then_those_offline_each_with_its_status_trailing_and_at_most_two_facts()
+    {
+        await BothMachinesAsync();
+        link.Known = [Gone("laptop-id", "Travel laptop", 5)];
+        link.Raise();
+        await Wait.UntilAsync(() => Rows().Length == 3, "every machine's row");
+
+        var rows = Rows();
+        Assert.Equal(["Test PC", "Build server", "Travel laptop"], rows.Select(r => r.Name));
+        Assert.Equal(["This machine", "Online", "Offline"], rows.Select(r => r.Status));
+        Assert.Equal(["1 session", "1 session", ""], rows.Select(r => r.Facts));
+        Assert.Equal("Last seen 5m ago", rows[2].Offline!.SeenText);
+        // ui.md §6.1: never an id on a row, and line 2 holds at most two facts.
+        Assert.All(rows, r => Assert.DoesNotContain("-id", r.Facts + r.Name));
+        Assert.All(rows, r => Assert.True(r.Facts.Split(" · ").Length <= 2));
+        Assert.Equal([true, true, false], rows.Select(r => r.CanShowSessions));
+    }
+
+    [Fact]
+    public async Task A_read_only_machines_row_says_view_only_and_keeps_the_hosts_reason_for_its_tooltip_not_the_row()
+    {
+        const string why = "read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
+        await BothMachinesAsync();
+        await Wait.UntilAsync(() => Rows().Any(r => r.Name == "Build server" && r.ViewOnly), "the read-only machine's row");
+
+        var row = Rows().Single(r => r.Name == "Build server");
+        Assert.Equal("1 session · View only", row.Facts);
+        Assert.Equal(why, row.ViewOnlyWhy);
+        Assert.DoesNotContain("read-only", row.Facts);
+        Assert.False(Rows().Single(r => r.Name == "Test PC").ViewOnly);
+    }
+
+    [Fact]
+    public void A_machine_rows_button_names_follow_the_machine_being_renamed()
+    {
+        var row = new MachineRowViewModel("remote-id") { Name = "Connecting machine" };
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.Name = "Build server";
+
+        Assert.Contains(nameof(MachineRowViewModel.ShowSessionsName), raised);
+        Assert.Contains(nameof(MachineRowViewModel.CheckHereName), raised);
+        Assert.Equal("Show the sessions on Build server", row.ShowSessionsName);
+    }
     static KnownMachine Gone(string id, string name, int minutesAgo) => new(id, name, "host", Make.T0.AddMinutes(-minutesAgo));
 
     [Fact]

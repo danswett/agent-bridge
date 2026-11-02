@@ -40,10 +40,10 @@
                         TextWrapping="Wrap" IsTextSelectionEnabled="True"
                         Text="{x:Bind Warning, Mode=OneWay}"
                         Visibility="{x:Bind local:Ui.Show(ShowWarning), Mode=OneWay}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind local:Ui.Show(CanAnswer), Mode=OneWay}">
+                    <local:WrapRow Spacing="8" Visibility="{x:Bind local:Ui.Show(CanAnswer), Mode=OneWay}">
                         <Button Style="{StaticResource AccentButtonStyle}" Content="Trust" AutomationProperties.AutomationId="TrustYes" Click="OnTrust" />
                         <Button Content="Quit" AutomationProperties.AutomationId="TrustNo" Click="OnQuit" />
-                    </StackPanel>
+                    </local:WrapRow>
                     <Button
                         Content="Try again" AutomationProperties.AutomationId="TrustResend"
                         Visibility="{x:Bind local:Ui.Show(ShowResend), Mode=OneWay}" Click="OnTrustResend" />
@@ -71,10 +71,10 @@
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, so a
              column narrower than its MaxWidth was pushed off the right edge. -->
         <Grid>
-            <StackPanel MaxWidth="720" Padding="16,12,16,24" Spacing="12">
-                <TextBlock Style="{StaticResource AbSectionTitle}" AutomationProperties.AutomationId="LaunchTitle" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
+            <StackPanel MaxWidth="720" Padding="24,20,24,24" Spacing="12">
+                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" AutomationProperties.AutomationId="LaunchTitle" Text="{x:Bind ViewModel.Title, Mode=OneWay}" />
                 <ComboBox
-                    x:Name="MachineBox" Tag="machine" Header="Machine" MinWidth="320"
+                    x:Name="MachineBox" Tag="machine" Header="Machine" HorizontalAlignment="Stretch"
                     AutomationProperties.AutomationId="LaunchMachine"
                     ItemTemplate="{StaticResource ChoiceTemplate}"
                     ItemsSource="{x:Bind ViewModel.Machines, Mode=OneWay}"
@@ -106,42 +106,42 @@
                     Visibility="{x:Bind local:Ui.Some(ViewModel.TrustNote), Mode=OneWay}" />
                 <StackPanel Spacing="12" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowForm), Mode=OneWay}">
                     <ComboBox
-                        Tag="resume" Header="Resume" MinWidth="320" AutomationProperties.AutomationId="LaunchResume"
+                        Tag="resume" Header="Resume" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchResume"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Resumes, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Resume, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResume), Mode=OneWay}" />
                     <ComboBox
-                        Tag="agent" Header="Agent" MinWidth="320" AutomationProperties.AutomationId="LaunchAgent"
+                        Tag="agent" Header="Agent" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchAgent"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Agents, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Agent, Mode=OneWay}"
                         SelectionChanged="OnPicked" />
                     <ComboBox
-                        Tag="workspace" Header="Workspace" MinWidth="320" AutomationProperties.AutomationId="LaunchWorkspace"
+                        Tag="workspace" Header="Workspace" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchWorkspace"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Workspaces, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Workspace, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowWorkspace), Mode=OneWay}" />
                     <ComboBox
-                        Tag="profile" Header="Profile" MinWidth="320" AutomationProperties.AutomationId="LaunchProfile"
+                        Tag="profile" Header="Profile" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchProfile"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Profiles, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Profile, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowProfile), Mode=OneWay}" />
                     <ComboBox
-                        Tag="model" Header="Model" MinWidth="320" AutomationProperties.AutomationId="LaunchModel"
+                        Tag="model" Header="Model" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchModel"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Models, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Model, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowModel), Mode=OneWay}" />
                     <ComboBox
-                        Tag="effort" Header="Effort" MinWidth="320" AutomationProperties.AutomationId="LaunchEffort"
+                        Tag="effort" Header="Effort" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchEffort"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Efforts, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Effort, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowEffort), Mode=OneWay}" />
                     <ComboBox
-                        Tag="context" Header="Context" MinWidth="320" AutomationProperties.AutomationId="LaunchContext"
+                        Tag="context" Header="Context" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchContext"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.Contexts, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.Context, Mode=OneWay}"
                         SelectionChanged="OnPicked" Visibility="{x:Bind local:Ui.Show(ViewModel.ShowContext), Mode=OneWay}" />
                     <ComboBox
-                        Tag="permissions" Header="Permissions" MinWidth="320" AutomationProperties.AutomationId="LaunchPermissions"
+                        Tag="permissions" Header="Permissions" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="LaunchPermissions"
                         ItemTemplate="{StaticResource ChoiceTemplate}"
                         ItemsSource="{x:Bind ViewModel.PermissionChoices}" SelectedItem="{x:Bind ViewModel.Permissions, Mode=OneWay}"
                         SelectionChanged="OnPicked" />
@@ -181,14 +181,14 @@
                     Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
                     Foreground="{x:Bind local:Ui.ToneBrush(ViewModel.StatusTone), Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.StatusText), Mode=OneWay}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <local:WrapRow Spacing="8">
                     <Button
                         Content="Try again" AutomationProperties.AutomationId="LaunchResend"
                         Visibility="{x:Bind local:Ui.Show(ViewModel.ShowResend), Mode=OneWay}" Click="OnResend" />
                     <Button
                         Content="Open session" AutomationProperties.AutomationId="LaunchOpen"
                         Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOpen), Mode=OneWay}" Click="OnOpen" />
-                </StackPanel>
+                </local:WrapRow>
                 <Button
                     Content="{x:Bind ViewModel.ReloadText, Mode=OneWay}" AutomationProperties.AutomationId="LaunchReload"
                     IsEnabled="{x:Bind ViewModel.CanReload, Mode=OneWay}"

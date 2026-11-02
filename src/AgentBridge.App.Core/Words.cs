@@ -26,6 +26,28 @@ public static class Words
 
     public static string Plural(int n, string one, string many) => $"{n} {(n == 1 ? one : many)}";
 
+    // A row's age (ui.md §6.1, the mock-ups' "now", "32m", "10h"): how long since the session
+    // last changed, in its largest whole unit.
+    public static string Age(DateTimeOffset at, DateTimeOffset now)
+    {
+        var s = Math.Max(0, (long)Math.Floor((now - at).TotalSeconds));
+        if (s < 60) { return "now"; }
+        var m = s / 60;
+        if (m < 60) { return $"{m}m"; }
+        var h = m / 60;
+        return h < 48 ? $"{h}h" : $"{h / 24}d";
+    }
+
+    // A path or command cut in the middle to at most `most` characters, keeping its start and its
+    // end, the part people tell paths apart by (#214): never broken mid-word onto another line.
+    public static string Middle(string? text, int most)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= most || most < 5) { return text ?? ""; }
+        var tail = (most - 1) / 2 + (most - 1) % 2;
+        var head = most - 1 - tail;
+        return $"{text[..head]}\u2026{text[^tail..]}";
+    }
+
     // "in 25d" / "in 4h" / "in 12m"; "due" once the window has rolled over.
     public static string Until(DateTimeOffset? at, DateTimeOffset now)
     {

@@ -157,7 +157,8 @@ public partial class App : Application
         }
         else { _ = StartFleetAsync(connection, ui, Remote, l => link = l); }
         var launch = new LaunchViewModel(main, ui);
-        window = new MainWindow(main, launch, options.SelfTest is not null);
+        // Where the window was left, kept beside the settings (#180).
+        window = new MainWindow(main, launch, options.SelfTest is not null, Path.Combine(appData, $"{options.Profile}-window.json"));
         window.CloseRequested += OnWindowClosing;
         connection.Start();
 
@@ -336,6 +337,7 @@ public partial class App : Application
         updateTimer?.Stop();
         // What was seen since the last tick's flush (SessionOrder.MarkSeen).
         main?.Order.Flush();
+        window?.SavePlacement();
         // Quit while an update stops the host, or before it is applied: the host comes back now, not
         // at the next sign-in, and no update stops it from here on. (Killed instead, the app's next
         // start does it.)

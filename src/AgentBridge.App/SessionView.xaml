@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.SessionView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:AgentBridge.App"
+    xmlns:core="using:AgentBridge.App.Core">
+    <!-- The session pane (docs/design/ui.md §6.2, §6.4, §6.5): the header with one meta line and its
+         actions; Conversation, Delegates and Tools tabs where there is no inspector; the
+         conversation at the reading measure; and the reply box. Status is the glyph and its words,
+         never an edge or a glow (#178). -->
+    <UserControl.Resources>
+        <!-- The conversation's reading text (§4.3: 15/24), a step larger than the UI around it,
+             including the Markdown a response is drawn from. -->
+        <Style x:Key="AbReadingRich" TargetType="RichTextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="LineHeight" Value="24" />
+            <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        </Style>
+    </UserControl.Resources>
+    <Grid x:Name="ViewRoot">
+        <VisualStateManager.VisualStateGroups>
+            <!-- The status words' colour (ui.md §2.2, §3), as on the row. -->
+            <VisualStateGroup x:Name="Words">
+                <VisualState x:Name="WordsUnset" />
+                <VisualState x:Name="WordsPlain">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText2}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsNeeds">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbNeedsText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsAgent">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbAgentText}" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WordsMuted">
+                    <VisualState.Setters>
+                        <Setter Target="StatusWords.Foreground" Value="{ThemeResource AbText2}" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- The header. -->
+        <Grid Padding="24,20,16,12" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button
+                Style="{StaticResource AbIconButton}"
+                Margin="-8,0,0,0"
+                VerticalAlignment="Top"
+                AutomationProperties.AutomationId="Back"
+                AutomationProperties.Name="Back to sessions"
+                ToolTipService.ToolTip="Back to sessions"
+                Visibility="{x:Bind local:Ui.Show(Layout.ShowBack), Mode=OneWay}"
+                Click="OnBack">
+                <ContentControl Style="{StaticResource AbIconBack}" Width="16" Height="16" />
+            </Button>
+            <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock
+                    Style="{StaticResource AbTypeTitle}"
+                    TextTrimming="CharacterEllipsis"
+                    TextWrapping="NoWrap"
+                    AutomationProperties.HeadingLevel="Level1"
+                    AutomationProperties.AutomationId="SessionTitle"
+                    Text="{x:Bind Card.Title, Mode=OneWay}" />
+                <!-- One meta line (§6.2): glyph · status · machine · repository, on one line so no
+                     separator starts a line (#214); the names in the text face (#215). -->
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <local:StatusGlyphView
+                        VerticalAlignment="Center"
+                        AutomationProperties.AutomationId="StatusGlyph"
+                        Size="16"
+                        Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
+                        Driven="{x:Bind Card.Driven, Mode=OneWay}"
+                        Label="{x:Bind Card.GlyphLabel, Mode=OneWay}" />
+                    <TextBlock
+                        Grid.Column="1"
+                        Style="{StaticResource AbTypeMeta}"
+                        Foreground="{ThemeResource AbText2}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="NoWrap"
+                        ToolTipService.ToolTip="{x:Bind Card.DriverPrincipal, Mode=OneWay}"
+                        AutomationProperties.AutomationId="HeaderMeta">
+                        <Run x:Name="StatusWords" Text="{x:Bind Card.StatusText, Mode=OneWay}" /><Run Text="{x:Bind local:SessionRow.Separator(Card.HeaderPlace), Mode=OneWay}" /><Run Text="{x:Bind Card.HeaderPlace, Mode=OneWay}" />
+                    </TextBlock>
+                </Grid>
+            </StackPanel>
+            <!-- Subtle icon buttons with tooltips (§6.2): Pin, Details, and the inspector. -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Top">
+                <Button
+                    Style="{StaticResource AbIconButton}"
+                    AutomationProperties.AutomationId="HeaderPin"
+                    AutomationProperties.Name="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
+                    ToolTipService.ToolTip="{x:Bind local:SessionView.PinName(Card.Pinned), Mode=OneWay}"
+                    Click="OnPin">
+                    <ContentControl Style="{StaticResource AbIconPin}" Width="16" Height="16" Foreground="{x:Bind local:SessionView.PinBrush(Card.Pinned), Mode=OneWay}" />
+                </Button>
+                <Button
+                    Style="{StaticResource AbIconButton}"
+                    AutomationProperties.AutomationId="Details"
+                    AutomationProperties.Name="Details"
+                    ToolTipService.ToolTip="Details">
+                    <ContentControl Style="{StaticResource AbIconMore}" Width="16" Height="16" />
+                    <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedRight">
+                            <local:SessionDetails x:Name="DetailsFlyout" Width="320" />
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+                <Button
+                    Style="{StaticResource AbIconButton}"
+                    AutomationProperties.AutomationId="ToggleInspector"
+                    AutomationProperties.Name="{x:Bind Layout.InspectorToggleName, Mode=OneWay}"
+                    ToolTipService.ToolTip="{x:Bind Layout.InspectorToggleName, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(Layout.CanToggleInspector), Mode=OneWay}"
+                    Click="OnToggleInspector">
+                    <ContentControl Style="{StaticResource AbIconInspector}" Width="16" Height="16" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Conversation / Delegates / Tools, where there is no inspector (§5.2). Delegates only while
+             the host reports some; U8 (#176) lists them. -->
+        <SelectorBar
+            x:Name="Tabs"
+            Grid.Row="1"
+            Margin="16,0,16,4"
+            AutomationProperties.AutomationId="SessionTabs"
+            Visibility="{x:Bind local:Ui.Show(Layout.ShowTabs), Mode=OneWay}"
+            SelectionChanged="OnTab">
+            <SelectorBarItem x:Name="ConversationTab" Text="Conversation" Tag="Conversation" IsSelected="True" />
+            <SelectorBarItem x:Name="DelegatesTab" Text="Delegates" Tag="Delegates" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegatesTab), Mode=OneWay}" />
+            <SelectorBarItem x:Name="ToolsTab" Text="Tools" Tag="Tools" />
+        </SelectorBar>
+
+        <Grid Grid.Row="2">
+            <!-- The conversation (§6.4): the main agent only, at the reading measure. -->
+            <ScrollViewer
+                x:Name="ConversationScroll"
+                AutomationProperties.AutomationId="Conversation"
+                Visibility="{x:Bind local:Ui.Show(Layout.ShowConversation), Mode=OneWay}">
+                <StackPanel
+                    x:Name="Conversation"
+                    MaxWidth="{StaticResource AbLayoutReadingMax}"
+                    HorizontalAlignment="Left"
+                    Padding="24,8,24,24"
+                    Spacing="24">
+                    <StackPanel.Resources>
+                        <Style TargetType="RichTextBlock" BasedOn="{StaticResource AbReadingRich}" />
+                    </StackPanel.Resources>
+                    <!-- A question, in the stream, in Needs you colours (§6.4). -->
+                    <Border
+                        x:Name="QuestionCard"
+                        Background="{ThemeResource AbNeedsFill}"
+                        CornerRadius="{StaticResource AbRadiusCard}"
+                        Visibility="Collapsed">
+                        <ContentControl x:Name="QuestionHost" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+                    </Border>
+
+                    <InfoBar
+                        Title="Not sent"
+                        Severity="Warning"
+                        IsOpen="{x:Bind Card.HasOrphan, Mode=OneWay}"
+                        Message="{x:Bind Card.OrphanNote, Mode=OneWay}"
+                        Closed="OnOrphanClosed">
+                        <StackPanel Spacing="8" Margin="0,0,0,8">
+                            <TextBox IsReadOnly="True" TextWrapping="Wrap" Text="{x:Bind Card.OrphanText, Mode=OneWay}" />
+                            <Button Content="Copy" Click="OnCopyOrphan" />
+                        </StackPanel>
+                    </InfoBar>
+
+                    <TextBlock
+                        Style="{StaticResource AbTypeRow}"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"
+                        AutomationProperties.AutomationId="Receipt"
+                        Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
+                        Foreground="{x:Bind local:Ui.ToneBrush(Card.ReceiptTone), Mode=OneWay}"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
+
+                    <!-- Your message: a bubble on the right. -->
+                    <Border
+                        HorizontalAlignment="Right"
+                        MaxWidth="560"
+                        Padding="16,10"
+                        Background="{ThemeResource AbCard}"
+                        BorderBrush="{ThemeResource AbStroke}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource AbRadiusCard}"
+                        AutomationProperties.AutomationId="YourMessage"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasUserMessage), Mode=OneWay}">
+                        <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
+                    </Border>
+
+                    <!-- The main agent: a label line, then its words; its reasoning behind a disclosure. -->
+                    <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasResponse), Mode=OneWay}">
+                        <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}">
+                            <Run Text="Main agent" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.AgeText, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock
+                            Style="{StaticResource AbTypeMeta}"
+                            Foreground="{ThemeResource AbText2}"
+                            Text="Earlier text not shown: the response was longer than the machine sends."
+                            Visibility="{x:Bind local:Ui.Show(Card.ResponseTruncated), Mode=OneWay}" />
+                        <local:MarkdownView
+                            x:Name="ResponseView"
+                            AutomationProperties.AutomationId="Response"
+                            Markdown="{x:Bind Card.Response, Mode=OneWay}" />
+                    </StackPanel>
+                    <Expander
+                        Header="Show reasoning"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        AutomationProperties.AutomationId="Reasoning"
+                        Visibility="{x:Bind local:Ui.Show(Card.HasReasoning), Mode=OneWay}">
+                        <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.Reasoning, Mode=OneWay}" />
+                    </Expander>
+
+                    <!-- What it is doing now: the tool glyph, then the call in mono, one weight (#215). -->
+                    <Grid ColumnSpacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasTool), Mode=OneWay}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
+                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" Foreground="{ThemeResource AbText2}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" AutomationProperties.AutomationId="CurrentTool">
+                            <Run Text="{x:Bind Card.ToolName, Mode=OneWay}" Foreground="{ThemeResource AbText}" /><Run Text=" " /><Run Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
+                        </TextBlock>
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Delegates, until U8 (#176): the counts the host reports. -->
+            <StackPanel
+                Padding="24,8,24,24"
+                Spacing="8"
+                AutomationProperties.AutomationId="DelegatesPanel"
+                Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegates), Mode=OneWay}">
+                <TextBlock Style="{StaticResource AbTypeRow}" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
+            </StackPanel>
+
+            <ScrollViewer AutomationProperties.AutomationId="ToolsPanel" Visibility="{x:Bind local:Ui.Show(Layout.ShowTools), Mode=OneWay}">
+                <local:ToolList x:Name="ToolsTabList" Padding="24,8,24,24" />
+            </ScrollViewer>
+        </Grid>
+
+        <!-- The reply box (§6.5): a card with a 2 px Bridge bottom edge, Attach, and Send. Replies only
+             ever go to the main agent. -->
+        <StackPanel
+            Grid.Row="3"
+            Padding="24,0,24,20"
+            Spacing="6"
+            MaxWidth="{StaticResource AbLayoutReadingMax}"
+            HorizontalAlignment="Left"
+            Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}"
+            AutomationProperties.AutomationId="ReplyBox">
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource AbNeedsText}"
+                Text="{x:Bind Card.Reply.HeldText, Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Some(Card.Reply.HeldText), Mode=OneWay, FallbackValue=Collapsed}" />
+            <Border
+                Background="{ThemeResource AbCard}"
+                BorderBrush="{ThemeResource AbBridge}"
+                BorderThickness="0,0,0,2"
+                CornerRadius="{StaticResource AbRadiusCard}"
+                Padding="4,4,8,8">
+                <Border.Resources>
+                    <!-- The card is the field: the box inside has no fill or edge of its own. -->
+                    <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                </Border.Resources>
+                <StackPanel Spacing="4">
+                    <TextBox
+                        x:Name="ReplyBox"
+                        AcceptsReturn="True"
+                        TextWrapping="Wrap"
+                        MinHeight="40"
+                        MaxHeight="240"
+                        PlaceholderText="Message the main agent"
+                        AutomationProperties.AutomationId="ReplyText"
+                        AutomationProperties.Name="Message the main agent"
+                        IsEnabled="{x:Bind local:Ui.Not(Card.Reply.Held), Mode=OneWay, FallbackValue=False}"
+                        Text="{x:Bind Card.Reply.Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="OnEditing"
+                        LostFocus="OnNotEditing"
+                        Paste="OnPaste"
+                        PreviewKeyDown="OnReplyKey" />
+                    <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False" Margin="8,0,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="core:ReplyAttachment">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" Text="{x:Bind Name}" />
+                                    <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
+                                    <Button Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Card.Reply.BytesText, Mode=OneWay}" />
+                        <Button
+                            Grid.Column="1"
+                            Content="Send again"
+                            MinHeight="32"
+                            Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowResend), Mode=OneWay, FallbackValue=Collapsed}"
+                            Click="OnResendReply" />
+                        <Button
+                            Grid.Column="2"
+                            Style="{StaticResource AbIconButton}"
+                            AutomationProperties.AutomationId="Attach"
+                            AutomationProperties.Name="Attach files"
+                            ToolTipService.ToolTip="Attach files"
+                            Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowAttach), Mode=OneWay, FallbackValue=Collapsed}"
+                            IsEnabled="{x:Bind Card.Reply.CanAttach, Mode=OneWay, FallbackValue=False}"
+                            Click="OnAttach">
+                            <ContentControl Style="{StaticResource AbIconAttach}" Width="16" Height="16" />
+                        </Button>
+                        <Button
+                            Grid.Column="3"
+                            Width="32"
+                            Height="32"
+                            Padding="0"
+                            Style="{StaticResource AccentButtonStyle}"
+                            AutomationProperties.AutomationId="SendReply"
+                            AutomationProperties.Name="Send"
+                            ToolTipService.ToolTip="Send (Ctrl+Enter)"
+                            IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
+                            Click="OnSendReply">
+                            <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" />
+                        </Button>
+                    </Grid>
+                </StackPanel>
+            </Border>
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                Foreground="{ThemeResource AbText2}"
+                Text="Line breaks go to the session as spaces: it takes a reply as one line."
+                Visibility="{x:Bind local:Ui.Show(Card.Reply.LineBreakHint), Mode=OneWay, FallbackValue=Collapsed}" />
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                TextWrapping="Wrap"
+                Foreground="{ThemeResource AbDangerText}"
+                Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
+            <TextBlock
+                Style="{StaticResource AbTypeMeta}"
+                TextWrapping="Wrap"
+                IsTextSelectionEnabled="True"
+                AutomationProperties.AutomationId="ReplyStatus"
+                Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
+                Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
+                Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+        </StackPanel>
+    </Grid>
+</UserControl>

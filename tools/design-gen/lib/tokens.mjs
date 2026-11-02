@@ -128,3 +128,71 @@ export function spaces(tokens) {
     return { value: v, css: `--ab-space-${v / unit}`, xaml: `AbSpace${v / unit}` };
   });
 }
+
+const SHADES = ['light3', 'light2', 'light1', 'base', 'dark1', 'dark2', 'dark3'];
+
+// WinUI's accent palette (color.accent.windows): { shade, key, value } for SystemAccentColor and
+// each shade, light2 and dark1 being the bridge role's dark and light colours.
+export function accentShades(tokens) {
+  const own = tokens.color.accent?.windows;
+  if (!own) { return []; }
+  const bridge = tokens.color.role.bridge;
+  const all = { ...own, light2: bridge.dark, dark1: bridge.light };
+  for (const k of Object.keys(own)) {
+    if (!SHADES.includes(k) || k === 'light2' || k === 'dark1') { throw new Error(`color.accent.windows.${k}: expected ${SHADES.filter((s) => s !== 'light2' && s !== 'dark1').join(', ')} (light2 and dark1 are the bridge role's)`); }
+  }
+  return SHADES.map((shade) => {
+    if (all[shade] === undefined) { throw new Error(`color.accent.windows lacks ${shade}`); }
+    parseColor(all[shade]);
+    const suffix = shade === 'base' ? '' : pascal(shade);
+    return { shade, key: `SystemAccentColor${suffix}`, value: all[shade] };
+  });
+}
+
+// The hyperlink brushes WinUI's text and HyperlinkButton read, as theme brushes like the roles':
+// { name, xaml, keys, dark, light, hc }. keys: every WinUI resource the brush stands for.
+export function hyperlinkTokens(tokens) {
+  const link = tokens.color.accent?.hyperlink;
+  if (!link) { return []; }
+  const shades = Object.fromEntries(accentShades(tokens).map((s) => [s.shade, s.value]));
+  const pick = (state, theme) => {
+    const name = link[state]?.[theme];
+    if (name === 'bridge') { return tokens.color.role.bridge[theme]; }
+    if (!(name in shades)) { throw new Error(`color.accent.hyperlink.${state}.${theme}: "${name}" is neither bridge nor a shade`); }
+    return shades[name];
+  };
+  const hc = system(link.hc, 'color.accent.hyperlink.hc');
+  // SystemControlHyperlinkTextBrush is what a Hyperlink in a TextBlock or RichTextBlock draws in.
+  return [
+    { name: 'link', state: 'rest', keys: ['SystemControlHyperlinkTextBrush', 'HyperlinkButtonForeground'] },
+    { name: 'linkPointerOver', state: 'pointerOver', keys: ['HyperlinkButtonForegroundPointerOver'] },
+    { name: 'linkPressed', state: 'pressed', keys: ['HyperlinkButtonForegroundPressed'] },
+  ].map((l) => ({ ...l, dark: pick(l.state, 'dark'), light: pick(l.state, 'light'), hc }));
+}
+
+// The Windows app's sizes (layout.breakpoints and layout.windows): { name, value, xaml, cs }.
+export function layoutSizes(tokens) {
+  const out = [];
+  for (const [name, v] of Object.entries(tokens.layout.breakpoints)) { out.push({ name, value: v }); }
+  for (const [name, v] of Object.entries(tokens.layout.windows ?? {})) {
+    if (name.startsWith('$')) { continue; }
+    out.push({ name, value: v });
+  }
+  for (const s of out) {
+    if (!Number.isInteger(s.value) || s.value <= 0) { throw new Error(`layout ${s.name}: ${s.value} is not a size in px`); }
+    s.xaml = `AbLayout${pascal(s.name)}`;
+    s.cs = pascal(s.name);
+  }
+  return out;
+}
+
+// The Windows type ramp (type.roles.windows, ui.md §4.3): "20/28 semibold (Display optical size)"
+// is size 20, line height 28, semibold, in the Display optical size.
+export function typeRamp(tokens) {
+  const win = tokens.type.roles.windows;
+  return Object.entries(win).filter(([k]) => k !== 'family').map(([role, spec]) => {
+    const m = /^(\d+)\/(\d+)(?: (semibold))?(?: \((Display) optical size\))?$/.exec(spec);
+    if (!m) { throw new Error(`type.roles.windows.${role}: "${spec}" is not size/line-height [semibold] [(Display optical size)]`); }
+    return { role, size: Number(m[1]), lineHeight: Number(m[2]), semibold: Boolean(m[3]), display: Boolean(m[4]), xaml: `AbType${pascal(role)}` };
+  });
+}

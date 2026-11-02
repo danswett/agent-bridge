@@ -241,9 +241,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Ended** holds the sessions a host removed while the client was running: the most
   recently ended first, at most 20, until the client restarts. A machine that goes offline
   or out of view ends nothing.
-- **Unread:** a row whose session updated since the row was last open (an unfolded card in
-  today's layout; the selected row once #179 and #180 land). A session seen for the first
-  time starts read.
+- **Unread:** a row whose session updated since the row was last open: the selected row (an
+  unfolded card in the PWA until #179 lands). A session seen for the first time starts read.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -315,6 +314,9 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
+- **Search:** finds sessions on every machine by the words of their title, repository, branch,
+  agent or machine, titles starting with them first, and opens the one chosen as a
+  notification does.
 - **Navigation:** a compact `NavigationView` rail (Sessions, Machines, Launch, Usage;
   Settings at the foot) with a selection pill.
 - **Content:** a layer with an 8 px top-left radius.
