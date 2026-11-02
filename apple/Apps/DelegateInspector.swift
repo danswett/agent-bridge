@@ -36,7 +36,7 @@ struct DelegateInspector: View {
                                 LabeledContent("Model", value: model)
                             }
                             LabeledContent("Kind", value: entry.kind == "background" ? "Background" : "Task")
-                            LabeledContent("ID", value: entry.id).fontDesign(.monospaced)
+                            LabeledContent("ID") { Text(entry.id).textSelection(.enabled) }.fontDesign(.monospaced)
                             if let started = entry.startedAt {
                                 LabeledContent("Started", value: SessionPresentation.timestamp(started))
                             }
@@ -48,18 +48,18 @@ struct DelegateInspector: View {
                             }
                         }
                         if !content.task.isEmpty {
-                            Section("Task") { BridgeMarkdown(content.task) }
+                            Section("Task") { BridgeMarkdown(content.task).textSelection(.enabled) }
                         }
                         if !content.latest.isEmpty {
                             Section("Latest") {
-                                BridgeMarkdown(content.latest)
+                                BridgeMarkdown(content.latest).textSelection(.enabled)
                                 if content.latestTruncated {
                                     Text("Earlier delegate response text was omitted by the host.").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
                         }
                         if showDetails, let reasoning = content.fetched?.reasoning, !reasoning.isEmpty {
-                            Section { DisclosureGroup("Reasoning") { BridgeMarkdown(reasoning) } }
+                            Section { DisclosureGroup("Reasoning") { BridgeMarkdown(reasoning).textSelection(.enabled) } }
                         }
                         if showDetails {
                             let tools = BridgeDelegatePresentation.tools(content.fetched ?? entry, listed: entry)
@@ -75,7 +75,13 @@ struct DelegateInspector: View {
                                             if let duration = BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date) {
                                                 Text("\(tool.status.capitalized) · \(duration)").font(.caption).foregroundStyle(.secondary)
                                             }
-                                        }.accessibilityElement(children: .combine)
+                                        }
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityAddTraits(.isStaticText)
+                                        .accessibilityLabel(tool.name)
+                                        .accessibilityValue([tool.status.capitalized, tool.summary,
+                                                             BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date)]
+                                                .compactMap(\.self).joined(separator: ", "))
                                     }
                                 }
                             }
@@ -112,7 +118,9 @@ struct DelegateInspector: View {
                     }
                 }
                 .formStyle(.grouped)
-                .textSelection(.enabled)
+                // Selectable control labels can recurse through AppKit accessibility
+                // when this sheet changes delegates. Only prose and IDs are selectable.
+                .textSelection(.disabled)
             }
             .navigationTitle("Delegate details")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -202,7 +210,15 @@ struct DelegateRows: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
+            .textSelection(.disabled)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(BridgeDelegateLabel.titled(row.delegate.name))
+            .accessibilityValue([row.delegate.statusText,
+                                 BridgeDelegatePresentation.duration(from: row.delegate.startedAt, to: row.delegate.endedAt ?? now),
+                                 BridgeDelegatePresentation.descendants(of: row.id, in: all).isEmpty ? nil : "\(BridgeDelegatePresentation.descendants(of: row.id, in: all).count) nested",
+                                 row.parentName.map { "Under \(BridgeDelegateLabel.titled($0))" }, row.delegate.line]
+                    .compactMap(\.self).joined(separator: ", "))
             .accessibilityHint("Open delegate details")
         }
     }
