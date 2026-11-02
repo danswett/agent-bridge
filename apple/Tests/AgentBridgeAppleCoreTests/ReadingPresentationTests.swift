@@ -63,6 +63,33 @@ import Testing
     #expect(BridgeMarkdownDocument("999999999999999999999. literal").blocks.first?.kind == .paragraph("999999999999999999999. literal"))
 }
 
+@Test func markdownIndentedCodeKeepsLiteralBlocksAndInternalBlankLines() {
+    let document = BridgeMarkdownDocument("    # literal heading\n      extra spaces\n\n\t- literal list\n\nNormal prose")
+    #expect(document.blocks.map(\.kind) == [.code("# literal heading\n  extra spaces\n\n- literal list"), .paragraph("Normal prose")])
+    #expect(BridgeMarkdownDocument("  \t```literal```").blocks.first?.kind == .code("```literal```"))
+}
+
+@Test func markdownIndentedCodeDoesNotInterruptParagraphsOrNestedLists() {
+    let paragraph = "Paragraph\n    # still paragraph"
+    #expect(BridgeMarkdownDocument(paragraph).blocks.first?.kind == .paragraph(paragraph))
+    #expect(BridgeMarkdownDocument("Paragraph\n    ---").blocks.first?.kind == .paragraph("Paragraph\n    ---"))
+    #expect(BridgeMarkdownDocument("Paragraph\n\t===\nFollowing prose").blocks.first?.kind == .paragraph("Paragraph\n\t===\nFollowing prose"))
+    #expect(BridgeMarkdownDocument("A | B\n    --- | ---").blocks.first?.kind == .paragraph("A | B\n    --- | ---"))
+    let document = BridgeMarkdownDocument("- Item\n\n      let value = 1\n\n  Following paragraph")
+    guard case let .list(_, _, items) = document.blocks.first?.kind else { Issue.record("Expected a list"); return }
+    #expect(items.first?.blocks.map(\.kind) == [.paragraph("Item"), .code("let value = 1"), .paragraph("Following paragraph")])
+}
+
+@Test func backgroundSummaryShowsAgentsAndCommandsWithoutNamedDelegates() throws {
+    func session(_ agents: Int, _ commands: Int) throws -> BridgeSession {
+        try #require(BridgeSession(json: .object(["id": .string("background"), "activity": .object(["background": .object(["agents": .number(Double(agents)), "shells": .number(Double(commands))])])])))
+    }
+    #expect(try SessionPresentation.backgroundSummary(session: session(1, 2)) == "1 background agent · 2 background commands")
+    #expect(try SessionPresentation.backgroundSummary(session: session(3, 1)) == "3 background agents · 1 background command")
+    #expect(try SessionPresentation.backgroundSummary(session: session(0, 1)) == "1 background command")
+    #expect(try SessionPresentation.backgroundSummary(session: session(0, 0)) == nil)
+}
+
 @MainActor private final class HistoryGate {
     var calls: [(String, Int)] = []
     var continuations: [CheckedContinuation<JSONValue, any Error>] = []

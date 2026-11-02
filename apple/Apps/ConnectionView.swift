@@ -12,6 +12,7 @@ struct ConnectionView: View {
     @State private var deviceName: String
     @State private var profile: String
     @State private var copiedCode = false
+    @AppStorage("bridge.reading.showDetails") private var showDetails = true
 
     init(store: BridgeStore) {
         self.store = store
@@ -78,6 +79,24 @@ struct ConnectionView: View {
                     Text("Sign in with the same GitHub account as your hosts to connect your machines.")
                 }
                 .disabled(store.isSigningIn)
+                Section("Reading") {
+                    Toggle("Show reasoning and tool history", isOn: $showDetails)
+                }
+                Section("About Agent Bridge") {
+                    if let version = bundleValue("CFBundleShortVersionString") {
+                        LabeledContent("Version", value: version)
+                    }
+                    if let build = bundleValue("CFBundleVersion") {
+                        LabeledContent("Build", value: build)
+                    }
+                    #if DEBUG
+                        Text("Development build").font(.caption).foregroundStyle(.secondary)
+                    #else
+                        if bundleValue("CFBundleShortVersionString") == nil, bundleValue("CFBundleVersion") == nil {
+                            Text("Version information is unavailable.").foregroundStyle(.secondary)
+                        }
+                    #endif
+                }
                 Section("Preview") {
                     Button(store.isSample ? "Close Sample Sessions" : "Explore Sample Sessions") {
                         store.cancelSignIn()
@@ -97,6 +116,11 @@ struct ConnectionView: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
         #endif
+    }
+
+    private func bundleValue(_ key: String) -> String? {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String, !value.isEmpty else { return nil }
+        return value
     }
 
     private func applySettings() {

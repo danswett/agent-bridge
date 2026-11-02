@@ -51,7 +51,22 @@ public struct BridgeMarkdownDocument: Sendable, Equatable {
             if text.isEmpty {
                 index += 1; continue
             }
-            if let fence = fence(text) {
+            if indentedCode(line.text) != nil {
+                var code: [String] = []
+                while index < lines.count {
+                    if let content = indentedCode(lines[index].text) {
+                        code.append(content); index += 1
+                    } else if trim(lines[index].text).isEmpty {
+                        code.append(""); index += 1
+                    } else {
+                        break
+                    }
+                }
+                while code.last == "" {
+                    code.removeLast()
+                }
+                result.append(Block(id: line.id, kind: .code(code.joined(separator: "\n"))))
+            } else if let fence = fence(text) {
                 index += 1
                 var code: [String] = []
                 while index < lines.count {
@@ -101,7 +116,9 @@ public struct BridgeMarkdownDocument: Sendable, Equatable {
                     }
                 }
                 result.append(Block(id: line.id, kind: .list(ordered: first.ordered, start: first.start, items: items)))
-            } else if index + 1 < lines.count, let headers = tableHeader(line.text, delimiter: lines[index + 1].text) {
+            } else if index + 1 < lines.count, indentedCode(lines[index + 1].text) == nil,
+                      let headers = tableHeader(line.text, delimiter: lines[index + 1].text)
+            {
                 index += 2
                 var rows: [[String]] = []
                 while index < lines.count, !trim(lines[index].text).isEmpty, lines[index].text.contains("|") {
@@ -114,17 +131,23 @@ public struct BridgeMarkdownDocument: Sendable, Equatable {
                     index += 1
                 }
                 result.append(Block(id: line.id, kind: .table(headers: headers, rows: rows)))
-            } else if index + 1 < lines.count, let level = setext(lines[index + 1].text) {
+            } else if index + 1 < lines.count, indentedCode(lines[index + 1].text) == nil, let level = setext(lines[index + 1].text) {
                 result.append(Block(id: line.id, kind: .heading(level, text))); index += 2
             } else {
                 var paragraph = [line.text]
                 index += 1
                 while index < lines.count {
                     let next = trim(lines[index].text)
+                    // Indentation continues an existing paragraph; it cannot start code here.
+                    if !next.isEmpty, indentedCode(lines[index].text) != nil {
+                        paragraph.append(lines[index].text); index += 1; continue
+                    }
                     if next.isEmpty || fence(next) != nil || rule(next) || heading(next) != nil || next.hasPrefix(">") || marker(lines[index].text) != nil {
                         break
                     }
-                    if index + 1 < lines.count, tableHeader(lines[index].text, delimiter: lines[index + 1].text) != nil || setext(lines[index + 1].text) != nil {
+                    if index + 1 < lines.count, indentedCode(lines[index + 1].text) == nil,
+                       tableHeader(lines[index].text, delimiter: lines[index + 1].text) != nil || setext(lines[index + 1].text) != nil
+                    {
                         break
                     }
                     paragraph.append(lines[index].text); index += 1
@@ -133,6 +156,21 @@ public struct BridgeMarkdownDocument: Sendable, Equatable {
             }
         }
         return result
+    }
+
+    private static func indentedCode(_ text: String) -> String? {
+        var column = 0
+        var index = text.startIndex
+        while column < 4, index < text.endIndex {
+            switch text[index] {
+            case " ": column += 1
+            case "\t": column += 4 - column % 4
+            default: return nil
+            }
+            index = text.index(after: index)
+        }
+        guard column >= 4 else { return nil }
+        return String(text[index...])
     }
 
     private static func fence(_ text: String) -> (character: Character, count: Int)? {

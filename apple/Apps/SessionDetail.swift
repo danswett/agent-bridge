@@ -10,6 +10,7 @@ struct SessionDetail: View {
 
     @State private var historyExpanded = false
     @State private var fullSession: JSONValue?
+    @AppStorage("bridge.reading.showDetails") private var showDetails = true
 
     var body: some View {
         Form {
@@ -37,8 +38,8 @@ struct SessionDetail: View {
                     }
                 }
             }
-            if let reasoning = session.reasoning, !reasoning.isEmpty {
-                Section { DisclosureGroup("Reasoning") { Text(reasoning) } }
+            if showDetails, let reasoning = session.reasoning, !reasoning.isEmpty {
+                Section { DisclosureGroup("Reasoning") { BridgeMarkdown(reasoning) } }
             }
             if let tool = session.activity?["currentTool"], tool != .null {
                 Section("Current tool") {
@@ -49,8 +50,11 @@ struct SessionDetail: View {
                     }
                 }
             }
-            if !session.delegates.isEmpty {
-                Section("Delegates") {
+            if SessionPresentation.backgroundSummary(session: session) != nil || !session.delegates.isEmpty {
+                Section("Background activity") {
+                    if let summary = SessionPresentation.backgroundSummary(session: session) {
+                        Text(summary).foregroundStyle(.secondary)
+                    }
                     ForEach(session.delegates) { delegate in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(delegate.name).font(.headline)
@@ -63,7 +67,7 @@ struct SessionDetail: View {
                     }
                 }
             }
-            if let onLoadHistory {
+            if showDetails, let onLoadHistory {
                 Section {
                     DisclosureGroup("Tool history", isExpanded: $historyExpanded) {
                         if historyExpanded {
