@@ -13,7 +13,8 @@ namespace AgentBridge.App;
 // a message the same way.
 public sealed class MarkdownView : StackPanel
 {
-    static readonly FontFamily Mono = new("Cascadia Mono, Consolas, Courier New");
+    // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
+    static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
 
     public MarkdownView() => Spacing = 8;
@@ -37,7 +38,7 @@ public sealed class MarkdownView : StackPanel
         MdCode c => Code(c),
         MdQuote q => Quote(q),
         MdList l => List(l),
-        MdRule => new Border { Height = 1, Background = Ui.Brush("AbBorder"), Margin = new Thickness(0, 4, 0, 4) },
+        MdRule => new Border { Height = 1, Background = Ui.Brush("AbStroke2"), Margin = new Thickness(0, 4, 0, 4) },
         MdTable t => Table(t),
         _ => new TextBlock(),
     };
@@ -86,7 +87,7 @@ public sealed class MarkdownView : StackPanel
 
     static UIElement Code(MdCode c) => new Border
     {
-        Background = Ui.Brush("AbCodeBg"),
+        Background = Ui.Brush("AbSubtle"),
         CornerRadius = new CornerRadius(6),
         Padding = new Thickness(10, 8, 10, 8),
         Child = new ScrollViewer
@@ -105,7 +106,7 @@ public sealed class MarkdownView : StackPanel
         foreach (var b in q.Blocks) { inner.Children.Add(Block(b)); }
         return new Border
         {
-            BorderBrush = Ui.Brush("AbBorder"),
+            BorderBrush = Ui.Brush("AbStroke2"),
             BorderThickness = new Thickness(3, 0, 0, 0),
             Padding = new Thickness(10, 0, 0, 0),
             Child = inner,

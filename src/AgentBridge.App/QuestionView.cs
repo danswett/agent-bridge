@@ -33,15 +33,15 @@ public sealed class QuestionView : StackPanel
         Padding = new Thickness(12);
         CornerRadius = new CornerRadius(8);
         BorderThickness = new Thickness(1);
-        BorderBrush = Ui.Brush("AbWarning");
+        BorderBrush = Ui.Brush("AbNeeds");
         AutomationId(this, "Question");
 
-        Children.Add(new TextBlock { Text = vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbWarningText") });
+        Children.Add(new TextBlock { Text = vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") });
         Children.Add(new MarkdownView { Markdown = vm.Message });
 
         if (!vm.Answerable)
         {
-            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbWarningText") });
+            Children.Add(new TextBlock { Text = vm.ReadOnlyNote, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") });
             if (vm.ShowReadOnlyFields)
             {
                 foreach (var f in vm.Fields)
@@ -57,7 +57,7 @@ public sealed class QuestionView : StackPanel
 
         if (vm.Answerable)
         {
-            error.Foreground = Ui.Brush("AbDanger");
+            error.Foreground = Ui.Brush("AbDangerText");
             resend.Click += (_, _) => vm.Resend();
             AutomationId(resend, "Resend");
             var footer = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -121,7 +121,7 @@ public sealed class QuestionView : StackPanel
             var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
             b.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
-            if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDanger"); }
+            if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, o.Label, $"Option:{o.Value}");
             b.Click += (_, _) => vm.Choose(o);
             refreshers.Add(() =>

@@ -41,7 +41,7 @@
                 <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind local:SettingsView.HostLine(ViewModel.HostVersion, ViewModel.Profile), Mode=OneWay}" />
                 <TextBlock
                     TextWrapping="Wrap"
-                    Foreground="{ThemeResource AbWarningText}"
+                    Foreground="{ThemeResource AbNeedsText}"
                     Text="The host is a different version from the app. Restart it to run the one installed with the app."
                     Visibility="{x:Bind local:Ui.Show(ViewModel.VersionSkew), Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -68,7 +68,7 @@
                         Click="OnSignIn" />
                 </StackPanel>
                 <Border
-                    Background="{ThemeResource AbCodeBg}"
+                    Background="{ThemeResource AbSubtle}"
                     CornerRadius="10"
                     Padding="16"
                     Visibility="{x:Bind local:Ui.Show(ViewModel.SignInPending), Mode=OneWay}">
@@ -76,7 +76,7 @@
                         <TextBlock TextWrapping="Wrap" Text="Open the page below, sign in to GitHub and enter this code:" />
                         <TextBlock
                             FontSize="28"
-                            FontFamily="Cascadia Mono, Consolas"
+                            FontFamily="{StaticResource MonoFontFamily}"
                             IsTextSelectionEnabled="True"
                             AutomationProperties.AutomationId="SignInCode"
                             Text="{x:Bind ViewModel.SignInCode, Mode=OneWay}" />
@@ -89,7 +89,7 @@
                 </Border>
                 <TextBlock
                     TextWrapping="Wrap"
-                    Foreground="{ThemeResource AbDanger}"
+                    Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind ViewModel.SignInError, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.SignInError), Mode=OneWay}" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
@@ -163,7 +163,7 @@
                     AcceptsReturn="True"
                     TextWrapping="NoWrap"
                     MaxHeight="360"
-                    FontFamily="Cascadia Mono, Consolas"
+                    FontFamily="{StaticResource MonoFontFamily}"
                     FontSize="12"
                     AutomationProperties.AutomationId="HostLog"
                     ScrollViewer.HorizontalScrollBarVisibility="Auto"

@@ -45,6 +45,7 @@ static class SelfTest
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
             Check(cards.Any(c => ById<FrameworkElement>(c, "Response") is MarkdownView { Children.Count: > 0 }), "renders a response's Markdown");
+            CheckDesign(window, Check);
 
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.CardList, Path.ChangeExtension(outFile, ".sessions.png"));
@@ -158,6 +159,53 @@ static class SelfTest
         Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
         await File.WriteAllTextAsync(outFile, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         exit(failures.Count == 0 ? 0 : 1);
+    }
+
+    // The design's generated resources (Design/DesignResources.xaml, tools/design-gen): every brush
+    // in every theme, and every glyph and icon drawn. A key missing from one theme would fail only
+    // on a machine using that theme, and a resource that fails to load shows only as 0xC000027B.
+    static void CheckDesign(MainWindow window, Action<bool, string> check)
+    {
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        check(design is not null, "merges the design's generated resources");
+        if (design is null) { return; }
+        foreach (var theme in new[] { "Light", "Dark", "HighContrast" })
+        {
+            List<string> missing = design.ThemeDictionaries.TryGetValue(theme, out var d) && d is ResourceDictionary brushes
+                ? [.. Design.DesignKeys.Brushes.Where(k => !brushes.TryGetValue(k, out var b) || b is not SolidColorBrush)]
+                : [.. Design.DesignKeys.Brushes];
+            check(missing.Count == 0, $"defines every design brush in {theme}{(missing.Count > 0 ? $": missing {string.Join(", ", missing)}" : "")}");
+        }
+        check(Application.Current.Resources.TryGetValue("MonoFontFamily", out var mono) && mono is FontFamily, "has the design's monospace stack");
+        List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
+        check(missingFonts.Count == 0, $"bundles Agent Bridge Mono and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
+
+        // The bundled font itself, with no fallback after it: in a monospace ten i are as wide as
+        // ten M. Were the file not found, the name would fall through to Segoe UI, where they aren't.
+        var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
+        TextBlock Sample(string text) => new() { Text = text, FontFamily = new FontFamily(bundled), FontSize = 20, HorizontalAlignment = HorizontalAlignment.Left };
+        var narrow = Sample("iiiiiiiiii");
+        var wide = Sample("MMMMMMMMMM");
+
+        // Drawn for a moment, unseen, so each template is applied and its path markup read.
+        var host = new StackPanel { Opacity = 0, IsHitTestVisible = false };
+        var controls = Design.DesignKeys.Glyphs.Concat(Design.DesignKeys.Icons)
+            .Select(k => (Key: k, Control: new ContentControl { Style = Application.Current.Resources.TryGetValue(k, out var s) ? s as Style : null }))
+            .ToList();
+        foreach (var (_, c) in controls) { host.Children.Add(c); }
+        host.Children.Add(narrow);
+        host.Children.Add(wide);
+        var root = (Panel)window.RootElement;
+        root.Children.Add(host);
+        try
+        {
+            host.UpdateLayout();
+            var undrawn = controls.Where(x => x.Control.Style is null || Find<Microsoft.UI.Xaml.Shapes.Path>(x.Control).Count == 0).Select(x => x.Key).ToList();
+            check(undrawn.Count == 0, $"draws every design glyph and icon{(undrawn.Count > 0 ? $": not {string.Join(", ", undrawn)}" : "")}");
+            var (n, w) = (narrow.ActualWidth, wide.ActualWidth);
+            check(n > 0 && Math.Abs(n - w) < 1, $"sets code in the bundled Agent Bridge Mono ({bundled}: ten i {n:0.#} px, ten M {w:0.#} px)");
+        }
+        finally { root.Children.Remove(host); }
     }
 
     // How many are listening to a card: its controls (on screen, once each) and the app's own.

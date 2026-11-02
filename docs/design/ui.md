@@ -114,8 +114,8 @@ Rules:
   card), light `text3` is 0.58 rather than 0.52 (#183), and iOS light secondary text is
   `rgba(60,60,67,0.76)` rather than UIKit's 0.60.
 
-This replaces the GitHub-derived palette in `pwa/app.css` and `App.xaml`, which the
-redesign removes.
+This replaces the GitHub-derived palette in `pwa/app.css` and `App.xaml`: both clients take
+every colour from the generated roles (#177).
 
 ## 4. Typography
 

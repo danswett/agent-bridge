@@ -35,6 +35,15 @@
     <Content Include="Assets\AgentBridge.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Agent Bridge Mono (docs/design/ui.md §4.1), from design/fonts rather than a second copy:
+       the TTFs the generated MonoFontFamily names by ms-appx, and the SIL Open Font License
+       they ship under, beside them. Design/DesignKeys.cs lists what must be here; the
+       self-test and build/pack-app.ps1 check it. -->
+  <ItemGroup>
+    <Content Include="..\..\design\fonts\agent-bridge-mono\ttf\*.ttf" Link="Assets\Fonts\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\design\fonts\agent-bridge-mono\OFL.txt" Link="Assets\Fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageReference Include="Velopack" Version="1.2.161" />

@@ -117,7 +117,9 @@ function global:dotnet {
     $a = @($args)
     $global:LASTEXITCODE = 0
     $out = $a[[array]::IndexOf($a, '-o') + 1]
-    foreach ($f in 'AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png') {
+    # And the bundled monospace and its licence, as the app's project copies them (Design/DesignKeys.cs).
+    $fonts = [regex]::Matches((Get-Content (Join-Path $PSScriptRoot '..' 'src' 'AgentBridge.App' 'Design' 'DesignKeys.cs') -Raw), '"(Assets/Fonts/[^"]+)"') | ForEach-Object { $_.Groups[1].Value -replace '/', '\' }
+    foreach ($f in @('AgentBridge.exe', 'AgentBridge.pri', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Assets\AgentBridge.ico', 'Assets\AgentBridge.png') + $fonts) {
         $path = Join-Path $out $f
         New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
         Set-Content $path 'stand-in'
