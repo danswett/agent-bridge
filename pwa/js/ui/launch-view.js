@@ -113,19 +113,19 @@ export class LaunchPanel {
   // again. A question answered stays shown, with its outcome, after the machine stops listing it.
   #trustAnswers = new Map();
 
-  // root: the #launch section. service: a LaunchService. jump(sessionId, hostId): shows a
-  // session's card, true once it is on screen. pick(hostId): another machine was picked.
-  // launched(hostId): Launch was pressed for that machine.
-  constructor(root, { service, jump = () => false, pick = () => {}, launched = () => {} }) {
-    Object.assign(this, { root, service, jump, pick, launched });
+  // root: the #launch section, on a page of its own (#/launch): open while that page shows.
+  // service: a LaunchService. jump(sessionId, hostId): shows a session's card, true once it is
+  // on screen. pick(hostId): another machine was picked. launched(hostId): Launch was pressed
+  // for that machine. waiting(on): whether a folder-trust question waits on a machine that takes
+  // no launches now, the only thing that brings the page to mind while it isn't open.
+  constructor(root, { service, jump = () => false, pick = () => {}, launched = () => {}, waiting = () => {} }) {
+    Object.assign(this, { root, service, jump, pick, launched, waiting });
     this.#build();
   }
 
   #build() {
     const e = this.els = {};
-    e.toggle = this.root.querySelector('.launch-toggle');
     e.body = this.root.querySelector('.launch-body');
-    e.toggle.addEventListener('click', () => this.setOpen(!this.#open));
     const field = (label, control, hint = null) => h('label', { class: 'launch-field' }, h('span', { class: 'launch-label' }, label), control, hint);
     e.machine = h('select', { name: 'machine', class: 'text-input', onchange: () => this.pick(e.machine.value) });
     e.machineField = h('label', { class: 'launch-field launch-machine', hidden: true }, h('span', { class: 'launch-label' }, 'Machine'), e.machine);
@@ -176,7 +176,6 @@ export class LaunchPanel {
 
   setOpen(open) {
     this.#open = open;
-    this.els.toggle.setAttribute('aria-expanded', String(open));
     this.els.body.hidden = !open;
     // Every time it opens: a workspace approved or a session ended since.
     if (open && this.#target && !this.#loading) { this.refresh(); }
@@ -239,7 +238,7 @@ export class LaunchPanel {
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
-    if (!target) { return; }
+    if (!target) { this.waiting(false); return; }
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     // One that finished while another machine was picked was not watched then: the list asked
     // for next supersedes the question it named, as it would have.
@@ -262,6 +261,7 @@ export class LaunchPanel {
     const name = this.#target?.machineName;
     const waiting = !this.#target?.inspectOnly || this.#trustQuestions().length > 0;
     this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? (waiting ? `Waiting on ${name}` : `Nothing waiting on ${name}`) : name ? `Start a session on ${name}` : 'Start a session';
+    this.waiting(!!this.#target?.inspectOnly && waiting);
   }
 
   // launch.options again: a workspace approved, an agent installed, a session ended since.

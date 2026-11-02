@@ -9,10 +9,44 @@
   color-scheme: light dark;
   --radius: 14px;
   --tap: 44px;
+  /* The type ramp (docs/design/ui.md §4.3; design/tokens.json type.roles.pwa): on a desktop the
+     Windows ramp, below the two-pane width the phone's. Size / line height, in px. */
+  --type-title: 20px;
+  --type-title-line: 28px;
+  --type-row: 14px;
+  --type-row-line: 20px;
+  --type-reading: 15px;
+  --type-reading-line: 24px;
+  --type-meta: 12px;
+  --type-meta-line: 16px;
+  --type-section: 12px;
+  --type-section-line: 16px;
+  --type-code: 12px;
+  --type-code-line: 18px;
+  /* The shell: the web app bar, the rail, and the bottom navigation on a phone. */
+  --appbar: 56px;
+  --rail: 48px;
+  --tabbar: 56px;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.45;
   -webkit-text-size-adjust: 100%;
+}
+@media (max-width: 759px) {
+  :root {
+    --type-title: 24px;
+    --type-title-line: 32px;
+    --type-row: 15px;
+    --type-row-line: 20px;
+    --type-reading: 16px;
+    --type-reading-line: 24px;
+    --type-meta: 13px;
+    --type-meta-line: 18px;
+    --type-section: 13px;
+    --type-section-line: 18px;
+    --type-code: 13px;
+    --type-code-line: 18px;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -22,11 +56,7 @@ body {
   margin: 0;
   background: var(--ab-shell);
   color: var(--ab-text);
-  /* The notch and the home indicator: content stays clear of both on an iPhone. */
-  padding: 0 max(12px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
 }
-
-main { max-width: 760px; margin: 0 auto; }
 
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -34,35 +64,165 @@ main { max-width: 760px; margin: 0 auto; }
 }
 
 .skip { position: absolute; left: -999px; top: 0; }
-.skip:focus { left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 10; background: var(--ab-card); padding: 8px 12px; border-radius: 8px; }
+.skip:focus { left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 30; background: var(--ab-card); padding: 8px 12px; border-radius: var(--ab-radius-card); }
 
 a { color: var(--ab-bridge); }
 :focus-visible { outline: 3px solid var(--ab-bridge); outline-offset: 2px; border-radius: 6px; }
 
-/* ---- top bar ---- */
-.topbar {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  max-width: 760px; margin: 0 auto;
-  padding: max(10px, env(safe-area-inset-top)) 2px 10px;
+/* ---- the shell: app bar, navigation, pages (ui.md §7, PWA) ---- */
+/* A phone first: one column with the page's own title row, the bottom navigation fixed under it.
+   The app bar appears only for news (the connection reconnecting, paused or failed) and while
+   searching; the page's title row carries Search and New. */
+.shell { min-height: 100vh; min-height: 100dvh; }
+.appbar {
+  position: sticky; top: 0; z-index: 20;
+  display: none; align-items: center; gap: var(--ab-space-3);
+  min-height: var(--appbar);
+  padding: max(var(--ab-space-2), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) var(--ab-space-2) max(var(--ab-space-4), env(safe-area-inset-left));
   background: var(--ab-shell);
 }
-.topbar h1 { font-size: 1.25rem; margin: 0; }
+body[data-conn="warn"] .appbar, body[data-conn="bad"] .appbar, body.searching .appbar { display: flex; }
+.appbar .brand, .appbar .online, .appbar .avatar { display: none; }
+body.searching .appbar .appbar-end { display: none; }
+body:not(.searching) .appbar .search { display: none; }
+.brand { display: flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-text); text-decoration: none; font-weight: 600; font-size: 14px; line-height: 20px; }
+.mark { width: 20px; height: 20px; color: var(--ab-bridge); flex: none; }
+.appbar-end { display: flex; align-items: center; gap: var(--ab-space-3); margin-left: auto; min-width: 0; }
 .pill {
-  margin: 0; padding: 4px 10px; border-radius: 999px; font-size: .85rem;
+  margin: 0; padding: 4px 10px; border-radius: var(--ab-radius-pill); font-size: var(--type-meta); line-height: var(--type-meta-line);
   border: 1px solid var(--ab-stroke2); color: var(--ab-text2); background: var(--ab-card);
-  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pill.ok { color: var(--ab-bridge); border-color: currentColor; }
-.pill.warn { color: var(--ab-needs-text); border-color: currentColor; }
+.pill.warn, .pill.demo { color: var(--ab-needs-text); border-color: currentColor; }
 .pill.bad { color: var(--ab-danger-text); border-color: currentColor; }
+/* Search: in the app bar on a desktop, its own row at the top while searching on a phone. */
+.search { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; }
+.search-input {
+  width: 100%; min-height: var(--tap); padding: 0 var(--ab-space-3) 0 36px;
+  font: inherit; font-size: 16px; color: var(--ab-text); background: var(--ab-card);
+  border: 1px solid var(--ab-stroke2); border-bottom-color: var(--ab-field-edge); border-radius: var(--ab-radius-control);
+}
+.search-input::placeholder { color: var(--ab-text2); }
+/* On a phone, Close search comes first (a back arrow): the glyph sits in the box past it, not
+   over it. On a desktop there is no Close, and the glyph is at the box's start. */
+.search-icon { position: absolute; left: calc(var(--tap) + var(--ab-space-3)); color: var(--ab-text2); pointer-events: none; }
+.search-close { order: -1; }
+.icon-button {
+  display: inline-grid; place-items: center; flex: none;
+  width: var(--tap); height: var(--tap); padding: 0; border: 0; border-radius: var(--ab-radius-control);
+  color: var(--ab-text); background: none; cursor: pointer;
+}
+.icon-button:hover { background: var(--ab-subtle); }
+.online { display: inline-flex; align-items: center; gap: var(--ab-space-2); color: var(--ab-text2); text-decoration: none; font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ab-bridge); }
+.online[data-online="0"] .online-dot { background: var(--ab-neutral); }
+.avatar {
+  display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+  font-size: 13px; font-weight: 600; text-decoration: none; color: var(--ab-text); background: var(--ab-selected); border: 1px solid var(--ab-stroke2);
+}
+
+/* The navigation: a bottom bar on a phone (Sessions, Machines, Usage, Settings; Launch is the
+   title row's New), with the page shown marked by a Bridge indicator over its icon. */
+.nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  display: flex; justify-content: space-around;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--ab-layer); border-top: 1px solid var(--ab-stroke2);
+}
+.nav-item {
+  position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  min-height: var(--tabbar); padding: 6px 4px 4px; text-decoration: none;
+  color: var(--ab-text2); font-size: 12px; line-height: 16px;
+}
+.nav-item .nav-icon { width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
+.nav-item[aria-current="page"] { color: var(--ab-text); font-weight: 600; }
+.nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; top: 0; left: 50%; width: 32px; height: 3px; margin-left: -16px;
+  border-radius: 0 0 2px 2px; background: var(--ab-bridge);
+}
+.nav-item[data-nav="launch"] { display: none; }
+/* A folder-trust question waiting on a machine: a needs dot on the way to it. */
+.nav-item.attention::after, .new-session.attention::after {
+  content: ""; position: absolute; top: 8px; right: calc(50% - 16px); width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ab-needs); box-shadow: 0 0 0 2px var(--ab-layer);
+}
+@media (forced-colors: active) {
+  .nav-item[aria-current="page"]::before, .nav-item.attention::after, .new-session.attention::after { forced-color-adjust: none; background: Highlight; }
+}
+
+.content {
+  display: block; outline: none;
+  padding: max(var(--ab-space-4), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-6)) max(var(--ab-space-4), env(safe-area-inset-left));
+}
+body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), env(safe-area-inset-bottom)); }
+body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); }
+.page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; }
+.page > .page-title, .page > section > .page-title { margin-bottom: var(--ab-space-4); }
+/* What a page shows when its panel has nothing: shown only while the panel is hidden. */
+#launch:not([hidden]) ~ .launch-none, #usage:not([hidden]) ~ .usage-none { display: none; }
+
+/* A desktop (the two- and three-pane widths): the Windows layout, with the web app bar in place
+   of the title bar, the rail on the left, and the page as a layer with a rounded top-left
+   corner. Each page scrolls on its own, under a bar that stays. */
+@media (min-width: 760px) {
+  .shell {
+    display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); grid-template-rows: var(--appbar) minmax(0, 1fr);
+    height: 100vh; height: 100dvh;
+  }
+  .appbar, body[data-conn] .appbar {
+    grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 480px) minmax(0, 1fr);
+    position: static; min-height: 0; height: var(--appbar);
+    padding: 0 max(var(--ab-space-4), env(safe-area-inset-right)) 0 max(var(--ab-space-4), env(safe-area-inset-left));
+  }
+  .appbar .brand { display: flex; }
+  .appbar .online { display: inline-flex; }
+  .appbar .avatar { display: inline-grid; }
+  .appbar .online[hidden], .appbar .avatar[hidden] { display: none; }
+  body:not(.searching) .appbar .search, .appbar .search { display: flex; grid-column: 2; }
+  .appbar .search[hidden] { display: none; }
+  body.searching .appbar .appbar-end { display: flex; }
+  .appbar-end { grid-column: 3; justify-self: end; }
+  .search-close, .search-open { display: none; }
+  .search-icon { left: var(--ab-space-3); }
+  .search-input { min-height: 32px; font-size: 14px; }
+  body[data-signed-in="false"] .appbar { grid-template-columns: minmax(0, 1fr) auto; }
+
+  .nav {
+    position: static; grid-column: 1; grid-row: 2;
+    flex-direction: column; justify-content: flex-start; align-items: center; gap: var(--ab-space-1);
+    padding: var(--ab-space-1) 0 var(--ab-space-2); background: none; border: 0;
+  }
+  .nav-item {
+    flex: none; width: 40px; min-height: 40px; height: 40px; padding: 0; border-radius: var(--ab-radius-control);
+  }
+  .nav-item:hover { background: var(--ab-subtle); color: var(--ab-text); }
+  .nav-item[data-nav="launch"] { display: flex; }
+  .nav-item .nav-icon { width: 20px; height: 20px; --ab-icon-stroke: 1.5; }
+  .nav-item .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .nav-item[aria-current="page"] { background: var(--ab-selected); }
+  /* The Windows selection pill: 3 × 16, Bridge, at the item's leading edge. */
+  .nav-item[aria-current="page"]::before { top: 12px; left: 0; width: 3px; height: 16px; margin: 0; border-radius: 2px; }
+  .nav-item.attention::after { top: 6px; right: 6px; box-shadow: 0 0 0 2px var(--ab-shell); }
+  .nav-foot { margin-top: auto; }
+
+  .content {
+    grid-column: 2; grid-row: 2; min-height: 0; overflow: auto;
+    padding: var(--ab-space-6);
+    background: var(--ab-layer); border-top-left-radius: var(--ab-radius-card);
+    border-top: 1px solid var(--ab-stroke); border-left: 1px solid var(--ab-stroke);
+  }
+  body[data-signed-in="false"] .shell { grid-template-columns: 0 minmax(0, 1fr); }
+  body[data-signed-in="false"] .content { border-top-left-radius: 0; border-left: 0; padding: var(--ab-space-6); }
+  .page, #signin { max-width: 760px; }
+}
 
 /* ---- shared ---- */
 .panel, .banner {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--radius);
   padding: 12px 14px; margin: 10px 0;
 }
-.panel h2, .sessions h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.panel h2 { font-size: 1.05rem; margin: 0 0 8px; }
 .banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .banner.demo { border-style: dashed; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
@@ -85,53 +245,66 @@ a { color: var(--ab-bridge); }
   .button, .toggle, .choice { forced-color-adjust: none; }
 }
 
-/* ---- machines ---- */
-.machines-panel h2 { margin: 0; }
-.machines-body { margin-top: 8px; }
-.machines { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.machine-button {
+/* ---- machines (the Machines page, #213) ---- */
+/* A row per machine: the icon and the trailing state on line 1 with the name, at most two facts
+   on line 2, and anything more (updates, Forget) under them in the same text column. One button
+   style for every action there, a small secondary button at the start of that column. */
+.machines { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--ab-space-2); }
+.machine {
+  position: relative; min-width: 0;
+  background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card);
+}
+.machine.offline { background: none; border-style: dashed; }
+.machine.selected { background: var(--ab-selected); }
+.machine.selected::before {
+  content: ""; position: absolute; left: -1px; top: var(--ab-space-4); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
+}
+@media (forced-colors: active) { .machine.selected::before { forced-color-adjust: none; background: Highlight; } }
+.machine-button, .machine-row {
   width: 100%; min-height: var(--tap); display: grid;
-  grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; column-gap: 10px;
-  align-items: center; text-align: left; padding: 8px 12px;
-  font: inherit; color: var(--ab-text); background: var(--ab-subtle);
-  border: 1px solid var(--ab-stroke2); border-radius: 10px; cursor: pointer;
+  grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: var(--ab-space-3); row-gap: 2px;
+  align-items: baseline; text-align: left; padding: var(--ab-space-3);
+  font: inherit; color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-card);
 }
-.machine-button .icon { grid-row: 1 / 3; width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
-.machine-name { font-weight: 600; }
-.machine-sub { grid-column: 2; grid-row: 2; color: var(--ab-text2); font-size: .8rem; min-width: 0; overflow-wrap: anywhere; }
-.machine-id { font: .8rem var(--ab-font-mono); }
-.machine-state { grid-column: 3; grid-row: 1 / 3; color: var(--ab-bridge); font-size: .85rem; }
-.machine-button.selected { border-color: var(--ab-bridge); box-shadow: inset 0 0 0 1px var(--ab-bridge); }
-.machine-button.selected .machine-state { color: var(--ab-bridge); }
-/* An offline machine, from the relay's roster: not a button, as there is nothing to open. */
-.machine-row {
-  min-height: var(--tap); display: grid;
-  grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; column-gap: 10px;
-  align-items: center; padding: 8px 12px;
-  border: 1px dashed var(--ab-stroke2); border-radius: 10px; color: var(--ab-text2);
+.machine-button { cursor: pointer; }
+.machine-button:hover { background: var(--ab-subtle); }
+/* The icon sits on line 1, centred on its 20 px line, never on the row's middle. */
+.machine-button .icon, .machine-row .icon { grid-column: 1; grid-row: 1; align-self: start; width: 20px; height: 20px; --ab-icon-stroke: 1.5; color: var(--ab-text2); }
+.machine-name { grid-column: 2; grid-row: 1; font-weight: 600; font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere; }
+.machine-state { grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line); white-space: nowrap; }
+.machine.selected .machine-state { color: var(--ab-bridge); font-weight: 600; }
+.machine-sub {
+  grid-column: 2 / 4; grid-row: 2; min-width: 0; color: var(--ab-text2);
+  font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.machine-row .icon { grid-row: 1 / 3; width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
-.machine-row .machine-name { color: var(--ab-text); }
-.machine-row .machine-state { color: var(--ab-text2); }
-.machine-forget { grid-column: 3; grid-row: 1 / 3; }
+.machine-flag.held { color: var(--ab-needs-text); }
+.machine-more {
+  display: grid; gap: var(--ab-space-2);
+  padding: 0 var(--ab-space-3) var(--ab-space-3) calc(var(--ab-space-3) + 20px + var(--ab-space-3));
+}
+.machine-more:empty { display: none; }
+.machine-update { font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); }
+.machine-update p { margin: 0; }
+.machine-actions { display: flex; flex-wrap: wrap; gap: var(--ab-space-2); margin-top: var(--ab-space-2); }
+.machine-update > .machine-actions:first-child, .machine-more > .machine-actions:first-child { margin-top: 0; }
+.machine-error { margin: 0; color: var(--ab-danger-text); font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .machine-forget.armed { color: var(--ab-danger-text); border-color: currentColor; }
-.machine-error { margin: 4px 12px 0; color: var(--ab-danger-text); font-size: .85rem; }
-/* A machine's updates (#51): what its app is doing, how the last one ended, Check and Install. */
-.machine-update { margin: 4px 12px 0; font-size: .85rem; color: var(--ab-text2); }
-.machine-update p { margin: 2px 0; }
-.machine-update .machine-error { margin: 2px 0; }
-.machine-update-actions { display: flex; gap: 8px; margin-top: 4px; }
-.machine-check-all { width: 100%; }
+/* Check for updates, for every machine at once: the same button, in the same column. */
+.machine-updates { list-style: none; padding: var(--ab-space-1) 0 0 calc(1px + var(--ab-space-3) + 20px + var(--ab-space-3)); }
+.button.small { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-meta); }
+@media (pointer: coarse) { .button.small { min-height: var(--tap); padding: 0 var(--ab-space-4); } }
 
 /* ---- agent usage: agent-ha-bridge's usage card ---- */
-.usage h2 { margin: 0; }
-.usage-toggle {
-  display: flex; align-items: center; gap: 6px; width: 100%; min-height: var(--tap); padding: 0;
-  font: inherit; font-weight: 600; color: var(--ab-text); background: none; border: 0; text-align: left; cursor: pointer;
+/* Under the sessions: each agent's fullest window, in its own colour, and the way to Usage. */
+.usage-line {
+  display: flex; align-items: center; min-height: var(--tap); margin-top: var(--ab-space-4); padding: 0 var(--ab-space-1);
+  border-top: 1px solid var(--ab-stroke2); color: var(--ab-text2); text-decoration: none;
+  font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;
 }
-.usage-chevron { width: 8px; height: 8px; border: solid var(--ab-text2); border-width: 0 2px 2px 0; transform: rotate(-45deg); transition: transform .2s ease; margin: 0 4px; }
-.usage-toggle[aria-expanded="true"] .usage-chevron { transform: rotate(45deg); }
-.usage-summary { margin: 0; color: var(--ab-text2); font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-line:hover .usage-summary { text-decoration: underline; }
+.usage-summary { margin: 0; color: var(--ab-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-body .usage-group:first-child { border-top: 0; margin-top: 0; }
 .usage-figure.warn { color: var(--ab-needs-text); }
 .usage-figure.crit { color: var(--ab-danger-text); }
 .usage-group { padding: 10px 0 4px; border-top: 1px solid var(--ab-stroke2); margin-top: 8px; }
@@ -159,24 +332,61 @@ a { color: var(--ab-bridge); }
 .usage-pace { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--ab-text); box-shadow: 0 0 0 1.5px var(--ab-card); }
 .usage-error { margin: 4px 0 0; font-size: .8rem; color: var(--ab-danger-text); }
 @media (prefers-reduced-motion: reduce) {
-  .usage-fill, .usage-chevron { transition: none; }
+  .usage-fill { transition: none; }
 }
 
 .icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 /* ---- sessions ---- */
-.sessions { margin-top: 16px; }
 .sessions:focus { outline: none; }
-.sessions-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
-/* The sort menu wraps below the heading and count, rather than squeezing them, on a phone. */
-.sessions-head > * { flex: none; max-width: 100%; }
-.count { color: var(--ab-text2); font-size: .9rem; }
+/* The title row: Sessions, the sort menu, then Search and New at its end (a phone's 24/32 title
+   row; on a desktop the list's header, with New as an Accent button), all on one line at 390 px
+   (#213). The count sits under the title. */
+.sessions-head {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "title sort actions" "count count count";
+  align-items: center; gap: 0 var(--ab-space-2); margin-bottom: var(--ab-space-2);
+}
+.sessions-head .page-title { grid-area: title; overflow-wrap: anywhere; }
+.head-actions { grid-area: actions; display: flex; align-items: center; gap: var(--ab-space-1); }
+.count { grid-area: count; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums; }
 .sort {
-  margin-left: auto; align-self: center; min-height: 32px; max-width: 45%;
-  font: inherit; font-size: .88rem; color: var(--ab-text); background: var(--ab-card);
-  border: 1px solid var(--ab-field-edge); border-radius: 8px; padding: 2px 6px;
+  grid-area: sort; justify-self: end; min-height: 32px; max-width: 9.5rem;
+  font: inherit; font-size: var(--type-meta); color: var(--ab-text); background: var(--ab-card);
+  border: 1px solid var(--ab-field-edge); border-radius: var(--ab-radius-control); padding: 2px 6px;
 }
 @media (pointer: coarse) { .sort { min-height: var(--tap); } }
+.new-session { position: relative; gap: var(--ab-space-1); }
+/* On a phone, New is an icon in the title row, in Bridge, as Search beside it. */
+@media (max-width: 759px) {
+  .new-session { width: var(--tap); padding: 0; color: var(--ab-bridge); background: none; border: 0; }
+  .new-session .ab-icon { width: 24px; height: 24px; --ab-icon-stroke: 1.4; }
+  .new-label { display: none; }
+  .new-session.attention::after { top: 6px; right: 6px; box-shadow: 0 0 0 2px var(--ab-shell); }
+}
+@media (min-width: 760px) {
+  .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
+  .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
+  .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
+}
+/* The machine tabs (SelectorBar-style): text, the one shown in bold with a Bridge bar under it. */
+.machine-tabs {
+  display: flex; gap: var(--ab-space-5); overflow-x: auto; scrollbar-width: none;
+  margin: 0 0 var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
+}
+.machine-tabs::-webkit-scrollbar { display: none; }
+.machine-tab {
+  position: relative; flex: none; min-height: var(--tap); padding: 0 2px;
+  font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
+  background: none; border: 0; cursor: pointer; white-space: nowrap;
+}
+.machine-tab:hover { color: var(--ab-text); }
+.machine-tab[aria-selected="true"] { color: var(--ab-text); font-weight: 600; }
+.machine-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--ab-bridge);
+}
+.machine-tab.away { font-style: italic; }
+@media (forced-colors: active) { .machine-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
+@media (min-width: 760px) { .machine-tab { min-height: 36px; } }
 .session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
 
 /* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,
@@ -196,13 +406,13 @@ a { color: var(--ab-bridge); }
 /* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
 .drag-handle { display: none; }
 @media (hover: hover) and (pointer: fine) {
-  .session-list[data-sort="yours"] .drag-handle {
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
     display: block; position: absolute; left: 1px; top: 14px; width: 12px; height: 32px;
     cursor: grab; opacity: 0; color: var(--ab-text2);
     background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
     background-size: 6px 6px; background-position: center;
   }
-  .session-list[data-sort="yours"] .session:hover .drag-handle { opacity: 1; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { opacity: 1; }
 }
 .session.dragging { opacity: .6; }
 .session.dragging .drag-handle { cursor: grabbing; }
@@ -267,6 +477,10 @@ a { color: var(--ab-bridge); }
 .ab-icon { --ab-icon-stroke: 1.5; flex: none; }
 .ab-icon-16 { --ab-icon-stroke: 1.7; }
 .ab-icon-24 { --ab-icon-stroke: 1.4; }
+/* Icons written into the page (index.html) carry no size of their own. */
+svg.ab-icon-16:not([width]) { width: 16px; height: 16px; }
+svg.ab-icon-20:not([width]) { width: 20px; height: 20px; }
+svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
 .head { padding-top: 6px; }
 .title { margin: 0; font-size: 1.05rem; }
@@ -538,16 +752,14 @@ summary {
 .end-session .stop-status { margin: 0 0 6px; }
 .end-session .resend { margin-bottom: 6px; }
 
-/* ---- account ---- */
-.account { margin: 24px 0 0; color: var(--ab-text2); font-size: .88rem; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.account p { margin: 0; }
-.notify { margin-top: 16px; }
+/* ---- settings ---- */
+.notify h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 
 /* Wide windows (a desktop browser) put the sessions side by side instead of one long stack:
    each column stays at least as wide as a phone, so a card's question form, reply box and
    buttons keep their phone layout. Rows start at the top so a tall card does not stretch the
    ones beside it. */
 @media (min-width: 960px) {
-  main, .topbar { max-width: 1680px; }
   .session-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); align-items: start; }
 }

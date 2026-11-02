@@ -1,6 +1,7 @@
 // A machine's updates in the machines list, in demo mode (#51): what its app found, Install
 // (which its app carries out once no session there is busy, and the outcome coming back), a
-// press the machine refuses, Check all, and none at all on a read-only machine.
+// press the machine refuses, Check all, and none at all on a read-only machine. On the Machines
+// page.
 import { test, expect } from '@playwright/test';
 
 async function openDemo(page, query = '') {
@@ -8,7 +9,7 @@ async function openDemo(page, query = '') {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
-  await page.goto(`?demo=1&static=1&updates=1&updateStep=300${query}`);
+  await page.goto(`?demo=1&static=1&updates=1&updateStep=300${query}#/machines`);
   await page.waitForSelector('html[data-demo-ready]');
 }
 

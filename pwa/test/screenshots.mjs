@@ -26,9 +26,9 @@ async function open(scheme, query = '') {
 }
 
 const out = (name) => path.join(pwa, 'docs', name);
-// For a picture of one card: the sticky top bar would otherwise sit across it.
+// For a picture of one card: the bottom navigation, fixed over the page, would otherwise sit across it.
 const fixTimes = (page) => page.evaluate(() => { for (const t of document.querySelectorAll('.since:not(:empty), .updated')) { t.textContent = t.classList.contains('since') ? 'for 4m' : 'updated 1m ago'; } });
-const hideBar = (page) => page.evaluate(() => { document.querySelector('.topbar').hidden = true; });
+const hideBar = (page) => page.evaluate(() => { document.getElementById('nav').hidden = true; });
 
 try {
   for (const scheme of ['light', 'dark']) {
@@ -79,12 +79,12 @@ try {
 
   {
     const { context, page } = await open('light', '&machines=3');
-    // Folded, so the picture holds the machines and every card's machine and status.
+    // Folded, so the picture holds the machine tabs and every card's machine and status.
     for (const fold of await page.locator('.session .fold').all()) { await fold.click(); }
     await fixTimes(page);
     await hideBar(page);
     // In the page's own coordinates: folding scrolled it.
-    const [top, bottom] = await page.evaluate(() => ['machines', 'sessions'].map((id) => {
+    const [top, bottom] = await page.evaluate(() => ['sessions', 'sessions'].map((id) => {
       const r = document.getElementById(id).getBoundingClientRect();
       return { y: r.top + scrollY, end: r.bottom + scrollY };
     }));
