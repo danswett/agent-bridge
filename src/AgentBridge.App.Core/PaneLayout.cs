@@ -103,10 +103,17 @@ public sealed class PaneLayoutViewModel : Observable
 
     // A session opened to be answered (Needs you, a toast, the tray, search) shows its question:
     // Tools or Delegates picked before would hide it. A row chosen, or a resize, keeps the tab.
+    // Scrolled to as well: the conversation opens at its top, and a session already open keeps
+    // where it was read to, either of which can leave its question out of sight.
     void OnOpened(SessionCardViewModel card)
     {
-        if (card.Question is not null && card == main.Selected) { Tab = SessionTab.Conversation; }
+        if (card.Question is null || card != main.Selected) { return; }
+        Tab = SessionTab.Conversation;
+        QuestionWanted?.Invoke(card);
     }
+
+    // A session opened to be answered: the session pane brings its question into view.
+    public event Action<SessionCardViewModel>? QuestionWanted;
     void OnMain(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is not (nameof(MainViewModel.Selected) or "" or null)) { return; }

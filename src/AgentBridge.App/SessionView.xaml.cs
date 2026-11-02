@@ -56,9 +56,9 @@ public sealed partial class SessionView : UserControl
         get => layout;
         set
         {
-            if (layout is not null) { layout.PropertyChanged -= OnLayout; }
+            if (layout is not null) { layout.PropertyChanged -= OnLayout; layout.QuestionWanted -= OnQuestionWanted; }
             layout = value;
-            if (layout is not null) { layout.PropertyChanged += OnLayout; }
+            if (layout is not null) { layout.PropertyChanged += OnLayout; layout.QuestionWanted += OnQuestionWanted; }
             Bindings.Update();
             ShowTab();
         }
@@ -167,6 +167,14 @@ public sealed partial class SessionView : UserControl
         }
         TakeFocus();
     }
+
+    // After the pane has laid out the session and its tab: the conversation's top is set as a
+    // session is shown (OnCard), and the question is brought into view after that.
+    void OnQuestionWanted(SessionCardViewModel card) =>
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (Card == card && QuestionCard.Visibility == Visibility.Visible) { QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false }); }
+        });
 
     void ShowWords()
     {

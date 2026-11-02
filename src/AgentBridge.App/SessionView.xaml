@@ -238,8 +238,8 @@
                             <ColumnDefinition Width="16" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <local:StatusGlyphView VerticalAlignment="Center" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
-                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" Foreground="{ThemeResource AbText2}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" AutomationProperties.AutomationId="CurrentTool">
+                        <local:StatusGlyphView Margin="0,3,0,0" VerticalAlignment="Top" Size="12" Glyph="{x:Bind Card.ToolGlyph, Mode=OneWay}" Label="{x:Bind Card.ToolState, Mode=OneWay}" AutomationProperties.AutomationId="ToolGlyph" />
+                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeCode}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" AutomationProperties.AutomationId="CurrentTool">
                             <Run Text="{x:Bind Card.ToolName, Mode=OneWay}" Foreground="{ThemeResource AbText}" /><Run Text=" " /><Run Text="{x:Bind Card.ToolSummary, Mode=OneWay}" />
                         </TextBlock>
                     </Grid>

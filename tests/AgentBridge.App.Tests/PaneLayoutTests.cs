@@ -274,14 +274,21 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Select("asking");
         Assert.Equal(SessionTab.Tools, Read(l => l.Tab));
 
-        // Opened to be answered: Tools would hide the question.
+        var wanted = new List<string>();
+        ui.Post(() => layout.QuestionWanted += c => wanted.Add(c.Id));
+
+        // Opened to be answered: Tools would hide the question, and it is brought into view.
         ui.Post(() => main.Open("asking"));
         Assert.Equal(SessionTab.Conversation, Read(l => l.Tab));
+        Assert.Equal(["asking"], TestUi.Read(() => wanted.ToList()));
 
         // A session with nothing to answer keeps the tab, opened or chosen.
         ui.Post(() => layout.Tab = SessionTab.Tools);
         ui.Post(() => main.Open("busy"));
-        Assert.Equal(SessionTab.Tools, Read(l => l.Tab));
+        Assert.Equal(SessionTab.Tools, Read(l => l.Tab));        // Chosen from the list, or with nothing to answer: nothing to bring into view.
+        Select("asking");
+        Assert.Equal(["asking"], TestUi.Read(() => wanted.ToList()));
+
     }
 
     [Fact]
