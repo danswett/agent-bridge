@@ -24,11 +24,86 @@ public struct BridgeNotificationPlan: Sendable, Equatable {
 }
 
 public enum BridgeNotificationPlanner {
+    struct History: Sendable {
+        private struct DelegateWait: Sendable {
+            let fromTurn: Bool
+            let responseBeforeWait: String?
+        }
+
+        private var waits: [String: [String: DelegateWait]] = [:]
+        private(set) var sessions: [String: [String: BridgeSession]] = [:]
+
+        mutating func plan(machineID: String, machineName: String, after: [BridgeSession], showPreviews: Bool = false,
+                           initialSnapshot: Bool = false, capabilities: Set<String> = []) -> BridgeNotificationPlan
+        {
+            // HostStore retains its old snapshot across a disconnect. Only this
+            // cleared-with-history snapshot may establish a wait's provenance.
+            let before = Array((sessions[machineID] ?? [:]).values)
+            sessions[machineID] = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            return BridgeNotificationPlanner.plan(machineID: machineID, machineName: machineName, before: before, after: after,
+                                                  showPreviews: showPreviews, initialSnapshot: initialSnapshot, capabilities: capabilities, history: &self)
+        }
+
+        mutating func clear(machineID: String, sessionID: String? = nil) {
+            if let sessionID {
+                sessions[machineID]?.removeValue(forKey: sessionID)
+                waits[machineID]?.removeValue(forKey: sessionID)
+                if waits[machineID]?.isEmpty == true {
+                    waits.removeValue(forKey: machineID)
+                }
+            } else {
+                sessions.removeValue(forKey: machineID)
+                waits.removeValue(forKey: machineID)
+            }
+        }
+
+        fileprivate mutating func endings(machineID: String, previous: [String: BridgeSession], current: [String: BridgeSession]) -> Set<String> {
+            var machineWaits = waits[machineID] ?? [:]
+            var endings = Set<String>()
+            for session in current.values {
+                let old = previous[session.id]
+                var wait = machineWaits[session.id]
+                if wait == nil, let old, Self.isDelegateWait(old) {
+                    // A client first seeing a wait cannot assume the main turn was running.
+                    wait = DelegateWait(fromTurn: false, responseBeforeWait: old.response)
+                }
+                if Self.isDelegateWait(session), !Self.isDelegateWait(old) {
+                    if let old {
+                        wait = DelegateWait(fromTurn: old.status == "working" || (old.status == "waiting" && old.waitingOn == nil),
+                                            responseBeforeWait: old.response)
+                    } else if wait == nil {
+                        wait = DelegateWait(fromTurn: false, responseBeforeWait: session.response)
+                    }
+                }
+                if let old, old.status == "working" || (old.status == "waiting" && (old.waitingOn == nil || wait?.fromTurn == true || session.response != wait?.responseBeforeWait)) {
+                    endings.insert(session.id)
+                }
+                machineWaits[session.id] = Self.isDelegateWait(session) ? wait : nil
+            }
+            machineWaits = machineWaits.filter { current[$0.key] != nil }
+            waits[machineID] = machineWaits.isEmpty ? nil : machineWaits
+            return endings
+        }
+
+        private static func isDelegateWait(_ session: BridgeSession?) -> Bool {
+            session?.status == "waiting" && session?.waitingOn != nil
+        }
+    }
+
     public static func plan(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession],
                             showPreviews: Bool = false, initialSnapshot: Bool = false, capabilities: Set<String> = []) -> BridgeNotificationPlan
     {
+        var history = History()
+        return plan(machineID: machineID, machineName: machineName, before: before, after: after,
+                    showPreviews: showPreviews, initialSnapshot: initialSnapshot, capabilities: capabilities, history: &history)
+    }
+
+    static func plan(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession],
+                     showPreviews: Bool = false, initialSnapshot: Bool = false, capabilities: Set<String> = [], history: inout History) -> BridgeNotificationPlan
+    {
         let previous = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let current = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        let endings = history.endings(machineID: machineID, previous: previous, current: current)
         var removeIDs: [String] = []
         var notices: [BridgeSessionNotice] = []
         for old in previous.values {
@@ -45,7 +120,7 @@ public enum BridgeNotificationPlanner {
                 if let question, initialSnapshot || question != pendingQuestion(old) {
                     kind = .question
                     version = question
-                } else if !initialSnapshot, let old, ["working", "waiting"].contains(old.status), isFinished(session), session.response?.isEmpty == false {
+                } else if !initialSnapshot, endings.contains(session.id), isFinished(session), session.response?.isEmpty == false {
                     kind = .finished
                     version = session.response ?? session.updatedAt ?? "finished"
                 } else {
