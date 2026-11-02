@@ -71,6 +71,13 @@ Both native targets must pass the repository's
 [`verify.sh`](../apple/scripts/verify.sh). Debug UI fixtures exercise simulated
 actions only and are not evidence of delivery to an agent.
 
+The local Mac fixture was exercised through question/reply receipts, confirmed
+stop, launch, nested and finished delegate reads, and the draft-only delegate
+stop request. Traversing the nested inspector exposed an AppKit accessibility
+recursion; limiting selection to prose and IDs and providing explicit control
+labels fixed the reproduced path. This is a targeted regression check, not a
+substitute for the full VoiceOver acceptance below.
+
 Still pending: a disposable real .NET-host/relay interoperability pass covering
 sign-in, multi-machine reconnect, answer/reply/stop receipts, attachments, launch,
 folder trust, copy/resume and remote update requests; OS notification
