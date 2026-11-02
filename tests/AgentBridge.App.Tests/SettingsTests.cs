@@ -177,6 +177,18 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.True(settings.DevBoxKeepAwake);
         Assert.Contains("az login", settings.DevBoxAlarm);
         Assert.Contains("Last pass at", settings.DevBoxText);
+
+        // A Dev Box whose agent settings the host cannot use is still shown, with its alarm,
+        // before any pass has run.
+        host.Status = FakeHost.StatusOf() with
+        {
+            Settings = new HostSettingsView(true, DevBoxKeepAwake: true),
+            DevBox = new DevBoxStatus(true, 15, Problem: "its devCenterUri is not a Dev Center address"),
+        };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.DevBoxAlarm?.Contains("could not be used") == true, "the settings alarm");
+        Assert.True(settings.ShowDevBox);
+        Assert.Contains("not a Dev Center address", settings.DevBoxAlarm);
     }
 
     [Fact]

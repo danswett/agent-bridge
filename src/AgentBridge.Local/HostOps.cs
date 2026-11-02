@@ -78,12 +78,15 @@ public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, 
     public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
 
-// The Dev Box keep-awake (devBox.*, docs/host-config.md), present only when this machine is a
-// Microsoft Dev Box. KeepAwake: whether passes run now. Last: the last pass, its outcome in
-// agent-ha-bridge's words (skipped, delayed, safe, no-action, blocked, failed) or the host's own
-// (stood-back, busy, not-a-devbox), and what it did; Alarming when a person should look (failed,
-// blocked: the Dev Box may hibernate). NextAt: when the next pass is due, while on.
-public sealed record DevBoxStatus(bool KeepAwake, int IntervalMinutes, DevBoxPass? Last = null, DateTimeOffset? NextAt = null);
+// The Dev Box keep-awake (devBox.*, docs/host-config.md), present when this machine is a Microsoft
+// Dev Box: when its Dev Box agent's settings file is here, whether or not the host can use it.
+// KeepAwake: whether passes run now. Last: the last pass, its outcome in agent-ha-bridge's words
+// (skipped, delayed, safe, no-action, blocked, failed) or the host's own (stood-back, busy,
+// not-a-devbox), and what it did; Alarming when a person should look (failed, blocked, or a
+// stand-back with no evidence agent-ha-bridge keeps it awake: the Dev Box may hibernate). NextAt:
+// when the next pass is due, while on. Problem: why the agent's settings could not be used, when
+// they could not, so the Dev Box cannot be kept awake.
+public sealed record DevBoxStatus(bool KeepAwake, int IntervalMinutes, DevBoxPass? Last = null, DateTimeOffset? NextAt = null, string? Problem = null);
 
 public sealed record DevBoxPass(DateTimeOffset At, string Outcome, string Detail, bool Alarming = false);
 

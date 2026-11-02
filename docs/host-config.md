@@ -186,8 +186,11 @@ instead of as a task of its own:
 * **Which Dev Box.** Read from the Dev Box agent's own settings
   (`C:\Program Files\Microsoft Dev Box Agent\…\appsettings.Production.json`): its Dev Center, project
   and name, afresh for every pass, so a reprovision is followed. A machine without it is not a Dev
-  Box, and nothing is done. A Dev Center address that is not `https://<name>.devcenter.azure.com`
-  is not followed, since the user's token would go there.
+  Box (`not-a-devbox`, said once), and nothing is done. A Dev Center address that is not
+  `https://<name>.devcenter.azure.com` is not followed, since the user's token would go there. A
+  settings file that is there but cannot be used (not JSON, a shape not known, such an address)
+  is a Dev Box that cannot be kept awake: with keep-awake on, every pass is `failed` and says so,
+  and the app keeps showing the section with the alarm.
 * **As whom.** The Azure CLI's sign-in: `az account get-access-token --resource
   https://devcenter.azure.com`, run with no window (`az.cmd` through `cmd.exe`). Dev Center's
   developer API under `users/me` is the only scope that lets a user skip or delay their own Dev
@@ -211,17 +214,19 @@ instead of as a task of its own:
 * **Never beside agent-ha-bridge's own.** Before every pass, the host looks for agent-ha-bridge's
   `AgentBridgeDevBoxKeepAwake[_<id>]` tasks and the mutex each of its passes holds. While any is
   enabled or running, or the scheduler cannot be read, the host stands back (`stood-back`): two
-  writers to one schedule is the problem G5 exists for. This holds for every host, read-only
-  (`delivery.readOnly`) or not. `migrate` disables that task and carries `devBox.*`, so the host
-  takes over; `rollback` enables it again, and the host stands back from its next pass.
+  writers to one schedule is the problem G5 exists for. Standing back only because the scheduler
+  could not be read is alarming, since nothing is then known to keep the Dev Box awake. This
+  holds for every host, read-only (`delivery.readOnly`) or not. `migrate` disables that task and
+  carries `devBox.*`, so the host takes over; `rollback` enables it again, and the host stands
+  back from its next pass.
 * **What it says.** Every pass is a line in the host's log, beginning `keep-awake:` and its
   outcome: `skipped`, `delayed`, `safe`, `no-action` (nothing scheduled: the normal state while
   anyone is connected), `blocked` (a stop the service would not move, or levers that never reached
-  it), `failed` (no `az login`, Dev Center unreachable or refusing, the lock file unusable),
-  `stood-back` or `busy`. `failed` and `blocked` add
-  `THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED`. The app's Settings shows the switch on a Dev Box
-  only, with the last pass and the next, and `failed` or `blocked` in red (`devBox` in the host's
-  status, [local-pipe.md](protocol/local-pipe.md)).
+  it), `failed` (no `az login`, Dev Center unreachable or refusing, the lock file unusable, the
+  Dev Box agent's settings unusable), `stood-back` or `busy`. `failed`, `blocked` and a
+  `stood-back` with the scheduler unreadable add `THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED`,
+  on every pass. The app's Settings shows the switch on a Dev Box only, with the last pass and the
+  next, and those in red (`devBox` in the host's status, [local-pipe.md](protocol/local-pipe.md)).
 
 ```
 agent-bridge-host devbox status

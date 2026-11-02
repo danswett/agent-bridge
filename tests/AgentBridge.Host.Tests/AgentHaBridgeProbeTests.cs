@@ -23,12 +23,17 @@ public sealed class AgentHaBridgeProbeTests
         if (!OperatingSystem.IsWindows()) { return; }
         const string task = "AgentBridgeDevBoxKeepAwake_0123456789abcdef0123456789abcdef";
 
-        Assert.Contains("this host stands back", AgentHaBridgeProbe.KeepAwakeReason([(task, true, false)], []));
-        Assert.Contains($"task {task} (running)", AgentHaBridgeProbe.KeepAwakeReason([(task, false, true)], []));
+        var enabled = AgentHaBridgeProbe.KeepAwakeReason([(task, true, false)], []);
+        Assert.Contains("this host stands back", enabled!.Reason);
+        Assert.True(enabled.Known);
+        Assert.Contains($"task {task} (running)", AgentHaBridgeProbe.KeepAwakeReason([(task, false, true)], [])!.Reason);
         // A pass of it holds the task's mutex, even with the task just disabled.
-        Assert.Contains("a pass is running", AgentHaBridgeProbe.KeepAwakeReason([(task, false, false)], [task]));
-        // Not being able to read the scheduler is not permission.
-        Assert.Contains("could not be checked", AgentHaBridgeProbe.KeepAwakeReason(null, []));
+        Assert.Contains("a pass is running", AgentHaBridgeProbe.KeepAwakeReason([(task, false, false)], [task])!.Reason);
+        // Not being able to read the scheduler is not permission, but nor is it evidence that
+        // agent-ha-bridge keeps the Dev Box awake: the stand-back on it is an alarm.
+        var unknown = AgentHaBridgeProbe.KeepAwakeReason(null, []);
+        Assert.Contains("could not be read", unknown!.Reason);
+        Assert.False(unknown.Known);
         // Migrate disables the task (rollback enables it again), and then the host keeps the Dev Box awake.
         Assert.Null(AgentHaBridgeProbe.KeepAwakeReason([(task, false, false)], []));
         Assert.Null(AgentHaBridgeProbe.KeepAwakeReason([], []));
@@ -41,7 +46,7 @@ public sealed class AgentHaBridgeProbeTests
         var name = "AgentBridgeDevBoxKeepAwake_" + Guid.NewGuid().ToString("N");
         using var pass = new Mutex(true, @"Local\" + name);
 
-        Assert.Contains($"{name} (a pass is running)", new AgentHaBridgeProbe().KeepAwakeActive());
+        Assert.Contains($"{name} (a pass is running)", new AgentHaBridgeProbe().KeepAwakeActive()!.Reason);
     }
 
     // A rollback re-enables and starts agent-ha-bridge's keep-awake task, perhaps while a pass of

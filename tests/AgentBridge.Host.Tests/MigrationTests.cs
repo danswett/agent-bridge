@@ -1802,6 +1802,70 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Contains(ConfigImport.Build(ahb, """{"version":1,"devBox":{"keepAwake":false}}""").Kept, k => k.Contains("once migrate disables agent-ha-bridge's keep-awake task nothing will", StringComparison.Ordinal));
     }
 
+    // agent-ha-bridge's keep-awake is its task: enabled, it runs whatever devBox.keepAwake says (its
+    // pass never reads it, and install.ps1's [bool] reads "false" as true). Migrate disables that
+    // task, so it is the task, not the file, that says whether the host must take over.
+    [Theory]
+    [InlineData("""{"keepAwake":"false","intervalMinutes":20}""", 20)]
+    [InlineData("""{"keepAwake":false}""", 15)]
+    [InlineData(null, 15)]
+    public async Task An_enabled_keep_awake_task_is_carried_as_on_whatever_agent_ha_bridges_file_says(string? devBox, int minutes)
+    {
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        var ahb = JsonNode.Parse(File.ReadAllText(_f.ConfigPath))!.AsObject();
+        ahb.Remove("devBox");
+        if (devBox is not null) { ahb["devBox"] = JsonNode.Parse(devBox); }
+        File.WriteAllText(_f.ConfigPath, ahb.ToJsonString());
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        var (settings, problem) = HostSettings.Load(_f.Profile);
+        Assert.Null(problem);
+        Assert.True(settings.DevBox.KeepAwake);
+        Assert.Equal(minutes, settings.DevBox.IntervalMinutes);
+        Assert.Contains("agent-ha-bridge's enabled keep-awake task -> devBox.keepAwake", report.ToString());
+        Assert.Contains("its keep-awake task is enabled, and that is what kept this Dev Box awake, so it is on here too", report.ToString());
+        Assert.False(_f.Runtime_.Tasks[keepAwake].Enabled);
+    }
+
+    [Fact]
+    public async Task An_enabled_keep_awake_task_with_a_profile_that_keeps_keep_awake_off_refuses_the_migration_and_changes_nothing()
+    {
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (true, false);
+        Directory.CreateDirectory(_f.Profile);
+        File.WriteAllText(Path.Combine(_f.Profile, "config.json"), """{"version":1,"devBox":{"keepAwake":false}}""");
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains("agent-bridge-host config set devBox.keepAwake true", report.ToString());
+        Assert.True(_f.Runtime_.Tasks[keepAwake].Enabled);
+        Assert.DoesNotContain(_f.Runtime_.Calls, c => c.StartsWith("disable", StringComparison.Ordinal));
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
+    public async Task A_disabled_keep_awake_task_leaves_keep_awake_as_agent_ha_bridges_file_and_the_profile_say()
+    {
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (false, false);
+        var ahb = JsonNode.Parse(File.ReadAllText(_f.ConfigPath))!.AsObject();
+        ahb["devBox"] = JsonNode.Parse("""{"keepAwake":true}""");
+        File.WriteAllText(_f.ConfigPath, ahb.ToJsonString());
+        Directory.CreateDirectory(_f.Profile);
+        File.WriteAllText(Path.Combine(_f.Profile, "config.json"), """{"version":1,"devBox":{"keepAwake":false}}""");
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.True(report.Ok, report.ToString());
+        Assert.False(HostSettings.Load(_f.Profile).Settings.DevBox.KeepAwake);
+        Assert.Contains("once migrate disables agent-ha-bridge's keep-awake task nothing will", report.ToString());
+    }
+
     [Theory]
     // As agent-ha-bridge ran it: never more than every 30 minutes, 1.25.0's hours read as minutes,
     // and nonsense as the default.

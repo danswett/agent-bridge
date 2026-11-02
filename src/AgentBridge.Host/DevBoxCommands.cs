@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core.DevBox;
+using AgentBridge.Local;
 
 namespace AgentBridge.Host;
 
@@ -15,8 +16,14 @@ namespace AgentBridge.Host;
 // and a second writer is exactly what the keep-awake is built to avoid.
 public static class DevBoxCommands
 {
+    // HostStatus.DevBox: present whenever the Dev Box agent's settings file is here, usable or not,
+    // so the app shows the setting and, when the file cannot be used, the alarm, rather than hiding
+    // the section as if this were not a Dev Box while it hibernates.
+    public static DevBoxStatus? Status(KeepAwakeState? state) => state is { IsDevBox: true } k
+        ? new DevBoxStatus(k.Enabled, k.IntervalMinutes, k.Last is { } last ? new DevBoxPass(k.LastAt!.Value, last.Outcome, last.Detail, last.Alarming) : null, k.NextAt, k.Problem)
+        : null;
     public static async Task<int> RunAsync(IReadOnlyList<string> args, HostSettings settings, string? settingsProblem, string log,
-        Func<(DevBoxIdentity? Identity, string? Problem)> findIdentity, Func<string?> agentHaBridgeKeepAwake, Func<KeepAwakeService> service,
+        Func<(DevBoxIdentity? Identity, string? Problem)> findIdentity, Func<KeepAwakeOwner?> agentHaBridgeKeepAwake, Func<KeepAwakeService> service,
         TextWriter output, TextWriter error, CancellationToken cancellationToken = default)
     {
         switch (args.ElementAtOrDefault(1))
@@ -26,13 +33,17 @@ public static class DevBoxCommands
                     var (identity, problem) = findIdentity();
                     output.WriteLine(identity is { } i
                         ? $"This machine is a Dev Box: {i.DevBox}, in project {i.Project} of {i.Endpoint.Host}."
-                        : $"This machine is not a Dev Box{(problem is { } p ? $": {p}" : "")}.");
+                        : problem is { } p
+                            ? $"This machine is a Dev Box, but its agent settings could not be used, so it cannot be kept awake: {p}."
+                            : "This machine is not a Dev Box.");
                     if (settingsProblem is not null) { output.WriteLine(settingsProblem); }
                     foreach (var wrong in settings.DevBoxProblems) { output.WriteLine($"config.json: {wrong}"); }
                     output.WriteLine(settings.DevBox.KeepAwake
                         ? $"Keep-awake is on (devBox.keepAwake): while the host serves, a pass every {settings.DevBox.IntervalMinutes} min (devBox.intervalMinutes) skips or delays this Dev Box's pending stop-on-disconnect."
                         : "Keep-awake is off (devBox.keepAwake): this host does not keep this Dev Box awake. Turn it on in the app's Settings, or with: agent-bridge-host config set devBox.keepAwake true");
-                    output.WriteLine(agentHaBridgeKeepAwake() is { } owner ? $"agent-ha-bridge: {owner}." : "agent-ha-bridge's own Dev Box keep-awake is not on here.");
+                    output.WriteLine(agentHaBridgeKeepAwake() is { } owner
+                        ? $"agent-ha-bridge: {owner.Reason}.{(owner.Known ? "" : " THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED.")}"
+                        : "agent-ha-bridge's own Dev Box keep-awake is not on here.");
                     output.WriteLine($"Each pass is logged in {log}, as lines beginning \"keep-awake\".");
                     return 0;
                 }

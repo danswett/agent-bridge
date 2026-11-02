@@ -337,10 +337,12 @@ public sealed class SettingsViewModel : Observable
         : d.Last is not { } last ? $"On: the first pass runs shortly, then one every {d.IntervalMinutes} minutes."
         : $"On, every {d.IntervalMinutes} minutes. Last pass at {last.At.ToLocalTime():t}: {last.Outcome}, {last.Detail}.{(d.NextAt is { } next ? $" Next at {next.ToLocalTime():t}." : "")}";
 
-    // What a person should act on: the last pass failed (az not signed in, say) or could not move
-    // the stop, so the Dev Box may hibernate.
-    public string? DevBoxAlarm => Status?.DevBox is { KeepAwake: true, Last: { Alarming: true } last }
-        ? $"The last pass did not keep this Dev Box awake ({last.Outcome}), so it may hibernate when you disconnect: {last.Detail}" : null;
+    // What a person should act on: the Dev Box agent's settings could not be used, or the last pass
+    // failed (az not signed in, say), could not move the stop, or stood back with no evidence that
+    // agent-ha-bridge keeps it awake, so the Dev Box may hibernate.
+    public string? DevBoxAlarm => Status?.DevBox is not { KeepAwake: true } d ? null
+        : d.Problem is { } problem ? $"This Dev Box's agent settings could not be used, so it cannot be kept awake and may hibernate when you disconnect: {problem}"
+        : d.Last is { Alarming: true } last ? $"The last pass did not keep this Dev Box awake ({last.Outcome}), so it may hibernate when you disconnect: {last.Detail}" : null;
 
     // Each setter acts only on a change: a binding refreshing pushes the same value back.
     public bool StartAtSignIn

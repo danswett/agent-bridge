@@ -87,7 +87,7 @@ public sealed class KeepAwakeOptions
     // Why agent-ha-bridge's own keep-awake owns this Dev Box's schedule now (its task is enabled,
     // or a pass of it runs, or that could not be told), or null when it does not. Asked before
     // every pass: two writers to one schedule is the double-writer problem G5 exists for.
-    public Func<string?> AgentHaBridgeKeepAwake { get; init; } = () => null;
+    public Func<KeepAwakeOwner?> AgentHaBridgeKeepAwake { get; init; } = () => null;
     // How soon after the host starts the first pass runs: soon, since a host started on a Dev Box
     // nobody is connected to may have a stop already pending.
     public TimeSpan FirstPass { get; init; } = TimeSpan.FromSeconds(30);
@@ -120,7 +120,7 @@ public sealed class KeepAwakeService : IAsyncDisposable
         this.log = log ?? (_ => { });
         enabled = options.Settings.KeepAwake;
         (var identity, identityProblem) = options.FindIdentity();
-        isDevBox = identity is not null;
+        isDevBox = identity is not null || identityProblem is not null;
     }
 
     public event Action? Changed;
@@ -150,14 +150,18 @@ public sealed class KeepAwakeService : IAsyncDisposable
 
     public void Start()
     {
-        if (isDevBox)
+        if (isDevBox && identityProblem is { } unusable && enabled)
+        {
+            log($"keep-awake is on (devBox.keepAwake), but this Dev Box's agent settings could not be used ({unusable}); every pass will fail until they can -- THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED");
+        }
+        else if (isDevBox)
         {
             log(enabled ? $"keep-awake is on (devBox.keepAwake): a pass in {options.FirstPass.TotalSeconds:F0} s, then every {options.Settings.IntervalMinutes} min"
                 : "keep-awake is off (devBox.keepAwake): unless agent-ha-bridge's own keep-awake runs here, this Dev Box may hibernate when its last session disconnects");
         }
         else if (enabled)
         {
-            log($"keep-awake is on (devBox.keepAwake) but this machine is not a Dev Box{(identityProblem is { } p ? $": {p}" : "")}; it is looked for again before every pass");
+            log("keep-awake is on (devBox.keepAwake) but this machine is not a Dev Box (it has no Dev Box agent settings); it is looked for again before every pass");
         }
         // Started whether or not this looks like a Dev Box now: the agent's settings file can be
         // unreadable for a moment (the agent rewriting or updating it), and one bad read at logon
@@ -186,14 +190,18 @@ public sealed class KeepAwakeService : IAsyncDisposable
         });
     }
 
+    // This machine's identity now. Its Dev Box agent's settings being there at all, usable or not,
+    // is what makes it a Dev Box for the status, so a file the host cannot use shows as an alarm in
+    // the app rather than the setting disappearing.
     DevBoxIdentity? Identify()
     {
         var (identity, problem) = options.FindIdentity();
+        var present = identity is not null || problem is not null;
         bool changed;
         lock (sync)
         {
-            changed = isDevBox != (identity is not null);
-            isDevBox = identity is not null;
+            changed = isDevBox != present || identityProblem != problem;
+            isDevBox = present;
             identityProblem = problem;
         }
         if (changed) { Changed?.Invoke(); }
@@ -222,10 +230,21 @@ public sealed class KeepAwakeService : IAsyncDisposable
     public async Task<KeepAwakeResult> PassAsync(bool dryRun = false, CancellationToken cancellationToken = default)
     {
         var identity = Identify();
-        if (identity is null) { return Record(new(KeepAwakeResult.NotADevBox, State.Problem ?? "this machine is not a Dev Box"), dryRun); }
+        // The Dev Box agent's settings are here but cannot be used (a shape not known, a file being
+        // rewritten, an address refused): this is a Dev Box that cannot be kept awake, which is a
+        // failure to raise every pass, not "not a Dev Box" said once.
+        if (identity is null && State.Problem is { } unusable)
+        {
+            return Record(new(KeepAwakeResult.Failed, $"this Dev Box's agent settings could not be used, so it cannot be kept awake: {unusable}"), dryRun);
+        }
+        if (identity is null) { return Record(new(KeepAwakeResult.NotADevBox, "this machine is not a Dev Box"), dryRun); }
         // A dry run changes nothing, so agent-ha-bridge's keep-awake running beside it does not
-        // matter, nor does another pass.
-        if (!dryRun && options.AgentHaBridgeKeepAwake() is { } owner) { return Record(new(KeepAwakeResult.StoodBack, owner), dryRun); }
+        // matter, nor does another pass. Standing back only because Task Scheduler could not be
+        // read is an alarm: nothing may be keeping the Dev Box awake.
+        if (!dryRun && options.AgentHaBridgeKeepAwake() is { } owner)
+        {
+            return Record(new(KeepAwakeResult.StoodBack, owner.Reason) { Unsure = !owner.Known }, dryRun);
+        }
         IDisposable? held = null;
         if (!dryRun)
         {
@@ -268,5 +287,12 @@ public sealed class KeepAwakeService : IAsyncDisposable
     }
 }
 
-// The keep-awake's state for the host's status (HostStatus.DevBox).
+// The keep-awake's state for the host's status (HostStatus.DevBox). IsDevBox: the Dev Box agent's
+// settings file is here, usable or not, so the app shows the setting and any alarm.
 public sealed record KeepAwakeState(bool IsDevBox, string? Problem, bool Enabled, int IntervalMinutes, DateTimeOffset? LastAt, KeepAwakeResult? Last, DateTimeOffset? NextAt);
+
+// Who keeps this Dev Box awake instead of the host: agent-ha-bridge's own keep-awake. Known: there
+// is positive evidence (its task enabled or running, a pass of it holding its mutex); false when
+// Task Scheduler could not be read, so standing back is only caution, and nothing may be keeping
+// the Dev Box awake at all.
+public sealed record KeepAwakeOwner(string Reason, bool Known = true);

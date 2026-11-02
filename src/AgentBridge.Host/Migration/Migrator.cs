@@ -160,6 +160,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             return new(false, lines);
         }
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
+        // Whether agent-ha-bridge's keep-awake task is what keeps this Dev Box awake now: migrate
+        // disables it, so the host must take it over (ConfigImport carries it as on).
+        var keepAwakeTaskEnabled = false;
         foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
         {
             ScheduledTaskState? state;
@@ -169,6 +172,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 Say($"Refused: Task Scheduler could not be asked about {name} ({e.Message}); nothing was changed.");
                 return new(false, lines);
             }
+            if (name == install.DevBoxTaskName && state is { Enabled: true }) { keepAwakeTaskEnabled = true; }
             if (state is { Enabled: true, Modifiable: false })
             {
                 Say($"Refused: {name} was registered from an administrator (elevated) prompt, so Task Scheduler lets this Windows user read it but not disable it, and agent-ha-bridge could not be handed over. Re-register it as this user: remove it from an elevated prompt (Unregister-ScheduledTask -TaskName {name}), then run agent-ha-bridge's installer again from a normal one, and migrate again.");
@@ -198,7 +202,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // Read once: these bytes are what the import is built from, what is snapshotted, and what
         // the file must still be when it is written.
         var hostBytes = File.Exists(hostConfig) ? File.ReadAllBytes(hostConfig) : null;
-        var import = ConfigImport.Build(install.Config, hostBytes is null ? null : Decode(hostBytes));
+        var import = ConfigImport.Build(install.Config, hostBytes is null ? null : Decode(hostBytes), keepAwakeTaskEnabled);
         if (import.Problems.Count > 0)
         {
             Say("Refused: the settings carried over would leave this profile's config.json with problems: " + string.Join("; ", import.Problems));

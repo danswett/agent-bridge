@@ -255,7 +255,7 @@ switch (command)
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
             using var devCenter = new AgentBridge.Host.Core.DevBox.DevCenterHttp(TimeSpan.FromSeconds(30));
             return await DevBoxCommands.RunAsync(arguments, settings, settingsProblem, Path.Combine(Identity.DefaultRoot, profileName, "logs", "host.log"),
-                FindDevBox, KeepAwakeOwner, () => NewKeepAwake(devCenter), Console.Out, Console.Error, stop.Token);
+                FindDevBox, AgentHaBridgeKeepAwakeOwner, () => NewKeepAwake(devCenter), Console.Out, Console.Error, stop.Token);
         }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
@@ -454,9 +454,7 @@ async Task<int> ServeAsync()
         },
         ApplyRemoteFolderTrustDevices = ids => launcher.TrustDevices = ids,
         ApplyDevBoxKeepAwake = keepAwake is null ? null : on => keepAwake.Enabled = on,
-        DevBox = () => keepAwake?.State is { IsDevBox: true } k
-            ? new DevBoxStatus(k.Enabled, k.IntervalMinutes, k.Last is { } last ? new DevBoxPass(k.LastAt!.Value, last.Outcome, last.Detail, last.Alarming) : null, k.NextAt)
-            : null,
+        DevBox = () => DevBoxCommands.Status(keepAwake?.State),
         Updates = updates,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
@@ -668,14 +666,14 @@ KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
         ? new KeepAwakeLocks(new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
             new DelegateKeepAwakeLock(() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().HoldKeepAwake() : null))
         : new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
-    AgentHaBridgeKeepAwake = KeepAwakeOwner,
+    AgentHaBridgeKeepAwake = AgentHaBridgeKeepAwakeOwner,
 }, Log);
 
 // Dev Boxes are Windows machines: anywhere else this is not one.
 static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
     OperatingSystem.IsWindows() ? DevBoxIdentity.Read(DevBoxIdentity.FindSettings()) : (null, null);
 
-static string? KeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
+static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
 // host.restart: the same command again, without a window, which waits for this process to let
 // go of the profile's lock before it starts.

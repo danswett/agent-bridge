@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core.DevBox;
 
 namespace AgentBridge.Host.Delivery.Windows;
 
@@ -43,8 +44,9 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
     // writers to one schedule is the double-writer problem G5 exists for, so a host beside
     // agent-ha-bridge (read-only or not) stands back while it is on; migrate disables the task and
     // the host takes over, and rollback enables it again. Not being able to read the scheduler is
-    // not permission.
-    public string? KeepAwakeActive()
+    // not permission, but it is not evidence either: the result says so (Known false), so a stand-
+    // back on it alarms instead of passing for agent-ha-bridge keeping the Dev Box awake.
+    public KeepAwakeOwner? KeepAwakeActive()
     {
         var tasks = KeepAwakeTasks();
         var passes = new SortedSet<string>(StringComparer.Ordinal);
@@ -54,15 +56,17 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
         return KeepAwakeReason(tasks, passes);
     }
 
-    internal static string? KeepAwakeReason(IReadOnlyList<(string Name, bool Enabled, bool Running)>? tasks, IEnumerable<string> passes)
+    internal static KeepAwakeOwner? KeepAwakeReason(IReadOnlyList<(string Name, bool Enabled, bool Running)>? tasks, IEnumerable<string> passes)
     {
         var owning = (tasks ?? []).Where(t => t.Enabled || t.Running).Select(t => $"task {t.Name} ({(t.Running ? "running" : "enabled")})")
             .Concat(passes.Select(p => $"{p} (a pass is running)")).Distinct().ToList();
         if (owning.Count > 0)
         {
-            return $"agent-ha-bridge's own Dev Box keep-awake is on here ({string.Join(", ", owning)}), so it keeps this Dev Box awake and this host stands back";
+            return new($"agent-ha-bridge's own Dev Box keep-awake is on here ({string.Join(", ", owning)}), so it keeps this Dev Box awake and this host stands back");
         }
-        return tasks is null ? "whether agent-ha-bridge's own Dev Box keep-awake is on could not be checked, so this host stands back rather than be a second writer to the schedule" : null;
+        return tasks is null
+            ? new("Task Scheduler could not be read to tell whether agent-ha-bridge's own Dev Box keep-awake is on, so this host stands back rather than be a second writer to the schedule, and nothing may be keeping this Dev Box awake", Known: false)
+            : null;
     }
 
     // For as long as a pass of this host's runs, the mutex each of agent-ha-bridge's keep-awake

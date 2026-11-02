@@ -438,18 +438,40 @@ public sealed class DevBoxTests : IDisposable
     {
         var dc = new FakeDevCenter { Answer = Serving(Actions(Stop("2026-09-30T23:00:00Z"))) };
         var token = new FakeToken();
-        string? owner = "agent-ha-bridge's own Dev Box keep-awake is on here (task AgentBridgeDevBoxKeepAwake_0123 (enabled))";
+        KeepAwakeOwner? owner = new("agent-ha-bridge's own Dev Box keep-awake is on here (task AgentBridgeDevBoxKeepAwake_0123 (enabled))");
         var service = Service(dc, token: token, agentHaBridge: () => owner);
 
         var result = await service.PassAsync();
 
         Assert.Equal(KeepAwakeResult.StoodBack, result.Outcome);
-        Assert.Equal(owner, result.Detail);
+        Assert.Equal(owner.Reason, result.Detail);
+        // agent-ha-bridge keeps it awake: nothing to raise.
+        Assert.False(result.Alarming);
         Assert.Empty(dc.Calls);
         Assert.Equal(0, token.Asked);
         // Once migrate has disabled that task, the host keeps the Dev Box awake itself.
         owner = null;
         Assert.Equal(KeepAwakeResult.Skipped, (await service.PassAsync()).Outcome);
+    }
+
+    // After migrate the task is disabled; if Task Scheduler then cannot be read, standing back is
+    // only caution, with nothing known to keep the Dev Box awake: that must not pass silently.
+    [Fact]
+    public async Task Standing_back_because_Task_Scheduler_could_not_be_read_is_an_alarm_not_a_quiet_stand_back()
+    {
+        var dc = new FakeDevCenter { Answer = Serving(Actions(Stop("2026-09-30T23:00:00Z"))) };
+        var service = Service(dc, agentHaBridge: () => new("Task Scheduler could not be read", Known: false));
+
+        var first = await service.PassAsync();
+        var second = await service.PassAsync();
+
+        Assert.Equal(KeepAwakeResult.StoodBack, first.Outcome);
+        Assert.True(first.Alarming);
+        Assert.True(service.State.Last!.Alarming);
+        Assert.Empty(dc.Calls);
+        // Said every pass, not once.
+        Assert.Equal(2, log.Count(l => l.StartsWith("keep-awake: stood-back:", StringComparison.Ordinal) && l.EndsWith("THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED", StringComparison.Ordinal)));
+        Assert.True(second.Alarming);
     }
 
     // ---- when passes run ----
@@ -501,11 +523,11 @@ public sealed class DevBoxTests : IDisposable
     }
 
     [Fact]
-    public async Task A_Dev_Box_whose_agent_settings_could_not_be_read_at_start_is_kept_awake_once_they_can_be()
+    public async Task A_Dev_Box_whose_agent_settings_cannot_be_used_fails_loudly_every_pass_and_is_kept_awake_once_they_can_be()
     {
         var time = new FakeTimeProvider(Now);
         var dc = new FakeDevCenter { Answer = Serving(Actions(Stop("2026-09-30T23:00:00Z"))) };
-        // The Dev Box agent rewriting its file as the host starts at logon.
+        // The Dev Box agent rewriting its file as the host starts at logon, or a shape not known.
         var readable = false;
         await using var service = new KeepAwakeService(new KeepAwakeOptions
         {
@@ -518,12 +540,18 @@ public sealed class DevBoxTests : IDisposable
         }, m => { lock (log) { log.Add(m); } });
 
         service.Start();
-        Assert.False(service.State.IsDevBox);
+        // Still a Dev Box for the status, so the app shows the setting and the alarm.
+        Assert.True(service.State.IsDevBox);
+        Assert.Contains("could not be read", service.State.Problem);
         await Until(() => service.State.NextAt is not null, "the first pass to be scheduled");
         time.Advance(TimeSpan.FromSeconds(30));
         await Until(() => service.State.Last is not null, "the first pass");
-        Assert.Equal(KeepAwakeResult.NotADevBox, service.State.Last!.Outcome);
+        Assert.Equal(KeepAwakeResult.Failed, service.State.Last!.Outcome);
+        Assert.True(service.State.Last.Alarming);
         Assert.Empty(dc.Calls);
+        // Every pass says it, not once.
+        Assert.Equal(KeepAwakeResult.Failed, (await service.PassAsync()).Outcome);
+        lock (log) { Assert.Equal(2, log.Count(l => l.StartsWith("keep-awake: failed:", StringComparison.Ordinal) && l.EndsWith("MAY HIBERNATE WHEN DISCONNECTED", StringComparison.Ordinal))); }
 
         readable = true;
         await Until(() => service.State.NextAt == Now.AddSeconds(30).AddMinutes(15), "the next pass to be scheduled");
@@ -531,6 +559,7 @@ public sealed class DevBoxTests : IDisposable
 
         await Until(() => service.State.Last?.Outcome == KeepAwakeResult.Skipped, "the stop skipped");
         Assert.True(service.State.IsDevBox);
+        Assert.Null(service.State.Problem);
     }
 
     [Fact]
@@ -554,7 +583,7 @@ public sealed class DevBoxTests : IDisposable
         static (bool, int) Of(DevBoxSettings s) => (s.KeepAwake, s.IntervalMinutes);
     }
 
-    KeepAwakeService Service(FakeDevCenter dc, IDevCenterToken? token = null, Func<string?>? agentHaBridge = null, TimeProvider? time = null, DevBoxSettings? settings = null) =>
+    KeepAwakeService Service(FakeDevCenter dc, IDevCenterToken? token = null, Func<KeepAwakeOwner?>? agentHaBridge = null, TimeProvider? time = null, DevBoxSettings? settings = null) =>
         new(new KeepAwakeOptions
         {
             Settings = settings ?? new DevBoxSettings { KeepAwake = true },

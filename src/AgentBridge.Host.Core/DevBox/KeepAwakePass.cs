@@ -12,17 +12,22 @@ namespace AgentBridge.Host.Core.DevBox;
 //                      a person needs to act on, so it wins the summary
 //   dry-run            what a pass would have cleared, having changed nothing
 //   failed             the pass could not finish (no az login, Dev Center unreachable)
-//   not-a-devbox       this machine is not a Dev Box
+//   not-a-devbox       this machine is not a Dev Box (it has no Dev Box agent settings at all; a
+//                      settings file this host cannot use is failed)
 // and this host's own:
-//   stood-back         agent-ha-bridge's keep-awake task is enabled here, so it is that task's
+//   stood-back         agent-ha-bridge's keep-awake task is enabled here, so it is that task's;
+//                      alarming (Unsure) when Task Scheduler could not be read to tell
 //   busy               another pass was already running
 public sealed record KeepAwakeResult(string Outcome, string Detail)
 {
     public const string Skipped = "skipped", Delayed = "delayed", Safe = "safe", NoAction = "no-action", Blocked = "blocked",
         DryRun = "dry-run", Failed = "failed", NotADevBox = "not-a-devbox", StoodBack = "stood-back", Busy = "busy";
 
+    // Stood back without positive evidence that anything else keeps the Dev Box awake.
+    public bool Unsure { get; init; }
+
     // What a person needs to look at: the Dev Box may hibernate.
-    public bool Alarming => Outcome is Failed or Blocked;
+    public bool Alarming => Outcome is Failed or Blocked || Unsure;
 }
 
 // One keep-awake pass, as agent-ha-bridge's Invoke-BridgeDevBoxKeepAwake: find any pending stop

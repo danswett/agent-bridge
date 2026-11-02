@@ -59,7 +59,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static bool Named(string key, params string[] names) => names.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase));
     static bool Secret(string key) => Secrets.Contains(key, StringComparer.OrdinalIgnoreCase);
 
-    public static ConfigImport Build(JsonObject ahb, string? hostText)
+    // keepAwakeTaskEnabled: agent-ha-bridge's AgentBridgeDevBoxKeepAwake_<id> is registered and
+    // enabled, so it is what keeps this Dev Box awake now, and migrate is about to disable it.
+    public static ConfigImport Build(JsonObject ahb, string? hostText, bool keepAwakeTaskEnabled = false)
     {
         var imported = new List<string>();
         var kept = new List<string>();
@@ -243,20 +245,26 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             }
             // The Dev Box keep-awake (#47), whose task migrate disables: without these the host
             // would not take it over, and the Dev Box would hibernate on disconnect.
-            if (ahb["devBox"] is JsonObject devBox)
+            // agent-ha-bridge's keep-awake is its task: enabled, it runs every interval whatever
+            // devBox.keepAwake says (the pass never reads it, and install.ps1's [bool] reads any
+            // text but "" as true). So an enabled task is carried as on, whatever the file says,
+            // and a profile that would leave it off refuses the migration.
+            var devBox = ahb["devBox"] as JsonObject;
+            if (devBox is not null || keepAwakeTaskEnabled)
             {
                 var target3 = new JsonObject();
-                if (Bool(devBox["keepAwake"]) is { } keepAwake) { target3["keepAwake"] = keepAwake; }
+                if (keepAwakeTaskEnabled) { target3["keepAwake"] = true; }
+                else if (devBox is not null && Bool(devBox["keepAwake"]) is { } keepAwake) { target3["keepAwake"] = keepAwake; }
                 // As Get-BridgeDevBoxIntervalMinutes reads it: intervalMinutes, else 1.25.0's
                 // intervalHours; a nonsense value is the default, and none is more than the cap.
-                var hasMinutes = devBox.ContainsKey("intervalMinutes");
-                var from = hasMinutes ? "devBox.intervalMinutes" : devBox.ContainsKey("intervalHours") ? "devBox.intervalHours" : null;
+                var hasMinutes = devBox?.ContainsKey("intervalMinutes") == true;
+                var from = devBox is null ? null : hasMinutes ? "devBox.intervalMinutes" : devBox.ContainsKey("intervalHours") ? "devBox.intervalHours" : null;
                 if (from is not null)
                 {
                     // Each read with PowerShell's -as [int] before anything else, as there: hours
                     // are made whole before they are made minutes (0.5 h ran every 15 minutes, the
                     // default, not every 30).
-                    int? configured = hasMinutes ? AsInt(devBox["intervalMinutes"]) : AsInt(devBox["intervalHours"]) is { } h ? h * 60 : null;
+                    int? configured = hasMinutes ? AsInt(devBox!["intervalMinutes"]) : AsInt(devBox!["intervalHours"]) is { } h ? h * 60 : null;
                     var interval = configured is not { } c || c < 1 ? AgentBridge.Host.Core.DevBox.DevBoxSettings.DefaultIntervalMinutes
                         : Math.Min(c, AgentBridge.Host.Core.DevBox.DevBoxSettings.MaxIntervalMinutes);
                     if (!hasMinutes || configured != interval)
@@ -265,18 +273,32 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     }
                     target3["intervalMinutes"] = interval;
                 }
+                var written = devBox?["keepAwake"];
                 if (target3.Count > 0)
                 {
                     var section = Section(host, "devBox");
-                    foreach (var (key, value) in target3.ToList()) { Put(section, key, value!.DeepClone(), key == "intervalMinutes" ? from! : $"devBox.{key}", $"devBox.{key}"); }
+                    foreach (var (key, value) in target3.ToList())
+                    {
+                        var source = key == "intervalMinutes" ? from! : keepAwakeTaskEnabled ? "agent-ha-bridge's enabled keep-awake task" : $"devBox.{key}";
+                        Put(section, key, value!.DeepClone(), source, $"devBox.{key}");
+                    }
+                    var on = section["keepAwake"]?.GetValueKind() == JsonValueKind.True;
+                    if (keepAwakeTaskEnabled && !on)
+                    {
+                        problems.Add("agent-ha-bridge's keep-awake task is enabled, so it keeps this Dev Box awake, and migrate disables it; but this profile's devBox.keepAwake is not true, so nothing would. Turn it on first (agent-bridge-host config set devBox.keepAwake true), or disable that task in agent-ha-bridge if the Dev Box should sleep, and migrate again");
+                    }
+                    else if (keepAwakeTaskEnabled && written?.GetValueKind() != JsonValueKind.True)
+                    {
+                        kept.Add($"devBox.keepAwake: agent-ha-bridge's file says {written?.ToJsonString() ?? "nothing"}, but its keep-awake task is enabled, and that is what kept this Dev Box awake, so it is on here too");
+                    }
                     // Said plainly: the person chose it here, but it is the difference between this
                     // Dev Box staying up and hibernating once migrate disables the task.
-                    if (Bool(devBox["keepAwake"]) == true && section["keepAwake"]?.GetValueKind() != JsonValueKind.True)
+                    else if (Bool(written) == true && !on)
                     {
                         kept.Add("devBox.keepAwake: agent-ha-bridge keeps this Dev Box awake, but this profile does not, so once migrate disables agent-ha-bridge's keep-awake task nothing will (turn it on in the app's Settings, or with agent-bridge-host config set devBox.keepAwake true)");
                     }
                 }
-                foreach (var (key, _) in devBox.Where(p => !Named(p.Key, "keepAwake", "intervalMinutes", "intervalHours")))
+                foreach (var (key, _) in devBox?.Where(p => !Named(p.Key, "keepAwake", "intervalMinutes", "intervalHours")) ?? [])
                 {
                     notCarried.Add($"devBox.{key}");
                 }
