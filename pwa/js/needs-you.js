@@ -71,9 +71,12 @@ function literalShape(message) {
   // command's lines; and no link anywhere hides where it goes behind its words.
   const nodes = parseMarkdown(message);
   if (hidesLink(nodes)) { return false; }
-  if (at < 0) { return !nodes.some((n) => n?.tag === 'pre'); }
+  // Counted at every depth: a block nested in a quote or a list item escapes the opening-fence
+  // check above, and its info string is not drawn either.
+  const blocks = codeBlocks(nodes);
+  if (at < 0) { return blocks === 0; }
   const last = nodes.at(-1);
-  return last?.tag === 'pre' && nodes.filter((n) => n?.tag === 'pre').length === 1
+  return last?.tag === 'pre' && blocks === 1
     && last.children?.[0]?.children?.join('') === lines.slice(at + 1, -1).join('\n');
 }
 
@@ -82,6 +85,8 @@ const textOf = (n) => (typeof n === 'string' ? n : (n?.children ?? []).map(textO
 const bare = (u) => String(u ?? '').replace(/\/+$/, '');
 const hidesLink = (nodes) => nodes.some((n) => n && typeof n === 'object'
   && ((n.tag === 'a' && bare(textOf(n)) !== bare(n.attrs?.href)) || (Array.isArray(n.children) && hidesLink(n.children))));
+
+const codeBlocks = (nodes) => nodes.reduce((n, x) => n + (x && typeof x === 'object' ? (x.tag === 'pre' ? 1 : 0) + (Array.isArray(x.children) ? codeBlocks(x.children) : 0) : 0), 0);
 
 // How much of an approval's prompt the lane can show whole. Approve once allows everything the
 // prompt describes (a command, a URL, a tool's arguments), so it is offered in the lane only when
