@@ -538,7 +538,10 @@ public sealed class HomeAssistantClient : IHomeAssistant
         using var lease = await auth.EnterAsync(credential, timeout.Token);
         WebSocket ws;
         try { ws = await connect(WebSocketUri, timeout.Token); }
-        catch (Exception e) when (UpgradeStatus(e) is { } status && lease.Answered(status) is { } refused) { throw refused; }
+        // Only a refusal says anything of the token: a 200 or 404 where the upgrade was expected
+        // means it was never sent, and must not count as accepted.
+        catch (Exception e) when (UpgradeStatus(e) is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+            && lease.Answered(UpgradeStatus(e)!.Value) is { } refused) { throw refused; }
         try
         {
             await HaWebSocket.AuthenticateAsync(ws, token, timeout.Token);

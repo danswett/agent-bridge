@@ -476,6 +476,49 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(4, ha.Seen.Count);
     }
 
+    // Three tokens refused once each spend the machine's three: all three stop, and stay stopped
+    // when a fourth logs in and Home Assistant's count, and the guard's, start again.
+    [Fact]
+    public async Task Tokens_that_spent_the_machines_count_between_them_stay_stopped_after_another_token_logs_in()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        var tokens = new[] { "a-not-a-secret", "b-not-a-secret", "c-not-a-secret" }.Select(t => Client(ha, guard, t)).ToList();
+        foreach (var t in tokens) { await Publish(t); }
+        Assert.Equal(3, ha.Seen.Count);
+
+        using (var l = await guard.EnterAsync(guard.Credential(Url, "d-not-a-secret"))) { l.Authenticated(true); }
+        foreach (var t in tokens) { await Hammer(t, TimeSpan.FromHours(2)); }
+
+        Assert.Equal(3, ha.Seen.Count);
+    }
+
+    // An upgrade answered 200 or 404 never carried the token, so it says nothing of it: the token is
+    // still not known to be accepted, and callers with it still go one at a time.
+    [Fact]
+    public async Task A_websocket_upgrade_that_fails_without_a_refusal_does_not_count_the_token_as_accepted()
+    {
+        var gate = new TaskCompletionSource();
+        var sent = 0;
+        var handler = new Waiting(async () =>
+        {
+            Interlocked.Increment(ref sent);
+            await gate.Task;
+            return HttpStatusCode.Unauthorized;
+        });
+        var guard = new HaAuthGuard(Record, time);
+        var client = new HomeAssistantClient(Url, Token, new HttpClient(handler),
+            (_, _) => throw new System.Net.WebSockets.WebSocketException("The server returned status code '404' when status code '101' was expected."), guard);
+        await Assert.ThrowsAsync<System.Net.WebSockets.WebSocketException>(() => client.ListEntityRegistryAsync());
+
+        var burst = Enumerable.Range(0, 6).Select(_ => Publish(client)).ToList();
+        await Task.Delay(200);
+        gate.SetResult();
+        await Task.WhenAll(burst);
+
+        Assert.Equal(1, sent);
+    }
+
     // The record keeps a bounded number of addresses and tokens, but never by forgetting a refusal.
     [Fact]
     public async Task A_stopped_token_stays_stopped_however_many_other_tokens_and_addresses_come_after_it()

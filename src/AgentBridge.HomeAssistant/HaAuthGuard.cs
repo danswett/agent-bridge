@@ -389,8 +389,13 @@ public sealed class HaAuthGuard
                     s.Strikes++;
                     s.StrikeAt = now;
                     // Stopped for good, not only while the count stands: a login with another token
-                    // resets the count, and must not give this one its attempts back.
-                    if (c.Rejections >= MaxRejections || s.Strikes >= MaxRejections) { c.Stopped = true; }
+                    // resets the count, and must not give these their attempts back. At the machine's
+                    // limit, that is every token refused so far, not only this one.
+                    if (c.Rejections >= MaxRejections) { c.Stopped = true; }
+                    if (s.Strikes >= MaxRejections)
+                    {
+                        foreach (var refused in s.Servers.Values.SelectMany(x => x.Credentials.Values).Where(x => x.Rejections > 0)) { refused.Stopped = true; }
+                    }
                 }
             });
             said = DescribeLocked(credential) ?? Message(credential, kind);
