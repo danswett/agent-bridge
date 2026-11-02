@@ -159,8 +159,8 @@ sessions and never moves their rows. An entry leaves when its question does.
   buttons: the same request, the same progress shown in the entry and on the card, and the
   same outcomes (a refused or busy answer can be given again, stale and unconfirmed are
   final). A longer approval (an edit's diff, a long command), one with a table, one not shaped
-  as a host writes a permission (a fence in its words, words after its command, a link, whose
-  words hide where it goes), or one from Codex (whose command can reach the machine cut short)
+  as a host writes a permission (a fence in its words, words after its command or its opening
+  fence, a link, whose words hide where it goes), or one from Codex (whose command can reach the machine cut short)
   opens its session instead.
 * **A form**, or a question this machine won't take from the phone, opens its session (the
   title), where the card says what it asks.

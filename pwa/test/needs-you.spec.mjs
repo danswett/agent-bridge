@@ -214,7 +214,8 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await e.getByRole('button', { name: /^Approve once/ }).click();
     await expect(e.locator('.needs-status')).toHaveText("Couldn't send it: the host is restarting.");
     await expect(e.getByRole('button', { name: /^Approve once/ })).toBeDisabled();
-    await e.getByRole('button', { name: 'Try again' }).click();
+    // Named for its session, as Approve once and Deny are: two failed sends can both offer it.
+    await e.getByRole('button', { name: 'Try again: Land the P1 slices', exact: true }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
     const [first, second] = await log(page);
     expect(second.request).toBe(first.request);

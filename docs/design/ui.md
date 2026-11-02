@@ -220,8 +220,8 @@ Sections, top to bottom:
      request, progress and outcomes. The action is the whole prompt, drawn as the card
      draws it with code literal, since Approve once allows all of it; one too long to show
      whole (an edit's diff, a long command), with a table, not shaped as a host writes a
-     permission (prose, then at most one fenced block ending it, and no link, whose words
-     hide where it goes), or from an agent whose prompt can reach the host cut short
+     permission (prose, then at most one fenced block ending it, its fence naming no
+     language but json or diff, and no link, whose words hide where it goes), or from an agent whose prompt can reach the host cut short
      (Codex, today; only Copilot's are whole and literal) opens the session instead.
    - Forms open the session. `answerAtMachine` entries say so and have no controls.
    - The lane references sessions; it never moves their rows.

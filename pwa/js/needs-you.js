@@ -53,27 +53,35 @@ export function questionLine(q) {
 // Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
 // allowed: prose, then at most one fenced block, which ends the prompt and holds the command
 // literal. A fence in the prose (the agent's own words can open one) would let the command's fence
-// close it instead and draw the command as Markdown, hiding some of it; and a link shows its
-// words, not where it goes. Either opens the session, where the card has the time to be read.
-function literalShape(text) {
-  const message = text.replace(/\r\n?/g, '\n');
+// close it instead and draw the command as Markdown, hiding some of it; a link shows its words,
+// not where it goes; and words after the opening fence are not drawn at all, so only the info
+// strings a host writes (none, json, diff) are taken. Any of those opens the session.
+function literalShape(message) {
   const lines = message.split('\n');
   const at = lines.findIndex((l) => FENCE.test(l));
   if (at >= 0) {
     const open = FENCE.exec(lines[at])[1];
+    if (!['', 'json', 'diff'].includes(lines[at].trim().slice(open.length).trim())) { return false; }
     const end = lines.findIndex((l, i) => i > at && closes(open, l));
     if (end !== lines.length - 1) { return false; }
   }
   const prose = (at >= 0 ? lines.slice(0, at) : lines).join('\n');
-  if (/\]\s*[([]/.test(prose) || /^ {0,3}\[[^\]]+\]:/m.test(prose)) { return false; }
+  if (/\]\s*[([]/.test(prose) || /\[[^\]]*\]:/.test(prose)) { return false; }
   // The renderer must agree: the fenced block, if any, is its last block, holding exactly the
-  // command's lines.
+  // command's lines; and no link anywhere hides where it goes behind its words.
   const nodes = parseMarkdown(message);
+  if (hidesLink(nodes)) { return false; }
   if (at < 0) { return !nodes.some((n) => n?.tag === 'pre'); }
   const last = nodes.at(-1);
   return last?.tag === 'pre' && nodes.filter((n) => n?.tag === 'pre').length === 1
     && last.children?.[0]?.children?.join('') === lines.slice(at + 1, -1).join('\n');
 }
+
+// A link whose words are not its address (an autolink's are), at any depth.
+const textOf = (n) => (typeof n === 'string' ? n : (n?.children ?? []).map(textOf).join(''));
+const bare = (u) => String(u ?? '').replace(/\/+$/, '');
+const hidesLink = (nodes) => nodes.some((n) => n && typeof n === 'object'
+  && ((n.tag === 'a' && bare(textOf(n)) !== bare(n.attrs?.href)) || (Array.isArray(n.children) && hidesLink(n.children))));
 
 // How much of an approval's prompt the lane can show whole. Approve once allows everything the
 // prompt describes (a command, a URL, a tool's arguments), so it is offered in the lane only when
@@ -86,7 +94,8 @@ export const PROMPT_MAX = Object.freeze({ chars: 600, lines: 12 });
 const hasTable = (nodes) => nodes.some((n) => n && typeof n === 'object' && (n.tag === 'table' || (Array.isArray(n.children) && hasTable(n.children))));
 
 export function wholePrompt(q) {
-  const m = (q?.message ?? '').trim();
+  // Every line ending the renderer breaks on is counted: a bare CR is a line too.
+  const m = (q?.message ?? '').trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
     && literalShape(m) && !hasTable(parseMarkdown(m));
 }

@@ -137,6 +137,7 @@ export class NeedsYouLane {
     els.title.setAttribute('aria-label', `${subject}: open the session`);
     els.approve?.setAttribute('aria-label', `Approve once: ${subject}`);
     els.deny?.setAttribute('aria-label', `Deny: ${subject}`);
+    els.resend?.setAttribute('aria-label', `Try again: ${subject}`);
     this.#age(view);
   }
 

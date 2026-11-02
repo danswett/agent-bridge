@@ -70,6 +70,11 @@ test('an approval whose prompt a fence or a link could make draw differently fro
     'a reference link': 'Send to [backup][1]?\n\n[1]: https://other.example',
     'words after the command': 'Allow **shell**?\n\n```\nls\n```\n\nAnd then more',
     'a fence left open': 'Allow **shell**?\n\n```\nls',
+    // Words after the opening fence are not drawn: a tool's description could say one thing there
+    // and another in the block.
+    'words after the opening fence': 'Allow **mytool**?\n\n``` Deletes all backups\nPrint the current status\n```',
+    'a shortcut reference defined in a quote': '> Send to [backup]\n>\n> [backup]: https://other.example',
+    'more lines than shown whole, broken by bare CRs': 'Allow **shell**?\r\r```\r1\r2\r3\r4\r5\r6\r7\r8\r9\r10\r```',
   };
   for (const [what, message] of Object.entries(opens)) {
     const [e] = lane([entry('h1', session('a', approval('q', { message })))]);
@@ -80,6 +85,8 @@ test('an approval whose prompt a fence or a link could make draw differently fro
     'shorter fences inside the command': 'Allow **shell**?\n\n````\ncat <<EOF\n```\nx\n```\nEOF\n````',
     'no command at all': 'Allow the **github** tool `create_issue`?',
     'CRLF line ends': 'Allow **shell**?\r\n\r\n```\r\nls -la\r\n```',
+    'a json block': 'Allow **mcp**?\n\n```json\n{ "a": 1 }\n```',
+    'a diff block': 'Allow **edit**?\n\n```diff\n+a\n```',
   };
   for (const [what, message] of Object.entries(approves)) {
     assert.equal(lane([entry('h1', session('a', approval('q', { message })))])[0].mode, 'approve', what);
