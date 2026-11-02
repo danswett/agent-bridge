@@ -38,7 +38,8 @@ const closes = (open, line) => new RegExp(`^ {0,3}${open[0] === '`' ? '`' : '~'}
 export function questionLine(q) {
   let open = null;
   let code = null;
-  for (const l of (q?.message ?? '').split('\n')) {
+  // Any line ending the renderer breaks on: a bare CR too.
+  for (const l of (q?.message ?? '').split(/\r\n?|\n/)) {
     if (open) {
       if (closes(open, l)) { open = null; } else if (l.trim()) { code ??= l; }
       continue;
