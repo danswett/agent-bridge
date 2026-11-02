@@ -134,8 +134,16 @@ public static class UsageProtocol
 // the account's other machines. Grouped as clients group them (UsageMerge, pwa/js/usage.js).
 public static class UsageShare
 {
-    // One allowance: an agent and its account.
-    public static string Key(AgentUsage a) => $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";
+    // One allowance: an agent and its account. A reading that names no account at all (Codex's from
+    // its transcripts, or from a probe that could not be sure whose it was) cannot be told from
+    // another user's, so it stays apart, an allowance of the machine that read it (#200): grouped by
+    // agent alone, the newest would stand in for every other user's.
+    public static string Key(AgentUsage a) => Keyless(a)
+        ? $"{a.Agent}\0\0{a.ReadBy?.Id}"
+        : $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";
+
+    // Whether a reading names no account: no accountKey and no account.
+    public static bool Keyless(AgentUsage a) => string.IsNullOrEmpty(a.AccountKey) && string.IsNullOrEmpty(a.Account);
 
     // Whether a client would show a over b: a reading over a failure however new, since a
     // failure is stamped with when the attempt was made, then the later one.

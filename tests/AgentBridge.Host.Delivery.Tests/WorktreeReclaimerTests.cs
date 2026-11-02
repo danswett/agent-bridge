@@ -504,6 +504,21 @@ public sealed class WorktreeReclaimerTests : IDisposable
     }
 
     [Fact]
+    public void The_hosts_own_Claude_usage_probe_does_not_keep_finished_worktrees_but_another_print_run_does()
+    {
+        using var f = new Fixture();
+        f.Processes.Run(AgentKind.Claude, 7730, @"C:\Users\u\.local\bin\claude.exe -p /usage --safe-mode --no-session-persistence --output-format json");
+
+        var usage = Reader(f).Read();
+
+        Assert.True(usage.Known, usage.Detail);
+        Assert.Empty(usage.Directories);
+
+        f.Processes.Run(AgentKind.Claude, 7731, @"C:\Users\u\.local\bin\claude.exe -p ""tidy the repo"" --no-session-persistence");
+        Assert.False(Reader(f).Read().Known);
+    }
+
+    [Fact]
     public void Anything_the_usage_snapshot_cannot_account_for_makes_it_unknown()
     {
         using (var f = new Fixture())

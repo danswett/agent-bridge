@@ -641,6 +641,22 @@ public static partial class CommandLine
         "--env-file", "--title", "--input-type", "--cwd",
     };
 
+    // The host's own reading of Claude's allowance (#200): `claude -p /usage --safe-mode
+    // --no-session-persistence ...`, which keeps no session and runs no hook, and which runs in the
+    // host's own empty folder, never a worktree. Recognised by those exact options, so a print-mode
+    // run with any other prompt, which does work somewhere, still counts as Claude's.
+    public static bool IsClaudeUsageProbe(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        var prompt = false;
+        for (var i = 1; i < arguments.Count - 1; i++)
+        {
+            if (arguments[i] is "-p" or "--print" && arguments[i + 1] == "/usage") { prompt = true; break; }
+        }
+        return prompt && arguments.Contains("--safe-mode") && arguments.Contains("--no-session-persistence");
+    }
+
     // Codex's global options that take the next argument as their value, before any subcommand
     // (codex-rs cli/src/main.rs and tui/src/cli.rs). One list for every reader: one missing from
     // a reader took the value for the subcommand there.

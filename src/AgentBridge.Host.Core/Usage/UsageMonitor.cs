@@ -23,6 +23,12 @@ namespace AgentBridge.Host.Core.Usage;
 // A reading is announced (Changed) when anything but its time changed, or when the last
 // announcement of it is Republish old, so a client can tell a host still confirming an
 // unchanged figure from one that stopped.
+//
+// Claude's and Codex's collectors can ask the agent itself for a fresh reading (#200), in the
+// background and at a pace of their own (ProbePace). The monitor tells them each pass whether a
+// session is open and whether it is asking at the busy pace, and asks them early (WakeAt) when a
+// probe has finished, so a probe's reading is shown within a tick or two rather than at the next
+// turn. Disposing the monitor never ends a probe: one ended mid-refresh can sign the agent out.
 public sealed class UsageMonitor : IAsyncDisposable
 {
     readonly IReadOnlyList<IUsageCollector> collectors;
@@ -63,12 +69,14 @@ public sealed class UsageMonitor : IAsyncDisposable
         get { lock (sync) { return (report, version); } }
     }
 
+    // probes: what lets Claude Code and Codex be asked to read their own allowance (serve only);
+    // without it each is read from what it last saved.
     public static IReadOnlyList<IUsageCollector> Collectors(UsageOptions options, IUsageHttp http, ICommandRunner commands, TimeProvider? time = null, Action<string>? log = null,
-        IReadOnlyList<CopilotAccount>? accounts = null)
+        IReadOnlyList<CopilotAccount>? accounts = null, UsageProbes? probes = null)
     {
         var store = OperatingSystem.IsWindows() ? new WindowsCredentialStore() : null;
         var credentials = new CopilotCredentials(options, commands, store, time: time, log: log);
-        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, http, time), new CodexUsageCollector(options),
+        return [new CopilotUsageCollector(options, http, credentials, time), new ClaudeUsageCollector(options, time, probes, log), new CodexUsageCollector(options, time, probes, log),
             .. (accounts ?? []).OrderBy(a => a.Slot).Select(a => new CopilotAccountCollector(options, http, credentials, a, time))];
     }
 
@@ -116,7 +124,8 @@ public sealed class UsageMonitor : IAsyncDisposable
             // named objects and scheduled tasks, which is not free.
             if (sessionOpen) { defer ??= Deferring(now); }
             var busy = sessionOpen && defer != true;
-            if (!Due(state, busy, now)) { continue; }
+            collector.Pace(sessionOpen, busy);
+            if (!Due(state, busy, now) && !Woken(collector, state, now)) { continue; }
             // Stamped before asking, so an ask that fails still waits its turn rather than
             // being repeated every tick until one works.
             state.CheckedAt = now;
@@ -186,6 +195,13 @@ public sealed class UsageMonitor : IAsyncDisposable
     }
 
     static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
+
+    // A collector that has something new to read (a probe it started has finished, or its reading
+    // has grown old enough to probe for) is asked before its turn, never within MinimumGap of the
+    // last ask: otherwise a reading probed for every quarter hour, and asked every quarter hour,
+    // would be found a moment short of stale at each ask and probed for only every half hour.
+    bool Woken(IUsageCollector collector, State state, DateTimeOffset now) =>
+        collector.WakeAt is { } wake && now >= wake && now - state.CheckedAt >= options.MinimumGap;
 
     // At most once a minute: whether agent-ha-bridge started or stopped matters to the pace,
     // which is minutes, and the probe should not run on every tick.

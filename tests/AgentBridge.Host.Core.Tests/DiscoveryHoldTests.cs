@@ -804,6 +804,36 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    public async Task The_hosts_own_usage_probe_is_nobodys_session_and_holds_nothing_but_another_print_run_still_holds()
+    {
+        using var f = new Fixture();
+        Directory.CreateDirectory(f.ClaudeRegistrations);
+        f.Processes.Run(AgentKind.Claude, 610, @"C:\Users\u\.local\bin\claude.exe -p /usage --safe-mode --no-session-persistence --output-format json");
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Empty(source.Snapshot());
+
+        f.Processes.Run(AgentKind.Claude, 611, "claude.exe -p \"summarise /usage\" --safe-mode --no-session-persistence");
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised claude process (pid 611)", source.Held?.Reason);
+    }
+
+    [Theory]
+    [InlineData("claude.exe -p /usage --safe-mode --no-session-persistence --output-format json", true)]
+    [InlineData("node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js --print /usage --no-session-persistence --safe-mode", true)]
+    [InlineData("claude -p /usage --no-session-persistence", false)]
+    [InlineData("claude -p /usage --safe-mode", false)]
+    [InlineData("claude -p \"/usage and more\" --safe-mode --no-session-persistence", false)]
+    [InlineData("claude --safe-mode --no-session-persistence /usage", false)]
+    public void Claudes_usage_probe_is_known_by_its_exact_options(string commandLine, bool probe)
+    {
+        Assert.Equal(probe, CommandLine.IsClaudeUsageProbe(commandLine));
+    }
+
+    [Fact]
     public async Task A_session_a_hold_kept_unseen_is_listed_before_the_hold_is_said_to_clear()
     {
         using var f = new Fixture();

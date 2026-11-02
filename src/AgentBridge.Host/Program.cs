@@ -385,7 +385,7 @@ async Task<int> ServeAsync(HostHandover handover)
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
-        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null)
+        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null, NewUsageProbes(identity.Folder))
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
@@ -750,11 +750,26 @@ LaunchService Launcher(ISessionSource source, IAgentHaBridgeProbe g5, Attachment
 
 // Each agent's allowance as config.json's usage section says to read it: at its pace, with its
 // further Copilot accounts.
-UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null)
+UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<string> log, Func<string?>? agentHaBridge = null, UsageProbes? probes = null)
 {
     var usageOptions = UsageOptions.For(options, settings.Usage);
-    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts), source, usageOptions,
+    return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts, probes: probes), source, usageOptions,
         agentHaBridge: agentHaBridge, log: log);
+}
+
+// What lets Claude Code and Codex read their own allowance (#200): only for serve, which is there
+// to see a probe through. Each agent is found as a launch finds it, with the config's path for it.
+UsageProbes NewUsageProbes(string folder)
+{
+    var locator = new AgentLocator();
+    return new UsageProbes
+    {
+        Launcher = new ProbeLauncher(),
+        Processes = new SystemProcessInspector(),
+        Find = agent => Launchers.Find(agent.ToString().ToLowerInvariant()) is { } l ? locator.Find(l, settings.Launch.Agent(l.Id)) : null,
+        WorkingDirectory = Path.Combine(folder, "usage-probe"),
+        ClientVersion = HostVersion(),
+    };
 }
 
 // The Dev Box keep-awake as config.json's devBox section says to run it (docs/host-config.md): az

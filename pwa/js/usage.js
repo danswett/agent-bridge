@@ -118,11 +118,20 @@ export function latestUsage(reports) {
   return entries;
 }
 
+// Which allowance a reading is of: its agent and account. One that names no account at all (Codex's
+// from its transcripts, or from a probe that could not be sure whose it was) could be anyone's, so
+// it stays a row of its own for the machine that read it: grouped by agent alone, the newest would
+// stand in for every other user's (#200). Mirrors UsageShare.Key.
+export function usageKey(a) {
+  if (!a.accountKey && !a.account) { return `${a.agent}\u0000\u0000${a.readBy?.id ?? ''}`; }
+  return `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
+}
+
 function usageSlots(reports) {
   const slots = new Map();
   for (const report of reports) {
     for (const a of report?.agents ?? []) {
-      const key = `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
+      const key = usageKey(a);
       const entry = { ...a, key, at: Date.parse(a.measuredAt ?? '') || 0 };
       const kind = hasReading(entry) ? 'reading' : 'failure';
       const slot = slots.get(key) ?? {};

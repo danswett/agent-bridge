@@ -752,7 +752,8 @@ public sealed class RelayFleetLink : IFleetLink
 // Every machine's usage as one list (pwa/js/usage.js, mergeUsage): one row per allowance (an
 // agent and its account), carrying the freshest reading any machine has. A reading outranks a
 // failure however new, since a failure is stamped with when the attempt was made; a failure
-// newer than the reading is still the latest word on why nothing fresher exists.
+// newer than the reading is still the latest word on why nothing fresher exists. A reading that
+// names no account is a row of its own for each machine that read it (UsageShare.Key).
 public static class UsageMerge
 {
     public static UsageReport Merge(IEnumerable<UsageReport> reports)

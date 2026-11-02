@@ -268,6 +268,37 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_usage_probe_runs_in_its_folder_with_the_profiles_home_set_a_removed_variable_gone_and_nothing_on_its_input()
+    {
+        var folder = Directory.CreateDirectory(Path.Combine(root, "usage probe")).FullName;
+        string script;
+        if (OperatingSystem.IsWindows())
+        {
+            // An npm shim, as claude.cmd is: run through cmd.exe.
+            script = Path.Combine(root, "claude.cmd");
+            File.WriteAllText(script, "@echo off\r\necho home=%CLAUDE_CONFIG_DIR%\r\necho gone=%AGENT_BRIDGE_PROBE_TEST%\r\necho cwd=%CD%\r\nset /p LINE=\r\necho stdin=[%LINE%]\r\nexit /b 3\r\n");
+        }
+        else
+        {
+            script = Path.Combine(root, "claude");
+            File.WriteAllText(script, "#!/bin/sh\necho \"home=$CLAUDE_CONFIG_DIR\"\necho \"gone=$AGENT_BRIDGE_PROBE_TEST\"\necho \"cwd=$(pwd)\"\nread LINE\necho \"stdin=[$LINE]\"\nexit 3\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", "inherited");
+        try
+        {
+            using var probe = new ProbeLauncher().Start(new AgentBridge.Host.Core.Usage.ProbeCommand(script, ["auth", "status"], folder,
+                new Dictionary<string, string?> { ["CLAUDE_CONFIG_DIR"] = Path.Combine(root, "profile"), ["AGENT_BRIDGE_PROBE_TEST"] = null }))!;
+
+            Assert.Equal(3, await probe.Exited.WaitAsync(TimeSpan.FromSeconds(30)));
+            var lines = (await probe.Output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            Assert.Equal([$"home={Path.Combine(root, "profile")}", "gone=", $"cwd={folder}", "stdin=[]"], lines);
+            Assert.Null(probe.Input);
+        }
+        finally { Environment.SetEnvironmentVariable("AGENT_BRIDGE_PROBE_TEST", null); }
+    }
+
+    [Fact]
     public void A_line_too_long_for_cmd_exe_is_refused_rather_than_cut()
     {
         Assert.Null(WindowsCommandLine.For(@"C:\npm\copilot.cmd", ["-i", new string('a', 9000)], out var problem));

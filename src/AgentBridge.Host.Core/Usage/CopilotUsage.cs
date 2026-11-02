@@ -4,8 +4,8 @@ using AgentBridge.Protocol;
 namespace AgentBridge.Host.Core.Usage;
 
 // One agent's allowance. Null means there is nothing to say: the agent has never run here
-// (it is left off rather than drawn as an empty bar), or a reading would cost something it
-// must not (an expired Claude token), in which case the last reading stands and ages.
+// (it is left off rather than drawn as an empty bar), or there is nothing newer to read, in which
+// case the last reading stands and ages.
 public interface IUsageCollector
 {
     AgentKind Agent { get; }
@@ -23,6 +23,16 @@ public interface IUsageCollector
     // A session of this agent has just opened here, so somebody is at the machine. Returns
     // whether that changed anything worth saying.
     bool SessionOpened(DateTimeOffset now) => false;
+
+    // Before each ask: whether a session of this agent is open here, and whether the monitor is
+    // asking at the busy pace (never while agent-ha-bridge runs for this user). A probing collector
+    // paces its probes by it.
+    void Pace(bool sessionOpen, bool busy) { }
+
+    // When the collector has something new to read before its next turn: a probe it started has
+    // finished, or a reading has become old enough to probe for. Never sooner than the monitor's
+    // MinimumGap after the last ask.
+    DateTimeOffset? WakeAt => null;
 }
 
 // Copilot's monthly allowance of AI credits, asked of GitHub (api.github.com/copilot_internal/

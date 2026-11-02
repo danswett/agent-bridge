@@ -1163,6 +1163,22 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal("rate limited", Assert.Single(UsageMerge.Merge([new UsageReport([failure])]).Agents).Error);
     }
 
+    [Fact]
+    public void Two_keyless_Codex_readings_from_different_machines_stay_two_rows_while_a_keyed_one_still_merges()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var laptop = new UsageReader(new string('b', 32), "Laptop");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, MeasuredAt = Make.T0, Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 10 }] };
+
+        var apart = UsageMerge.Merge([new UsageReport([keyless with { ReadBy = vm }]), new UsageReport([keyless with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+
+        Assert.Equal(["VM", "Laptop"], apart.Select(a => a.ReadBy!.Name));
+
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
+        var together = UsageMerge.Merge([new UsageReport([keyed with { ReadBy = vm }]), new UsageReport([keyed with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
+        Assert.Equal("Laptop", Assert.Single(together).ReadBy!.Name);
+    }
+
     OfflineMachineViewModel[] Offline()
     {
         OfflineMachineViewModel[] now = [];

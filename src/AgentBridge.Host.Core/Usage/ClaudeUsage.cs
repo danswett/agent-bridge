@@ -1,62 +1,332 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Core.Usage;
 
-// Claude's session and weekly windows, asked of Anthropic (api.anthropic.com/api/oauth/usage)
-// with the OAuth token Claude Code keeps beside its settings.
+// Claude's session and weekly windows, as Claude Code itself last read them (#200, spike #197).
 //
-// The token is never refreshed, and an expired one is never spent. Anthropic issues a new
-// refresh token with each use and retires the old one, so a refresh from here would either
-// sign Claude Code out or race its own write of the new one. It expires about hourly, so that
-// is the common case, and it is handled by saying nothing: the last reading stands and ages.
-public sealed class ClaudeUsageCollector(UsageOptions options, IUsageHttp http, TimeProvider? time = null) : IUsageCollector
+// Claude Code saves its last answer from Anthropic's usage endpoint in the profile's .claude.json
+// (cachedUsageUtilization), and that is what is read here: no credential is opened. When the
+// reading has gone stale, Claude Code is asked to read it again, with
+// `claude -p "/usage" --safe-mode --no-session-persistence --output-format json`: /usage is a local
+// command with a print-mode form that starts no model turn, and it refreshes Claude Code's token
+// through Claude Code's own lock and compare-and-swap write. The file is then read again.
+//
+// Anthropic issues a new refresh token with each use and retires the old one. A refresh from
+// here would sign Claude Code out or race its own write of the new one, and Anthropic's terms do
+// not allow a third party to collect or intermediate those tokens, so the host never opens
+// .credentials.json or Claude Code's credential store: the token read this collector used to make
+// (api.anthropic.com/api/oauth/usage with Claude Code's access token) is retired.
+//
+// A probe is never ended by the host, on a timeout or at shutdown: one ended between the token
+// response and Claude Code's write loses the rotated token, and the next refresh signs the
+// machine out (spike E4). Its exit code says nothing about a sign-out either (E4: it exited 0 with
+// the cached bars after one), so `claude auth status` gates the probes and says when Claude Code
+// is signed out.
+public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? time = null, UsageProbes? probes = null, Action<string>? log = null) : IUsageCollector
 {
-    static readonly Uri Usage = new("https://api.anthropic.com/api/oauth/usage");
+    public const string SignedOutError = "Claude Code is signed out on this machine";
+
+    // The probe, exactly: anything else, and a prompt could reach the model.
+    internal static readonly string[] ProbeArguments = ["-p", "/usage", "--safe-mode", "--no-session-persistence", "--output-format", "json"];
+
+    internal enum Auth { Unknown, ClaudeAi, OtherLogin, SignedOut, Unavailable }
+
     readonly TimeProvider clock = time ?? TimeProvider.System;
+    readonly Action<string> say = log ?? (_ => { });
+    readonly ProbePace pace = new(options);
+    readonly object gate = new();
+    Auth auth = Auth.Unknown;
+    DateTimeOffset authCheckedAt = DateTimeOffset.MinValue;
+    string? plan;
+    bool sessionOpen, busy;
+    // A pass of auth status and the probe, while it runs; and processes it stopped waiting for
+    // that have not ended yet, each of which holds the next one off.
+    Task? cycle;
+    int lingering;
+    // A probe or auth status finished since the last read, so the file is worth reading now.
+    bool finished;
+    DateTimeOffset? nextDue;
 
     public AgentKind Agent => AgentKind.Claude;
 
-    public async Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
+    public void Pace(bool sessionOpen, bool busy)
     {
-        string token;
-        string? plan;
-        using (var credentials = UsageRead.Json(Path.Combine(options.ClaudeHome, ".credentials.json"), options.MaxStateBytes))
-        {
-            if (credentials is null || UsageRead.Property(credentials.RootElement, "claudeAiOauth") is not { } oauth) { return null; }
-            if (UsageRead.String(oauth, "accessToken") is not { } t || !CopilotCredentials.LooksLikeToken(t.Trim())) { return null; }
-            token = t.Trim();
-            plan = UsageRead.String(oauth, "subscriptionType");
-            // Spending an expired token costs a round trip to be told so, and a 401 counts
-            // against the account like any failed authentication.
-            if (UsageRead.Number(oauth, "expiresAt") is { } expires && DateTimeOffset.FromUnixTimeMilliseconds((long)expires) <= clock.GetUtcNow()) { return null; }
-        }
-        // Carried by a failure too: one that could not say whose it was would be a second row
-        // beside the reading it failed to refresh.
-        var accountKey = AccountKey(options.ClaudeAccountPath, options.MaxStateBytes);
+        lock (gate) { (this.sessionOpen, this.busy) = (sessionOpen, busy); }
+    }
 
-        JsonDocument body;
+    public DateTimeOffset? WakeAt
+    {
+        get
+        {
+            lock (gate)
+            {
+                if (finished) { return DateTimeOffset.MinValue; }
+                return cycle is null && lingering == 0 ? nextDue : null;
+            }
+        }
+    }
+
+    // Whether a probe or auth status the host started is still running (tests, and the log).
+    internal bool Probing { get { lock (gate) { return cycle is not null || lingering > 0; } } }
+
+    // The background pass, while one runs, for tests to wait on.
+    internal Task Cycle { get { lock (gate) { return cycle ?? Task.CompletedTask; } } }
+
+    public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
+    {
+        var now = clock.GetUtcNow();
+        var saved = Read(options.ClaudeAccountPath, options.MaxStateBytes);
+        // Never signed in to claude.ai here: nothing to show, and nothing to ask Claude Code.
+        if (saved.Account is null) { return Task.FromResult<AgentUsage?>(null); }
+        lock (gate) { finished = false; }
+        if (probes is not null) { Consider(saved.Reading?.MeasuredAt, now); }
+        Auth known;
+        string? named;
+        lock (gate) { (known, named) = (auth, plan); }
+        var reading = saved.Reading is { } r ? r with { Plan = named ?? r.Plan } : null;
+        if (known == Auth.SignedOut)
+        {
+            // The last reading still says what was used when it was taken, and the error why
+            // nothing newer will come: a client shows it once the reading is stale.
+            return Task.FromResult<AgentUsage?>(reading is not null ? reading with { Error = SignedOutError }
+                : UsageRead.Failure(AgentKind.Claude, SignedOutError, now, accountKey: saved.Key, plan: named));
+        }
+        return Task.FromResult(reading);
+    }
+
+    // Whether to ask Claude Code now: auth status at most hourly, and only when a probe would
+    // otherwise run or Claude Code was found signed out (to see it sign in again); the probe only
+    // on a claude.ai login, when the pace allows.
+    void Consider(DateTimeOffset? readingAt, DateTimeOffset now)
+    {
+        bool checkAuth, probe;
+        lock (gate)
+        {
+            nextDue = null;
+            if (cycle is not null || lingering > 0) { return; }
+            var authDue = now - authCheckedAt >= options.ClaudeAuthEvery || now < authCheckedAt;
+            var probeDue = pace.Due(readingAt, busy, now);
+            switch (auth)
+            {
+                case Auth.ClaudeAi:
+                    checkAuth = probeDue && authDue;
+                    probe = probeDue;
+                    if (!probeDue) { nextDue = pace.DueAt(readingAt, busy); }
+                    break;
+                case Auth.Unknown:
+                    // Not yet asked, or its answer could not be read: asked again at most hourly,
+                    // and no probe without it.
+                    checkAuth = probe = probeDue && authDue;
+                    if (!probeDue) { nextDue = pace.DueAt(readingAt, busy); }
+                    else if (!authDue) { nextDue = authCheckedAt + options.ClaudeAuthEvery; }
+                    break;
+                default:
+                    // Signed out, another kind of login, or no claude to ask: only auth status, hourly.
+                    checkAuth = authDue;
+                    probe = authDue && probeDue;
+                    if (!authDue) { nextDue = authCheckedAt + options.ClaudeAuthEvery; }
+                    break;
+            }
+            if (!checkAuth && !probe) { return; }
+            cycle = Task.Run(() => CycleAsync(checkAuth, probe, now));
+        }
+    }
+
+    async Task CycleAsync(bool checkAuth, bool probe, DateTimeOffset now)
+    {
         try
         {
-            body = await UsageFetch.GetJsonAsync(http, Usage,
-                [new("Authorization", $"Bearer {token}"), new("anthropic-beta", "oauth-2025-04-20"), new("Accept", "application/json"), new("User-Agent", "agent-bridge")],
-                options, cancellationToken);
+            if (checkAuth) { await CheckAuthAsync(now); }
+            if (!probe) { return; }
+            lock (gate)
+            {
+                if (auth != Auth.ClaudeAi) { return; }
+                pace.Started(now);
+            }
+            var ok = await ProbeAsync();
+            lock (gate)
+            {
+                if (ok) { pace.Succeeded(); }
+                else { pace.Failed(clock.GetUtcNow()); }
+            }
         }
-        // A refused token is the expiry above arriving a moment early, not a fault.
-        catch (UsageHttpException e) when (e.Status == 401) { return null; }
-        catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (Exception e)
         {
-            return UsageRead.Failure(AgentKind.Claude, $"The Claude usage could not be read: {UsageFetch.Describe(e)}", clock.GetUtcNow(), accountKey: accountKey, plan: plan);
+            say($"usage: asking Claude Code for its allowance failed: {e.GetType().Name}");
+            lock (gate) { pace.Failed(clock.GetUtcNow()); }
         }
-        using (body) { return Convert(body.RootElement, accountKey, plan, clock.GetUtcNow()); }
+        finally
+        {
+            lock (gate)
+            {
+                cycle = null;
+                finished = true;
+            }
+        }
+    }
+
+    async Task CheckAuthAsync(DateTimeOffset now)
+    {
+        var (state, subscription) = await AuthStatusAsync();
+        Auth before;
+        lock (gate)
+        {
+            before = auth;
+            authCheckedAt = now;
+            // Not knowing is not a change: an answer that could not be read keeps what was known,
+            // except that it is no claude.ai login to probe.
+            auth = state == Auth.Unknown && before != Auth.ClaudeAi ? before : state;
+            if (subscription is not null) { plan = subscription; }
+        }
+        if (state == before) { return; }
+        var said = state switch
+        {
+            Auth.SignedOut => "usage: Claude Code is signed out on this machine; it is not asked for its allowance until it signs in again",
+            Auth.OtherLogin => "usage: Claude Code is not signed in with claude.ai here, so it is not asked for its allowance",
+            Auth.Unavailable => "usage: claude could not be found or started, so it is not asked for its allowance",
+            Auth.ClaudeAi when before is Auth.SignedOut => "usage: Claude Code is signed in again",
+            _ => null,
+        };
+        if (said is not null) { say(said); }
+    }
+
+    // claude auth status prints its state as JSON and exits 1 when signed out (spike C-5). It only
+    // reads what Claude Code stored.
+    async Task<(Auth State, string? Plan)> AuthStatusAsync()
+    {
+        if (probes!.Find(AgentKind.Claude) is not { } exe) { return (Auth.Unavailable, null); }
+        var process = probes.Launcher.Start(new ProbeCommand(exe, ["auth", "status"], WorkingDirectory(), Environment()));
+        if (process is null) { return (Auth.Unavailable, null); }
+        if (!await EndsWithinAsync(process, options.ClaudeAuthTimeout, "claude auth status")) { return (Auth.Unknown, null); }
+        using (process)
+        {
+            var code = await process.Exited;
+            var output = await process.Output;
+            return ReadAuth(code, output);
+        }
+    }
+
+    internal static (Auth State, string? Plan) ReadAuth(int exitCode, string output)
+    {
+        JsonDocument document;
+        try { document = JsonDocument.Parse(output.Trim()); }
+        catch (JsonException) { return (Auth.Unknown, null); }
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || UsageRead.Property(root, "loggedIn") is not { } logged
+                || logged.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return (Auth.Unknown, null);
+            }
+            var subscription = UsageRead.String(root, "subscriptionType") is { Length: > 0 } s ? s : null;
+            if (logged.ValueKind == JsonValueKind.False) { return (Auth.SignedOut, null); }
+            return UsageRead.String(root, "authMethod") == "claude.ai" && exitCode == 0 ? (Auth.ClaudeAi, subscription) : (Auth.OtherLogin, subscription);
+        }
+    }
+
+    // Success is Claude Code's saved reading having moved. One that did not (the endpoint is rate
+    // limited, and /usage then shows the bars it last loaded) is a failure, and backs off.
+    async Task<bool> ProbeAsync()
+    {
+        if (probes!.Find(AgentKind.Claude) is not { } exe) { return false; }
+        // One at a time, on the machine and not only in this host: another host of this user, or
+        // this one before a restart, may have left one running.
+        if (probes.Processes.Observe(AgentKind.Claude).Processes.Any(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)))
+        {
+            say("usage: a Claude Code /usage probe is already running here; not starting another");
+            return false;
+        }
+        var before = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
+        var process = probes.Launcher.Start(new ProbeCommand(exe, ProbeArguments, WorkingDirectory(), Environment()));
+        if (process is null)
+        {
+            say("usage: claude could not be started to read its allowance");
+            return false;
+        }
+        if (!await EndsWithinAsync(process, options.ClaudeProbeTimeout, "Claude Code's /usage probe")) { return false; }
+        int code;
+        using (process) { code = await process.Exited; }
+        var after = FetchedAt(options.ClaudeAccountPath, options.MaxStateBytes);
+        if (code == 0 && after is { } a && (before is not { } b || a > b)) { return true; }
+        say(code != 0 ? $"usage: Claude Code's /usage probe exited {code}" : "usage: Claude Code's /usage probe did not read the allowance afresh (rate limited, or signed out)");
+        return false;
+    }
+
+    // Waits for a process the host started, at most timeout. One still running then is left to
+    // finish: it may be refreshing Claude Code's sign-in. Until it ends, nothing else is started.
+    async Task<bool> EndsWithinAsync(IProbeProcess process, TimeSpan timeout, string what)
+    {
+        using var stop = new CancellationTokenSource();
+        var limit = Task.Delay(timeout, clock, stop.Token);
+        if (await Task.WhenAny(process.Exited, limit) == process.Exited)
+        {
+            await stop.CancelAsync();
+            return true;
+        }
+        say($"usage: {what} has not finished in {timeout.TotalSeconds:0} s; it is left running, since it may be refreshing Claude Code's sign-in");
+        lock (gate) { lingering++; }
+        _ = process.Exited.ContinueWith(_ =>
+        {
+            process.Dispose();
+            lock (gate)
+            {
+                lingering--;
+                finished = true;
+            }
+        }, TaskScheduler.Default);
+        return false;
+    }
+
+    string WorkingDirectory()
+    {
+        Directory.CreateDirectory(probes!.WorkingDirectory);
+        return probes.WorkingDirectory;
+    }
+
+    Dictionary<string, string?> Environment() => ProbeEnvironment.Home("CLAUDE_CONFIG_DIR", options.ClaudeHome, ".claude");
+
+    // What .claude.json says: whose account it is (its digest), and Claude Code's last reading of
+    // its allowance when that reading is the same account's. A reading saved for another account
+    // (Claude Code drops it on a switch, but a file caught mid-switch could hold one) is not shown
+    // under this one.
+    internal sealed record Saved(string? Account, string? Key, AgentUsage? Reading);
+
+    internal static Saved Read(string? path, long maxBytes)
+    {
+        using var document = UsageRead.Json(path, maxBytes);
+        if (document is null || UsageRead.Property(document.RootElement, "oauthAccount") is not { } account) { return new(null, null, null); }
+        if (UsageRead.String(account, "accountUuid") is not { } uuid || string.IsNullOrWhiteSpace(uuid)) { return new(null, null, null); }
+        var key = AccountKey(account);
+        if (UsageRead.Property(document.RootElement, "cachedUsageUtilization") is not { } cached
+            || UsageRead.String(cached, "accountUuid") is not { } cachedFor
+            || !string.Equals(cachedFor.Trim(), uuid.Trim(), StringComparison.OrdinalIgnoreCase)
+            || UsageRead.Number(cached, "fetchedAtMs") is not { } fetched || fetched <= 0
+            || UsageRead.Property(cached, "utilization") is not { } utilization)
+        {
+            return new(uuid, key, null);
+        }
+        var measured = DateTimeOffset.FromUnixTimeMilliseconds((long)fetched);
+        return new(uuid, key, Convert(utilization, key, null, measured, UsageSource.Cache));
+    }
+
+    static DateTimeOffset? FetchedAt(string? path, long maxBytes)
+    {
+        using var document = UsageRead.Json(path, maxBytes);
+        return document is not null && UsageRead.Property(document.RootElement, "cachedUsageUtilization") is { } cached
+            && UsageRead.Number(cached, "fetchedAtMs") is { } fetched && fetched > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds((long)fetched)
+            : null;
     }
 
     // limits is the list Claude Code itself draws, every entry of which applies to this plan,
     // the session window included: it reads 0% whenever no five-hour window is open, and
     // dropping it made Claude look as if it had only a weekly cap.
-    internal static AgentUsage? Convert(JsonElement response, string? accountKey, string? plan, DateTimeOffset now)
+    internal static AgentUsage? Convert(JsonElement response, string? accountKey, string? plan, DateTimeOffset measuredAt, UsageSource source = UsageSource.Cache)
     {
         if (UsageRead.Property(response, "limits") is not { ValueKind: JsonValueKind.Array } limits) { return null; }
         var started = UsageRead.Property(response, "seven_day_breakdown") is { } breakdown ? UsageRead.Instant(breakdown, "window_started_at") : null;
@@ -81,9 +351,9 @@ public sealed class ClaudeUsageCollector(UsageOptions options, IUsageHttp http, 
             Label = UsageRead.Label(AgentKind.Claude),
             AccountKey = accountKey,
             Plan = plan,
-            Source = UsageSource.Api,
+            Source = source,
             Windows = windows,
-            MeasuredAt = now,
+            MeasuredAt = measuredAt,
         };
     }
 
@@ -95,7 +365,11 @@ public sealed class ClaudeUsageCollector(UsageOptions options, IUsageHttp http, 
     internal static string? AccountKey(string? path, long maxBytes)
     {
         using var document = UsageRead.Json(path, maxBytes);
-        if (document is null || UsageRead.Property(document.RootElement, "oauthAccount") is not { } account) { return null; }
+        return document is not null && UsageRead.Property(document.RootElement, "oauthAccount") is { } account ? AccountKey(account) : null;
+    }
+
+    static string? AccountKey(JsonElement account)
+    {
         if (UsageRead.String(account, "accountUuid") is not { } uuid || string.IsNullOrWhiteSpace(uuid)) { return null; }
         var identity = $"claude:{uuid.Trim().ToLowerInvariant()}";
         if (UsageRead.String(account, "organizationUuid") is { } org && !string.IsNullOrWhiteSpace(org)) { identity += $":{org.Trim().ToLowerInvariant()}"; }

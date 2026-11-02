@@ -13,14 +13,22 @@ public sealed class UsageOptions
     // agent-ha-bridge probes them: the first that exists wins.
     public IReadOnlyList<string> CopilotCacheRoots { get; init; } = [];
 
-    // ~/.claude: .credentials.json holds Claude Code's OAuth token in the clear.
+    // ~/.claude: the Claude profile, CLAUDE_CONFIG_DIR for a probe of a profile that is not the
+    // default. Its credentials are never opened (#200).
     public required string ClaudeHome { get; init; }
 
-    // ~/.claude.json: oauthAccount names the account, which only its digest leaves here.
+    // ~/.claude.json: oauthAccount names the account, which only its digest leaves here, and
+    // cachedUsageUtilization is Claude Code's own last reading of the allowance.
     public string? ClaudeAccountPath { get; init; }
 
-    // ~/.codex: sessions/**/rollout-*.jsonl, whose token_count events carry the rate limits.
+    // ~/.codex: sessions/**/rollout-*.jsonl, whose token_count events carry the rate limits, and
+    // app-server-control/app-server-control.sock, the managed daemon's control socket.
     public required string CodexHome { get; init; }
+
+    // Where the managed daemon listens, if it runs: Codex's own path under its home, unless set.
+    public string? CodexControlSocket { get; init; }
+
+    public string ControlSocket => CodexControlSocket ?? Path.Combine(CodexHome, "app-server-control", "app-server-control.sock");
 
     // The pace for an agent with a session open on this machine. The figures move while a
     // session runs (Copilot's were measured changing inside three minutes), so this is a
@@ -62,6 +70,34 @@ public sealed class UsageOptions
 
     // How many of Codex's newest transcripts are searched for a rate-limit event.
     public int CodexFiles { get; init; } = 5;
+
+    // Asking the agents themselves for a reading (#200, spike #197). A probe is due only once the
+    // newest reading is IdleInterval old, at most every IdleInterval with no session of the agent
+    // open here and every ProbeBusyInterval with one.
+    public TimeSpan ProbeBusyInterval { get; init; } = TimeSpan.FromMinutes(5);
+
+    // After a failed or rate-limited probe: this, doubling with each failure in a row, at most
+    // ProbeBackoffMax. A sign-out holds the probes for ProbeBackoffMax.
+    public TimeSpan ProbeBackoff { get; init; } = TimeSpan.FromMinutes(15);
+    public TimeSpan ProbeBackoffMax { get; init; } = TimeSpan.FromHours(2);
+
+    // How long `claude -p /usage` is waited for. A probe still running then is a failure, and is
+    // left running: it may be part-way through refreshing Claude Code's token (spike E4).
+    public TimeSpan ClaudeProbeTimeout { get; init; } = TimeSpan.FromSeconds(120);
+
+    // `claude auth status`: how often it is asked, and how long it is waited for. It only reads
+    // Claude Code's stored state, and is never ended either.
+    public TimeSpan ClaudeAuthEvery { get; init; } = TimeSpan.FromHours(1);
+    public TimeSpan ClaudeAuthTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
+    // Codex's app-server: how long its answers are waited for before the probe reports nothing
+    // (it starts by refreshing under a 20 s limit, twice when the first times out, so 40 s before
+    // initialize answers is possible: E13 on Linux); how long after its last answer standard input
+    // is kept open (longer than its own 15 s and 20 s refresh limits, E13); and when a process that
+    // has still not answered is given up on as hung.
+    public TimeSpan CodexReportTimeout { get; init; } = TimeSpan.FromSeconds(60);
+    public TimeSpan CodexGrace { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan CodexCeiling { get; init; } = TimeSpan.FromMinutes(10);
 
     public static UsageOptions For(SessionSourceOptions sessions, UsageSettings? usage = null)
     {

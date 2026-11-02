@@ -354,15 +354,6 @@ public sealed class UsageTests : IDisposable
 
     // --- Claude ---
 
-    void ClaudeCredentials(string token = "sk-ant-oat01-fixture", DateTimeOffset? expires = null)
-    {
-        Directory.CreateDirectory(f.ClaudeHome);
-        File.WriteAllText(Path.Combine(f.ClaudeHome, ".credentials.json"),
-            $"{{\"claudeAiOauth\":{{\"accessToken\":\"{token}\",\"refreshToken\":\"sk-ant-ort01-never\",\"expiresAt\":{(expires ?? Now.AddHours(1)).ToUnixTimeMilliseconds()},\"subscriptionType\":\"max\"}}}}");
-        File.WriteAllText(Path.Combine(f.Root, "home", ".claude.json"),
-            "{\"projects\":{},\"oauthAccount\":{\"accountUuid\":\"AAAA-1111\",\"organizationUuid\":\"BBBB-2222\",\"emailAddress\":\"octo@example.com\"}}");
-    }
-
     const string ClaudeBody = """
         {"limits":[
           {"kind":"session","percent":12,"resets_at":"2026-10-28T22:00:00Z"},
@@ -372,32 +363,46 @@ public sealed class UsageTests : IDisposable
          "seven_day_breakdown":{"window_started_at":"2026-10-26T00:00:00Z"}}
         """;
 
-    [Fact]
-    public async Task Claude_reads_every_window_its_plan_has_with_the_week_start_for_pace()
+    // ~/.claude.json as Claude Code keeps it: the account, and its own last reading of the
+    // allowance (cachedUsageUtilization), saved for the account it was read for.
+    void ClaudeAccount(DateTimeOffset? fetched = null, string cachedFor = "AAAA-1111", string body = ClaudeBody)
     {
-        ClaudeCredentials();
-        http.Respond(200, ClaudeBody);
+        Directory.CreateDirectory(Path.Combine(f.Root, "home"));
+        var cache = fetched is { } at ? $",\"cachedUsageUtilization\":{{\"fetchedAtMs\":{at.ToUnixTimeMilliseconds()},\"accountUuid\":\"{cachedFor}\",\"utilization\":{body}}}" : "";
+        File.WriteAllText(Path.Combine(f.Root, "home", ".claude.json"),
+            "{\"projects\":{},\"oauthAccount\":{\"accountUuid\":\"AAAA-1111\",\"organizationUuid\":\"BBBB-2222\",\"emailAddress\":\"octo@example.com\"}" + cache + "}");
+    }
 
-        var usage = await new ClaudeUsageCollector(Options(), http, time).CollectAsync();
+    [Fact]
+    public async Task A_Claude_reading_comes_from_Claude_Codes_saved_reading_taken_when_it_was_fetched_with_no_credentials_file()
+    {
+        ClaudeAccount(fetched: Now.AddMinutes(-7));
+        Assert.False(File.Exists(Path.Combine(f.ClaudeHome, ".credentials.json")));
 
-        var request = Assert.Single(http.Requests);
-        Assert.Equal("https://api.anthropic.com/api/oauth/usage", request.Uri.ToString());
-        Assert.Contains(new KeyValuePair<string, string>("Authorization", "Bearer sk-ant-oat01-fixture"), request.Headers);
-        Assert.Contains(new KeyValuePair<string, string>("anthropic-beta", "oauth-2025-04-20"), request.Headers);
-        Assert.Equal(("max", UsageSource.Api, Now), (usage!.Plan, usage.Source, usage.MeasuredAt));
+        var usage = await new ClaudeUsageCollector(Options(), time).CollectAsync();
+
+        Assert.Equal((UsageSource.Cache, Now.AddMinutes(-7)), (usage!.Source, usage.MeasuredAt));
         Assert.Equal(["Session (5h)", "Weekly", "Monthly extra"], usage.Windows.Select(w => w.Label));
         Assert.Equal([12, 41.3, 3], usage.Windows.Select(w => w.Percent));
         Assert.Null(usage.Windows[0].StartsAt);
         Assert.Equal(new DateTimeOffset(2026, 10, 26, 0, 0, 0, TimeSpan.Zero), usage.Windows[1].StartsAt);
+        Assert.Null(usage.Error);
+    }
+
+    [Fact]
+    public async Task A_saved_Claude_reading_for_another_account_is_ignored()
+    {
+        ClaudeAccount(fetched: Now.AddMinutes(-7), cachedFor: "CCCC-3333");
+
+        Assert.Null(await new ClaudeUsageCollector(Options(), time).CollectAsync());
     }
 
     [Fact]
     public async Task Claude_is_told_apart_by_a_digest_of_its_account_and_organisation_never_by_either()
     {
-        ClaudeCredentials();
-        http.Respond(200, ClaudeBody);
+        ClaudeAccount(fetched: Now);
 
-        var usage = await new ClaudeUsageCollector(Options(), http, time).CollectAsync();
+        var usage = await new ClaudeUsageCollector(Options(), time).CollectAsync();
 
         var expected = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("claude:aaaa-1111:bbbb-2222")))[..12];
         Assert.Equal(expected, usage!.AccountKey);
@@ -439,47 +444,20 @@ public sealed class UsageTests : IDisposable
     }
 
     [Fact]
-    public async Task Claude_never_spends_an_expired_token_and_leaves_the_last_reading_to_age()
+    public async Task Claude_never_signed_in_here_is_left_off_and_its_credentials_are_never_opened()
     {
-        ClaudeCredentials(expires: Now.AddMinutes(-1));
+        Assert.Null(await new ClaudeUsageCollector(Options(), time).CollectAsync());
 
-        Assert.Null(await new ClaudeUsageCollector(Options(), http, time).CollectAsync());
-        Assert.Empty(http.Requests);
-    }
-
-    [Fact]
-    public async Task Claude_takes_a_refused_token_as_expiry_rather_than_a_fault()
-    {
-        ClaudeCredentials();
-        http.Respond(401, "{}");
-
-        Assert.Null(await new ClaudeUsageCollector(Options(), http, time).CollectAsync());
-        Assert.Single(http.Requests);
-    }
-
-    [Fact]
-    public async Task Claude_failing_for_another_reason_says_so_and_still_says_whose_it_was()
-    {
-        ClaudeCredentials();
-        http.Fail(new HttpRequestException("The SSL connection could not be established, see inner exception.", new IOException("An existing connection was forcibly closed by the remote host.")));
-
-        var usage = await new ClaudeUsageCollector(Options(), http, time).CollectAsync();
-
-        Assert.Equal(3, http.Requests.Count);
-        Assert.Empty(usage!.Windows);
-        Assert.NotNull(usage.AccountKey);
-        Assert.Equal("The Claude usage could not be read: The SSL connection could not be established - An existing connection was forcibly closed by the remote host.", usage.Error);
-    }
-
-    [Fact]
-    public async Task Claude_never_writes_to_its_credentials()
-    {
-        ClaudeCredentials();
-        http.Respond(200, ClaudeBody);
+        // A credentials file held open with no sharing at all would make any read of it fail.
+        ClaudeAccount(fetched: Now);
+        Directory.CreateDirectory(f.ClaudeHome);
+        var credentials = Path.Combine(f.ClaudeHome, ".credentials.json");
+        File.WriteAllText(credentials, "{\"claudeAiOauth\":{\"accessToken\":\"fixture-not-a-token\"}}");
         var before = f.Listing();
-
-        await new ClaudeUsageCollector(Options(), http, time).CollectAsync();
-
+        using (new FileStream(credentials, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.NotNull(await new ClaudeUsageCollector(Options(), time).CollectAsync());
+        }
         Assert.Equal(before, f.Listing());
     }
 
@@ -669,6 +647,29 @@ public sealed class UsageTests : IDisposable
         time.Advance(TimeSpan.FromMinutes(3));
         await monitor.PassAsync();
         Assert.Equal(2, copilot.Calls);
+    }
+
+    [Fact]
+    public async Task A_collector_with_a_finished_probe_is_asked_before_its_turn_but_never_within_half_a_minute_and_is_told_the_pace()
+    {
+        var sessions = new FakeSessions();
+        var claude = new FakeCollector(AgentKind.Claude, () => Reading(AgentKind.Claude, 10, time.GetUtcNow()));
+        await using var monitor = Monitor(sessions, () => "agent-ha-bridge is running", claude);
+        await monitor.PassAsync();
+
+        claude.WakeAt = time.GetUtcNow();
+        time.Advance(TimeSpan.FromSeconds(15));
+        await monitor.PassAsync();
+        Assert.Equal(1, claude.Calls);
+        time.Advance(TimeSpan.FromSeconds(15));
+        await monitor.PassAsync();
+        Assert.Equal(2, claude.Calls);
+
+        // A session open beside agent-ha-bridge: open, but never the busy pace.
+        sessions.Open(AgentKind.Claude);
+        await monitor.PassAsync();
+        Assert.Equal((true, false), claude.Paced[^1]);
+        Assert.Equal((false, false), claude.Paced[0]);
     }
 
     [Fact]
@@ -868,6 +869,10 @@ public sealed class UsageTests : IDisposable
     {
         public int Calls { get; private set; }
         public AgentKind Agent => agent;
+        public DateTimeOffset? WakeAt { get; set; }
+        public List<(bool Open, bool Busy)> Paced { get; } = [];
+
+        public void Pace(bool sessionOpen, bool busy) => Paced.Add((sessionOpen, busy));
 
         public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
         {

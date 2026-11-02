@@ -45,6 +45,15 @@ test('two accounts no vendor names are kept apart by a few characters of their k
   assert.equal(mergeUsage([readUsage({ agents: [claude('aaaa1111bbbb', 10)] })])[0].account, null);
 });
 
+test('two keyless Codex readings from different machines stay two rows, and a keyed one still merges across machines', () => {
+  const codex = (machine, percent, extra = {}) => ({ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-percent * 1000), windows: [{ key: 'primary', label: '5h limit', percent }], readBy: { id: machine, name: machine }, ...extra });
+  const apart = mergeUsage([{ agents: [codex('vm', 10)] }, { agents: [codex('laptop', 20)] }].map(readUsage));
+  assert.deepEqual(apart.map((r) => r.readBy.name), ['laptop', 'vm']);
+  const keyed = { accountKey: 'c0dec0dec0de', source: 'api' };
+  const together = mergeUsage([{ agents: [codex('vm', 10, keyed)] }, { agents: [codex('laptop', 20, keyed)] }].map(readUsage));
+  assert.deepEqual(together.map((r) => r.readBy.name), ['vm']);
+});
+
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {
   // DSWETT-DEV-VM1 is signed in as octo and lists dswett_microsoft as a further account; the
   // laptop is signed in as dswett_microsoft itself, and its failed read lends the row its error.
