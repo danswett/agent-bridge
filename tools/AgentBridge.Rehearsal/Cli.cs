@@ -82,6 +82,15 @@ internal static class Cli
             Usage: "note --step <id> --result pass|fail|manual --detail <what was seen> [--screenshot <file>]: record a step a person or Hyperloop checked"),
         new("report", Options: ["--checklist"],
             Usage: "report [--checklist docs/parity-checklist.md]: the evidence so far, one line per step, and with --checklist the steps not yet run"),
+        new("soak run", Options: ["--url", "--token-file", "--state", "--slug", "--workspace", "--count", "--every", "--hold", "--turn-timeout", "--restart-daemon-at", "--restart-shadow-at", "--only"],
+            Repeatable: ["--model", "--effort"], Required: ["--token-file", "--state"],
+            Usage: "soak run --token-file <file> --state <dir> [--url http://127.0.0.1:8123] [--slug <machine slug>] [--workspace Rehearsal] [--count 66] [--every <minutes, 22>] [--hold <s, 35>] [--turn-timeout <minutes, 6>] [--model <Agent>=<model>]... [--effort <Agent>=<effort>]... [--restart-daemon-at <episode>] [--restart-shadow-at <episode>] [--only <scenario>]: the shadow soak's scripted load through a disposable Home Assistant (docs/host-shadow.md); carries on from --state's soak.json"),
+        new("soak status", Options: ["--state"], Required: ["--state"],
+            Usage: "soak status --state <dir>: what the soak has done so far, by agent"),
+        new("soak collect", MinArgs: 1, MaxArgs: 1, Options: ["--out"], Required: ["--out"],
+            Usage: "soak collect <session id> --out <zip>: a session's raw transcripts and its sub-agents', zipped"),
+        new("soak resumable", Options: ["--url", "--token-file", "--slug"], Required: ["--token-file"],
+            Usage: "soak resumable --token-file <file> [--url] [--slug]: agent-ha-bridge's resume list (from Home Assistant) beside the host's (launch.options), as the shadow compares them"),
     ];
 
     public static Parsed Parse(IReadOnlyList<string> argv)
