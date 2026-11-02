@@ -194,6 +194,18 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     expect(second.request).not.toBe(first.request);
   });
 
+  test('a long reason wraps inside the entry on a phone rather than running off the side', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 664 });
+    await openDemo(page);
+    await script(page, { outcome: 'refused', reason: `policy ${'x'.repeat(160)}` });
+    const e = await ask(page, LAND, permission());
+    await e.getByRole('button', { name: /^Approve once/ }).click();
+    await expect(e.locator('.needs-status')).toContainText('The machine refused this answer');
+    const [status, box] = await Promise.all([e.locator('.needs-status').boundingBox(), lane(page).boundingBox()]);
+    expect(status.x + status.width).toBeLessThanOrEqual(box.x + box.width);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
   test('busy lets you press again after a moment', async ({ page }) => {
     await openDemo(page);
     await script(page, 'busy');

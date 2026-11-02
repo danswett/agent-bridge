@@ -225,7 +225,7 @@ a { color: var(--ab-bridge); }
 .button.needs-approve { background: var(--ab-bridge); border-color: var(--ab-bridge); color: var(--ab-bridge-on); }
 /* In the text colour, not the outcome's: the role colours are checked against the card, not the
    Needs you fill, and the words say the outcome. */
-.needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); }
+.needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
 }
