@@ -31,11 +31,24 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         }
     }
 
+    public private(set) var actionStatus: String?
+    public var onAction: (@MainActor (BridgeNoticeActionRequest) async -> String)?
+    public func dismissActionStatus() {
+        actionStatus = nil
+    }
+
     public var onSelectSession: (@MainActor (String, String) -> Void)?
+    public var notifyFinished: Bool {
+        didSet { defaults.set(notifyFinished, forKey: "bridge.notifications.finished") }
+    }
+
+    @ObservationIgnored private var focusedSession: (machine: String, session: String)?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let center: UNUserNotificationCenter
     @ObservationIgnored private var sessions: [String: [String: BridgeSession]] = [:]
     @ObservationIgnored private var knownNotices: [String: BridgeSessionNotice] = [:]
+    @ObservationIgnored private var deliveryIdentifiers: [String: String] = [:]
+    @ObservationIgnored private var actionRegistry = BridgeNoticeActionRegistry()
     @ObservationIgnored private var foreground = false
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var permissionGeneration = UUID()
@@ -46,8 +59,10 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         enabled = defaults.bool(forKey: "bridge.notifications.enabled")
         quiet = defaults.bool(forKey: "bridge.notifications.quiet")
         showPreviews = defaults.bool(forKey: "bridge.notifications.previews")
+        notifyFinished = defaults.object(forKey: "bridge.notifications.finished") as? Bool ?? true
         super.init()
         center.delegate = self
+        center.setNotificationCategories([])
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
     }
@@ -118,10 +133,18 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         #endif
     }
 
-    public func update(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession], initialSnapshot: Bool = false) {
+    public func focus(machineID: String?, sessionID: String?) {
+        if let machineID, let sessionID {
+            focusedSession = (machineID, sessionID)
+        } else {
+            focusedSession = nil
+        }
+    }
+
+    public func update(machineID: String, machineName: String, before: [BridgeSession], after: [BridgeSession], initialSnapshot: Bool = false, capabilities: Set<String> = [], scope: String = "local") {
         sessions[machineID] = Dictionary(after.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         let plan = BridgeNotificationPlanner.plan(machineID: machineID, machineName: machineName, before: before, after: after,
-                                                  showPreviews: showPreviews, initialSnapshot: initialSnapshot)
+                                                  showPreviews: showPreviews, initialSnapshot: initialSnapshot, capabilities: capabilities)
         let stale = knownNotices.values.filter { $0.machineID == machineID && !BridgeNotificationPlanner.isCurrent($0, session: sessions[machineID]?[$0.sessionID]) }.map(\.id)
         remove(Array(Set(plan.removeIDs + stale)))
         waitingCount = sessions.values.reduce(0) { $0 + $1.values.filter { BridgeNotificationPlanner.pendingQuestion($0) != nil }.count }
@@ -129,8 +152,11 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         guard enabled, !quiet else { return }
         for notice in plan.notices where knownNotices[notice.id] == nil {
             knownNotices[notice.id] = notice
+            actionRegistry.register(notice, scope: scope)
             let token = generation
-            Task { await deliver(notice, generation: token) }
+            let identifier = notice.id + "." + UUID().uuidString
+            deliveryIdentifiers[notice.id] = identifier
+            Task { await deliver(notice, generation: token, identifier: identifier) }
         }
     }
 
@@ -147,6 +173,7 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
     }
 
     public func clearAll() {
+        actionStatus = nil
         generation = UUID()
         sessions = [:]
         waitingCount = 0
@@ -157,6 +184,18 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
     private func canDeliver(_ notice: BridgeSessionNotice, generation token: UUID) -> Bool {
         guard token == generation, enabled, !quiet, knownNotices[notice.id] != nil,
               BridgeNotificationPlanner.isCurrent(notice, session: sessions[notice.machineID]?[notice.sessionID]) else { return false }
+        if notice.kind == .finished, !notifyFinished {
+            return false
+        }
+        if foreground, focusedSession?.machine == notice.machineID, focusedSession?.session == notice.sessionID {
+            #if os(macOS)
+                if NSApplication.shared.isActive, NSApplication.shared.keyWindow != nil {
+                    return false
+                }
+            #else
+                return false
+            #endif
+        }
         #if os(iOS)
             return foreground
         #else
@@ -164,37 +203,79 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
         #endif
     }
 
-    private func deliver(_ notice: BridgeSessionNotice, generation token: UUID) async {
-        guard canDeliver(notice, generation: token) else { knownNotices.removeValue(forKey: notice.id); return }
+    private func deliver(_ notice: BridgeSessionNotice, generation token: UUID, identifier: String) async {
+        do { try await Task.sleep(for: .seconds(notice.kind == .question ? 2 : 3)) } catch { return }
+        guard deliveryIdentifiers[notice.id] == identifier else { return }
+        guard canDeliver(notice, generation: token) else { removeDelivery(notice.id, identifier: identifier); return }
         let content = UNMutableNotificationContent()
         content.title = notice.title
         content.body = notice.body
         content.sound = .default
         content.threadIdentifier = "agentbridge.sessions"
-        content.userInfo = ["machine": notice.machineID, "session": notice.sessionID]
+        content.userInfo = ["machine": notice.machineID, "session": notice.sessionID, "notice": notice.id]
+        if let binding = actionRegistry.bindings[notice.id] {
+            content.userInfo["actionToken"] = binding.token.uuidString
+            content.categoryIdentifier = "agentbridge.actions." + binding.token.uuidString
+            refreshCategories()
+        }
         do {
-            try await center.add(UNNotificationRequest(identifier: notice.id, content: content, trigger: nil))
-            if !canDeliver(notice, generation: token) {
-                remove([notice.id])
+            try await center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            if deliveryIdentifiers[notice.id] != identifier || !canDeliver(notice, generation: token) {
+                removeDelivery(notice.id, identifier: identifier)
             }
         } catch {
-            knownNotices.removeValue(forKey: notice.id)
-            status = "Could not show a notification: \(error.localizedDescription)"
+            let isCurrent = deliveryIdentifiers[notice.id] == identifier
+            removeDelivery(notice.id, identifier: identifier)
+            if isCurrent {
+                status = "Could not show a notification: \(error.localizedDescription)"
+            }
         }
     }
 
     private func remove(_ identifiers: [String]) {
         guard !identifiers.isEmpty else { return }
-        center.removePendingNotificationRequests(withIdentifiers: identifiers)
-        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+        let delivered = identifiers.compactMap { deliveryIdentifiers[$0] }
+        center.removePendingNotificationRequests(withIdentifiers: delivered)
+        center.removeDeliveredNotifications(withIdentifiers: delivered)
         for id in identifiers {
             knownNotices.removeValue(forKey: id)
+            actionRegistry.remove(id)
+            deliveryIdentifiers.removeValue(forKey: id)
         }
+        refreshCategories()
+    }
+
+    private func removeDelivery(_ noticeID: String, identifier: String) {
+        if deliveryIdentifiers[noticeID] == identifier {
+            remove([noticeID])
+        } else {
+            // An old add can complete after the same question was re-registered.
+            // Its unique system ID cannot remove or overwrite the new notice.
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        }
+    }
+
+    private func refreshCategories() {
+        center.setNotificationCategories(Set(actionRegistry.bindings.values.map { Self.category(notice: $0.notice, token: $0.token) }))
+    }
+
+    static func category(notice: BridgeSessionNotice, token: UUID) -> UNNotificationCategory {
+        let actions: [UNNotificationAction] = notice.actions.map { action in
+            switch action.kind {
+            case .choice:
+                UNNotificationAction(identifier: action.id, title: action.title, options: [.foreground, .authenticationRequired])
+            case .answerText, .reply:
+                UNTextInputNotificationAction(identifier: action.id, title: action.title, options: [.foreground, .authenticationRequired],
+                                              textInputButtonTitle: "Send", textInputPlaceholder: action.kind == .reply ? "Message" : "Answer")
+            }
+        }
+        return UNNotificationCategory(identifier: "agentbridge.actions." + token.uuidString, actions: actions, intentIdentifiers: [], options: [])
     }
 
     private func removePending() {
         generation = UUID()
-        center.removePendingNotificationRequests(withIdentifiers: Array(knownNotices.keys))
+        center.removePendingNotificationRequests(withIdentifiers: Array(deliveryIdentifiers.values))
     }
 
     private func removeAllNotices() {
@@ -213,20 +294,47 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
 
     public nonisolated func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
+        let identifier = info["notice"] as? String ?? response.notification.request.identifier
         let machine = info["machine"] as? String
         let session = info["session"] as? String
-        let isDefault = response.actionIdentifier == UNNotificationDefaultActionIdentifier
-        await MainActor.run { [weak self] in
-            if isDefault, let machine, let session {
-                self?.onSelectSession?(machine, session)
-            }
+        let actionToken = info["actionToken"] as? String
+        let action = response.actionIdentifier
+        let text = (response as? UNTextInputNotificationResponse)?.userText
+        await handleResponse(identifier: identifier, machine: machine, session: session, actionToken: actionToken, action: action, text: text)
+    }
+
+    private func handleResponse(identifier: String, machine: String?, session: String?, actionToken: String?, action: String, text: String?) async {
+        guard action != UNNotificationDismissActionIdentifier else { return }
+        if let machine, let session {
+            onSelectSession?(machine, session)
         }
+        guard action != UNNotificationDefaultActionIdentifier else { return }
+        guard enabled, let binding = actionRegistry.bindings[identifier], actionToken == binding.token.uuidString,
+              binding.notice.machineID == machine, binding.notice.sessionID == session,
+              knownNotices[identifier] == binding.notice,
+              BridgeNotificationPlanner.isCurrent(binding.notice, session: sessions[binding.notice.machineID]?[binding.notice.sessionID]),
+              let onAction,
+              let request = actionRegistry.consume(identifier: identifier, token: actionToken, machine: machine, session: session, action: action, text: text)
+        else {
+            actionStatus = "Not sent. This notification expired or the machine is offline. Review the session."
+            return
+        }
+        // Consume before the first suspension: duplicate OS callbacks cannot create
+        // a second press, even if the host's result arrives before its next upsert.
+        remove([identifier])
+        let token = generation
+        actionStatus = "Checking the current session…"
+        let result = await onAction(request)
+        guard token == generation else { return }
+        actionStatus = result
     }
 
     public nonisolated func userNotificationCenter(_: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         let identifier = notification.request.identifier
+        let noticeID = notification.request.content.userInfo["notice"] as? String
         return await MainActor.run { [weak self] in
-            guard let self, let notice = knownNotices[identifier], canDeliver(notice, generation: generation) else { return [] }
+            guard let self, let noticeID, deliveryIdentifiers[noticeID] == identifier,
+                  let notice = knownNotices[noticeID], canDeliver(notice, generation: generation) else { return [] }
             return [.banner, .list, .sound]
         }
     }
