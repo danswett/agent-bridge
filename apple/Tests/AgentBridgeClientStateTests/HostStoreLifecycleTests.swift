@@ -7,16 +7,19 @@ private actor LifecycleHost {
     enum ReplyMode { case deliver, lose, hold }
     let instance: String
     let replyMode: ReplyMode
+    let reportEvents: Bool
     let messages = AsyncThrowingStream<BridgeEnvelope, any Error>.makeStream()
     private(set) var requests: [BridgeRequest] = []
     private(set) var closeCount = 0
     private var sequence = 0
     private var revision = 1
     private var heldReply: CheckedContinuation<Void, Never>?
+    private var heldUsage: CheckedContinuation<Void, Never>?
 
-    init(instance: String, replyMode: ReplyMode = .deliver) {
+    init(instance: String, replyMode: ReplyMode = .deliver, reportEvents: Bool = false) {
         self.instance = instance
         self.replyMode = replyMode
+        self.reportEvents = reportEvents
     }
 
     func transport() -> HostTransport {
@@ -32,6 +35,10 @@ private actor LifecycleHost {
         heldReply?.resume(); heldReply = nil
     }
 
+    func releaseUsage() {
+        heldUsage?.resume(); heldUsage = nil
+    }
+
     func count(_ op: String) -> Int {
         requests.filter { $0.op == op }.count
     }
@@ -40,6 +47,11 @@ private actor LifecycleHost {
         revision += 1
         sequence += 2
         try messages.continuation.yield(envelope(["ev": .string("future.event"), "seq": .number(Double(sequence)), "data": .object([:])]))
+        if reportEvents {
+            // Already queued by the old subscriptions before the client sees the gap.
+            try reportEvent("usage.update", revision: revision - 1)
+            try reportEvent("update.state", revision: revision - 1)
+        }
     }
 
     private func send(_ request: BridgeRequest, timeout _: Duration) async throws -> BridgeEnvelope {
@@ -49,7 +61,7 @@ private actor LifecycleHost {
         case "hello":
             result = .object(["protocol": .number(1), "capabilities": .array(["sessions.read", "sessions.reply", "usage", "update"].map(JSONValue.string)),
                               "machine": .object(["name": .string(instance), "id": .string("fixture"), "instance": .string(instance)])])
-        case "usage.subscribe", "update.subscribe": result = .object(["revision": .number(Double(revision))])
+        case "usage.get", "usage.subscribe", "update.subscribe": result = .object(["revision": .number(Double(revision))])
         case "session.reply":
             if replyMode == .lose {
                 close(); throw RelayError.disconnected
@@ -62,6 +74,12 @@ private actor LifecycleHost {
         }
         let response = try envelope(["re": .number(Double(request.id)), "ok": .bool(true), "result": result])
         messages.continuation.yield(response)
+        if request.op == "usage.get", reportEvents {
+            revision += 1
+            try reportEvent("usage.update", revision: revision)
+            // The stream can advance before the awaiting caller is scheduled again.
+            await withCheckedContinuation { heldUsage = $0 }
+        }
         if request.op == "sessions.subscribe" {
             sequence += 1
             try messages.continuation.yield(envelope(["ev": .string("session.upsert"), "seq": .number(Double(sequence)), "data": .object([
@@ -71,6 +89,12 @@ private actor LifecycleHost {
             try messages.continuation.yield(envelope(["ev": .string("sessions.synced"), "seq": .number(Double(sequence)), "data": .object([:])]))
         }
         return response
+    }
+
+    private func reportEvent(_ name: String, revision: Int) throws {
+        sequence += 1
+        try messages.continuation.yield(envelope(["ev": .string(name), "seq": .number(Double(sequence)),
+                                                  "data": .object(["revision": .number(Double(revision))])]))
     }
 
     private func envelope(_ dictionary: [String: JSONValue]) throws -> BridgeEnvelope {
@@ -179,4 +203,31 @@ private actor DeferredProvider {
     #expect(await fixture.count("sessions.subscribe") == 2)
     #expect(await fixture.count("usage.subscribe") == 2)
     #expect(await fixture.count("update.subscribe") == 2)
+}
+
+@MainActor @Test func queuedOldReportEventsCannotOverwriteResubscriptionSnapshots() async throws {
+    let fixture = LifecycleHost(instance: "run", reportEvents: true)
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.transport() }
+    defer { host.stop() }
+    host.start()
+    try await awaitLifecycle { host.isLive }
+    try await fixture.skipEvent()
+    try await awaitLifecycle { host.isLive && host.sessions.first?.title == "Revision 2" }
+    #expect(host.usage?["revision"] == .number(2))
+    #expect(host.update?["revision"] == .number(2))
+    #expect(await fixture.count("usage.subscribe") == 2)
+    #expect(await fixture.count("update.subscribe") == 2)
+}
+
+@MainActor @Test func newerUsageEventSurvivesADelayedRefreshContinuation() async throws {
+    let fixture = LifecycleHost(instance: "run", reportEvents: true)
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.transport() }
+    defer { host.stop() }
+    host.start()
+    try await awaitLifecycle { host.isLive }
+    let refreshing = Task { await host.refreshUsage() }
+    try await awaitLifecycle { host.usage?["revision"] == .number(2) }
+    await fixture.releaseUsage()
+    await refreshing.value
+    #expect(host.usage?["revision"] == .number(2))
 }
