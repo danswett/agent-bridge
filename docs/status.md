@@ -114,7 +114,8 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 The design session's output is in the repository (#182). The owner **signed off ui.md on
 2026-11-01**; subagents.md's sign-off and its §8 questions sit with the overall coordinator
 (track A). A UI coordinator session runs track B and merges its PRs; it keeps this section
-current. The sources:
+current. Since 2026-11-02 13:10 PT that is Copilot session 4d05d459 on a Cloud PC, which
+took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 
 - [design/ui.md](design/ui.md): the spec for every client (status language, colour, type,
   layout, surfaces, platform shells);
@@ -135,8 +136,8 @@ current. The sources:
 | U2 | #165 | "Needs you" lane | **Done**: #202 (PWA), #203 (app); approve-once refuses bidi and invisible characters |
 | U3 | #177 | Design tokens generator; both clients switch to the colour roles | **Done**: #188 (generator, PWA), #193 (app) |
 | U4 | #178 | Status glyphs and icons replace card edges and glows | **Done**: #204 (PWA), #205 (app); #211 fixed the clash that turned main red |
-| U5 | #179 | PWA layout (half of #166) | **Done**: #216, #217, #218, #221, #245. Follow-ups #249 in review (#252) |
-| U6 | #180 | Windows app layout (half of #166) | **Done**: #219 |
+| U5 | #179 | PWA layout (half of #166) | **Done**: #217, #218, #221. Follow-ups #249 in review (#252) |
+| U6 | #180 | Windows app layout (half of #166) | **Done**: #216, #219, #245 |
 | U7 | #168 | PWA platform layer | In review: #259 (PWA CI red on Chromium back-navigation tests; the fix is pushed) |
 | U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. App in review: #250 (closes #229, draft), whose two MEDIUM security fixes have landed; it needs 3 Copilot threads fixed and a security re-review. PWA part 2 (strip, tab, inspector) pushed to `ui/u8-pwa-delegates`, stacked on #252, with no PR yet |
 | U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. PWA in review: #261 (draft, 10 review threads open); app not started |
