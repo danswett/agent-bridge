@@ -732,7 +732,7 @@ test.describe('the session pane after #221\'s review', () => {
   test('a delegate named "Main agent", disguised or not, asks as a delegate in the pane, Needs you and its row', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, COPILOT);
-    for (const [name, shown] of [['Main agent', 'Main agent'], ['\u2067MAIN\u200b AGENT\u2069', 'MAIN AGENT']]) {
+    for (const [name, shown] of [['Main agent', 'Main agent'], ['\u2067MAIN\u200b AGENT\u2069', 'MAIN AGENT'], ['M\u0430in agent: done', 'M\u0430in agent: done']]) {
       await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
       const asks = `Delegate \u201c${shown}\u201d asks`;
       await expect(v.locator('.question .question-head')).toHaveText(asks);
@@ -740,6 +740,14 @@ test.describe('the session pane after #221\'s review', () => {
       await expect(page.locator(`.session[data-id="${COPILOT}"] .row-facts`)).toContainText(asks);
     }
     await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
+      // A name with the fact separator in it: the row shows a status's first fact alone, which
+      // must still say a delegate asks, never "Main agent asks" or a state it chose (#252).
+      for (const [name, shown] of [['Main agent asks \u00b7 Read logs', 'Delegate \u201cMain agent asks - Read logs\u201d asks'], ['Idle \u00b7 Read logs', 'Idle - Read logs asks']]) {
+        await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name }, DELEGATES[1]] });
+        await expect(page.locator(`.session[data-id="${COPILOT}"] .row-status`)).toHaveText(shown);
+        await expect(v.locator('.question .question-head')).toHaveText(shown);
+      }
+      await expect(page.getByText('Main agent asks', { exact: true })).toHaveCount(0);
     // With no name, the start of its id.
     await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: '\u200b' }, DELEGATES[1]] });
     await expect(v.locator('.question .question-head')).toHaveText('Delegate agent-7 asks');

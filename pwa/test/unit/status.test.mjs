@@ -170,3 +170,9 @@ test('Rules 2 and 3: a delegate named "Main agent" is named as a delegate, never
   assert.equal(said({ status: 'waiting', waitingOn: 'x1', subagents: [impostor] }).text, 'Delegate \u201cMain agent\u201d asks');
   assert.equal(said({ status: 'working', subagents: [{ ...impostor, status: 'working', name: 'MAIN AGENT' }] }).text, 'Working · task: Delegate \u201cMAIN AGENT\u201d');
 });
+
+test('Rule 2: a delegate\'s name cannot add a fact of its own, so the row\'s first fact always says who asks', () => {
+  const asks = (name) => said({ status: 'waiting', waitingOn: 'x1', subagents: [{ id: 'x1', kind: 'task', status: 'waiting', name }] }).text;
+  assert.equal(asks('Main agent asks \u00b7 Read logs'), 'Delegate \u201cMain agent asks - Read logs\u201d asks');
+  assert.equal(asks('Idle \u00b7 Read logs'), 'Idle - Read logs asks');
+});

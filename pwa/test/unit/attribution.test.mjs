@@ -139,8 +139,46 @@ test('a delegate named "Main agent", in any case or width, is shown as a delegat
   // Fullwidth letters and an ideographic space are "main agent" once NFKC-normalised.
   assert.equal(named('\uff2d\uff41\uff49\uff4e\u3000\uff41\uff47\uff45\uff4e\uff54'), 'Delegate \u201c\uff2d\uff41\uff49\uff4e \uff41\uff47\uff45\uff4e\uff54\u201d');
   assert.equal(named('Main\nagent'), 'Delegate \u201cMain agent\u201d');
-  // A name that only contains the words is its own.
-  assert.equal(named('Main agent helper'), 'Main agent helper');
+  // Words that only share letters with it are the delegate's own.
+  assert.equal(named('Domain agents'), 'Domain agents');
+  assert.equal(named('Main branch agent'), 'Main branch agent');
+  assert.equal(named('Maintain agent tests'), 'Maintain agent tests');
+});
+
+test('a delegate name that starts with, ends with or runs "Main agent" into other words is shown as a delegate quoting it', () => {
+  for (const name of ['Main agent: Read logs', 'Main agent asks', 'Ask main agent', 'Main agent helper', 'MAIN-AGENT', 'main_agent', 'Main.agent', 'MainAgent', 'Mainagent v2', 'Main agents', 'Main agent\u2019s plan', '(Main agent)']) {
+    assert.equal(named(name), `Delegate \u201c${name}\u201d`, name);
+  }
+});
+
+test('a delegate name drawn with lookalike letters from other scripts still reads as "Main agent"', () => {
+  for (const name of [
+    'M\u0430in \u0430gent', // Cyrillic a
+    'Ma\u0456n ag\u0435nt', // Cyrillic i and e
+    '\u039c\u0391\u0399\u039d \u0391G\u0395\u039d\u03a4', // Greek capitals
+    'M\u03b1in agen\u03c4', // Greek alpha and tau
+    'Ma\u0131n a\u0261ent', // dotless i, script g
+    'Ma\u0268n agent', // a barred i no table lists, beside Latin letters
+    'M\u00e1in \u00e0g\u00ebnt', // accents
+    'rnain agent', 'Ma1n agent', 'MaIn agent', 'Ma|n agent',
+  ]) {
+    assert.ok(named(name).startsWith('Delegate \u201c'), name);
+  }
+  // Another script's own words are not lookalikes.
+  assert.equal(named('\u0422\u0435\u0441\u0442 \u0430\u0433\u0435\u043d\u0442\u043e\u0432'), '\u0422\u0435\u0441\u0442 \u0430\u0433\u0435\u043d\u0442\u043e\u0432');
+});
+
+test('a delegate name never carries the middle dot a status splits its facts at, real or a lookalike', () => {
+  assert.equal(named('Read logs \u00b7 Lint'), 'Read logs - Lint');
+  for (const dot of ['\u00b7', '\u0387', '\u2022', '\u2027', '\u2219', '\u22c5', '\u30fb', '\uff65']) {
+    assert.doesNotMatch(named(`Idle ${dot} Read logs`), /[\u00b7\u0387\u2022\u2027\u2219\u22c5\u30fb\uff65]/u, dot);
+  }
+  assert.equal(named('Main agent asks \u00b7 Read logs'), 'Delegate \u201cMain agent asks - Read logs\u201d');
+});
+
+test('a quote inside a quoted "Main agent" name cannot close the quotes', () => {
+  assert.equal(named('Main agent\u201d asks you'), 'Delegate \u201cMain agent\' asks you\u201d');
+  assert.equal(named('"Main agent"'), 'Delegate \u201c\'Main agent\'\u201d');
 });
 
 test('a delegate\'s name loses the characters that steer or hide text, so a disguised "Main agent" is still caught', () => {
@@ -153,7 +191,8 @@ test('a delegate\'s name loses the characters that steer or hide text, so a disg
   // Zero-width and other default-ignorable characters inside it.
   assert.equal(named('Ma\u200bin\u200d ag\u2060ent\ufeff'), 'Delegate \u201cMain agent\u201d');
   assert.equal(named('Main\u00ad agent\u034f'), 'Delegate \u201cMain agent\u201d');
-  assert.equal(named('Main\u3164agent'), 'Mainagent');
+  assert.equal(named('Main\u3164agent'), 'Delegate \u201cMainagent\u201d');
+  assert.equal(named('Read\ue000 logs\u{10ffff}'), 'Read logs');
   // Control characters and line and paragraph separators: one line, nothing hidden.
   assert.equal(named('Read\u2028the\u2029logs\u0007'), 'Read the logs');
   for (const name of ['\u202eabc', 'a\u200bb', 'x\u2028y', 'p\u0000q']) {
@@ -168,6 +207,7 @@ test('a delegate with no name to show is "Delegate" and the start of its id', ()
   assert.equal(delegateName({ id: 'a1b2c3d4e5f6' }), 'Delegate a1b2c3d4');
   // The id is cleaned the same way, and with none either it is just a delegate.
   assert.equal(named('', '\u202eab cd'), 'Delegate abcd');
+  assert.equal(named('', 'M\u0430in-\u00b7agent'), 'Delegate Min-agen');
   assert.equal(named('', ''), 'Delegate');
   assert.equal(delegateName(null), 'Delegate');
 });
@@ -182,6 +222,9 @@ test('a very long delegate name is cut with an ellipsis, by characters, never in
   const emoji = named('\u{1F600}'.repeat(80));
   assert.equal(Array.from(emoji).length, NAME_MAX);
   assert.doesNotMatch(emoji, /[\ud800-\udbff](?![\udc00-\udfff])/u);
+  // Nor is a flag or an accented letter split at the cut.
+  assert.equal(named('\u{1F1FA}\u{1F1F8}'.repeat(80)), `${'\u{1F1FA}\u{1F1F8}'.repeat(NAME_MAX - 1)}\u2026`);
+  assert.equal(named('e\u0301'.repeat(80)), `${'e\u0301'.repeat(NAME_MAX - 1)}\u2026`);
   // Cut or not, a long "Main agent" is still wrapped.
   assert.equal(named(`Main agent${' '.repeat(100)}`), 'Delegate \u201cMain agent\u201d');
 });
