@@ -303,19 +303,20 @@ body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn
   font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;
 }
 .usage-line:hover .usage-summary { text-decoration: underline; }
-.usage-summary { margin: 0; color: var(--ab-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Wraps rather than cutting an account short (#225); an account moves to the next line whole. */
+.usage-summary { margin: 0; padding: var(--ab-space-2) 0; color: var(--ab-text2); overflow-wrap: anywhere; }
+.usage-who { display: inline-block; max-width: 100%; }
 .usage-body .usage-group:first-child { border-top: 0; margin-top: 0; }
 .usage-figure.warn { color: var(--ab-needs-text); }
 .usage-figure.crit { color: var(--ab-danger-text); }
 .usage-group { padding: 10px 0 4px; border-top: 1px solid var(--ab-stroke2); margin-top: 8px; }
-.usage-head { display: flex; align-items: baseline; gap: 8px; }
+/* The agent, its account in full (the identity: it never gives way, #225), and the reading's
+   age; short of room, the line wraps rather than cutting anything. */
+.usage-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
 .usage-name { font-weight: 600; }
-.usage-account { flex: 1; min-width: 0; font-size: .85rem; color: var(--ab-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.usage-age { flex: none; font-size: .8rem; color: var(--ab-text2); }
+.usage-account { flex: 1 1 auto; min-width: 0; font-size: .85rem; color: var(--ab-text2); overflow-wrap: anywhere; }
+.usage-age { flex: none; margin-left: auto; font-size: .8rem; color: var(--ab-text2); }
 .usage-age.stale { color: var(--ab-needs-text); }
-/* Which machine took the reading (#172): one that may be offline now. */
-.usage-by { flex: 0 1 auto; min-width: 0; max-width: 45%; font-size: .8rem; color: var(--ab-text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.usage-by.stale { color: var(--ab-needs-text); }
 .usage-window { margin-top: 8px; }
 .usage-top, .usage-foot, .usage-pacefoot { display: flex; justify-content: space-between; gap: 8px; }
 .usage-top { font-size: .9rem; }

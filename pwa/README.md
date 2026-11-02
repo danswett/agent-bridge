@@ -352,8 +352,10 @@ app.
 The **Usage** page is agent-ha-bridge's usage card: one row per allowance, merged
 across every machine, fullest first, each window a bar with an even-pace mark, its amounts,
 when it resets and how old the reading is. Under the sessions, one line of figures in their
-own colours leads to it. It shows once any machine offers `usage`, or a
-reading is kept from an earlier visit. Each row says which machine read it (`read on Laptop`):
+own colours leads to it. Each row and each figure names its account in full, since two
+accounts of one agent are told apart by nothing else (#225). It shows once any machine offers
+`usage`, or a reading is kept from an earlier visit. Which machine read a row is in its
+tooltip and said to a screen reader, not on the line:
 a host that offers `usage.shared` is asked for the readings it keeps from the account's other
 machines too, and the last reading of each allowance is kept in IndexedDB for the signed-in
 account, so it outlives its machine going offline (#172); signing out deletes it.

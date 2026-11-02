@@ -387,7 +387,7 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
     // Not viewed: a short channel tells the list what it is and the panel what it has spent.
     const row = page.locator('[data-device-name="usage-host"]');
     await expect(row.locator('.machine-status')).toHaveText('2 sessions · 0.0.0-fixture (dev)', { timeout: 30000 });
-    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot 40%');
+    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot · octo 40%');
     await expect(page.locator('#usage .usage-account')).toHaveText('octo · enterprise');
     // A machine that offers no usage says only its version.
     await expect(page.locator('[data-device-name="fixture-host"] .machine-status')).toHaveText('0.0.0-fixture');
@@ -398,7 +398,7 @@ test('every machine shows its sessions and version, and its agents\' usage, merg
     await expect(page.locator('.session')).toHaveCount(2, { timeout: 30000 });
     await expect.poll(() => usageHost.log.filter((op) => op === 'usage.subscribe').length, { timeout: 15000 }).toBe(1);
     await usageHost.setUsage(copilot(91));
-    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot 91%');
+    await expect(page.locator('#usage-line .usage-summary')).toHaveText('GitHub Copilot · octo 91%');
     await expect(page.locator('#usage-line .usage-figure')).toHaveClass(/crit/);
     await expect(page.locator('#usage .usage-verdict')).toHaveText('58% ahead of pace');
   } finally {

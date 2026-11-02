@@ -389,6 +389,10 @@ machine, online ones first, then the account's offline machines (#213):
 - **A folder-trust question** waiting on a machine that takes no launches puts a Needs you dot on
   the way to Launch (the rail's Launch, the phone's New).
 - **Under the sessions,** one line of each agent's fullest usage leads to Usage.
+- **Usage names the account** (#225), on every group and every figure ("GitHub Copilot ·
+  danswett 12%"), in full: two of one agent's accounts differ by nothing else. Short of room the
+  line wraps; the account never gives way to the agent's name or the age. Which machine took a
+  reading is for diagnosis, in a tooltip or said to a screen reader, never on the line.
 - **Platform layer (#168):** detection only for shortcut hints, safe areas and back
   navigation.
 

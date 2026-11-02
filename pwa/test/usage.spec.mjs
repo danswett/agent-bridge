@@ -46,8 +46,8 @@ test('each agent is a row with its windows, fullest first, read as agent-ha-brid
   // The line under the sessions: each agent's fullest window, in its own colour.
   const line = page.locator('#usage-line');
   await expect(line).toBeVisible();
-  await expect(line.locator('.usage-summary')).toHaveText('GitHub Copilot 79% · Codex 61% · Claude Code 41%');
-  await expect(line.locator('.usage-figure.warn')).toHaveText('GitHub Copilot 79%');
+  await expect(line.locator('.usage-summary')).toHaveText('GitHub Copilot · danswett 79% · Codex 61% · Claude Code 41%');
+  await expect(line.locator('.usage-figure.warn')).toHaveText('GitHub Copilot · danswett 79%');
   await go(page, 'usage');
   const usage = page.locator('#usage');
   await expect(usage).toBeVisible();
@@ -96,7 +96,7 @@ test('an update from the host redraws the bars, and an error shows only when the
       { agent: 'claude', label: 'Claude Code', source: 'none', measuredAt: at(0), error: 'The Claude usage could not be read: the server answered 500', windows: [] },
     ],
   }));
-  await expect(page.locator('#usage-line .usage-figure.crit')).toHaveText('GitHub Copilot 93%');
+  await expect(page.locator('#usage-line .usage-figure.crit')).toHaveText('GitHub Copilot · danswett 93%');
   await go(page, 'usage');
   const usage = page.locator('#usage');
   const copilot = usage.locator('.usage-group[data-agent="copilot"]');
@@ -113,7 +113,7 @@ test('an update from the host redraws the bars, and an error shows only when the
 test('the usage line under the sessions opens the Usage page, which a reload keeps, and back returns to the sessions', async ({ page }) => {
   await openDemo(page);
   const line = page.locator('#usage-line');
-  await expect(line.locator('.usage-summary')).toContainText('GitHub Copilot 79%');
+  await expect(line.locator('.usage-summary')).toContainText('GitHub Copilot · danswett 79%');
   await expect(page.locator('#usage')).toBeHidden();
 
   await line.click();
@@ -165,13 +165,15 @@ test('a reading kept from a machine that has gone shows with its age and the mac
   });
   const second = usage.locator('.usage-group[data-agent="claude"]').filter({ hasText: '#aaaa' });
   await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
+  // Said to a screen reader and in a tooltip, never on the line (#225).
+  await expect(second.locator('.usage-head')).toHaveAttribute('title', 'Read on Laptop');
+  expect((await second.locator('.usage-by').boundingBox()).width).toBeLessThanOrEqual(1);
 
   await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', false));
   await expect(second.locator('.usage-percent')).toHaveText('64%');
   await expect(second.locator('.usage-age')).toHaveText('3h ago');
   await expect(second.locator('.usage-age')).toHaveClass(/stale/);
   await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
-  await expect(second.locator('.usage-by')).toHaveClass(/stale/);
 
   // A later visit: Laptop is back but no longer offers that account; what was kept still shows.
   await page.reload();
@@ -179,6 +181,37 @@ test('a reading kept from a machine that has gone shows with its age and the mac
   await expect(second.locator('.usage-percent')).toHaveText('64%');
   await expect(second.locator('.usage-by')).toHaveText('read on Laptop');
   expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+});
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test('two Copilot accounts with long logins each show their login in full, in the groups and the summary, and no machine (#225)', async ({ page }) => {
+    await openDemo(page);
+    const one = 'a-remarkably-long-github-login-number-one';
+    const two = 'another-quite-long-github-login-number-two';
+    await sendUsage(page, (at) => ({
+      agents: [one, two].map((account, i) => ({
+        agent: 'copilot', label: 'GitHub Copilot', account, plan: 'enterprise', source: 'api', measuredAt: at(-60000),
+        windows: [{ key: 'plan', label: 'Plan', percent: i ? 0.3 : 11.7, startsAt: at(-10 * 86400000), resetsAt: at(20 * 86400000) }],
+      })),
+    }));
+    const line = page.locator('#usage-line .usage-summary');
+    await expect(line).toHaveText(`GitHub Copilot · ${one} 12% · GitHub Copilot · ${two} 0%`);
+    for (const who of await line.locator('.usage-who').all()) { expect(await who.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true); }
+    await go(page, 'usage');
+    const groups = page.locator('#usage .usage-group[data-agent="copilot"]');
+    await expect(groups).toHaveCount(2);
+    await expect(groups.locator('.usage-account')).toHaveText([`${one} · enterprise`, `${two} · enterprise`]);
+    for (const a of await groups.locator('.usage-account').all()) {
+      const box = await a.boundingBox();
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      expect(await a.evaluate((e) => e.scrollWidth <= e.clientWidth + 1 && getComputedStyle(e).textOverflow !== 'ellipsis')).toBe(true);
+    }
+    // No "read on <machine>" anywhere a person sees it.
+    for (const by of await page.locator('#usage .usage-by').all()) { expect((await by.boundingBox()).width).toBeLessThanOrEqual(1); }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
 });
 
 test('a machine that does not offer usage shows no usage panel', async ({ page }) => {

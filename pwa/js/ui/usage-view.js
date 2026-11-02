@@ -38,10 +38,13 @@ export class UsageView {
     if (this.line) { this.line.hidden = this.book.empty; }
 
     // Each figure in the colour of its own fullest bar, so one agent running short does not
-    // turn every agent beside it amber.
+    // turn every agent beside it amber. Each names its account: two of one agent's accounts are
+    // two figures, and only the account tells them apart (#225). A separator stays with the
+    // figure before it (ui.md §6.1).
     const figures = entries.filter((e) => headline(e) !== null);
     this.summary?.replaceChildren(...(figures.length
-      ? figures.flatMap((e, i) => [i > 0 ? ' \u00b7 ' : null, h('span', { class: `usage-figure ${severity(headline(e))}`.trim() }, `${e.label} ${Math.round(headline(e))}%`)]).filter(Boolean)
+      ? figures.flatMap((e, i) => [i > 0 ? '\u00a0\u00b7 ' : null, h('span', { class: `usage-figure ${severity(headline(e))}`.trim() },
+        e.label, e.account ? ['\u00a0\u00b7 ', h('span', { class: 'usage-who' }, e.account)] : null, ` ${Math.round(headline(e))}%`)]).filter(Boolean)
       : ['No usage reported yet']));
     this.line?.setAttribute('aria-label', `Agent usage: ${this.summary?.textContent ?? ''}`);
 
@@ -51,11 +54,13 @@ export class UsageView {
   #group(entry, now) {
     const stale = isStale(entry.at, now) ? ' stale' : '';
     const by = readOn(entry);
-    const head = h('div', { class: 'usage-head' },
+    // The account is the group's identity, in full (#225); which machine read it is for
+    // diagnosis only: a tooltip, and said to a screen reader, never on the line.
+    const head = h('div', { class: 'usage-head', title: by ? by.replace(/^read/, 'Read') : null },
       h('span', { class: 'usage-name' }, entry.label),
       h('span', { class: 'usage-account' }, [entry.account, entry.plan].filter(Boolean).join(' \u00b7 ')),
       h('span', { class: `usage-age${stale}` }, ago(entry.at, now)),
-      by ? h('span', { class: `usage-by${stale}` }, by) : null);
+      by ? h('span', { class: 'usage-by sr-only' }, by) : null);
     return h('div', { class: 'usage-group', dataset: { agent: entry.agent } },
       head,
       hasReading(entry) ? entry.windows.map((w) => this.#window(w, now)) : null,
