@@ -46,7 +46,7 @@ public sealed class MachineRowViewModel : Observable
         internal set { if (Set(ref viewOnlyWhy, value)) { Raise(nameof(ViewOnly)); } }
     }
     public bool CanShowSessions { get => canShowSessions; internal set => Set(ref canShowSessions, value); }
-    // This machine's own Check, which Settings' updater does.
+    // This machine's own Check: Settings' check, shown there with its outcome and install.
     public bool CanCheckHere { get => canCheckHere; internal set => Set(ref canCheckHere, value); }
     public MachineUpdateViewModel? Update
     {
@@ -57,7 +57,7 @@ public sealed class MachineRowViewModel : Observable
     public OfflineMachineViewModel? Offline { get; }
     public bool IsOffline => Offline is not null;
     public string ShowSessionsName => $"Show the sessions on {name}";
-    public string CheckHereName => $"Check {name} for updates";
+    public string CheckHereName => $"Check {name} for updates in Settings";
 }
 
 public sealed partial class MainViewModel

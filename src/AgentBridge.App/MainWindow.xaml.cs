@@ -127,7 +127,12 @@ public sealed partial class MainWindow : Window
     }
 
     static MachineRowViewModel? RowOf(object sender) => (sender as FrameworkElement)?.Tag as MachineRowViewModel;
-    void OnCheckHere(object sender, RoutedEventArgs e) => ViewModel.CheckLocal?.Invoke();
+    // This machine's updates are Settings': its check, progress, outcome and Update and restart.
+    void OnCheckHere(object sender, RoutedEventArgs e)
+    {
+        ShowPage("settings");
+        if (ViewModel.Settings is { } s) { _ = s.CheckForUpdatesAsync(); }
+    }
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
