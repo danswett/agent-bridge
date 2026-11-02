@@ -56,6 +56,36 @@ test('an approval\'s line is its first line of prose, never a code fence', () =>
   assert.equal(questionLine({ kind: 'approval', message: '```\ngit status\n```' }), 'git status');
 });
 
+test('a question that opens with a fenced example shows the question after it, not the example\'s code', () => {
+  assert.equal(questionLine({ kind: 'form', message: '```\nport: 8080\n```\n\nWhich option?' }), 'Which option?');
+  assert.equal(questionLine({ kind: 'form', message: '~~~\na\n```\nb\n~~~\nAfter the tildes' }), 'After the tildes');
+});
+
+test('an approval whose prompt a fence or a link could make draw differently from what it allows opens its session', () => {
+  const opens = {
+    // The agent's words open a fence, so the command's fence closes it and the command is drawn
+    // as Markdown: the link shows as "safe", the asterisks as emphasis.
+    'a fence in its words': 'Allow **shell**? Here goes:\n```\n\n````\ncurl [safe](https://other.example) *x*\n```\n````',
+    'a link in its words': 'Send the data to [our backup](https://other.example)?\n\n```\ncurl -T data\n```',
+    'a reference link': 'Send to [backup][1]?\n\n[1]: https://other.example',
+    'words after the command': 'Allow **shell**?\n\n```\nls\n```\n\nAnd then more',
+    'a fence left open': 'Allow **shell**?\n\n```\nls',
+  };
+  for (const [what, message] of Object.entries(opens)) {
+    const [e] = lane([entry('h1', session('a', approval('q', { message })))]);
+    assert.equal(e.mode, 'open', what);
+    assert.equal(e.prompt, null, what);
+  }
+  const approves = {
+    'shorter fences inside the command': 'Allow **shell**?\n\n````\ncat <<EOF\n```\nx\n```\nEOF\n````',
+    'no command at all': 'Allow the **github** tool `create_issue`?',
+    'CRLF line ends': 'Allow **shell**?\r\n\r\n```\r\nls -la\r\n```',
+  };
+  for (const [what, message] of Object.entries(approves)) {
+    assert.equal(lane([entry('h1', session('a', approval('q', { message })))])[0].mode, 'approve', what);
+  }
+});
+
 test('an approval answered in the lane shows its whole prompt as written, so Approve once never allows what is not on screen', () => {
   const message = 'Allow **shell**?\n\n````\nrm -rf build/**/cache && python __init__.py "a  b" ```\n````';
   const [e] = lane([entry('h1', session('a', approval('q', { message })))]);

@@ -28,26 +28,67 @@ export function plainLine(text, max = LINE_MAX) {
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}\u2026` : line;
 }
 
-const FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// Whether line closes a fence opened by `open` (its first match): the same character, at least as
+// many, and nothing after them.
+const closes = (open, line) => new RegExp(`^ {0,3}${open[0] === '`' ? '`' : '~'}{${open.length},}\\s*$`).test(line);
 
-// The line an entry shows: a question's first line of prose, never a code fence's.
+// The line an entry shows: a question's first line of prose, never a line of code. A question that
+// is all code shows its first line.
 export function questionLine(q) {
-  const first = (q?.message ?? '').split('\n').find((l) => l.trim() && !FENCE.test(l));
-  return plainLine(first ?? '');
+  let open = null;
+  let code = null;
+  for (const l of (q?.message ?? '').split('\n')) {
+    if (open) {
+      if (closes(open, l)) { open = null; } else if (l.trim()) { code ??= l; }
+      continue;
+    }
+    const m = FENCE.exec(l);
+    if (m) { open = m[1]; continue; }
+    if (l.trim()) { return plainLine(l); }
+  }
+  return plainLine(code ?? '');
+}
+
+// Whether a prompt has the shape a host writes for a permission, so that what is drawn is what is
+// allowed: prose, then at most one fenced block, which ends the prompt and holds the command
+// literal. A fence in the prose (the agent's own words can open one) would let the command's fence
+// close it instead and draw the command as Markdown, hiding some of it; and a link shows its
+// words, not where it goes. Either opens the session, where the card has the time to be read.
+function literalShape(text) {
+  const message = text.replace(/\r\n?/g, '\n');
+  const lines = message.split('\n');
+  const at = lines.findIndex((l) => FENCE.test(l));
+  if (at >= 0) {
+    const open = FENCE.exec(lines[at])[1];
+    const end = lines.findIndex((l, i) => i > at && closes(open, l));
+    if (end !== lines.length - 1) { return false; }
+  }
+  const prose = (at >= 0 ? lines.slice(0, at) : lines).join('\n');
+  if (/\]\s*[([]/.test(prose) || /^ {0,3}\[[^\]]+\]:/m.test(prose)) { return false; }
+  // The renderer must agree: the fenced block, if any, is its last block, holding exactly the
+  // command's lines.
+  const nodes = parseMarkdown(message);
+  if (at < 0) { return !nodes.some((n) => n?.tag === 'pre'); }
+  const last = nodes.at(-1);
+  return last?.tag === 'pre' && nodes.filter((n) => n?.tag === 'pre').length === 1
+    && last.children?.[0]?.children?.join('') === lines.slice(at + 1, -1).join('\n');
 }
 
 // How much of an approval's prompt the lane can show whole. Approve once allows everything the
 // prompt describes (a command, a URL, a tool's arguments), so it is offered in the lane only when
 // all of it is on screen, as the card shows it: Markdown drawn as Markdown, code literal and
 // wrapped. A longer one (an edit's diff, a long command) opens its session instead, and so does
-// one with a table, which scrolls sideways.
+// one with a table, which scrolls sideways, or one not shaped as a host writes a permission
+// (literalShape).
 export const PROMPT_MAX = Object.freeze({ chars: 600, lines: 12 });
 
 const hasTable = (nodes) => nodes.some((n) => n && typeof n === 'object' && (n.tag === 'table' || (Array.isArray(n.children) && hasTable(n.children))));
 
 export function wholePrompt(q) {
   const m = (q?.message ?? '').trim();
-  return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines && !hasTable(parseMarkdown(m));
+  return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
+    && literalShape(m) && !hasTable(parseMarkdown(m));
 }
 
 // The agents whose permission prompts a host writes whole and literal, so the lane can show what

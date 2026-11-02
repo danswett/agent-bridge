@@ -131,10 +131,12 @@ export class NeedsYouLane {
     els.age.title = localTime(e.askedAt);
     els.meta.replaceChildren(...[e.machine ? els.machine : null, els.agent, e.delegate ? els.delegate : null, els.age]
       .filter(Boolean).flatMap((el, i) => (i ? [' \u00b7 ', el] : [el])));
-    // Two entries can both have Approve once: each button says which session it answers.
-    els.title.setAttribute('aria-label', `${e.title}: open the session`);
-    els.approve?.setAttribute('aria-label', `Approve once: ${e.title}`);
-    els.deny?.setAttribute('aria-label', `Deny: ${e.title}`);
+    // Two entries can both have Approve once: each button says which session it answers, and on
+    // which machine when several are shown, since two machines can have sessions of one title.
+    const subject = e.machine ? `${e.title} on ${e.machine}` : e.title;
+    els.title.setAttribute('aria-label', `${subject}: open the session`);
+    els.approve?.setAttribute('aria-label', `Approve once: ${subject}`);
+    els.deny?.setAttribute('aria-label', `Deny: ${subject}`);
     this.#age(view);
   }
 

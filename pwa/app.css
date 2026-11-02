@@ -214,16 +214,18 @@ a { color: var(--ab-bridge); }
 .needs-prompt { font-size: .9rem; }
 .needs-prompt > :first-child { margin-top: 0; }
 .needs-prompt > :last-child { margin-bottom: 4px; }
+/* Never a tint on a role fill, as in a question: a linked `code` would be bridge at 4.41:1 on
+   subtle over the light needs fill (design/tokens.json color.contrast.tints). */
+.needs-prompt.md pre, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
 .needs-meta { margin: 2px 0 0; font-size: .8rem; color: var(--ab-text2); overflow-wrap: anywhere; }
 .needs-delegate, .needs-at-machine { color: var(--ab-needs-text); font-weight: 600; }
 .needs-age { font-variant-numeric: tabular-nums; }
 .needs-at-machine { margin: 4px 0 0; font-size: .85rem; }
 .needs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .button.needs-approve { background: var(--ab-bridge); border-color: var(--ab-bridge); color: var(--ab-bridge-on); }
-.needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text2); }
-.needs-status.ok { color: var(--ab-bridge); }
-.needs-status.warn { color: var(--ab-needs-text); }
-.needs-status.bad { color: var(--ab-danger-text); }
+/* In the text colour, not the outcome's: the role colours are checked against the card, not the
+   Needs you fill, and the words say the outcome. */
+.needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); }
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
 }

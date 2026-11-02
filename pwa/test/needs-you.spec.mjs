@@ -80,6 +80,25 @@ test.describe('on a phone', () => {
     await expect(entries(page).last()).toHaveAttribute('data-id', CLAUDE);
   });
 
+  test('with several machines shown, each control names the machine as well as the session, and the prompt\'s code sits on the card colour', async ({ page }) => {
+    await openDemo(page, '&machines=3');
+    const e = await ask(page, LAND, permission({ message: 'Allow **shell**? It runs `git push`.\n\n```\ngit push origin main\n```' }));
+    await expect(e.getByRole('button', { name: 'Approve once: Land the P1 slices on Demo machine' })).toBeVisible();
+    await expect(e.getByRole('button', { name: 'Deny: Land the P1 slices on Demo machine' })).toBeVisible();
+    await expect(e.getByRole('button', { name: 'Land the P1 slices on Demo machine: open the session' })).toBeVisible();
+    // Never a tint on the Needs you fill: code in the prompt is on the card's own colour.
+    const backgrounds = await e.evaluate((el) => {
+      const probe = document.createElement('div');
+      probe.style.background = 'var(--ab-card)';
+      el.append(probe);
+      const card = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return [card, ...[...el.querySelectorAll('.needs-prompt pre, .needs-prompt p code')].map((c) => getComputedStyle(c).backgroundColor)];
+    });
+    expect(backgrounds).toHaveLength(3);
+    expect(new Set(backgrounds).size).toBe(1);
+  });
+
   test('the lane never moves list rows: a question arriving, being answered and going leaves every row where it was', async ({ page }) => {
     await openDemo(page);
     const before = await rows(page);
@@ -158,6 +177,15 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await e.getByRole('button', { name: /^Approve once/ }).click();
     await expect(e.locator('.needs-status')).toHaveText('The machine refused this answer: the session is running elevated.');
     await expect(e.locator('.needs-status')).toHaveClass(/\bbad\b/);
+    // In the text colour, not danger: the roles are checked against the card, not the Needs you fill.
+    expect(await e.locator('.needs-status').evaluate((el) => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--ab-text)';
+      el.after(probe);
+      const text = getComputedStyle(probe).color;
+      probe.remove();
+      return getComputedStyle(el).color === text;
+    })).toBe(true);
     await expect(e.getByRole('button', { name: /^Deny/ })).toBeEnabled();
     await e.getByRole('button', { name: /^Deny/ }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
