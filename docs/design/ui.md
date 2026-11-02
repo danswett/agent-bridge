@@ -315,6 +315,9 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
+- **Search:** finds sessions on every machine by the words of their title, repository, branch,
+  agent or machine, titles starting with them first, and opens the one chosen as a
+  notification does.
 - **Navigation:** a compact `NavigationView` rail (Sessions, Machines, Launch, Usage;
   Settings at the foot) with a selection pill.
 - **Content:** a layer with an 8 px top-left radius.

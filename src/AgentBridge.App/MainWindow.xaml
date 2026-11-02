@@ -6,21 +6,90 @@
     xmlns:local="using:AgentBridge.App"
     xmlns:core="using:AgentBridge.App.Core"
     Title="Agent Bridge">
-    <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <!-- The Windows shell (docs/design/ui.md §7): Mica behind a 48 px title bar with the mark, the
+         name and a centred search box, a compact rail, and the pages on a layer with an 8 px
+         top-left radius, which NavigationView draws in its left modes. -->
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+    <Grid x:Name="Root" AutomationProperties.AutomationId="Shell">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid.KeyboardAccelerators>
+            <!-- Ctrl+K focuses search (ui.md §9). -->
+            <KeyboardAccelerator Modifiers="Control" Key="K" Invoked="OnFocusSearch" />
+        </Grid.KeyboardAccelerators>
+
+        <TitleBar
+            x:Name="AppTitleBar"
+            Height="{StaticResource AbLayoutTitleBar}"
+            Title="Agent Bridge"
+            IsBackButtonVisible="False"
+            IsPaneToggleButtonVisible="False"
+            AutomationProperties.AutomationId="TitleBar">
+            <TitleBar.LeftHeader>
+                <ContentControl
+                    Style="{StaticResource AbIconMark}"
+                    Width="16"
+                    Height="16"
+                    Margin="16,0,0,0"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource AbBridge}"
+                    AutomationProperties.AutomationId="Mark"
+                    AutomationProperties.AccessibilityView="Raw" />
+            </TitleBar.LeftHeader>
+            <AutoSuggestBox
+                x:Name="SearchBox"
+                Width="400"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                PlaceholderText="Search"
+                UpdateTextOnSelect="False"
+                AutomationProperties.AutomationId="Search"
+                AutomationProperties.Name="Search sessions"
+                ToolTipService.ToolTip="Search sessions (Ctrl+K)"
+                TextChanged="OnSearchChanged"
+                QuerySubmitted="OnSearchSubmitted">
+                <AutoSuggestBox.ItemTemplate>
+                    <DataTemplate x:DataType="core:SearchHit">
+                        <StackPanel Padding="0,4" AutomationProperties.Name="{x:Bind Label}">
+                            <TextBlock Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" Text="{x:Bind Title}" />
+                            <TextBlock
+                                Style="{StaticResource AbTypeMeta}"
+                                Foreground="{ThemeResource AbText2}"
+                                TextTrimming="CharacterEllipsis"
+                                Text="{x:Bind Detail}"
+                                Visibility="{x:Bind local:Ui.Some(Detail)}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </AutoSuggestBox.ItemTemplate>
+            </AutoSuggestBox>
+        </TitleBar>
+
         <NavigationView
             x:Name="Nav"
-            PaneDisplayMode="Top"
+            Grid.Row="1"
+            PaneDisplayMode="LeftCompact"
+            IsPaneToggleButtonVisible="False"
             IsBackButtonVisible="Collapsed"
             IsSettingsVisible="False"
+            IsTitleBarAutoPaddingEnabled="False"
+            AutomationProperties.AutomationId="Rail"
             SelectionChanged="OnNavigate">
+            <NavigationView.Resources>
+                <!-- The rail is the window's Mica, as the title bar is: no pane fill of its own. -->
+                <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="Transparent" />
+                <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="Transparent" />
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
-                <!-- The design's icons (design/icons) beside the words: they are stroked shapes, which an
-                     IconElement can't draw, so they are the item's content rather than its Icon. -->
-                <NavigationViewItem x:Name="SessionsItem" Tag="sessions" AutomationProperties.AutomationId="NavSessions" AutomationProperties.Name="Sessions">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ContentControl Style="{StaticResource AbIconSessions}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
-                        <TextBlock Text="Sessions" VerticalAlignment="Center" />
-                    </StackPanel>
+                <!-- The design's icons (design/icons) are stroked shapes, which an IconElement can't draw,
+                     so each is the item's content, and the rail shows only that; the name is its tooltip
+                     and accessible name. Without an Icon, NavigationView keeps an 8 px column where the
+                     icon would be: the -8 margin centres the icon in the rail. -->
+                <NavigationViewItem x:Name="SessionsItem" Tag="sessions" AutomationProperties.AutomationId="NavSessions" AutomationProperties.Name="Sessions" ToolTipService.ToolTip="Sessions">
+                    <ContentControl Style="{StaticResource AbIconSessions}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
                     <NavigationViewItem.InfoBadge>
                         <InfoBadge
                             Value="{x:Bind ViewModel.Waiting, Mode=OneWay}"
@@ -29,45 +98,40 @@
                             Foreground="{ThemeResource AbNeedsInk}" />
                     </NavigationViewItem.InfoBadge>
                 </NavigationViewItem>
-                <NavigationViewItem
-                    x:Name="LaunchItem" Tag="launch" AutomationProperties.AutomationId="NavLaunch" AutomationProperties.Name="Launch"
-                    Visibility="{x:Bind local:Ui.Show(Launch.Available), Mode=OneWay}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ContentControl Style="{StaticResource AbIconLaunch}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
-                        <TextBlock Text="Launch" VerticalAlignment="Center" />
-                    </StackPanel>
+                <NavigationViewItem x:Name="MachinesItem" Tag="machines" AutomationProperties.AutomationId="NavMachines" AutomationProperties.Name="Machines" ToolTipService.ToolTip="Machines">
+                    <ContentControl Style="{StaticResource AbIconMachine}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
                 </NavigationViewItem>
-                <NavigationViewItem Tag="usage" AutomationProperties.AutomationId="NavUsage" AutomationProperties.Name="Usage">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ContentControl Style="{StaticResource AbIconUsage}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
-                        <TextBlock Text="Usage" VerticalAlignment="Center" />
-                    </StackPanel>
+                <NavigationViewItem
+                    x:Name="LaunchItem" Tag="launch" AutomationProperties.AutomationId="NavLaunch" AutomationProperties.Name="Launch" ToolTipService.ToolTip="Launch"
+                    Visibility="{x:Bind local:Ui.Show(Launch.Available), Mode=OneWay}">
+                    <ContentControl Style="{StaticResource AbIconLaunch}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
+                </NavigationViewItem>
+                <NavigationViewItem Tag="usage" AutomationProperties.AutomationId="NavUsage" AutomationProperties.Name="Usage" ToolTipService.ToolTip="Usage">
+                    <ContentControl Style="{StaticResource AbIconUsage}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <ContentControl Style="{StaticResource AbIconSettings}" AutomationProperties.AutomationId="NavIcon" VerticalAlignment="Center" />
-                        <TextBlock Text="Settings" VerticalAlignment="Center" />
-                    </StackPanel>
+                <NavigationViewItem Tag="settings" AutomationProperties.AutomationId="NavSettings" AutomationProperties.Name="Settings" ToolTipService.ToolTip="Settings">
+                    <ContentControl Style="{StaticResource AbIconSettings}" Width="20" Height="20" Margin="-8,0,0,0" AutomationProperties.AutomationId="NavIcon" />
                 </NavigationViewItem>
             </NavigationView.FooterMenuItems>
 
-            <Grid>
+            <Grid AutomationProperties.AutomationId="Content">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
+                <!-- What stops the app doing its job, over every page. -->
                 <StackPanel Grid.Row="0">
                     <InfoBar
-                        Margin="16,8,16,0"
+                        Margin="24,12,24,0"
                         AutomationProperties.AutomationId="Banner"
                         IsClosable="False"
                         Severity="Warning"
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
                     <InfoBar
-                        Margin="16,8,16,0"
+                        Margin="24,12,24,0"
                         AutomationProperties.AutomationId="DiscoveryHeld"
                         IsClosable="False"
                         Severity="Informational"
@@ -75,193 +139,231 @@
                         Message="{x:Bind ViewModel.HeldWhy, Mode=OneWay}" />
                 </StackPanel>
 
-                <ScrollViewer x:Name="SessionsPane" Grid.Row="1" AutomationProperties.AutomationId="SessionsPane">
-                    <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
-                         the column off the right edge (see LaunchView). -->
+                <!-- Sessions. -->
+                <Grid x:Name="SessionsPage" Grid.Row="1" AutomationProperties.AutomationId="SessionsPage">
+                    <ScrollViewer x:Name="SessionsPane" AutomationProperties.AutomationId="SessionsPane">
+                        <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
+                             the column off the right edge (see LaunchView). -->
+                        <Grid>
+                            <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
+                                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Sessions" />
+                                <ComboBox
+                                    x:Name="MachinePicker"
+                                    AutomationProperties.AutomationId="MachinePicker"
+                                    AutomationProperties.Name="Show sessions from"
+                                    Header="Machines"
+                                    HorizontalAlignment="Stretch"
+                                    ItemsSource="{x:Bind ViewModel.Machines}"
+                                    SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
+                                    SelectionChanged="OnMachineChosen"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="core:MachineChoice">
+                                            <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <!-- Your order, Most recent or Machine (#164). -->
+                                <ComboBox
+                                    x:Name="SortPicker"
+                                    AutomationProperties.AutomationId="SortPicker"
+                                    AutomationProperties.Name="Sort sessions"
+                                    Header="Sort"
+                                    MinWidth="160"
+                                    ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
+                                    SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
+                                <InfoBar
+                                    AutomationProperties.AutomationId="FleetNote"
+                                    IsClosable="False"
+                                    Severity="Informational"
+                                    IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
+                                    Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
+                                <TextBlock
+                                    Style="{StaticResource AbSecondaryText}"
+                                    AutomationProperties.AutomationId="EmptyText"
+                                    TextWrapping="Wrap"
+                                    Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
+                                <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="14" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="core:SessionCardViewModel">
+                                            <local:SessionCard Card="{x:Bind}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <!-- Ended · N, folded: sessions a host removed while the app was running (#164). -->
+                                <Expander
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Stretch"
+                                    AutomationProperties.AutomationId="Ended"
+                                    Header="{x:Bind ViewModel.EndedHeader, Mode=OneWay}"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.HasEnded), Mode=OneWay}">
+                                    <ItemsControl ItemsSource="{x:Bind ViewModel.Ended}" IsTabStop="False">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="core:EndedRow">
+                                                <StackPanel Padding="0,4">
+                                                    <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" Text="{x:Bind Title}" />
+                                                    <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Meta}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </Expander>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
+
+                <!-- Machines (#180, #213): one row per machine on the account, this one first, then the others,
+                     then those offline. A row is ui.md §6.1's: the icon and the status trailing the name both on
+                     line 1, at most two facts on line 2, the machine's update inside its own row, and its buttons,
+                     all one style, in one column under the text. -->
+                <ScrollViewer x:Name="MachinesPage" Grid.Row="1" Visibility="Collapsed" AutomationProperties.AutomationId="MachinesPane">
                     <Grid>
-                        <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="12">
-                            <ComboBox
-                                x:Name="MachinePicker"
-                                AutomationProperties.AutomationId="MachinePicker"
-                                AutomationProperties.Name="Show sessions from"
-                                Header="Machines"
-                                MinWidth="260"
-                                ItemsSource="{x:Bind ViewModel.Machines}"
-                                SelectedItem="{x:Bind ViewModel.SelectedMachine, Mode=OneWay}"
-                                SelectionChanged="OnMachineChosen"
-                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate x:DataType="core:MachineChoice">
-                                        <TextBlock Text="{x:Bind Label, Mode=OneWay}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                            <!-- Your order, Most recent or Machine (#164). -->
-                            <ComboBox
-                                x:Name="SortPicker"
-                                AutomationProperties.AutomationId="SortPicker"
-                                AutomationProperties.Name="Sort sessions"
-                                Header="Sort"
-                                MinWidth="160"
-                                ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
-                                SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
+                        <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Machines" />
+                                <!-- Every machine listed, this one included (#51). -->
+                                <Button
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.AutomationId="CheckAllUpdates"
+                                    AutomationProperties.Name="Check every machine for updates, this one included"
+                                    Content="Check all"
+                                    IsEnabled="{x:Bind ViewModel.CanCheckAll, Mode=OneWay}"
+                                    Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachineUpdates), Mode=OneWay}"
+                                    Click="{x:Bind ViewModel.CheckAll}" />
+                            </Grid>
                             <InfoBar
-                                AutomationProperties.AutomationId="FleetNote"
+                                AutomationProperties.AutomationId="MachinesFleetNote"
                                 IsClosable="False"
                                 Severity="Informational"
                                 IsOpen="{x:Bind ViewModel.HasFleetNote, Mode=OneWay}"
                                 Message="{x:Bind ViewModel.FleetNote, Mode=OneWay}" />
-                            <TextBlock
-                                Style="{StaticResource AbSecondaryText}"
-                                AutomationProperties.AutomationId="EmptyText"
-                                TextWrapping="Wrap"
-                                Text="{x:Bind ViewModel.EmptyText, Mode=OneWay}"
-                                Visibility="{x:Bind local:Ui.Show(ViewModel.Empty), Mode=OneWay}" />
-                            <ItemsControl x:Name="Cards" ItemsSource="{x:Bind ViewModel.Sessions}" IsTabStop="False" AutomationProperties.AutomationId="Cards">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="14" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.MachineRows}" IsTabStop="False" AutomationProperties.AutomationId="MachineList">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="core:SessionCardViewModel">
-                                        <local:SessionCard Card="{x:Bind}" />
+                                    <DataTemplate x:DataType="core:MachineRowViewModel">
+                                        <Border BorderBrush="{ThemeResource AbStroke}" BorderThickness="0,0,0,1" Padding="0,12">
+                                            <Grid ColumnSpacing="12" AutomationProperties.AutomationId="MachineRow" AutomationProperties.Name="{x:Bind Name, Mode=OneWay}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="20" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <!-- Top, with line 1: never centred on a row of several lines. -->
+                                                <ContentControl
+                                                    Style="{StaticResource AbIconMachine}"
+                                                    Width="20"
+                                                    Height="20"
+                                                    VerticalAlignment="Top"
+                                                    Foreground="{ThemeResource AbText2}"
+                                                    AutomationProperties.AutomationId="MachineIcon"
+                                                    AutomationProperties.AccessibilityView="Raw" />
+                                                <StackPanel Grid.Column="1" Spacing="2">
+                                                    <!-- The status in the name's own style, so the two share line 1's baseline. -->
+                                                    <Grid ColumnSpacing="12">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Style="{StaticResource AbTypeRow}" TextTrimming="CharacterEllipsis" AutomationProperties.AutomationId="MachineName" Text="{x:Bind Name, Mode=OneWay}" />
+                                                        <TextBlock Grid.Column="1" Style="{StaticResource AbTypeRow}" Foreground="{ThemeResource AbText2}" AutomationProperties.AutomationId="MachineStatus" Text="{x:Bind Status, Mode=OneWay}" />
+                                                    </Grid>
+                                                    <!-- At most two facts. A read-only host's reason is a sentence: its tooltip, not the row. -->
+                                                    <TextBlock
+                                                        Style="{StaticResource AbTypeMeta}"
+                                                        Foreground="{ThemeResource AbText2}"
+                                                        TextTrimming="CharacterEllipsis"
+                                                        AutomationProperties.AutomationId="MachineFacts"
+                                                        AutomationProperties.HelpText="{x:Bind ViewOnlyWhy, Mode=OneWay}"
+                                                        ToolTipService.ToolTip="{x:Bind ViewOnlyWhy, Mode=OneWay}"
+                                                        Text="{x:Bind Facts, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Some(Facts), Mode=OneWay}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbTypeMeta}"
+                                                        Foreground="{ThemeResource AbText2}"
+                                                        Text="{x:Bind Offline.SeenText, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Show(IsOffline)}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource AbTypeMeta}"
+                                                        Foreground="{ThemeResource AbDangerText}"
+                                                        TextWrapping="Wrap"
+                                                        Text="{x:Bind Offline.Error, Mode=OneWay}"
+                                                        Visibility="{x:Bind local:Ui.Some(Offline.Error), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                    <!-- The machine's update (#51), inside its row. -->
+                                                    <StackPanel Spacing="2" AutomationProperties.AutomationId="MachineUpdate" Visibility="{x:Bind local:Ui.Show(HasUpdate), Mode=OneWay}">
+                                                        <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" TextWrapping="Wrap" Text="{x:Bind Update.StatusText, Mode=OneWay}" />
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            Text="{x:Bind Update.LastText, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Some(Update.LastText), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                        <TextBlock
+                                                            Style="{StaticResource AbTypeMeta}"
+                                                            Foreground="{ThemeResource AbText2}"
+                                                            TextWrapping="Wrap"
+                                                            Text="{x:Bind Update.Note, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Some(Update.Note), Mode=OneWay, FallbackValue=Collapsed}" />
+                                                    </StackPanel>
+                                                    <local:WrapRow Spacing="8" Margin="0,8,0,0" AutomationProperties.AutomationId="MachineButtons">
+                                                        <Button
+                                                            Content="Show sessions"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="ShowMachineSessions"
+                                                            AutomationProperties.Name="{x:Bind ShowSessionsName, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(CanShowSessions), Mode=OneWay}"
+                                                            Click="OnShowMachineSessions" />
+                                                        <Button
+                                                            Content="Check"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CheckHere"
+                                                            AutomationProperties.Name="{x:Bind CheckHereName, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(CanCheckHere), Mode=OneWay}"
+                                                            Click="OnCheckHere" />
+                                                        <Button
+                                                            Content="Check"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="CheckMachineUpdate"
+                                                            AutomationProperties.Name="{x:Bind Update.CheckName, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Update.CanCheck, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasUpdate), Mode=OneWay}"
+                                                            Click="OnCheckMachine" />
+                                                        <Button
+                                                            Content="Install"
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="InstallMachineUpdate"
+                                                            AutomationProperties.Name="{x:Bind Update.InstallName, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Update.CanInstall, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(HasUpdate), Mode=OneWay}"
+                                                            Click="OnInstallMachine" />
+                                                        <Button
+                                                            Tag="{x:Bind}"
+                                                            AutomationProperties.AutomationId="ForgetMachine"
+                                                            AutomationProperties.Name="{x:Bind Offline.ForgetName, Mode=OneWay}"
+                                                            Content="{x:Bind Offline.ForgetText, Mode=OneWay}"
+                                                            IsEnabled="{x:Bind Offline.CanForget, Mode=OneWay}"
+                                                            Visibility="{x:Bind local:Ui.Show(IsOffline)}"
+                                                            Click="OnForgetMachine" />
+                                                    </local:WrapRow>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <!-- Ended · N, folded: sessions a host removed while the app was running (#164). -->
-                            <Expander
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Stretch"
-                                AutomationProperties.AutomationId="Ended"
-                                Header="{x:Bind ViewModel.EndedHeader, Mode=OneWay}"
-                                Visibility="{x:Bind local:Ui.Show(ViewModel.HasEnded), Mode=OneWay}">
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.Ended}" IsTabStop="False">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="core:EndedRow">
-                                            <StackPanel Padding="0,4">
-                                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Title}" />
-                                                <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta}" />
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </Expander>
-                            <!-- The account's other machines' updates, each with Check and Install, and Check
-                                 all, which checks this machine too (#51). -->
-                            <StackPanel
-                                Spacing="6"
-                                AutomationProperties.AutomationId="MachineUpdates"
-                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachineUpdates), Mode=OneWay}">
-                                <Grid ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Style="{StaticResource AbSecondaryText}" VerticalAlignment="Center" Text="Updates on your other machines" />
-                                    <Button
-                                        Grid.Column="1"
-                                        AutomationProperties.AutomationId="CheckAllUpdates"
-                                        AutomationProperties.Name="Check every machine for updates, this one included"
-                                        Content="Check all"
-                                        IsEnabled="{x:Bind ViewModel.CanCheckAll, Mode=OneWay}"
-                                        Click="{x:Bind ViewModel.CheckAll}" />
-                                </Grid>
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.MachineUpdates}" IsTabStop="False">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Spacing="6" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="core:MachineUpdateViewModel">
-                                            <Grid ColumnSpacing="8" AutomationProperties.AutomationId="MachineUpdate">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel>
-                                                    <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" Text="{x:Bind StatusText, Mode=OneWay}" />
-                                                    <TextBlock
-                                                        Style="{StaticResource AbSecondaryText}"
-                                                        TextWrapping="Wrap"
-                                                        Text="{x:Bind LastText, Mode=OneWay}"
-                                                        Visibility="{x:Bind local:Ui.Show(HasLast), Mode=OneWay}" />
-                                                    <TextBlock
-                                                        Style="{StaticResource AbSecondaryText}"
-                                                        TextWrapping="Wrap"
-                                                        Text="{x:Bind Note, Mode=OneWay}"
-                                                        Visibility="{x:Bind local:Ui.Show(HasNote), Mode=OneWay}" />
-                                                </StackPanel>
-                                                <Button
-                                                    Grid.Column="1"
-                                                    VerticalAlignment="Center"
-                                                    AutomationProperties.AutomationId="CheckMachineUpdate"
-                                                    AutomationProperties.Name="{x:Bind CheckName, Mode=OneWay}"
-                                                    Content="Check"
-                                                    IsEnabled="{x:Bind CanCheck, Mode=OneWay}"
-                                                    Click="{x:Bind Check}" />
-                                                <Button
-                                                    Grid.Column="2"
-                                                    VerticalAlignment="Center"
-                                                    AutomationProperties.AutomationId="InstallMachineUpdate"
-                                                    AutomationProperties.Name="{x:Bind InstallName, Mode=OneWay}"
-                                                    Content="Install"
-                                                    IsEnabled="{x:Bind CanInstall, Mode=OneWay}"
-                                                    Click="{x:Bind Install}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-                            <!-- The account's machines that are offline, from the relay's roster, each with a
-                                 two-press Forget (#50). -->
-                            <StackPanel
-                                Spacing="6"
-                                AutomationProperties.AutomationId="OfflineMachines"
-                                Visibility="{x:Bind local:Ui.Show(ViewModel.ShowOfflineMachines), Mode=OneWay}">
-                                <TextBlock Style="{StaticResource AbSecondaryText}" Text="Offline machines" />
-                                <ItemsControl ItemsSource="{x:Bind ViewModel.OfflineMachines}" IsTabStop="False">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Spacing="6" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="core:OfflineMachineViewModel">
-                                            <Grid ColumnSpacing="12" AutomationProperties.AutomationId="OfflineMachine">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel>
-                                                    <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind LastSeenText, Mode=OneWay}" />
-                                                    <TextBlock
-                                                        Style="{StaticResource AbSecondaryText}"
-                                                        TextWrapping="Wrap"
-                                                        Text="{x:Bind Error, Mode=OneWay}"
-                                                        Visibility="{x:Bind local:Ui.Show(HasError), Mode=OneWay}" />
-                                                </StackPanel>
-                                                <Button
-                                                    Grid.Column="1"
-                                                    VerticalAlignment="Center"
-                                                    AutomationProperties.AutomationId="ForgetMachine"
-                                                    AutomationProperties.Name="{x:Bind ForgetName, Mode=OneWay}"
-                                                    Content="{x:Bind ForgetText, Mode=OneWay}"
-                                                    IsEnabled="{x:Bind CanForget, Mode=OneWay}"
-                                                    Click="{x:Bind Press}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>
-
+                <!-- Launch, Usage and Settings: a page each, its title at the top of the view. -->
                 <local:LaunchView x:Name="LaunchPane" Grid.Row="1" Visibility="Collapsed" />
                 <local:UsageView x:Name="UsagePane" Grid.Row="1" Visibility="Collapsed" />
                 <local:SettingsView x:Name="SettingsPane" Grid.Row="1" Visibility="Collapsed" />

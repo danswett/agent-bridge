@@ -39,6 +39,48 @@ static class DesignKeys
         "AbText2",
         "AbText3",
         "AbShadow",
+        "AbLink",
+        "SystemControlHyperlinkTextBrush",
+        "HyperlinkButtonForeground",
+        "AbLinkPointerOver",
+        "HyperlinkButtonForegroundPointerOver",
+        "AbLinkPressed",
+        "HyperlinkButtonForegroundPressed",
+    ];
+
+    // WinUI's accent palette, as Bridge: each key and its colour, #RRGGBB.
+    public static readonly (string Key, string Color)[] AccentColors =
+    [
+        ("SystemAccentColorLight3", "#5EEAD4"),
+        ("SystemAccentColorLight2", "#2DD4BF"),
+        ("SystemAccentColorLight1", "#14B8A6"),
+        ("SystemAccentColor", "#0E8073"),
+        ("SystemAccentColorDark1", "#0B7A6E"),
+        ("SystemAccentColorDark2", "#0A665C"),
+        ("SystemAccentColorDark3", "#08524A"),
+    ];
+
+    public static readonly string[] TypeStyles =
+    [
+        "AbTypeTitle",
+        "AbTypeRow",
+        "AbTypeReading",
+        "AbTypeMeta",
+        "AbTypeSectionHeader",
+        "AbTypeCode",
+    ];
+
+    public static readonly string[] LayoutSizes =
+    [
+        "AbLayoutThreePane",
+        "AbLayoutTwoPane",
+        "AbLayoutTitleBar",
+        "AbLayoutMinWidth",
+        "AbLayoutMinHeight",
+        "AbLayoutList",
+        "AbLayoutListMin",
+        "AbLayoutInspector",
+        "AbLayoutReadingMax",
     ];
 
     public static readonly string[] Glyphs =

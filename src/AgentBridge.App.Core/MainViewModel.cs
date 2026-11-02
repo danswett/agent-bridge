@@ -141,6 +141,7 @@ public sealed partial class MainViewModel : Observable
             if (at != i) { OfflineMachines.Move(at, i); }
         }
         Raise(nameof(ShowOfflineMachines));
+        SyncMachineRows();
     }
 
     // The account's other machines whose updates can be seen and asked for (#51): those whose
@@ -149,7 +150,17 @@ public sealed partial class MainViewModel : Observable
     public bool ShowMachineUpdates => MachineUpdates.Count > 0;
     public bool CanCheckAll => MachineUpdates.Any(u => u.CanCheck) || CheckLocal is not null;
     // This machine's own check, for Check all: its updater's, which Settings shows. Set by the app.
-    public Action? CheckLocal { get; set; }
+    public Action? CheckLocal
+    {
+        get => checkLocal;
+        set
+        {
+            checkLocal = value;
+            Raise(nameof(CanCheckAll));
+            SyncMachineRows();
+        }
+    }
+    Action? checkLocal;
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
     // Check all: every machine listed, and this one.
@@ -175,6 +186,7 @@ public sealed partial class MainViewModel : Observable
         else { row.Changed(); }
         Raise(nameof(ShowMachineUpdates));
         Raise(nameof(CanCheckAll));
+        SyncMachineRows();
     }
 
     // What the Sessions page says about the account's other machines, when there is something.
@@ -297,6 +309,7 @@ public sealed partial class MainViewModel : Observable
             var state = m.Host.State == LinkState.Connected ? Words.Plural(count, "session", "sessions") : "connecting…";
             choice.Label = $"{m.Name}{(m.IsLocal ? " (this machine)" : "")} · {state}";
         }
+        SyncMachineRows();
     }
 
     // A toast or the tray asked for this session: the window shows it.

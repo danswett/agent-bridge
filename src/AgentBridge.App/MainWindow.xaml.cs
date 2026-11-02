@@ -1,8 +1,11 @@
+using System.Runtime.InteropServices;
 using AgentBridge.App.Core;
 using Microsoft.UI;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
 
 namespace AgentBridge.App;
@@ -10,18 +13,53 @@ namespace AgentBridge.App;
 public sealed partial class MainWindow : Window
 {
     bool active;
+    // Where the window is kept between runs (<profile>-window.json); null in the self-test, whose
+    // window is sized for its pictures.
+    readonly string? placementFile;
+    // The last place the window had while neither maximised nor minimised: a maximised window is
+    // kept as maximised over where it goes back to.
+    PixelRect? normal;
+    DispatcherQueueTimer? saveSoon;
+    // Maximised when first shown, not when placed: maximising shows a window, and one started in the
+    // background at sign-in must stay hidden.
+    bool maximizeWhenShown;
+    // Whether the window was maximised before it was last minimised: what it comes back as.
+    bool wasMaximized;
 
-    internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest)
+    internal MainWindow(MainViewModel viewModel, LaunchViewModel launch, bool selfTest, string? placementFile = null)
     {
         ViewModel = viewModel;
         Launch = launch;
+        this.placementFile = selfTest ? null : placementFile;
         InitializeComponent();
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"));
-        AppWindow.Resize(new SizeInt32(selfTest ? 1100 : 960, selfTest ? 1400 : 900));
+
+        // The title bar is the window's own (ui.md §7), over Mica; the caption buttons stay the
+        // system's, as tall as the bar and in the app's theme.
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
+        AppWindow.TitleBar.PreferredHeightOption = TitleBarHeightOption.Tall;
+        AppWindow.TitleBar.PreferredTheme = TitleBarTheme.UseDefaultAppMode;
+
+        if (selfTest) { AppWindow.Resize(new SizeInt32(1100, 1400)); }
+        else { Place(); }
+        KeepSmallest();
+        Root.Loaded += (_, _) => { if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); } };
+        Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
+        AppWindow.Changed += OnWindowChanged;
+
         AppWindow.Closing += (_, e) => CloseRequested?.Invoke(e);
-        Activated += (_, e) => active = e.WindowActivationState != WindowActivationState.Deactivated;
+        Activated += (_, e) =>
+        {
+            active = e.WindowActivationState != WindowActivationState.Deactivated;
+            if (active && maximizeWhenShown && AppWindow.Presenter is OverlappedPresenter p)
+            {
+                maximizeWhenShown = false;
+                p.Maximize();
+            }
+        };
         UsagePane.ViewModel = viewModel.Usage;
         LaunchPane.ViewModel = launch;
         if (viewModel.Settings is { } s) { SettingsPane.ViewModel = s; }
@@ -41,6 +79,10 @@ public sealed partial class MainWindow : Window
 
     internal ItemsControl CardList => Cards;
     internal FrameworkElement RootElement => Root;
+    internal NavigationView Rail => Nav;
+    internal TitleBar Bar => AppTitleBar;
+    internal AutoSuggestBox Search => SearchBox;
+    internal string CurrentPage => (Nav.SelectedItem as NavigationViewItem)?.Tag as string ?? "";
 
     public void ShowInFront()
     {
@@ -50,7 +92,11 @@ public sealed partial class MainWindow : Window
         TrayIcon.SetForegroundWindow(Handle);
     }
 
-    public void HideToTray() => AppWindow.Hide();
+    public void HideToTray()
+    {
+        SavePlacement();
+        AppWindow.Hide();
+    }
 
     internal void ShowPage(string tag) =>
         Nav.SelectedItem = Nav.MenuItems.Concat(Nav.FooterMenuItems).OfType<NavigationViewItem>().First(i => (string)i.Tag == tag);
@@ -58,7 +104,8 @@ public sealed partial class MainWindow : Window
     void OnNavigate(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
-        SessionsPane.Visibility = Ui.Show(tag == "sessions");
+        SessionsPage.Visibility = Ui.Show(tag == "sessions");
+        MachinesPage.Visibility = Ui.Show(tag == "machines");
         UsagePane.Visibility = Ui.Show(tag == "usage");
         LaunchPane.Visibility = Ui.Show(tag == "launch");
         if (tag == "launch") { Launch.Opened(); } else { Launch.Closed(); }
@@ -71,7 +118,26 @@ public sealed partial class MainWindow : Window
         if (MachinePicker.SelectedItem is MachineChoice choice) { ViewModel.SelectedMachine = choice; }
     }
 
-    // A toast or the tray asked for a session: its card, on screen.
+    // A machine's row on the Machines page: its sessions, on the Sessions page.
+    void OnShowMachineSessions(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not MachineRowViewModel row || ViewModel.Machines.FirstOrDefault(c => c.Key == row.Key) is not { } choice) { return; }
+        ViewModel.SelectedMachine = choice;
+        ShowPage("sessions");
+    }
+
+    static MachineRowViewModel? RowOf(object sender) => (sender as FrameworkElement)?.Tag as MachineRowViewModel;
+    // This machine's updates are Settings': its check, progress, outcome and Update and restart.
+    void OnCheckHere(object sender, RoutedEventArgs e)
+    {
+        ShowPage("settings");
+        if (ViewModel.Settings is { } s) { _ = s.CheckForUpdatesAsync(); }
+    }
+    void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
+    void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
+    void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
+
+    // A toast, the tray or the search box asked for a session: its card, on screen.
     void Reveal(SessionCardViewModel card)
     {
         Nav.SelectedItem = SessionsItem;
@@ -83,4 +149,114 @@ public sealed partial class MainWindow : Window
             }
         });
     }
+
+    // --- Search (ui.md §7, §9): every machine's sessions, opened as a toast opens one. ---
+
+    void OnFocusSearch(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        SearchBox.Focus(FocusState.Keyboard);
+    }
+
+    void OnSearchChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+    {
+        if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput) { SearchFor(sender.Text); }
+    }
+
+    // Up to 400 px, centred; narrower with the window, so the mark, the name and the caption buttons
+    // keep their room down to the smallest window.
+    void FitSearch(double width) => SearchBox.Width = Math.Clamp(width - 400, 120, 400);
+
+    internal void SearchFor(string text) => SearchBox.ItemsSource = ViewModel.Search(text);
+
+    // Enter, a click or a tap opens the suggestion picked, or the first one found. Not on
+    // SuggestionChosen: that comes as the arrow keys move through the suggestions, and opening
+    // then would leave the keyboard no way past the first.
+    void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+    {
+        var hit = args.ChosenSuggestion as SearchHit ?? ViewModel.Search(args.QueryText).FirstOrDefault();
+        if (hit is not null) { OpenHit(hit); }
+    }
+
+    internal void OpenHit(SearchHit hit)
+    {
+        SearchBox.Text = "";
+        SearchBox.ItemsSource = null;
+        ViewModel.Open(hit);
+    }
+
+    // --- Size and place (#180): down to 360×600, and back where it was left. ---
+
+    double Scale => GetDpiForWindow(Handle) is var dpi and > 0 ? dpi / 96.0 : 1;
+
+    // The smallest window ui.md allows, at the scale of the display the window is on now.
+    void KeepSmallest()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter p) { return; }
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        var (w, h) = area is null ? WindowPlacement.Smallest(Scale) : WindowPlacement.Smallest(new Display(new PixelRect(area.WorkArea.X, area.WorkArea.Y, area.WorkArea.Width, area.WorkArea.Height), Scale));
+        p.PreferredMinimumWidth = w;
+        p.PreferredMinimumHeight = h;
+    }
+
+    void Place()
+    {
+        var saved = WindowPlacement.Load(placementFile);
+        var areas = DisplayArea.FindAll();
+        var displays = new List<Display>();
+        for (var i = 0; i < areas.Count; i++) { displays.Add(Of(areas[i])); }
+        var primary = Of(DisplayArea.Primary);
+        var at = WindowPlacement.Place(saved, displays, primary);
+        AppWindow.MoveAndResize(new RectInt32(at.X, at.Y, at.Width, at.Height));
+        normal = at.Rect;
+        maximizeWhenShown = at.Maximized;
+    }
+
+    static Display Of(DisplayArea area)
+    {
+        var w = area.WorkArea;
+        var scale = 1.0;
+        var monitor = Win32Interop.GetMonitorFromDisplayId(area.DisplayId);
+        if (GetDpiForMonitor(monitor, 0, out var dpi, out _) == 0 && dpi > 0) { scale = dpi / 96.0; }
+        return new Display(new PixelRect(w.X, w.Y, w.Width, w.Height), scale);
+    }
+
+    void OnWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
+    {
+        if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
+        if (args.DidPositionChange || args.DidSizeChange) { KeepSmallest(); }
+        if (AppWindow.Presenter is OverlappedPresenter { State: not OverlappedPresenterState.Minimized } shown) { wasMaximized = shown.State == OverlappedPresenterState.Maximized; }
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })
+        {
+            normal = new PixelRect(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
+        }
+        if (placementFile is null) { return; }
+        // Kept once the window settles, not at every step of a drag.
+        saveSoon ??= DispatcherQueue.CreateTimer();
+        saveSoon.Interval = TimeSpan.FromSeconds(1);
+        saveSoon.IsRepeating = false;
+        saveSoon.Tick -= OnSaveSoon;
+        saveSoon.Tick += OnSaveSoon;
+        saveSoon.Start();
+    }
+
+    void OnSaveSoon(DispatcherQueueTimer sender, object args) => SavePlacement();
+
+    // Also on hiding to the tray and on quitting.
+    internal void SavePlacement()
+    {
+        if (placementFile is null || normal is not { } r || AppWindow.Presenter is not OverlappedPresenter p) { return; }
+        // Minimised, it keeps the place and state it had before, which it comes back to.
+        var maximized = p.State == OverlappedPresenterState.Minimized ? wasMaximized : p.State == OverlappedPresenterState.Maximized;
+        // A window started hidden in the tray keeps the maximised state it has yet to be shown in.
+        try { new WindowPlacement(r.X, r.Y, r.Width, r.Height, maximizeWhenShown || maximized).Save(placementFile); }
+        // A nicety: the window opens at the first start's place instead.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"window placement not kept: {e.Message}"); }
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial uint GetDpiForWindow(nint hwnd);
+
+    [LibraryImport("shcore.dll")]
+    private static partial int GetDpiForMonitor(nint monitor, int type, out uint dpiX, out uint dpiY);
 }
