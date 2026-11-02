@@ -148,8 +148,8 @@
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
                                                     </Grid.ColumnDefinitions>
-                                                    <!-- A plain mark until the status glyphs (#178). -->
-                                                    <Ellipse Width="10" Height="10" Margin="0,11,0,0" VerticalAlignment="Top" Fill="{ThemeResource AbNeeds}" />
+                                                    <!-- The Needs you glyph (#178), decorative: the lane's heading says it. -->
+                                                    <local:StatusGlyphView Size="16" Margin="0,8,0,0" VerticalAlignment="Top" Glyph="{x:Bind Glyph}" AutomationProperties.AutomationId="NeedsYouGlyph" />
                                                     <StackPanel Grid.Column="1" Spacing="2">
                                                         <HyperlinkButton
                                                             Padding="0"

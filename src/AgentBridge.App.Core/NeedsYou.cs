@@ -56,6 +56,8 @@ public sealed partial class NeedsYouEntry : Observable
     public string QuestionId { get; }
     public DateTimeOffset AskedAt { get; }
     public NeedsYouMode Mode { get; }
+    // Every entry waits on you: the Needs you glyph (ui.md §2.2 rule 1).
+    public StatusGlyph Glyph => StatusGlyph.Needs;
     public bool Approvable => Mode == NeedsYouMode.Approve;
     public bool AtMachine => Mode == NeedsYouMode.AtMachine;
     public string Title => Card.Title;

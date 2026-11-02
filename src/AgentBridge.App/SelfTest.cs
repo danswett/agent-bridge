@@ -67,6 +67,7 @@ static class SelfTest
             var entries = Entries();
             result["needsYou"] = main.NeedsYou.Select(e => $"{e.Card.Id}: {e.Mode}").ToList();
             Check(lane is { Visibility: Visibility.Visible } && entries.Count == 4 && main.NeedsYou.Count == main.Waiting, "lists all four questions in Needs you, as many as the tray counts");
+            Check(entries.Count == 4 && entries.All(g => ById<StatusGlyphView>(g, "NeedsYouGlyph") is { } v && Find<ContentControl>(v).Any()), "marks every Needs you entry with the Needs you glyph");
             // Every entry's template has the buttons, collapsed and disabled where it offers none:
             // exactly one of each is live, the permission prompt's.
             int Live(string id) => lane is null ? 0 : Find<Button>(lane).Count(b => AutomationProperties.GetAutomationId(b) == id && b.IsEnabled);
