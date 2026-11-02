@@ -76,6 +76,7 @@ export function parsePathData(d, file = 'path') {
     const m = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(d.slice(i));
     if (!m) { throw new Error(`${file}: expected a number at ${i} in "${d}"`); }
     i += m[0].length;
+    if (!Number.isFinite(Number(m[0]))) { throw new Error(`${file}: ${m[0]} is too large a number in "${d}"`); }
     return Number(m[0]);
   };
   const flag = () => {
@@ -173,7 +174,7 @@ function parseTransform(t, file) {
   const ops = [];
   for (const m of t.matchAll(/(\w+)\s*\(([^)]*)\)/g)) {
     const a = m[2].split(/[\s,]+/).filter(Boolean);
-    if (!a.every((v) => PLAIN.test(v))) { throw new Error(`${file}: transform "${t}" must use plain numbers`); }
+    if (!a.every((v) => isPlain(v))) { throw new Error(`${file}: transform "${t}" must use plain numbers`); }
     a.forEach((v, i) => { a[i] = Number(v); });
     // rotate(a) or rotate(a cx cy), translate(x) or translate(x y): any other count would be NaN
     // in the geometry, or an argument silently dropped.
@@ -253,6 +254,8 @@ const ALLOWED = new Set([...INHERITED, 'class', 'transform', 'opacity', 'stroke-
 // Lengths are plain user-space numbers: "50%", "2px" or "1em" would be NaN in XAML geometry
 // while the browser drew the sprite, so the two clients would differ.
 const PLAIN = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i;
+// ...and finite: 1e999 is Infinity, which no XAML geometry or size takes.
+const isPlain = (v) => PLAIN.test(v) && Number.isFinite(Number(v));
 const NUMERIC = new Set(['cx', 'cy', 'r', 'x', 'y', 'width', 'height', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2',
   'stroke-width', 'opacity', 'stroke-opacity', 'fill-opacity']);
 function checkValues(attrs, file, tag) {
@@ -262,7 +265,7 @@ function checkValues(attrs, file, tag) {
     if (keyword && !keyword.includes(v)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not one of ${keyword.join(', ')}`); }
     const list = k === 'stroke-dasharray' && v !== 'none' ? v.split(/[\s,]+/).filter(Boolean) : NUMERIC.has(k) ? [v.trim()] : [];
     if (list.length === 0 && k === 'stroke-dasharray' && v !== 'none') { throw new Error(`${file}: ${k}="${v}" on <${tag}> is not a list of plain numbers`); }
-    for (const n of list) { if (!PLAIN.test(n)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be a plain number, in the viewBox's units`); } }
+    for (const n of list) { if (!isPlain(n)) { throw new Error(`${file}: ${k}="${v}" on <${tag}> must be a plain number, in the viewBox's units`); } }
     // SVG clamps an opacity and draws nothing for a shape with no size, or a negative radius or
     // width; XAML would draw a cap or an unclamped value instead, so neither is in the subset.
     const x = Number(v);
@@ -288,7 +291,7 @@ export function readDesignSvg(file, kind) {
   const root = parseXml(source, file);
   if (root.tag !== 'svg') { throw new Error(`${file}: the root must be <svg>`); }
   const vb = (root.attrs.viewBox ?? '').trim().split(/[\s,]+/);
-  if (vb.length !== 4 || !vb.every((v) => PLAIN.test(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || Number(vb[2]) !== Number(vb[3]) || !(Number(vb[2]) > 0)) { throw new Error(`${file}: needs a square viewBox from 0 0, with sides above 0`); }
+  if (vb.length !== 4 || !vb.every((v) => isPlain(v)) || Number(vb[0]) !== 0 || Number(vb[1]) !== 0 || Number(vb[2]) !== Number(vb[3]) || !(Number(vb[2]) > 0)) { throw new Error(`${file}: needs a square viewBox from 0 0, with sides above 0`); }
   vb.forEach((v, i) => { vb[i] = Number(v); });
   // The root carries only its size and paint the parts inherit: an opacity, transform or class
   // here would be dropped by both clients rather than drawn.

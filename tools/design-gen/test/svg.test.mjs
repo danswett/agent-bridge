@@ -181,3 +181,10 @@ test('a comma anywhere but between two numbers is refused, as browsers stop draw
   for (const d of ['M2,,2L4 4', 'M,2 2L4 4', 'M2 2,L4 4', ',M2 2', 'M2 2L4 4,']) { assert.throws(() => parsePathData(d), /comma out of place/, d); }
   assert.equal(formatCommands(parsePathData('M2 , 2L4,4a1,1 0 0,1 2,0')), 'M2,2 L4,4 A1,1 0 0 1 6,4');
 });
+
+test('a number too large to be finite is refused wherever the subset reads one', () => {
+  assert.throws(() => parsePathData('M2 2L1e999 4'), /too large a number/);
+  assert.throws(() => readDesignSvg(svgFile('bigr', '<circle cx="8" cy="8" r="1e400" fill="currentColor"/>'), 'glyph'), /plain number/);
+  assert.throws(() => readDesignSvg(svgFile('bigt', '<g transform="translate(1e999)"><path d="M2 8L14 8" stroke="currentColor"/></g>'), 'glyph'), /plain numbers/);
+  assert.throws(() => readDesignSvg(svgFile('bigvb', '<circle cx="8" cy="8" r="5" fill="currentColor"/>', 'viewBox="0 0 1e999 1e999"'), 'glyph'), /square viewBox/);
+});
