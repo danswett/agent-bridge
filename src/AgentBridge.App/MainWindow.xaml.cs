@@ -108,6 +108,7 @@ public sealed partial class MainWindow : Window
     {
         var tag = (args.SelectedItem as NavigationViewItem)?.Tag as string;
         SessionsView.Visibility = Ui.Show(tag == "sessions");
+        SyncSessionsOnScreen();
         MachinesPage.Visibility = Ui.Show(tag == "machines");
         UsagePane.Visibility = Ui.Show(tag == "usage");
         LaunchPane.Visibility = Ui.Show(tag == "launch");
@@ -137,6 +138,11 @@ public sealed partial class MainWindow : Window
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
 
+    // The Sessions page's tool history is asked for only while it is on screen.
+    void SyncSessionsOnScreen()
+    {
+        if (SessionsView.Layout is { } layout) { layout.OnScreen = SessionsView.Visibility == Visibility.Visible && AppWindow.IsVisible; }
+    }
     // A toast, the tray or the search box asked for a session: it is MainViewModel.Selected
     // already, so the Sessions page shows it, its row scrolled into view.
     void Reveal(SessionCardViewModel card) => Nav.SelectedItem = SessionsItem;
@@ -215,6 +221,7 @@ public sealed partial class MainWindow : Window
     void OnWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
         if (!args.DidPositionChange && !args.DidSizeChange && !args.DidPresenterChange) { return; }
+        if (args.DidVisibilityChange) { SyncSessionsOnScreen(); }
         if (args.DidPositionChange || args.DidSizeChange) { KeepSmallest(); }
         if (AppWindow.Presenter is OverlappedPresenter { State: not OverlappedPresenterState.Minimized } shown) { wasMaximized = shown.State == OverlappedPresenterState.Maximized; }
         if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })

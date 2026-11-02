@@ -84,9 +84,12 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.Equal("2 background agents · 1 background command", Card("busy").DelegatesText);
 
         // A session with nothing delegated has no Delegates tab, and shows its conversation.
+        Assert.Equal(SessionTab.Delegates, Read(l => l.ShownTab));
         Select("quiet");
         Assert.False(Read(l => l.ShowDelegatesTab || l.ShowDelegates));
         Assert.True(Read(l => l.ShowConversation));
+        // The bar shows the tab in force, not the one picked before it went.
+        Assert.Equal(SessionTab.Conversation, Read(l => l.ShownTab));
     }
 
     [Fact]
@@ -153,13 +156,14 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.True(details["Process"].Mono && details["Folder"].Mono && details["Branch"].Mono && details["ID"].Mono);
         Assert.False(details["Repository"].Mono || details["Model"].Mono);
         Assert.Equal(@"C:\src\agent-bridge", details["Folder"].Tip);
+        Assert.True(details["Folder"].Path && !details["Branch"].Path);
         // Three panes have no Delegates tab: Details has the counts the host reports.
         Assert.Equal("2 background agents · 1 background command", details["Background"].Value);
         Assert.DoesNotContain("Background", Card("quiet").Details.Select(d => d.Label));
     }
 
     [Fact]
-    public void A_sessions_tool_history_loads_as_the_inspector_or_tools_tab_shows_it_and_stops_following_once_hidden()
+    public void A_sessions_tool_history_loads_as_the_inspector_or_tools_tab_shows_it_and_stops_following_once_hidden_or_off_screen()
     {
         Resize(1440);
         Select("busy");
@@ -178,6 +182,12 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.Equal(["busy", "quiet"], fetched);
         Select("busy");
         Assert.False(TestUi.Read(() => Card("quiet").HistoryOpen));
+        Assert.True(TestUi.Read(() => Card("busy").HistoryOpen));
+
+        // Another page, or the window hidden in the tray: no history asked for until it is back.
+        ui.Post(() => layout.OnScreen = false);
+        Assert.False(TestUi.Read(() => Card("busy").HistoryOpen));
+        ui.Post(() => layout.OnScreen = true);
         Assert.True(TestUi.Read(() => Card("busy").HistoryOpen));
     }
 

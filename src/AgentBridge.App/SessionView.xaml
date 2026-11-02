@@ -148,8 +148,8 @@
             Visibility="{x:Bind local:Ui.Show(Layout.ShowTabs), Mode=OneWay}"
             SelectionChanged="OnTab">
             <SelectorBarItem x:Name="ConversationTab" Text="Conversation" Tag="Conversation" IsSelected="True" />
-            <SelectorBarItem x:Name="DelegatesTab" Text="Delegates" Tag="Delegates" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegatesTab), Mode=OneWay}" />
-            <SelectorBarItem x:Name="ToolsTab" Text="Tools" Tag="Tools" />
+            <SelectorBarItem x:Name="DelegatesTab" Text="Delegates" Tag="Delegates" Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegatesTab), Mode=OneWay, FallbackValue=Collapsed}" />
+            <SelectorBarItem x:Name="ToolsTab" Text="Tools" Tag="Tools" Visibility="{x:Bind local:Ui.Show(Layout.ShowToolsTab), Mode=OneWay, FallbackValue=Collapsed}" />
         </SelectorBar>
 
         <Grid Grid.Row="2">

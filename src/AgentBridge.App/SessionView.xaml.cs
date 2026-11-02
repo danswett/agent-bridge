@@ -126,14 +126,15 @@ public sealed partial class SessionView : UserControl
 
     void OnLayout(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(PaneLayoutViewModel.Tab) or "" or null) { ShowTab(); }
+        if (e.PropertyName is nameof(PaneLayoutViewModel.ShownTab) or "" or null) { ShowTab(); }
     }
 
-    // The tab the panes say, picked in the bar (a resize can bring the bar back with it).
+    // The tab the panes show, selected in the bar: the one picked, or Conversation once the picked
+    // one has gone (a resize can bring the bar back with it).
     void ShowTab()
     {
         if (layout is null) { return; }
-        var want = layout.Tab switch { SessionTab.Delegates => DelegatesTab, SessionTab.Tools => ToolsTab, _ => ConversationTab };
+        var want = layout.ShownTab switch { SessionTab.Delegates => DelegatesTab, SessionTab.Tools => ToolsTab, _ => ConversationTab };
         if (Tabs.SelectedItem != want) { Tabs.SelectedItem = want; }
     }
 

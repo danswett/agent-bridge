@@ -1,20 +1,17 @@
 namespace AgentBridge.App.Core;
 
 // One fact in a session's Details (ui.md §6.2): what rows never carry (§6.1). Mono for what is
-// code (§4.1, #215: paths, branches, ids, commands); a long one is cut in the middle, with the
-// whole of it in Full.
-public sealed record DetailRow(string Label, string Value, bool Mono = false, string? Full = null)
+// code (§4.1, #215: paths, branches, ids, commands). A path is cut in the middle to the width it
+// is shown at, by the view (Words.Middle), keeping the end people tell paths apart by (#214), with
+// the whole of it in the tooltip.
+public sealed record DetailRow(string Label, string Value, bool Mono = false, bool Path = false)
 {
-    public string Tip => Full ?? Value;
+    public string Tip => Value;
 }
-
 // What the window's panes show of a session (#180): its row in the list (§6.1), its header
 // (§6.2), its Details and its delegates' counts until U8 (#176) lists them.
 public sealed partial class SessionCardViewModel
 {
-    // How long a path may be in Details before it is cut in the middle.
-    const int PathMost = 48;
-
     bool selected;
     public bool Selected { get => selected; internal set => Set(ref selected, value); }
 
@@ -51,7 +48,7 @@ public sealed partial class SessionCardViewModel
             if (session.Model is { Length: > 0 } model) { rows.Add(new("Model", model)); }
             if (session.Repository is { Length: > 0 } repo) { rows.Add(new("Repository", repo)); }
             if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
-            if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", Words.Middle(cwd, PathMost), Mono: true, Full: cwd)); }
+            if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", cwd, Mono: true, Path: true)); }
             if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
             // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
             if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }

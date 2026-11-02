@@ -18,6 +18,7 @@ public sealed class PaneLayoutViewModel : Observable
     PaneMode mode = PaneMode.Three;
     bool inspectorWanted = true;
     SessionTab tab;
+    bool onScreen = true;
     SessionCardViewModel? watched;
     // The card whose tool history is open, loaded and kept current while on screen.
     SessionCardViewModel? history;
@@ -84,7 +85,18 @@ public sealed class PaneLayoutViewModel : Observable
     public bool ShowDelegates => Has && Shown == SessionTab.Delegates;
     public bool ShowTools => Has && Shown == SessionTab.Tools;
     // The tool history is wanted where it is on screen: the inspector or the Tools tab.
-    public bool WantsTools => (ShowInspector || ShowTools) && ShowToolsTab;
+    public bool WantsTools => onScreen && (ShowInspector || ShowTools) && ShowToolsTab;
+
+    // The Sessions page on screen: its page shown in a window that is. The tool history is asked
+    // for only then, not for a page left for another or a window hidden in the tray.
+    public bool OnScreen
+    {
+        get => onScreen;
+        set { if (Set(ref onScreen, value)) { Changed(); } }
+    }
+
+    // The tab the session shows: the one picked, unless it has gone (no delegates, no history).
+    public SessionTab ShownTab => Shown;
 
     public void Back() => main.Selected = null;
 
@@ -115,7 +127,7 @@ public sealed class PaneLayoutViewModel : Observable
         {
             nameof(ShowList), nameof(ShowSession), nameof(ShowBack), nameof(ShowEmpty), nameof(CanToggleInspector), nameof(ShowInspector),
             nameof(InspectorToggleName), nameof(ShowTabs), nameof(ShowDelegatesTab), nameof(ShowToolsTab), nameof(ShowConversation), nameof(ShowDelegates),
-            nameof(ShowTools), nameof(WantsTools),
+            nameof(ShowTools), nameof(WantsTools), nameof(ShownTab),
         }) { Raise(p); }
         SyncHistory();
     }

@@ -29,6 +29,7 @@
                             TextTrimming="CharacterEllipsis"
                             IsTextSelectionEnabled="True"
                             ToolTipService.ToolTip="{x:Bind Tip}"
+                            SizeChanged="OnValueSized"
                             AutomationProperties.AutomationId="{x:Bind local:SessionDetails.ValueId(Label)}"
                             Text="{x:Bind Value}" />
                     </Grid>

@@ -31,6 +31,34 @@ public sealed partial class SessionDetails : UserControl
         if (IsLoaded) { Bindings.Update(); }
     }
 
+    // A path cut in the middle to the width it has, keeping its start and the end people tell
+    // paths apart by (#214), rather than its end cut off.
+    void OnValueSized(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is TextBlock { DataContext: DetailRow { Path: true } row } block) { FitMiddle(block, row.Value, e.NewSize.Width); }
+    }
+
+    static void FitMiddle(TextBlock block, string full, double width)
+    {
+        var probe = new TextBlock { Style = block.Style, FontFamily = block.FontFamily, FontSize = block.FontSize, FontWeight = block.FontWeight };
+        double Width(string text)
+        {
+            probe.Text = text;
+            probe.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            return probe.DesiredSize.Width;
+        }
+        // A pixel spare: measured and laid-out widths round differently.
+        var room = width - 1;
+        if (width <= 0 || Width(full) <= room) { block.Text = full; return; }
+        int low = 5, high = full.Length - 1, best = 5;
+        while (low <= high)
+        {
+            var mid = (low + high) / 2;
+            if (Width(Words.Middle(full, mid)) <= room) { best = mid; low = mid + 1; }
+            else { high = mid - 1; }
+        }
+        block.Text = Words.Middle(full, best);
+    }
     void OnEnd(object sender, RoutedEventArgs e) => Card?.End?.Press();
     void OnResendEnd(object sender, RoutedEventArgs e) => Card?.End?.Resend();
 }

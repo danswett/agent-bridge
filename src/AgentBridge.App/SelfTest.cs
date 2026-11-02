@@ -425,6 +425,12 @@ static partial class SelfTest
         var detail = ById<TextBlock>(page, "Detail:ID");
         check(detail is not null && detail.FontFamily.Source == ((Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["MonoFontFamily"]).Source && ById<Button>(page, "EndSession") is not null,
             "lists the session's details in the inspector, its ID in mono, with End session");
+        // A path cut in the middle to the width it has, its end kept (#214).
+        var folder = ById<TextBlock>(page, "Detail:Folder");
+        var whole = card.Session.Cwd ?? "";
+        var cutWell = folder is not null && (folder.Text == whole || folder.Text.Split('\u2026') is [var head, var tail] && whole.StartsWith(head, StringComparison.Ordinal) && whole.EndsWith(tail, StringComparison.Ordinal) && tail.Length > 0)
+            && folder.ActualWidth > 0 && !folder.IsTextTrimmed;
+        check(whole.Length == 0 || cutWell, $"cuts a session's folder in Details in the middle, to its width ({folder?.Text ?? "none"})");
         await Picture(window.RootElement, Path.ChangeExtension(outFile, ".panes3.png"));
         if (ById<Button>(page.SessionPaneView, "ToggleInspector") is { } toggle)
         {
