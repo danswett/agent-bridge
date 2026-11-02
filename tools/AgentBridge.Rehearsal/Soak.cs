@@ -48,6 +48,12 @@ internal static class SoakScript
     static string CopilotMulti(string t) => $"{t}: call ask_user once as a form with one field extras (any of x, y, z), then reply with only the answer.";
     static string Ok(string t) => $"{t}: say ok and nothing else.";
 
+    // The comparison samples every 15 s and counts background work only as agent-ha-bridge
+    // lists it, which it does for Copilot alone; an agent that finished in 6 s was never seen.
+    // So Copilot's background work sleeps long enough to be sampled several times.
+    static string CopilotShell(string t) => $"{t}: start the shell command \"Start-Sleep 60\" in the background without waiting for it, say that you started it, and end your turn.";
+    static string CopilotShells(string t) => $"{t}: start two shell commands in the background without waiting for them: \"Start-Sleep 60\" and \"Start-Sleep 75\". Say that you started them, and end your turn.";
+
     static string ClaudeChoice(string t) => $"{t}: use AskUserQuestion once with the question \"Pick one\" and the options alpha, beta, gamma, then reply with only the choice.";
     static string ClaudeTwo(string t) => $"{t}: use AskUserQuestion once with two questions: \"Colour?\" with options red, green, blue, and \"Size?\" with options small, large. Then reply with one short line.";
     static string ClaudeMulti(string t) => $"{t}: use AskUserQuestion once with the question \"Which extras?\" allowing multiple selections from the options x, y, z, then reply with only the answer.";
@@ -78,7 +84,7 @@ internal static class SoakScript
         [
             Q(CopilotChoice("{t}"), AnswerStyle.Card), Q(CopilotText("{t}"), AnswerStyle.Box), Q(CopilotForm("{t}"), AnswerStyle.Card),
             Q(CopilotOther("{t}"), AnswerStyle.Payload), Q(CopilotMulti("{t}"), AnswerStyle.Card), Q(CopilotText("{t}"), AnswerStyle.Payload),
-            Q(CopilotChoice("{t}"), AnswerStyle.Late),
+            Bg(CopilotShell("{t}")), Q(CopilotChoice("{t}"), AnswerStyle.Late),
         ]),
         new("claude-questions", Claude,
         [
@@ -89,8 +95,8 @@ internal static class SoakScript
         new("copilot-background", Copilot,
         [
             Q(CopilotChoice("{t}"), AnswerStyle.Card),
-            Bg("{t}: start the shell command \"Start-Sleep 40\" in the background without waiting for it, say that you started it, and end your turn."),
-            Bg("{t}: start one background agent (do not wait for it) that runs \"git log --oneline -3\" and reports the output, say that you started it, and end your turn."),
+            Bg(CopilotShells("{t}")),
+            Bg("{t}: start two background agents (do not wait for them). Each runs the shell command \"Start-Sleep 45; git log --oneline -3\" and reports the output. Say that you started them, and end your turn."),
             Q(CopilotText("{t}"), AnswerStyle.Box),
         ]),
         new("claude-background", Claude,
@@ -111,7 +117,7 @@ internal static class SoakScript
             Q(ClaudeTwo("{t}"), AnswerStyle.Card), T(Ok("{t}")), Compact, Q(ClaudeChoice("{t}"), AnswerStyle.Card), Q(ClaudeMulti("{t}"), AnswerStyle.Abandon),
         ]),
         new("codex-compact", Codex, [T(Ok("{t}")), T("{t}: run the shell command \"git log --oneline -2\" once and reply with one short line."), Compact, T(Ok("{t}"))]),
-        new("copilot-resume", Copilot, [Q(CopilotChoice("{t}"), AnswerStyle.Card), Q(CopilotText("{t}"), AnswerStyle.Payload)], Resume: true),
+        new("copilot-resume", Copilot, [Q(CopilotChoice("{t}"), AnswerStyle.Card), Bg(CopilotShell("{t}")), Q(CopilotText("{t}"), AnswerStyle.Payload)], Resume: true),
         new("claude-resume", Claude, [Q(ClaudeChoice("{t}"), AnswerStyle.Card), T(Ok("{t}"))], Resume: true),
         new("codex-resume", Codex, [T(Ok("{t}")), T(Ok("{t}"))], Resume: true),
     ];

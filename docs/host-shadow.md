@@ -344,6 +344,12 @@ reply. Sessions end by End session, with its confirming second press when not id
 agent-ha-bridge restart (`agent-ha-bridge restart`) and one restart of the shadow host's serve
 task happen at the episodes given, between sessions. Usage readings accrue on their own.
 
+Background work and compactions count only as agent-ha-bridge lists them, and it lists
+background shells and agents for Copilot alone and compactions for Copilot and Claude (a
+Codex session always reports none). So Copilot's background shells and agents sleep for 45 to
+75 seconds, long enough to be sampled: a background agent that finished in six seconds, between
+two 15-second samples, was never seen.
+
 What it cannot do: answer at the terminal (it has no console), or answer the folder-trust and
 Bypass-permissions prompts a fresh agent install shows (sign the agents in and trust the
 workspace first). An agent whose sign-in has lapsed shows as a session that never answers.
