@@ -97,12 +97,13 @@ private func actionRequest(_ notice: BridgeSessionNotice, text: String? = nil) t
 private actor NoticeHost {
     let stream = AsyncThrowingStream<BridgeEnvelope, any Error>.makeStream()
     var fresh: JSONValue
+    let initial: JSONValue
     var holdGet: Bool
     let outcome: String
     private(set) var operations: [BridgeRequest] = []
     private var gate: CheckedContinuation<Void, Never>?
-    init(fresh: JSONValue = actionSession(), holdGet: Bool = false, outcome: String = "delivered") {
-        self.fresh = fresh; self.holdGet = holdGet; self.outcome = outcome
+    init(fresh: JSONValue = actionSession(), initial: JSONValue = actionSession(), holdGet: Bool = false, outcome: String = "delivered") {
+        self.fresh = fresh; self.initial = initial; self.holdGet = holdGet; self.outcome = outcome
     }
 
     func connection() -> HostTransport {
@@ -133,7 +134,7 @@ private actor NoticeHost {
         let response = try envelope(["re": .number(Double(request.id)), "ok": .bool(true), "result": result])
         stream.continuation.yield(response)
         if request.op == "sessions.subscribe" {
-            try stream.continuation.yield(envelope(["ev": .string("session.upsert"), "seq": .number(1), "data": actionSession()]))
+            try stream.continuation.yield(envelope(["ev": .string("session.upsert"), "seq": .number(1), "data": initial]))
             try stream.continuation.yield(envelope(["ev": .string("sessions.synced"), "seq": .number(2), "data": .object([:])]))
         }
         return response
@@ -208,4 +209,18 @@ private actor NoticeHost {
     let offline = await BridgeNotificationDelivery.perform(request, host: host, scope: "account-one") { true }
     #expect(offline.hasPrefix("Not sent"))
     #expect(await fixture.operations.count == before)
+}
+
+@MainActor @Test func notificationReplyDoesNotConsumeAMatchingSavedComposerDraft() async throws {
+    let session = actionSession(questionID: nil)
+    let fixture = NoticeHost(fresh: session, initial: session)
+    let host = HostStore(id: "m", name: "Mac", isLocal: false) { await fixture.connection() }
+    defer { host.stop() }; host.start()
+    try await awaitNotice { host.isLive }
+    host.replyDrafts["s"] = "Continue with tests"
+    let request = try actionRequest(actionNotice(session), text: "Continue")
+    let result = await BridgeNotificationDelivery.perform(request, host: host, scope: "account-one") { true }
+    #expect(result == "Delivered.")
+    #expect(host.replyDrafts["s"] == "Continue with tests")
+    #expect(await fixture.operations.last?.data["text"] == .string("Continue"))
 }

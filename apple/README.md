@@ -29,18 +29,19 @@ the connected host offers them, such as a capable remote Windows host.
 ## Workflows
 
 - Local and encrypted remote fleet feeds; reconnect, snapshots and sequence-gap
-  recovery; explicit offline state and canonical local/remote machine identity.
+  recovery; usage/update snapshots and events retain wire order during recovery
+  and manual refresh; explicit offline state and canonical local/remote identity.
 - Global search, Needs You, pins, persistent manual/recent/machine order, unread
   state, recently ended sessions, Markdown, reasoning and recent tools. Delegate
   details show task/latest text, reasoning, tool durations, nesting and finished
   groups; a stop request prepares an ID-only reply without sending it.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
-  sends a fresh press. A delivered reply removes only its sent prefix from the
-  saved draft once, preserving text appended while delivery was pending. Question
-  answers have separate editor state. Replies check the complete encoded 48 KiB
-  request budget before delivery; answers also check the host's 16 KiB budget using
-  its pinned .NET 10 JSON escaping rules.
+  sends a fresh press. A delivered composer reply removes only its sent prefix
+  from the saved draft once, preserving text appended while delivery was pending.
+  Question answers and notification replies have separate draft state. Replies
+  check the complete encoded 48 KiB request budget before delivery; answers also
+  check the host's 16 KiB budget using its pinned .NET 10 JSON escaping rules.
 - Files, PhotosPicker and Mac image paste, resizing when needed, removable staged
   attachments, bounded chunk uploads and encrypted blob uploads up to host limits.
 - Host-provided launch/resume choices, signed full-disclosure folder-trust answers,
