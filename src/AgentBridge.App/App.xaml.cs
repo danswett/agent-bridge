@@ -354,6 +354,7 @@ public partial class App : Application
             if (c is not null) { await c.DisposeAsync(); }
             if (d is not null) { await d.DisposeAsync(); }
         });
+        if (options.SelfTest is not null) { AppLog.Write("self-test: closing the window and exiting"); }
         window?.Close();
         Exit();
     }

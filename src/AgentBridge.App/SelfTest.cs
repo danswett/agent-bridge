@@ -417,6 +417,13 @@ static partial class SelfTest
                 try
                 {
                     if (hidden.Count > 0) { page.UpdateLayout(); }
+                    if (tag == "usage")
+                    {
+                        // #225: whose account it is, whole, however narrow: wrapped, never cut.
+                        var accounts = Find<TextBlock>(page).Where(t => AutomationProperties.GetAutomationId(t) is "UsageAccount" or "UsageSummary" && Shown(t, page)).ToList();
+                        var cutShort = accounts.Where(t => t.IsTextTrimmed || t.TransformToVisual(root).TransformPoint(new Windows.Foundation.Point(t.ActualWidth, 0)).X > root.ActualWidth + 1).Select(t => t.Text).ToList();
+                        check(accounts.Count >= 2 && cutShort.Count == 0, $"shows every usage account and the summary whole in a {DesignLayout.MinWidth:0} px window ({accounts.Count}{(cutShort.Count > 0 ? $"; cut: {string.Join(", ", cutShort)}" : "")})");
+                    }
                     if (tag == "machines")
                     {
                         var most = Find<Panel>(page).Where(p => AutomationProperties.GetAutomationId(p) == "MachineButtons").Select(p => p.Children.OfType<Button>().Count(b => Shown(b, page))).DefaultIfEmpty().Max();

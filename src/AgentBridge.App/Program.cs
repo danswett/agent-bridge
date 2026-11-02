@@ -23,6 +23,7 @@ public static class Program
             .Run();
 
         var options = AppOptions.Parse(args);
+        if (options.SelfTest is not null) { SelfTestTrace.Start(); }
 
         // One window per profile: a second start shows the first one's window and leaves.
         using var single = SingleInstance.TryClaim(options);
@@ -48,6 +49,28 @@ public static class Program
         // exit code 1, and this tells the app's own code from what happened after it.
         if (options.SelfTest is not null) { AppLog.Write($"self-test: the app ends with exit code {App.ExitCode}"); }
         return App.ExitCode;
+    }
+}
+
+// For the self-test only, in the app's log: every exception thrown, caught or not, and the code
+// the process ends with. On CI a run once ended with exit code 1 a moment after high contrast was
+// turned off, with no crash log and before Main returned; this says what was thrown before it.
+static class SelfTestTrace
+{
+    const int Most = 400;
+    static int written;
+    [ThreadStatic] static bool writing;
+
+    public static void Start()
+    {
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+        {
+            if (writing || Interlocked.Increment(ref written) > Most) { return; }
+            writing = true;
+            try { AppLog.Write($"self-test: thrown on thread {Environment.CurrentManagedThreadId}: {e.Exception.GetType().FullName}: {e.Exception.Message}"); }
+            finally { writing = false; }
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => AppLog.Write($"self-test: the process exits with code {Environment.ExitCode}");
     }
 }
 
