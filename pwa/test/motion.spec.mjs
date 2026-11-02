@@ -16,6 +16,11 @@ async function openDemo(page, { width = 1440, height = 900 } = {}) {
   await page.setViewportSize({ width, height });
   await page.addInitScript(() => {
     window.__motions = [];
+    // The motions CSS draws by itself (the Needs you lane's), with the duration each started with.
+    window.__css = [];
+    addEventListener('animationstart', (e) => {
+      if (e.animationName.startsWith('ab-motion')) { window.__css.push({ name: e.animationName, cls: e.target.className, duration: getComputedStyle(e.target).animationDuration }); }
+    }, true);
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes, options) {
       const a = animate.call(this, keyframes, options);
@@ -36,6 +41,9 @@ const motions = (page) => page.evaluate(() => window.__motions.map((m) => ({
   inLane: !!m.el.closest?.('#needs-you') || !!m.el.querySelector?.('#needs-you'),
 })));
 
+// The CSS motions that moved: those that started with a duration.
+const cssMotions = (page) => page.evaluate(() => window.__css.filter((m) => m.duration !== '0s'));
+
 // What the tokens say an entry takes, going in and going out, in ms.
 const tokens = (page) => page.evaluate(() => {
   const css = getComputedStyle(document.documentElement);
@@ -47,6 +55,14 @@ const tokens = (page) => page.evaluate(() => {
   out.crossFade = ms('--ab-motion-cross-fade');
   return out;
 });
+
+async function ask(page, id) {
+  await page.evaluate((id) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    d.upsert({ ...d.host.get(id), status: 'waiting', statusSince: t, updatedAt: t, question: { kind: 'form', askedAt: t, fields: [], prompt: 'Carry on?' } });
+  }, id);
+}
 
 async function upsert(page, id, change) {
   await page.evaluate(({ id, change }) => {
@@ -83,8 +99,10 @@ async function desktopTour(page) {
 
 test('nothing moves as the app starts, and every motion a desktop then draws is timed by its catalogue entry\'s token, none past 300 ms', async ({ page }) => {
   await openDemo(page);
+  await expect(page.locator('#needs-you .needs-entry')).not.toHaveCount(0);
   await page.waitForTimeout(400);
   expect(await motions(page)).toEqual([]);
+  expect(await cssMotions(page)).toEqual([]);
   await desktopTour(page);
   const t = await tokens(page);
   const drawn = await motions(page);
@@ -134,11 +152,25 @@ test('an approval\'s command never moves: a session asking a question fades in w
   expect(push[0]).toMatchObject({ travels: false });
   expect(push.length).toBeGreaterThan(1);
   expect((await motions(page)).filter((m) => m.inLane)).toEqual([]);
+  expect(await cssMotions(page)).toEqual([]);
+});
+
+test('a Needs you entry that arrives once the app is running has its mark fade in, and nothing else in the lane moves', async ({ page }) => {
+  await openDemo(page);
+  const t = await tokens(page);
+  await page.waitForTimeout(400);
+  await ask(page, CLAUDE);
+  await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
+  expect(await cssMotions(page)).toEqual([{ name: 'ab-motion-fade-in', cls: 'needs-mark', duration: `${t.listItem[0] / 1000}s` }]);
+  expect((await motions(page)).filter((m) => m.inLane)).toEqual([]);
 });
 
 test('with reduced motion nothing travels: the only motions are fades no longer than the cross-fade, and presses change at once', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openDemo(page, { width: 390, height: 844 });
+  await expect(page.locator('#needs-you .needs-entry')).not.toHaveCount(0);
+  await page.waitForTimeout(400);
+  expect(await cssMotions(page)).toEqual([]);
   await open(page, COPILOT);
   await view(page, COPILOT).locator('.session-header .back').click();
   await expect(row(page, COPILOT)).toBeVisible();

@@ -6,7 +6,7 @@
 // still hide themselves when they have nothing to show, inside it.
 import { isSearchKey, shortcutHints } from '../platform.js';
 
-import { slide } from './motion.js';
+import { hold, slide } from './motion.js';
 
 export const ROUTES = Object.freeze(['sessions', 'machines', 'launch', 'usage', 'settings']);
 export const HOME = 'sessions';
@@ -189,6 +189,7 @@ export class Shell {
     const leaving = from.route !== route && this.routes.some((r) => r.dataset.route !== route && r.contains(focused));
     for (const r of this.routes) { r.hidden = !this.#signedIn || r.dataset.route !== route; }
     if (from.route !== route) {
+      hold(this.doc);
       // Every page shares one scroller (the content on a desktop, the window on a phone): a new
       // page starts at its top, not at the last one's offset.
       if (this.els.main) { this.els.main.scrollTop = 0; }

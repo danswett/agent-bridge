@@ -24,7 +24,7 @@ import { maxPlain } from '../blobs.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
-import { enter, scrollBehavior } from './motion.js';
+import { enter, hold, scrollBehavior } from './motion.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -507,6 +507,7 @@ export class SessionsPage {
     // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and
     // only its content slides in, from the trailing side going in and the leading side coming
     // back. Not the first drawing, which is the app starting.
+    if (was !== undefined && was !== body.dataset.sessionOpen) { hold(); }
     if (was !== undefined && was !== body.dataset.sessionOpen && this.phone.matches) {
       const opened = body.dataset.sessionOpen === 'true';
       if (opened) {

@@ -1101,10 +1101,13 @@ summary {
 .nav-item:active { background: var(--ab-selected); }
 
 /* A Needs you entry arriving (#165): its mark fades in. The entry itself, and the command an
-   approval shows, appear at once and never fade, slide or pass under anything. */
-.needs-entry > .needs-mark { animation: ab-motion-fade-in var(--ab-motion-list-item-duration) var(--ab-motion-list-item-ease) backwards; }
+   approval shows, appear at once and never fade, slide or pass under anything. Both motions here
+   take 0s until motion.js arms them, so a lane already there at start never moves. */
+.needs-entry > .needs-mark { animation: ab-motion-fade-in 0s var(--ab-motion-list-item-ease) backwards; }
+:root[data-motion="on"] .needs-entry > .needs-mark { animation-duration: var(--ab-motion-list-item-duration); }
 @keyframes ab-motion-fade-in { from { opacity: 0; } }
 /* Approve once and Deny acknowledged in the lane: the outcome rises into place under the buttons,
    never over the command. */
-.needs-status:not([hidden]) { animation: ab-motion-rise var(--ab-motion-acknowledge-duration) var(--ab-motion-acknowledge-ease) backwards; }
+.needs-status:not([hidden]) { animation: ab-motion-rise 0s var(--ab-motion-acknowledge-ease) backwards; }
+:root[data-motion="on"] .needs-status:not([hidden]) { animation-duration: var(--ab-motion-acknowledge-duration); }
 @keyframes ab-motion-rise { from { opacity: 0; translate: 0 var(--ab-motion-acknowledge-distance); } }

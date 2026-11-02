@@ -37,6 +37,34 @@ export function scrollBehavior(doc = globalThis.document) {
   return timing('scroll', { doc }).duration > 0 ? 'smooth' : 'auto';
 }
 
+// The Needs you lane's two motions are CSS alone (app.css), and CSS can't tell an entry drawn
+// at start from one arriving. So until armed their duration is 0s. Arming waits for the motions
+// already drawn to end: a CSS animation keeps its start time when its duration changes, so an
+// animation that has ended stays ended. Nothing moves at start, even under reduced motion's cross-fade.
+const settling = new WeakMap();
+
+function settle(root, doc) {
+  root.dataset.motion = 'held';
+  clearTimeout(settling.get(root));
+  let wait = 0;
+  try {
+    wait = Math.max(...['listItem', 'acknowledge'].map((entry) => timing(entry, { doc }).duration));
+  } catch { /* no styles to read: arm at once */ }
+  settling.set(root, setTimeout(() => { root.dataset.motion = 'on'; }, wait + 50));
+}
+
+export function arm(doc = globalThis.document) {
+  const root = doc?.documentElement;
+  if (root?.dataset && !root.dataset.motion) { settle(root, doc); }
+}
+
+// A CSS animation replays whenever its element is shown again. So a page coming back (Back on a
+// phone, a route) holds the lane's motions at 0s until it is drawn: what was there is there at once.
+export function hold(doc = globalThis.document) {
+  const root = doc?.documentElement;
+  if (root?.dataset?.motion) { settle(root, doc); }
+}
+
 // What the motions drew, by entry, as Animation.id: the tests read them back.
 function run(el, keyframes, entry, t, options = {}) {
   if (!el?.isConnected || typeof el.animate !== 'function' || !(t.duration > 0)) { return null; }
