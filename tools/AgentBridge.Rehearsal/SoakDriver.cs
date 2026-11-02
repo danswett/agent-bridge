@@ -379,6 +379,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         var asked = false;
         var sawWork = false;
         var sawCard = false;
+        string? lastStatus = null;
         var begun = now();
         while (now() < until)
         {
@@ -393,6 +394,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 return true;
             }
             if (status is "working" or "waiting" or "agents" or "shell") { sawWork = true; }
+            if (status != lastStatus) { Log($"  status {status}"); lastStatus = status; }
             var current = await MarkerAsync(node, ct);
             // A launch's turn is measured from the card as first seen (a resumed session's shows
             // what it said last time); a later turn's from just before its prompt was sent.
@@ -442,7 +444,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
             else { idleSince = null; }
         }
         record.Problems.Add($"turn {record.Turns} did not end in time");
-        Log($"  turn {record.Turns} timed out");
+        Log($"  turn {record.Turns} timed out: status {lastStatus}, seen working {sawWork}, response moved {moved}, card {(CardQuestion.Read(await ha.StateAsync($"select.{node}_decision", ct)) is { } open ? "asks " + open.DecisionId : "clear")}");
         return false;
     }
 
