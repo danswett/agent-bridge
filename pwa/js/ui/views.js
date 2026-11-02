@@ -5,7 +5,7 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
-import { arm, enter, leave, slide } from './motion.js';
+import { enter, leave, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
 
 const LONG_PRESS_MS = 500;
@@ -33,6 +33,8 @@ export class SessionListView {
   #selected = null;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
+
+  get drawn() { return this.#drawn; }
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
   // fetchDetail(hostId, id) -> Promise<Session|null>; fetchDelegate(hostId, id, agent) ->
@@ -193,7 +195,6 @@ export class SessionListView {
       if (el?.isConnected) { enter(el, 'listItem'); }
     }
     this.#drawn = true;
-    if (entries.length) { arm(); }
     // An ended session that matches is a result too: Ended shows it.
     this.shownCount = shown + ended.length;
     this.onRender?.(entries.length);

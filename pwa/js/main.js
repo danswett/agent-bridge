@@ -39,7 +39,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
-import { reveal, watchDisclosures } from './ui/motion.js';
+import { reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
@@ -675,6 +675,7 @@ async function startLive() {
 
 registerServiceWorker();
 watchDisclosures(document);
+watchPresses(document);
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');

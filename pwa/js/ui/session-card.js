@@ -31,7 +31,7 @@ import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
-import { enter, leave, scrollBehavior, slide } from './motion.js';
+import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -75,10 +75,13 @@ export class SessionCard {
   // the words that said so when last drawn, which move on with the clock.
   #stale = null;
   #shownStale = null;
-  // The question last drawn (undefined before the first drawing), and whether a finger or the
-  // mouse is on the conversation: what decides a scroll to a question that arrives.
+  // The question last drawn (undefined before the first drawing), and whether a finger or a
+  // mouse button is on the conversation: what decides a scroll to a question that arrives.
   #asked = undefined;
-  #touching = false;
+  #touches = false;
+  #pressing = false;
+  // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
+  #arrived = null;
   #menu = new RowMenu();
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -176,8 +179,7 @@ export class SessionCard {
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
-    e.scroll.addEventListener('pointerdown', () => { this.#touching = true; });
-    for (const end of ['pointerup', 'pointercancel', 'pointerleave']) { e.scroll.addEventListener(end, () => { this.#touching = false; }); }
+    this.#watchHold(e.scroll);
     e.conversation = h('div', { class: 'conversation', id: this.ids.conversation, role: 'tabpanel', 'aria-labelledby': this.ids.tabC },
       e.scroll, e.reply);
 
@@ -210,6 +212,8 @@ export class SessionCard {
 
   update(s) {
     const first = this.#s === null;
+    // Whether the conversation is read to its end, before this update draws anything into it.
+    const atEnd = this.#atEnd();
     this.#s = s;
     const e = this.els;
     const state = sessionStatus(s);
@@ -307,6 +311,7 @@ export class SessionCard {
     if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
       this.#renderFacts(s);
     }
+    this.#bringQuestion(atEnd);
 
     // The tools shown follow the session: refetched (at most every 2 s) as it changes.
     if (!first && this.#history.loaded && this.#toolsShown() && this.#changed('historyAt', s.updatedAt)) { this.#scheduleHistory(); }
@@ -507,9 +512,11 @@ export class SessionCard {
   // The machine's capabilities changed (a reconnect to another version of its host).
   refreshQuestion() {
     if (!this.#s) { return; }
+    const atEnd = this.#atEnd();
     this.#renderQuestion(this.#s);
     this.#renderReply(this.#s);
     this.#renderStop(this.#s);
+    this.#bringQuestion(atEnd);
   }
 
   // End session, while the connected machine can end sessions.
@@ -589,20 +596,55 @@ export class SessionCard {
     }
     // A new question replaces a receipt that has said its last word.
     if (q && this.#receipt?.final) { this.#dropReceipt(); }
-    // Scroll to a question (ui.md §5.3): one that arrives while the conversation is read to its
-    // end comes into sight, smoothly; one scrolled back through, or held, is left where it is.
+    // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
+    // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
-    const sc = this.els.scroll;
-    const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
     this.#asked = q?.id ?? null;
     this.els.question.replaceChildren(...[this.#orphanView(), this.#receipt?.element, view].filter(Boolean));
+    // An approval's command never slides: a push still under way stops travelling.
+    if (view) { stopTravel(view); }
     if (this.#receipt?.fresh) {
       this.#receipt.fresh = false;
       enter(this.#receipt.element, 'acknowledge', { dy: 1 });
     }
-    if (arrived && view && atEnd && !this.#touching && this.#selected && this.viewing() && sc.getClientRects().length) {
+    this.#arrived = arrived && view ? view : null;
+  }
+
+  #atEnd() {
+    const sc = this.els.scroll;
+    return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
+  }
+
+  // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
+  // reader was before the update, since a longer response drawn with the question moves it.
+  #bringQuestion(atEnd) {
+    const view = this.#arrived;
+    this.#arrived = null;
+    const sc = this.els.scroll;
+    if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && this.#selected && this.viewing() && sc.getClientRects().length) {
       view.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
     }
+  }
+
+  // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer
+  // events: once the browser takes a touch over to scroll it sends pointercancel while the finger
+  // is still down. A mouse button holds it until released, wherever that is.
+  #watchHold(scroller) {
+    const fingers = (e) => { this.#touches = (e.touches?.length ?? 0) > 0; };
+    scroller.addEventListener('touchstart', () => { this.#touches = true; }, { passive: true });
+    for (const end of ['touchend', 'touchcancel']) { scroller.addEventListener(end, fingers, { passive: true }); }
+    scroller.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'touch') { return; }
+      this.#pressing = true;
+      const win = scroller.ownerDocument?.defaultView;
+      const up = () => {
+        this.#pressing = false;
+        win?.removeEventListener('pointerup', up, true);
+        win?.removeEventListener('pointercancel', up, true);
+      };
+      win?.addEventListener('pointerup', up, true);
+      win?.addEventListener('pointercancel', up, true);
+    });
   }
 
   #watchReceipt({ service, hostId, sessionId }, questionId) {

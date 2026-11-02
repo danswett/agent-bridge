@@ -1085,29 +1085,28 @@ summary {
 /* ---- motion (ui.md §5.3) ----
    Only the generated tokens time anything here, and under prefers-reduced-motion they are 0, so
    no rule below needs a reduced-motion rule of its own. js/ui/motion.js draws the motions that
-   answer a change (push, a row arriving, the selection pill, a menu); these are the ones CSS
-   draws by itself.
+   answer a change (push, a row arriving, the selection pill, a menu, the Needs you lane's mark);
+   these are the ones CSS draws by itself.
 
-   Press: the pressed fill shows at once on press, and eases back on release. Nothing scales. */
-.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item, .choice, .toggle {
+   Press: the pressed fill shows at once on press, and eases back on release. Nothing scales.
+   Only the release eases: motion.js marks a control data-press="released" for the press token's
+   length once the pointer lets go, so a row being selected, a tab chosen or the theme changing
+   takes its new fill at once. */
+:is(.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item, .choice, .toggle)[data-press="released"] {
   transition: background-color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
     border-color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
-    color var(--ab-motion-press-duration) var(--ab-motion-press-ease),
-    opacity var(--ab-motion-press-duration) var(--ab-motion-press-ease);
+    color var(--ab-motion-press-duration) var(--ab-motion-press-ease);
 }
-:is(.button, .icon-button, .row-main, .nav-item, .view-tab, .machine-tab, .row-menu-item, .choice, .toggle):active { transition-duration: 0s; }
 :is(.icon-button, .row-main, .view-tab, .machine-tab, .row-menu-item):active:not(:disabled) { background: var(--ab-selected); }
-.button:active:not(:disabled, [aria-disabled="true"]) { opacity: .85; }
 .nav-item:active { background: var(--ab-selected); }
-
-/* A Needs you entry arriving (#165): its mark fades in. The entry itself, and the command an
-   approval shows, appear at once and never fade, slide or pass under anything. Both motions here
-   take 0s until motion.js arms them, so a lane already there at start never moves. */
-.needs-entry > .needs-mark { animation: ab-motion-fade-in 0s var(--ab-motion-list-item-ease) backwards; }
-:root[data-motion="on"] .needs-entry > .needs-mark { animation-duration: var(--ab-motion-list-item-duration); }
-@keyframes ab-motion-fade-in { from { opacity: 0; } }
-/* Approve once and Deny acknowledged in the lane: the outcome rises into place under the buttons,
-   never over the command. */
-.needs-status:not([hidden]) { animation: ab-motion-rise 0s var(--ab-motion-acknowledge-ease) backwards; }
-:root[data-motion="on"] .needs-status:not([hidden]) { animation-duration: var(--ab-motion-acknowledge-duration); }
-@keyframes ab-motion-rise { from { opacity: 0; translate: 0 var(--ab-motion-acknowledge-distance); } }
+/* A button's pressed fill keeps its label at 4.5:1 (ui.md §9) rather than fading the whole
+   control: a filled button's Bridge moves toward the text colour, darker on light and lighter on
+   dark, away from its label's; an outlined one takes the selected fill, and its Bridge label moves
+   the same way, so it holds its contrast on the card and on the shell. In forced colours the
+   system pairs stay as they are. */
+@media not (forced-colors: active) {
+  .button:active:not(.secondary, :disabled, [aria-disabled="true"]) { background-color: color-mix(in srgb, var(--ab-bridge) 88%, var(--ab-text)); }
+  .button.secondary:active:not(:disabled, [aria-disabled="true"]) {
+    background-color: var(--ab-selected); color: color-mix(in srgb, var(--ab-bridge) 85%, var(--ab-text));
+  }
+}

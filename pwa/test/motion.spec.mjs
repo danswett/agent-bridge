@@ -12,15 +12,30 @@ const later = (ms = 1000) => new Date(Date.now() + ms).toISOString();
 
 // Every animation the page asks for, from the first script on: js/ui/motion.js names each one
 // ab-motion-<entry> (Animation.id), set just after it is made, so it is read when asked for.
-async function openDemo(page, { width = 1440, height = 900 } = {}) {
+async function openDemo(page, { width = 1440, height = 900, hash = '' } = {}) {
   await page.setViewportSize({ width, height });
   await page.addInitScript(() => {
     window.__motions = [];
-    // The motions CSS draws by itself (the Needs you lane's), with the duration each started with.
+    // What CSS moves by itself: every animation but the glyphs' loops (ui.md §2.1), and every
+    // transition, with the duration each started with.
     window.__css = [];
-    addEventListener('animationstart', (e) => {
-      if (e.animationName.startsWith('ab-motion')) { window.__css.push({ name: e.animationName, cls: e.target.className, duration: getComputedStyle(e.target).animationDuration }); }
-    }, true);
+    const heard = (e) => {
+      if (e.animationName === 'glyph-turn' || e.animationName === 'spin') { return; }
+      // A press letting go eases back by itself (ui.md §5.3, Press): that is the press, not news.
+      if (e.type === 'transitionstart' && e.target.dataset?.press === 'released') { return; }
+      const cs = getComputedStyle(e.target);
+      window.__css.push({ name: e.animationName ?? e.propertyName, cls: e.target.className?.baseVal ?? e.target.className, duration: e.animationName ? cs.animationDuration : cs.transitionDuration });
+    };
+    addEventListener('animationstart', heard, true);
+    addEventListener('transitionstart', heard, true);
+    // The copies leave() fades are in closed shadow roots: kept here so a test can look inside.
+    window.__shadows = [];
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (init) {
+      const root = attach.call(this, init);
+      window.__shadows.push(root);
+      return root;
+    };
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes, options) {
       const a = animate.call(this, keyframes, options);
@@ -28,7 +43,7 @@ async function openDemo(page, { width = 1440, height = 900 } = {}) {
       return a;
     };
   });
-  await page.goto('?demo=1&static=1');
+  await page.goto(`?demo=1&static=1${hash}`);
   await page.waitForSelector('html[data-demo-ready]');
   await expect(page.locator('.session')).not.toHaveCount(0);
 }
@@ -39,10 +54,11 @@ const motions = (page) => page.evaluate(() => window.__motions.map((m) => ({
   travels: m.keyframes.some((k) => k.transform && k.transform !== 'none'),
   from: m.keyframes[0]?.transform ?? null,
   inLane: !!m.el.closest?.('#needs-you') || !!m.el.querySelector?.('#needs-you'),
+  cls: m.el.getAttribute?.('class') ?? null,
 })));
 
 // The CSS motions that moved: those that started with a duration.
-const cssMotions = (page) => page.evaluate(() => window.__css.filter((m) => m.duration !== '0s'));
+const cssMotions = (page) => page.evaluate(() => window.__css.filter((m) => !/^0s(, 0s)*$/.test(m.duration)));
 
 // What the tokens say an entry takes, going in and going out, in ms.
 const tokens = (page) => page.evaluate(() => {
@@ -161,8 +177,24 @@ test('a Needs you entry that arrives once the app is running has its mark fade i
   await page.waitForTimeout(400);
   await ask(page, CLAUDE);
   await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
-  expect(await cssMotions(page)).toEqual([{ name: 'ab-motion-fade-in', cls: 'needs-mark', duration: `${t.listItem[0] / 1000}s` }]);
-  expect((await motions(page)).filter((m) => m.inLane)).toEqual([]);
+  expect((await motions(page)).filter((m) => m.inLane)).toEqual([
+    { id: 'ab-motion-listItem', duration: t.listItem[0], travels: false, from: null, inLane: true, cls: 'needs-mark' },
+  ]);
+  expect(await cssMotions(page)).toEqual([]);
+});
+
+test('on a phone, Back to the list shows Needs you as it was: no mark fades in again', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  await ask(page, CLAUDE);
+  await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
+  const before = (await motions(page)).filter((m) => m.inLane).length;
+  await open(page, CODEX);
+  await view(page, CODEX).locator('.session-header .back').click();
+  await expect(page.locator(`#needs-you .needs-entry[data-id="${CLAUDE}"]`)).toBeVisible();
+  await page.waitForTimeout(300);
+  expect((await motions(page)).filter((m) => m.inLane)).toHaveLength(before);
+  expect(await cssMotions(page)).toEqual([]);
 });
 
 test('with reduced motion nothing travels: the only motions are fades no longer than the cross-fade, and presses change at once', async ({ page }) => {
@@ -238,4 +270,276 @@ test('a question that arrives is scrolled to while the conversation is read to i
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
   await ask('q-motion-2', 4000);
   await expect(v.locator('.question-slot .question')).toBeInViewport();
+});
+
+test('a control eases back to its fill only when a press lets go: a row selected, or the theme changing, takes its fill at once', async ({ page }) => {
+  await openDemo(page);
+  const t = await tokens(page);
+  const durations = () => page.evaluate(() => [...document.querySelectorAll('.button, .icon-button, .row-main, .view-tab')]
+    .filter((el) => !el.dataset.press).flatMap((el) => getComputedStyle(el).transitionDuration.split(',').map((d) => d.trim())));
+  expect(new Set(await durations())).toEqual(new Set(['0s']));
+  // Selecting a row by keyboard is no press: its fill and its neighbours' change at once.
+  await row(page, CLAUDE).locator('.row-main').focus();
+  await page.keyboard.press('Enter');
+  await expect(row(page, CLAUDE)).toHaveClass(/selected/);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  expect(await cssMotions(page)).toEqual([]);
+  const main = row(page, CODEX).locator('.row-main');
+  const b = await main.boundingBox();
+  await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  expect(await main.evaluate((el) => [el.dataset.press, getComputedStyle(el).transitionDuration.split(',')[0].trim()]))
+    .toEqual(['released', `${t.press[0] / 1000}s`]);
+  await expect(main).not.toHaveAttribute('data-press', /./);
+});
+
+const luminance = (rgb) => {
+  const [r, g, b] = rgb.map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+
+for (const scheme of ['light', 'dark']) {
+  test(`in ${scheme}, a pressed Approve once and a pressed Deny keep their labels at 4.5:1 and never fade`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await openDemo(page);
+    await page.evaluate((id) => {
+      const d = window.agentBridgeDemo;
+      const t = new Date(Date.now() + 60_000).toISOString();
+      const question = {
+        id: 'r1#motion', kind: 'approval', message: 'Allow **shell**?\n\n```\ngit push origin main\n```', askedAt: t,
+        fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }] }],
+      };
+      d.upsert({ ...d.host.get(id), status: 'waiting', statusSince: t, updatedAt: t, question });
+    }, COPILOT);
+    for (const [name, cls] of [['Approve once', 'needs-approve'], ['Deny', 'needs-deny']]) {
+      const button = page.locator(`#needs-you .needs-entry[data-id="${COPILOT}"] .${cls}`);
+      await expect(button).toBeVisible();
+      const b = await button.boundingBox();
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+      await page.mouse.down();
+      // Painted colours, read off a canvas, so color-mix() and the card beneath both count.
+      const pressed = await button.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        const paint = (color) => {
+          const c = document.createElement('canvas').getContext('2d');
+          c.fillStyle = color; c.fillRect(0, 0, 1, 1);
+          return [...c.getImageData(0, 0, 1, 1).data];
+        };
+        let under = 'rgb(255, 255, 255)';
+        for (let p = el; p; p = p.parentElement) {
+          const bg = getComputedStyle(p).backgroundColor;
+          if (paint(bg)[3] === 255) { under = bg; break; }
+        }
+        const c = document.createElement('canvas').getContext('2d');
+        c.fillStyle = under; c.fillRect(0, 0, 1, 1);
+        c.fillStyle = cs.backgroundColor; c.fillRect(0, 0, 1, 1);
+        return { opacity: cs.opacity, active: el.matches(':active'), fill: [...c.getImageData(0, 0, 1, 1).data].slice(0, 3), label: paint(cs.color).slice(0, 3) };
+      });
+      // Let go somewhere else: the press is all this measures, not an answer sent.
+      await page.mouse.move(1, 1);
+      await page.mouse.up();
+      expect(pressed.active, name).toBe(true);
+      expect(pressed.opacity, name).toBe('1');
+      expect(contrast(pressed.fill, pressed.label), name).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+}
+
+test('a glyph that changes fades out as it was, in its own colour, not in the colour of what it became', async ({ page }) => {
+  await openDemo(page);
+  await upsert(page, CODEX, { status: 'working', statusSince: later(), updatedAt: later() });
+  const glyph = row(page, CODEX).locator('.row-glyph .glyph');
+  await expect(glyph).toHaveAttribute('data-glyph', 'working');
+  const working = await glyph.evaluate((el) => getComputedStyle(el).color);
+  const before = await page.evaluate(() => window.__shadows.length);
+  await upsert(page, CODEX, { status: 'idle', statusSince: later(2000), updatedAt: later(2000) });
+  await expect(glyph).not.toHaveAttribute('data-glyph', 'working');
+  const now = await glyph.evaluate((el) => getComputedStyle(el).color);
+  expect(now).not.toBe(working);
+  const copies = await page.evaluate((from) => window.__shadows.slice(from).map((root) => {
+    const svg = root.querySelector('svg');
+    return svg ? { color: svg.style.color, refs: [...svg.querySelectorAll('use')].map((u) => u.getAttribute('href')) } : null;
+  }).filter(Boolean), before);
+  expect(copies.length).toBeGreaterThan(0);
+  for (const c of copies) {
+    expect(c.color).toBe(working);
+    expect(c.refs.some((r) => r.endsWith('#glyph-working--still'))).toBe(true);
+  }
+});
+
+test('what leaves is a copy with nothing in it to find, use or run: text stays text, and no id, link, control or script is carried', async ({ page }) => {
+  await openDemo(page);
+  const copy = await page.evaluate(async () => {
+    const { leave } = await import('./js/ui/motion.js');
+    const el = document.createElement('div');
+    el.id = 'leaving';
+    el.className = 'session';
+    el.dataset.id = 'x';
+    const words = '<img src=x onerror="window.__ran=1"><b>bold</b>';
+    el.append(
+      document.createTextNode(words),
+      Object.assign(document.createElement('a'), { href: 'https://example.com/', id: 'link', textContent: 'link' }),
+      Object.assign(document.createElement('button'), { id: 'b', textContent: 'Approve once', onclick: () => { window.__ran = 2; } }),
+      Object.assign(document.createElement('input'), { value: 'typed' }),
+      Object.assign(document.createElement('script'), { textContent: 'window.__ran = 3' }),
+    );
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.innerHTML = '<use href="design/sprite.svg#glyph-idle"></use><use href="https://example.com/x.svg#a"></use><foreignObject><p>hidden</p></foreignObject><a href="https://example.com/"><path d="M0 0"/></a>';
+    el.append(svg);
+    Object.assign(el.style, { position: 'fixed', top: '100px', left: '100px', width: '200px', height: '80px' });
+    document.body.append(el);
+    const from = window.__shadows.length;
+    const a = leave(el, 'listItem');
+    el.remove();
+    const root = window.__shadows[from];
+    const host = root.host;
+    const all = [...root.querySelectorAll('*')];
+    const out = {
+      animated: !!a,
+      host: { hidden: host.getAttribute('aria-hidden'), inert: host.inert, pointer: host.style.pointerEvents },
+      text: root.textContent,
+      tags: [...new Set(all.map((n) => n.localName))].sort(),
+      attrs: [...new Set(all.flatMap((n) => [...n.attributes].map((x) => x.name)))].sort(),
+      refs: all.filter((n) => n.localName === 'use').map((n) => n.getAttribute('href')),
+      found: document.querySelectorAll('#leaving, #link, #b, .session[data-id="x"]').length,
+    };
+    await new Promise((r) => setTimeout(r, 300));
+    out.ran = window.__ran ?? null;
+    out.gone = !host.isConnected;
+    return out;
+  });
+  expect(copy.animated).toBe(true);
+  expect(copy.host).toEqual({ hidden: 'true', inert: true, pointer: 'none' });
+  expect(copy.text).toContain('<img src=x onerror="window.__ran=1"><b>bold</b>');
+  expect(copy.text).toContain('Approve once');
+  expect(copy.text).not.toContain('window.__ran = 3');
+  expect(copy.tags).toEqual(['div', 'path', 'span', 'svg', 'use'].filter((t) => copy.tags.includes(t)));
+  for (const tag of ['a', 'b', 'button', 'img', 'input', 'script', 'foreignObject', 'p']) { expect(copy.tags).not.toContain(tag); }
+  expect(copy.attrs.filter((a) => !['style', 'href', 'd', 'width', 'height'].includes(a))).toEqual([]);
+  expect(copy.refs).toEqual(['design/sprite.svg#glyph-idle']);
+  expect(copy.found).toBe(0);
+  expect(copy.ran).toBe(null);
+  expect(copy.gone).toBe(true);
+});
+
+test('a copy shows only what showed of what left: clipped by its scroller, and drawn where it was even mid-motion', async ({ page }) => {
+  await openDemo(page);
+  const out = await page.evaluate(async () => {
+    const { leave, enter } = await import('./js/ui/motion.js');
+    const scroller = document.createElement('div');
+    Object.assign(scroller.style, { position: 'fixed', top: '100px', left: '100px', width: '200px', height: '100px', overflow: 'auto' });
+    const pad = document.createElement('div');
+    pad.style.height = '80px';
+    const item = document.createElement('div');
+    Object.assign(item.style, { height: '60px', background: 'red' });
+    scroller.append(pad, item, Object.assign(document.createElement('div'), { style: 'height: 200px' }));
+    document.body.append(scroller);
+    // Mid-entrance: 12 px down, as a menu or a row is while it settles.
+    document.documentElement.style.setProperty('--ab-motion-menu-duration', '5000ms');
+    const moving = enter(item, 'menu', { dy: 1 });
+    moving.pause();
+    moving.currentTime = 0;
+    const r = item.getBoundingClientRect();
+    const from = window.__shadows.length;
+    leave(item, 'listItem');
+    const root = window.__shadows[from];
+    const host = root.host;
+    return {
+      rect: { top: r.top, left: r.left },
+      host: { top: parseFloat(host.style.top), left: parseFloat(host.style.left), clip: host.style.clipPath, z: Number(host.style.zIndex) },
+      transform: root.firstElementChild.style.transform,
+      translate: root.firstElementChild.style.translate,
+    };
+  });
+  expect(out.host.top).toBeCloseTo(out.rect.top, 0);
+  expect(out.host.left).toBeCloseTo(out.rect.left, 0);
+  expect(out.transform).toBe('none');
+  expect(out.translate).toBe('none');
+  // The item runs from 80 px (plus the motion's distance) into a scroller 100 px tall: what
+  // showed is its top, and the rest is cut. (inset() as CSS shortens it: top, right, bottom, left.)
+  expect(out.host.clip).toMatch(/^inset\(/);
+  const [t, r = t, b = t] = [...out.host.clip.matchAll(/([\d.]+)px/g)].map((m) => Number(m[1]));
+  expect(t).toBe(0);
+  expect(r).toBe(0);
+  expect(b).toBeGreaterThan(0);
+  // Under the app bar and the bottom bar.
+  expect(out.host.z).toBeLessThan(20);
+});
+
+test('a finger held on the conversation keeps it where it is when a question arrives, even after the browser takes the touch over to scroll', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long }, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  const ask = (id, ms) => page.evaluate(({ id, ms, from }) => {
+    const d = window.agentBridgeDemo;
+    const q = { ...d.host.get(from).question, id };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question: q, status: 'waiting', updatedAt: new Date(Date.now() + ms).toISOString() });
+  }, { id, ms, from: COPILOT });
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const top = await scroller.evaluate((el) => el.scrollTop);
+  // A finger goes down; the browser takes the gesture to scroll, which cancels its pointer.
+  await scroller.evaluate((el) => {
+    el.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    el.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerType: 'touch' }));
+    el.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'touch' }));
+  });
+  await ask('q-held', 2000);
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(top);
+  await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+});
+
+test('a question that arrives with a longer response is brought into sight below all of it', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  await upsert(page, CODEX, { activity: { response: 'Short.', userMessage: null, reasoning: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  // The whole conversation fits: it is read to its end without scrolling, so the question is in
+  // sight when it is first drawn, until the response drawn with it pushes it down.
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await page.evaluate((long) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get('019a1b2c-codex-example');
+    const question = { id: 'q-with-long', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...s, activity: { ...s.activity, response: long }, question, status: 'waiting', updatedAt: new Date(Date.now() + 5000).toISOString() });
+  }, long);
+  await expect(v.locator('.question-slot .question')).toBeInViewport();
+});
+test('a session the address names at startup, or after a reload, is there at once on a phone: nothing slides in', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  const host = await row(page, CLAUDE).getAttribute('data-host-id');
+  const hash = `#/sessions/${encodeURIComponent(host)}/${encodeURIComponent(CLAUDE)}`;
+  // A fresh load with the address, as a link or a bookmark opens it (not a hash change in a
+  // running app, which is a move).
+  await page.goto('about:blank');
+  await page.goto(`?demo=1&static=1${hash}`);
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(view(page, CLAUDE)).toBeVisible();
+  await page.waitForTimeout(300);
+  expect((await motions(page)).filter((m) => m.id === 'ab-motion-push')).toEqual([]);
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(view(page, CLAUDE)).toBeVisible();
+  await page.waitForTimeout(300);
+  expect((await motions(page)).filter((m) => m.id === 'ab-motion-push')).toEqual([]);
+});
+
+test('a question that arrives while its session is still sliding in on a phone stops the slide: its command only fades', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-push-duration', '5000ms'));
+  await row(page, CLAUDE).locator('.row-main').click();
+  await expect(view(page, CLAUDE)).toBeVisible();
+  const travelling = () => page.evaluate(() => document.getAnimations().filter((a) => a.id === 'ab-motion-push' && a.playState === 'running')
+    .map((a) => a.effect.getKeyframes().some((k) => k.transform && k.transform !== 'none')));
+  expect(await travelling()).toEqual([true]);
+  await ask(page, CLAUDE);
+  await expect(view(page, CLAUDE).locator('.question-slot .question')).toHaveCount(1);
+  expect(await travelling()).toEqual([false]);
 });

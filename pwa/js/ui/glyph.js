@@ -34,6 +34,12 @@ export function glyph(name, options = {}) {
 export function setGlyph(svg, name, { size = 16, label = null, driven = false } = {}) {
   const g = GLYPHS.includes(name) ? name : 'idle';
   const px = GLYPH_SIZES.includes(size) ? size : 16;
+  const drawn = `${g}${driven ? '+driven' : ''}`;
+  // A status glyph's state change (ui.md §5.3): the old glyph cross-fades into the new one, with
+  // its colour. Not its first drawing, and only where it is on screen. The copy that fades out is
+  // taken first, while the glyph still has the class and data-glyph that colour it.
+  const change = !!svg.dataset.drawn && svg.dataset.drawn !== drawn && svg.isConnected;
+  if (change) { leave(svg, 'glyph'); }
   svg.setAttribute('class', `glyph${driven ? ' driven' : ''}`);
   svg.setAttribute('width', String(px));
   svg.setAttribute('height', String(px));
@@ -47,12 +53,7 @@ export function setGlyph(svg, name, { size = 16, label = null, driven = false } 
     svg.removeAttribute('aria-label');
     svg.setAttribute('aria-hidden', 'true');
   }
-  const drawn = `${g}${driven ? '+driven' : ''}`;
   if (svg.dataset.drawn !== drawn) {
-    // A status glyph's state change (ui.md §5.3): the old glyph cross-fades into the new one.
-    // Not its first drawing, and only where it is on screen.
-    const change = !!svg.dataset.drawn && svg.isConnected;
-    if (change) { leave(svg, 'glyph'); }
     svg.dataset.drawn = drawn;
     const part = MOVING[g];
     const parts = [use(part ? `glyph-${g}--still` : `glyph-${g}`)];

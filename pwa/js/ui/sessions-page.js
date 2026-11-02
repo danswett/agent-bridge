@@ -24,7 +24,7 @@ import { maxPlain } from '../blobs.js';
 import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
-import { enter, hold, scrollBehavior } from './motion.js';
+import { enter, scrollBehavior, watchLane } from './motion.js';
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -80,6 +80,10 @@ export class SessionsPage {
   #want = null;
   // Whether the address names a session: on a phone, its view is pushed over the list.
   #open = false;
+  #navigating = false;
+  #painted = false;
+  #frame = 0;
+  #unwatchLane = null;
   #inspectorHidden = false;
   // What had focus in the list when a session was opened on a phone.
   #returnTo = null;
@@ -162,6 +166,12 @@ export class SessionsPage {
       open: (hostId, id) => this.showSession(id, hostId),
       badge,
     });
+    // An entry is news, and its mark fades in, as a row is (views.js): once the list was drawn
+    // before the change that brought it, and its machine has sent its whole list. Read as the
+    // change comes, since the list draws before the lane does.
+    let news = false;
+    hosts.sessions.onChange(() => { news = this.view.drawn; });
+    this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) });
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -185,7 +195,7 @@ export class SessionsPage {
       this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
         // Back on Sessions, what it shows is seen now.
-        if (route === 'sessions') { this.#route(rest); this.view.schedule(); this.view.layoutChanged(); }
+        if (route === 'sessions') { this.#navigate(() => this.#route(rest)); this.view.schedule(); this.view.layoutChanged(); }
       });
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
@@ -339,7 +349,7 @@ export class SessionsPage {
     // What had focus in the list (a row, a Needs you entry) gets it back when a phone returns there.
     const had = globalThis.document?.activeElement;
     this.#returnTo = had && this.$('list-pane')?.contains(had) ? had : card.els.open;
-    if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#drawPanes(); return; }
+    if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#navigate(() => this.#drawPanes()); return; }
     const phone = this.phone.matches;
     const onSessions = this.shell.route === 'sessions';
     const already = onSessions && this.shell.rest.join('/') === rest.join('/');
@@ -494,6 +504,22 @@ export class SessionsPage {
     if (!this.#inspectorHidden && this.wide.matches) { enter(this.view.selected?.els.inspector, 'pane', { dx: 1 }); }
   }
 
+  // While the address moves (a row opened, Back): what #drawPanes shows then is a push or a pop.
+  #navigate(draw) {
+    const was = this.#navigating;
+    this.#navigating = true;
+    try { draw(); } finally { this.#navigating = was; }
+  }
+
+  // Whether the panes shown now have been painted: false from a change until the next frame.
+  #paint() {
+    this.#painted = false;
+    const frame = this.#frame = (this.#frame ?? 0) + 1;
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf !== 'function') { this.#painted = true; return; }
+    raf(() => raf(() => { if (this.#frame === frame) { this.#painted = true; } }));
+  }
+
   // Which panes show: on a phone, the list or the session pushed over it; the inspector, as its
   // own pane at the three-pane width unless hidden.
   #drawPanes() {
@@ -506,9 +532,13 @@ export class SessionsPage {
     if (none) { none.hidden = !!this.view?.selected; }
     // Push and pop (ui.md §5.3): on a phone the screen that comes covers the other at once, and
     // only its content slides in, from the trailing side going in and the leading side coming
-    // back. Not the first drawing, which is the app starting.
-    if (was !== undefined && was !== body.dataset.sessionOpen) { hold(); }
-    if (was !== undefined && was !== body.dataset.sessionOpen && this.phone.matches) {
+    // back. Only for a move the address made (a row opened, Back) from a screen that was on show
+    // for a frame at least: a session the address names at startup or on a reload, and the list
+    // put beneath it then (#listBeneath), are the app starting, not a move.
+    const changed = was !== body.dataset.sessionOpen;
+    const moved = changed && this.#navigating && this.#painted && was !== undefined && this.phone.matches;
+    if (changed) { this.#paint(); }
+    if (moved) {
       const opened = body.dataset.sessionOpen === 'true';
       if (opened) {
         const content = this.view.selected?.view;
@@ -531,6 +561,8 @@ export class SessionsPage {
     this.#unroute = null;
     this.#listening?.abort();
     this.#listening = null;
+    this.#unwatchLane?.();
+    this.#unwatchLane = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();
