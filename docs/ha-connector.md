@@ -1257,12 +1257,17 @@ agent-ha-bridge's (`test-auth-backoff.ps1`):
   already accepted, and writes what it counted as soon as it can. Only a write that succeeds
   ends that; a read alone doesn't. A token already accepted carries on.
 - **A corrupt record is set aside, not trusted.** A record that isn't one (cut short, zero-filled
-  by a power cut, or JSON missing a field or table, or holding a negative count) is copied to `ha-auth.json.corrupt`, logged, and replaced by a record of its
+  by a power cut, JSON with a null table or a negative count, one missing a field of its version, or
+  one of a version newer than the host knows) is copied to `ha-auth.json.corrupt`, logged, and replaced by a record of its
   loss; until that is written, the corrupt file stays where it is and goes on holding. Its counts
   are lost, so every token not accepted since is held, in every process and after a restart, even
   one a process still knew as accepted, until a person acts. `ha token set` allows that token
   one attempt; deleting `ha-auth.json` starts over. If `ha token set` can't record that, it says
   so and exits with 1, and the token stays held.
+- **The record's format is versioned.** A record written by an earlier build is brought up to
+  date when it is read, not set aside: a token it shows as accepted carries on, and one it shows
+  refused at all is stopped. A change to the format bumps the version, gives the new field a
+  default, and migrates older records.
 
 The host log, `ha status` (a `refused:` line) and the app's Settings page all say the same thing:
 what was refused, what to do, and when the next attempt is, or that there will be none.

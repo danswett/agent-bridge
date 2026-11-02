@@ -2,7 +2,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -725,10 +725,7 @@ public sealed class HaAuthGuard
         {
             return $"it could not be read ({e.GetType().Name})";
         }
-        State? read = null;
-        try { read = JsonSerializer.Deserialize<State>(text, Json); }
-        catch (JsonException) { }
-        if (read is not null && Valid(read))
+        if (Parse(text) is { } read)
         {
             if (text != readText) { reread = true; }
             readText = text;
@@ -763,6 +760,59 @@ public sealed class HaAuthGuard
         basis = new State();
         return null;
     }
+
+    // 2: every field written, Lost and Granted among them. 1: written by builds of #234 before the
+    // record was versioned for change (Strikes once kept per address; Stopped, Refusals, Lost and
+    // Granted not always there).
+    internal const int RecordVersion = 2;
+
+    // The record in text as this build reads it, migrated from an older version; null when it is not
+    // one: it does not parse, holds what no record does, lacks a field of its version, or is of a
+    // version newer than this build knows.
+    static State? Parse(string text)
+    {
+        try
+        {
+            if (JsonNode.Parse(text) is not JsonObject root || root["version"] is not JsonValue v || !v.TryGetValue<int>(out var version)) { return null; }
+            if (version < 1 || version > RecordVersion) { return null; }
+            if (!Complete(root, version == RecordVersion ? Fields : FieldsV1)) { return null; }
+            var read = root.Deserialize<State>(Json);
+            if (read is null) { return null; }
+            if (version < RecordVersion) { Migrate(read, root); }
+            return Valid(read) ? read : null;
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException) { return null; }
+    }
+
+    // A record of version 1, brought up to this one. A token refused at all is stopped, since how
+    // many attempts it had is not certain; one accepted stays accepted. Lost and Granted, where a
+    // record has none, are none (null, false): only a record that was lost holds every token.
+    static void Migrate(State s, JsonObject root)
+    {
+        // The first records kept the machine's count per address.
+        if (!root.ContainsKey("strikes"))
+        {
+            s.Strikes = root["servers"]!.AsObject().Sum(x => x.Value?["strikes"]?.GetValue<int>() ?? 0);
+        }
+        foreach (var c in s.Servers.Values.SelectMany(x => x.Credentials.Values).Where(c => c.Rejections > 0)) { c.Stopped = true; }
+        s.Version = RecordVersion;
+    }
+
+    readonly record struct Shape(string[] Root, string[] Server, string[] Cred);
+
+    static readonly Shape Fields = new(Names<State>(), Names<Server>(), Names<Cred>());
+
+    // What every record of version 1 had, from the first written.
+    static readonly Shape FieldsV1 = new(["version", "servers"], ["credentials"], ["rejections", "accepted"]);
+
+    static string[] Names<T>() => [.. typeof(T).GetProperties().Select(p => JsonNamingPolicy.CamelCase.ConvertName(p.Name))];
+
+    static bool Complete(JsonObject root, Shape shape) =>
+        shape.Root.All(root.ContainsKey)
+        && root["servers"] is JsonObject servers
+        && servers.All(x => x.Value is JsonObject server && shape.Server.All(server.ContainsKey)
+            && server["credentials"] is JsonObject creds
+            && creds.All(c => c.Value is JsonObject cred && shape.Cred.All(cred.ContainsKey)));
 
     // JSON that parses is not yet a record: a missing table or a negative count, written by hand or
     // by a bad write, would otherwise throw from the middle of recording a refusal, so that the
@@ -847,63 +897,47 @@ public sealed class HaAuthGuard
 
     static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    // Every field required: what this guard writes has them all, and a record missing one (a
-    // stopped flag, a ban) would quietly give back what it held, so it is taken for a corrupt one.
+    // The record's format. To add a field: give it a default, bump RecordVersion, and add a step to
+    // Migrate that fills it for records written before, erring toward holding only where it must,
+    // never toward holding a token that was working. A field missing from a record of the current
+    // version is no format at all, and the record is taken for a corrupt one (a stopped flag or a ban
+    // left out would quietly give back what it held); so is a version newer than this build knows.
     sealed class State
     {
-        [JsonRequired]
-        public int Version { get; set; } = 1;
+        public int Version { get; set; } = RecordVersion;
         // Refusals Home Assistant has counted against this machine since a WebSocket login last
         // reset its count: by any token, at any address it was reached by.
-        [JsonRequired]
         public int Strikes { get; set; }
-        [JsonRequired]
         public DateTimeOffset? StrikeAt { get; set; }
         // Every refusal ever recorded, by any process: only ever rises.
-        [JsonRequired]
         public long Refusals { get; set; }
         // The process making the one attempt not yet known to be accepted, and until when.
-        [JsonRequired]
         public string? ProbeBy { get; set; }
-        [JsonRequired]
         public DateTimeOffset? ProbeUntil { get; set; }
-        [JsonRequired]
         public Dictionary<string, Server> Servers { get; set; } = new(StringComparer.Ordinal);
         // When the record was found unreadable and set aside: what it held is gone, so a token not
         // accepted since waits for a person (Forget, or deleting the record).
-        [JsonRequired]
         public DateTimeOffset? Lost { get; set; }
     }
 
     // One Home Assistant, by address.
     sealed class Server
     {
-        [JsonRequired]
         public DateTimeOffset? BannedSince { get; set; }
-        [JsonRequired]
         public int BanLooks { get; set; }
-        [JsonRequired]
         public DateTimeOffset? BanCheckAt { get; set; }
-        [JsonRequired]
         public DateTimeOffset? Touched { get; set; }
-        [JsonRequired]
         public Dictionary<string, Cred> Credentials { get; set; } = new(StringComparer.Ordinal);
     }
 
     sealed class Cred
     {
-        [JsonRequired]
         public int Rejections { get; set; }
-        [JsonRequired]
         public bool Stopped { get; set; }
-        [JsonRequired]
         public DateTimeOffset? RejectedAt { get; set; }
-        [JsonRequired]
         public bool Accepted { get; set; }
-        [JsonRequired]
         public DateTimeOffset? AttemptAt { get; set; }
         // Allowed one attempt by a person while the record is lost.
-        [JsonRequired]
         public bool Granted { get; set; }
     }
 }

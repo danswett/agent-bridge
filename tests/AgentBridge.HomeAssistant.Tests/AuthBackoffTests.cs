@@ -405,7 +405,9 @@ public sealed class AuthBackoffTests : IDisposable
     [InlineData("""{ "strikes": -100, "servers": {} }""")]
     [InlineData("""{ "servers": null }""")]
     [InlineData("""{}""")]
-    [InlineData("""{ "version": 1, "strikes": 0, "strikeAt": null, "refusals": 0, "probeBy": null, "probeUntil": null, "lost": null, "servers": { "0123456789abcdef": { "bannedSince": null, "banLooks": 0, "banCheckAt": null, "touched": null, "credentials": { "fedcba9876543210": {} } } } }""")]
+    [InlineData("""{ "version": "two", "servers": {} }""")]
+    [InlineData("""{ "version": 1, "servers": { "0123456789abcdef": { "credentials": { "fedcba9876543210": { "accepted": true } } } } }""")]
+    [InlineData("""{ "version": 2, "strikes": 0, "strikeAt": null, "refusals": 0, "probeBy": null, "probeUntil": null, "lost": null, "servers": { "0123456789abcdef": { "bannedSince": null, "banLooks": 0, "banCheckAt": null, "touched": null, "credentials": { "fedcba9876543210": {} } } } }""")]
     public async Task A_record_that_parses_but_is_not_one_is_set_aside_and_holds_every_token(string record)
     {
         Directory.CreateDirectory(folder);
@@ -416,6 +418,99 @@ public sealed class AuthBackoffTests : IDisposable
 
         Assert.Empty(ha.Seen);
         Assert.True(File.Exists(Record + HaAuthGuard.CorruptSuffix));
+    }
+
+    // Records written by earlier builds, rewritten from this one's by leaving out what they did
+    // not have, as afec8bfc wrote them (no lost, no granted) and before (no stopped, no count of
+    // refusals, no reservation). Each is brought up to date, and a token that was working goes on.
+    public static TheoryData<string[]> EarlierFormats => new()
+    {
+        new[] { "lost", "granted" },
+        new[] { "lost", "granted", "stopped" },
+        new[] { "lost", "granted", "stopped", "refusals", "probeBy", "probeUntil" },
+    };
+
+    [Theory]
+    [MemberData(nameof(EarlierFormats))]
+    public async Task A_record_in_an_earlier_format_is_brought_up_to_date_and_a_working_token_goes_on(string[] missing)
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        Assert.Null(await Publish(Client(ha, new HaAuthGuard(Record, time))));
+        Rewrite(record => Earlier(record, missing));
+
+        var restarted = new HaAuthGuard(Record, time);
+        Assert.Null(restarted.Refused(restarted.Credential(Url, Token)));
+        Assert.Null(await Publish(Client(ha, restarted)));
+        Assert.False(File.Exists(Record + HaAuthGuard.CorruptSuffix));
+    }
+
+    // Brought up to date, a token refused at all in an earlier record is stopped: how many attempts
+    // it had is not certain from it.
+    [Fact]
+    public async Task A_token_refused_in_an_earlier_record_stays_stopped()
+    {
+        var ha = new Answering(time);
+        await Publish(Client(ha, new HaAuthGuard(Record, time)));
+        Rewrite(record => Earlier(record, ["lost", "granted", "stopped"]));
+
+        await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromDays(1));
+
+        Assert.Single(ha.Seen);
+    }
+
+    // The very first records kept the machine's count per address: it is still counted.
+    [Fact]
+    public async Task The_first_records_count_kept_per_address_still_stops_a_new_token()
+    {
+        var ha = new Answering(time);
+        var guard = new HaAuthGuard(Record, time);
+        foreach (var t in new[] { "a-not-a-secret", "b-not-a-secret", "c-not-a-secret" }) { await Publish(Client(ha, guard, t)); }
+        Rewrite(record =>
+        {
+            var strikes = record["strikes"]!.GetValue<int>();
+            Earlier(record, ["lost", "granted", "stopped", "refusals", "probeBy", "probeUntil", "strikes", "strikeAt"]);
+            foreach (var server in record["servers"]!.AsObject()) { server.Value!["strikes"] = strikes; }
+        });
+
+        await Publish(Client(ha, new HaAuthGuard(Record, time), "d-not-a-secret"));
+        await Hammer(Client(ha, new HaAuthGuard(Record, time), "d-not-a-secret"), TimeSpan.FromDays(1));
+
+        Assert.Equal(4, ha.Seen.Count);
+    }
+
+    // A record from a newer build is not read as this build's: what it holds is not known, so it
+    // holds every token, as a corrupt one does.
+    [Fact]
+    public async Task A_record_of_a_version_newer_than_this_build_knows_holds_every_token()
+    {
+        var ha = new Answering(time) { Status = HttpStatusCode.OK };
+        Assert.Null(await Publish(Client(ha, new HaAuthGuard(Record, time))));
+        Rewrite(record => record["version"] = HaAuthGuard.RecordVersion + 1);
+
+        Assert.Equal(HaAuthKind.RecordLost, Assert.IsType<HomeAssistantAuthException>(await Publish(Client(ha, new HaAuthGuard(Record, time)))).Kind);
+        Assert.Single(ha.Seen);
+    }
+
+    void Rewrite(Action<System.Text.Json.Nodes.JsonObject> change)
+    {
+        var record = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Record))!.AsObject();
+        change(record);
+        File.WriteAllText(Record, record.ToJsonString());
+    }
+
+    static void Earlier(System.Text.Json.Nodes.JsonObject record, string[] missing)
+    {
+        record["version"] = 1;
+        var objects = new List<System.Text.Json.Nodes.JsonObject> { record };
+        foreach (var server in record["servers"]!.AsObject())
+        {
+            objects.Add(server.Value!.AsObject());
+            objects.AddRange(server.Value!["credentials"]!.AsObject().Select(c => c.Value!.AsObject()));
+        }
+        foreach (var o in objects)
+        {
+            foreach (var name in missing) { o.Remove(name); }
+        }
     }
 
     // A record that is there but cannot be read now (another program has it open exclusively) is
