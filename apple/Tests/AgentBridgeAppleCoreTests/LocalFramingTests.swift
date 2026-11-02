@@ -1,6 +1,6 @@
+@testable import AgentBridgeAppleCore
 import Foundation
 import Testing
-@testable import AgentBridgeAppleCore
 
 @Test func frameRoundTripsUTF8() throws {
     let payload = Data(#"{"op":"hello","text":"こんにちは"}"#.utf8)
@@ -10,8 +10,8 @@ import Testing
 }
 
 @Test func rejectsOversizedFrames() throws {
-    #expect(throws: LocalFraming.FrameError.oversized(65_520)) {
-        try LocalFraming.encode(Data(repeating: 0, count: 65_520))
+    #expect(throws: LocalFraming.FrameError.oversized(65520)) {
+        try LocalFraming.encode(Data(repeating: 0, count: 65520))
     }
 }
 
