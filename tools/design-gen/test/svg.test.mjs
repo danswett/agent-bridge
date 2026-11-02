@@ -169,3 +169,10 @@ test('malformed XML is refused, never skipped over and repaired', () => {
   }
   assert.throws(() => parseXml('<svg><<g/></svg>'), /cannot read the XML at 5/);
 });
+
+test('path data must open with a moveto and say something, as SVG draws nothing otherwise', () => {
+  assert.throws(() => parsePathData('L2 2L4 4'), /must start with M, not "L"/);
+  assert.throws(() => parsePathData('z'), /must start with M/);
+  assert.throws(() => readDesignSvg(svgFile('empty', '<path d="" stroke="currentColor"/>'), 'glyph'), /needs path data/);
+  assert.equal(formatCommands(parsePathData('m2 2l2 0')), 'M2,2 L4,2');
+});

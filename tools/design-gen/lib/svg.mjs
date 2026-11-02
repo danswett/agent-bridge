@@ -85,6 +85,8 @@ export function parsePathData(d, file = 'path') {
   while (i < d.length) {
     if (/[a-zA-Z]/.test(d[i])) { cmd = d[i++]; } else if (!cmd) { throw new Error(`${file}: expected a command at ${i} in "${d}"`); } else if (cmd === 'M') { cmd = 'L'; } else if (cmd === 'm') { cmd = 'l'; }
     const C = cmd.toUpperCase();
+    // SVG draws nothing for path data that does not open with a moveto, and XAML refuses it.
+    if (out.length === 0 && C !== 'M') { throw new Error(`${file}: path data must start with M, not "${cmd}", in "${d}"`); }
     if (!(C in ARGS) || 'STQ'.includes(C)) { throw new Error(`${file}: path command ${cmd} is not in the design subset`); }
     const rel = cmd !== C;
     // Z takes no numbers, so one after it is an error, not a Z repeated without end.
@@ -127,7 +129,11 @@ function shapeCommands(node, file) {
     return Number(v);
   };
   switch (node.tag) {
-    case 'path': return parsePathData(node.attrs.d ?? '', file);
+    case 'path': {
+      const cmds = parsePathData(node.attrs.d ?? '', file);
+      if (cmds.length === 0) { throw new Error(`${file}: <path> needs path data`); }
+      return cmds;
+    }
     case 'line': return [{ c: 'M', p: [n('x1', 0), n('y1', 0)] }, { c: 'L', p: [n('x2', 0), n('y2', 0)] }];
     case 'circle': {
       const [cx, cy, r] = [n('cx', 0), n('cy', 0), n('r')];
