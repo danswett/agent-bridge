@@ -114,6 +114,16 @@ public sealed partial class SessionCardViewModel : Observable
     public string Response => (ResponseByDelegate ? session.Activity.Own?.Response : session.Activity.Response) ?? "";
     public bool HasResponse => Response.Length > 0;
     public bool ResponseTruncated => (ResponseByDelegate ? session.Activity.Own?.ResponseTruncated : session.Activity.ResponseTruncated) == true && HasResponse;
+    // The main agent had a response, but the session budget left it out to make room for its
+    // delegates (own.response dropped, own.responseTruncated kept): said so, rather than looking
+    // like no answer, and never filled with the delegate's text.
+    public bool ResponseDropped => ResponseByDelegate && !HasResponse && session.Activity.Own?.ResponseTruncated == true;
+    // The label line shows for the main agent's words, or for the note that they were left out.
+    public bool HasVoice => HasResponse || ResponseDropped;
+    // When the main agent last wrote what is shown: own.at for its own text beside a delegate's,
+    // which moves the session's updatedAt without touching the main agent's answer; else the
+    // session's age, as on its row.
+    public string ResponseAgeText => ResponseByDelegate && session.Activity.Own?.At is { } at ? Words.Age(at, ctx.Time.GetUtcNow()) : AgeText;
     public string Reasoning => (!string.IsNullOrEmpty(session.Activity.Source?.Reasoning) ? session.Activity.Own?.Reasoning : session.Activity.Reasoning ?? session.Activity.Own?.Reasoning) ?? "";
     public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
@@ -313,6 +323,7 @@ public sealed partial class SessionCardViewModel : Observable
         Raise(nameof(SinceText));
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));
+        Raise(nameof(ResponseAgeText));
         SyncDetails();
     }
 

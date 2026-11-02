@@ -38,6 +38,7 @@ public sealed partial class SessionView : UserControl
     {
         InitializeComponent();
         Loaded += (_, _) => Attach();
+        SizeChanged += (_, e) => FitComposer(e.NewSize.Height);
         Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
         // The Words states' ThemeResources are read as a state is entered: entered again, they are
         // the new theme's.
@@ -176,8 +177,14 @@ public sealed partial class SessionView : UserControl
             if (Card == card && QuestionCard.Visibility == Visibility.Visible) { QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false }); }
         });
 
-    void ShowWords()
+    // The reply box takes at most half the pane and scrolls inside that, so the conversation, and a
+    // question arriving while a long draft is held, always keep the other half.
+    void FitComposer(double height)
     {
+        if (height > 0) { Composer.MaxHeight = Math.Floor(height / 2); }
+    }
+
+    void ShowWords()    {
         var next = WordsState(Card?.StatusTone ?? StatusTone.Plain);
         if (words == next) { return; }
         if (words is null) { VisualStateManager.GoToState(this, "WordsUnset", false); }

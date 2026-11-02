@@ -377,4 +377,43 @@ public sealed class PaneLayoutTests : IAsyncLifetime
 
         Assert.Equal(("Main's own reply.", "Main agent"), TestUi.Read(() => (card.Response, card.Speaker)));
     }
+
+    [Fact]
+    public async Task A_main_agent_answer_the_budget_left_out_is_said_to_be_left_out_never_replaced_by_the_delegates()
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(1)) with
+        {
+            Activity = new Activity
+            {
+                Response = "The delegate's findings.",
+                Source = new ActivitySource { Response = "agent-1" },
+                Own = new OwnActivity { ResponseTruncated = true },
+            },
+        });
+        var busy = Card("busy");
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.ResponseDropped), "the dropped answer");
+
+        Assert.Equal(("", false, true, "Main agent"), TestUi.Read(() => (busy.Response, busy.HasResponse, busy.HasVoice, busy.Speaker)));
+    }
+
+    [Fact]
+    public async Task The_main_agents_answer_beside_a_delegates_is_dated_by_when_the_main_agent_wrote_it()
+    {
+        // A delegate's update moved the session's time; the main agent wrote five hours ago.
+        var now = DateTimeOffset.UtcNow;
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: now) with
+        {
+            Activity = new Activity
+            {
+                Response = "The delegate's findings.",
+                Source = new ActivitySource { Response = "agent-1" },
+                Own = new OwnActivity { Response = "The main agent's answer.", At = now.AddHours(-5) },
+            },
+        });
+        var busy = Card("busy");
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Response) == "The main agent's answer.", "the main agent's answer");
+        ui.Post(busy.RefreshTimes);
+
+        Assert.Equal(("now", "5h"), TestUi.Read(() => (busy.AgeText, busy.ResponseAgeText)));
+    }
 }

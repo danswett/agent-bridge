@@ -207,9 +207,9 @@
                     </Border>
 
                     <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words; its reasoning behind a disclosure. -->
-                    <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasResponse), Mode=OneWay}">
+                    <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasVoice), Mode=OneWay}">
                         <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}">
-                            <Run Text="{x:Bind Card.Speaker, Mode=OneWay}" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.AgeText, Mode=OneWay}" />
+                            <Run Text="{x:Bind Card.Speaker, Mode=OneWay}" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.ResponseAgeText, Mode=OneWay}" />
                         </TextBlock>
                         <TextBlock
                             Style="{StaticResource AbTypeMeta}"
@@ -217,6 +217,13 @@
                             TextWrapping="Wrap"
                             Text="Earlier text not shown: the response was longer than the machine sends."
                             Visibility="{x:Bind local:Ui.Show(Card.ResponseTruncated), Mode=OneWay}" />
+                        <TextBlock
+                            Style="{StaticResource AbTypeMeta}"
+                            Foreground="{ThemeResource AbText2}"
+                            TextWrapping="Wrap"
+                            AutomationProperties.AutomationId="ResponseDropped"
+                            Text="The main agent's latest response was left out: too long to send with its delegates."
+                            Visibility="{x:Bind local:Ui.Show(Card.ResponseDropped), Mode=OneWay}" />
                         <local:MarkdownView
                             x:Name="ResponseView"
                             Reading="True"
@@ -262,133 +269,139 @@
 
         <!-- The reply box (§6.5): a card with a 2 px Bridge bottom edge, Attach, and Send. Replies only
              ever go to the main agent. -->
-        <StackPanel
+        <!-- Never more than half the pane (FitComposer): at 360×600 a long draft, attachments and
+             the notes under them otherwise took every line from the conversation and its question. -->
+        <ScrollViewer
+            x:Name="Composer"
             Grid.Row="3"
-            Padding="24,0,24,20"
-            Spacing="6"
-            MaxWidth="{StaticResource AbLayoutReadingMax}"
-            HorizontalAlignment="Left"
-            Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}"
-            AutomationProperties.AutomationId="ReplyBox">
-            <TextBlock
-                Style="{StaticResource AbTypeMeta}"
-                TextWrapping="Wrap"
-                Foreground="{ThemeResource AbNeedsText}"
-                Text="{x:Bind Card.Reply.HeldText, Mode=OneWay}"
-                Visibility="{x:Bind local:Ui.Some(Card.Reply.HeldText), Mode=OneWay, FallbackValue=Collapsed}" />
-            <Border
-                Background="{ThemeResource AbCard}"
-                BorderBrush="{ThemeResource AbBridge}"
-                BorderThickness="0,0,0,2"
-                CornerRadius="{StaticResource AbRadiusCard}"
-                Padding="4,4,8,8">
-                <Border.Resources>
-                    <!-- The card is the field: the box inside has no fill or edge of its own. -->
-                    <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
-                    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
-                </Border.Resources>
-                <StackPanel Spacing="4">
-                    <TextBox
-                        x:Name="ReplyBox"
-                        AcceptsReturn="True"
-                        TextWrapping="Wrap"
-                        MinHeight="40"
-                        MaxHeight="240"
-                        PlaceholderText="Message the main agent"
-                        AutomationProperties.AutomationId="ReplyText"
-                        AutomationProperties.Name="Message the main agent"
-                        IsEnabled="{x:Bind local:Ui.Not(Card.Reply.Held), Mode=OneWay, FallbackValue=False}"
-                        Text="{x:Bind Card.Reply.Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                        GotFocus="OnEditing"
-                        LostFocus="OnNotEditing"
-                        Paste="OnPaste"
-                        PreviewKeyDown="OnReplyKey" />
-                    <!-- Many files scroll here, so the box and Send stay in a short window. -->
-                    <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False" Margin="8,0,0,0">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="core:ReplyAttachment">
-                                    <!-- The name gives way, cut short with the whole of it in its tooltip, so Remove
-                                         stays in the box at the narrowest window. -->
-                                    <Grid ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
-                                        <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
-                                        <Button Grid.Column="2" Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Card.Reply.BytesText, Mode=OneWay}" />
-                        <Button
-                            Grid.Column="1"
-                            Content="Send again"
-                            MinHeight="32"
-                            Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowResend), Mode=OneWay, FallbackValue=Collapsed}"
-                            Click="OnResendReply" />
-                        <Button
-                            Grid.Column="2"
-                            Style="{StaticResource AbIconButton}"
-                            AutomationProperties.AutomationId="Attach"
-                            AutomationProperties.Name="Attach files"
-                            ToolTipService.ToolTip="Attach files"
-                            Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowAttach), Mode=OneWay, FallbackValue=Collapsed}"
-                            IsEnabled="{x:Bind Card.Reply.CanAttach, Mode=OneWay, FallbackValue=False}"
-                            Click="OnAttach">
-                            <ContentControl Style="{StaticResource AbIconAttach}" Width="16" Height="16" />
-                        </Button>
-                        <Button
-                            Grid.Column="3"
-                            Width="32"
-                            Height="32"
-                            Padding="0"
-                            Style="{StaticResource AccentButtonStyle}"
-                            AutomationProperties.AutomationId="SendReply"
-                            AutomationProperties.Name="Send"
-                            ToolTipService.ToolTip="Send (Ctrl+Enter)"
-                            IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
-                            Click="OnSendReply">
-                            <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" />
-                        </Button>
-                    </Grid>
-                </StackPanel>
-            </Border>
-            <TextBlock
-                Style="{StaticResource AbTypeMeta}"
-                Foreground="{ThemeResource AbText2}"
-                TextWrapping="Wrap"
-                Text="Line breaks go to the session as spaces: it takes a reply as one line."
-                Visibility="{x:Bind local:Ui.Show(Card.Reply.LineBreakHint), Mode=OneWay, FallbackValue=Collapsed}" />
-            <TextBlock
-                Style="{StaticResource AbTypeMeta}"
-                TextWrapping="Wrap"
-                Foreground="{ThemeResource AbDangerText}"
-                Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
-                Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
-            <TextBlock
-                Style="{StaticResource AbTypeMeta}"
-                TextWrapping="Wrap"
-                IsTextSelectionEnabled="True"
-                AutomationProperties.AutomationId="ReplyStatus"
-                Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
-                Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
-                Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
-        </StackPanel>
+            VerticalScrollBarVisibility="Auto"
+            Visibility="{x:Bind local:Ui.Some(Card.Reply), Mode=OneWay}">
+            <StackPanel
+                Padding="24,0,24,20"
+                Spacing="6"
+                MaxWidth="{StaticResource AbLayoutReadingMax}"
+                HorizontalAlignment="Left"
+                AutomationProperties.AutomationId="ReplyBox">
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource AbNeedsText}"
+                    Text="{x:Bind Card.Reply.HeldText, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(Card.Reply.HeldText), Mode=OneWay, FallbackValue=Collapsed}" />
+                <Border
+                    Background="{ThemeResource AbCard}"
+                    BorderBrush="{ThemeResource AbBridge}"
+                    BorderThickness="0,0,0,2"
+                    CornerRadius="{StaticResource AbRadiusCard}"
+                    Padding="4,4,8,8">
+                    <Border.Resources>
+                        <!-- The card is the field: the box inside has no fill or edge of its own. -->
+                        <SolidColorBrush x:Key="TextControlBackground" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrush" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="Transparent" />
+                    </Border.Resources>
+                    <StackPanel Spacing="4">
+                        <TextBox
+                            x:Name="ReplyBox"
+                            AcceptsReturn="True"
+                            TextWrapping="Wrap"
+                            MinHeight="40"
+                            MaxHeight="240"
+                            PlaceholderText="Message the main agent"
+                            AutomationProperties.AutomationId="ReplyText"
+                            AutomationProperties.Name="Message the main agent"
+                            IsEnabled="{x:Bind local:Ui.Not(Card.Reply.Held), Mode=OneWay, FallbackValue=False}"
+                            Text="{x:Bind Card.Reply.Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            GotFocus="OnEditing"
+                            LostFocus="OnNotEditing"
+                            Paste="OnPaste"
+                            PreviewKeyDown="OnReplyKey" />
+                        <!-- Many files scroll here, so the box and Send stay in a short window. -->
+                        <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{x:Bind Card.Reply.Attachments, Mode=OneWay}" IsTabStop="False" Margin="8,0,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="core:ReplyAttachment">
+                                        <!-- The name gives way, cut short with the whole of it in its tooltip, so Remove
+                                             stays in the box at the narrowest window. -->
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock VerticalAlignment="Center" Style="{StaticResource AbTypeCode}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{x:Bind Name}" Text="{x:Bind Name}" />
+                                            <TextBlock Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind SizeText}" />
+                                            <Button Grid.Column="2" Content="Remove" MinHeight="32" Padding="8,2" Click="OnRemoveAttachment" Tag="{x:Bind}" AutomationProperties.Name="{x:Bind local:SessionView.RemoveName(Name)}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Margin="8,0,0,0" VerticalAlignment="Center" Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}" Text="{x:Bind Card.Reply.BytesText, Mode=OneWay}" />
+                            <Button
+                                Grid.Column="1"
+                                Content="Send again"
+                                MinHeight="32"
+                                Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowResend), Mode=OneWay, FallbackValue=Collapsed}"
+                                Click="OnResendReply" />
+                            <Button
+                                Grid.Column="2"
+                                Style="{StaticResource AbIconButton}"
+                                AutomationProperties.AutomationId="Attach"
+                                AutomationProperties.Name="Attach files"
+                                ToolTipService.ToolTip="Attach files"
+                                Visibility="{x:Bind local:Ui.Show(Card.Reply.ShowAttach), Mode=OneWay, FallbackValue=Collapsed}"
+                                IsEnabled="{x:Bind Card.Reply.CanAttach, Mode=OneWay, FallbackValue=False}"
+                                Click="OnAttach">
+                                <ContentControl Style="{StaticResource AbIconAttach}" Width="16" Height="16" />
+                            </Button>
+                            <Button
+                                Grid.Column="3"
+                                Width="32"
+                                Height="32"
+                                Padding="0"
+                                Style="{StaticResource AccentButtonStyle}"
+                                AutomationProperties.AutomationId="SendReply"
+                                AutomationProperties.Name="Send"
+                                ToolTipService.ToolTip="Send (Ctrl+Enter)"
+                                IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
+                                Click="OnSendReply">
+                                <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" />
+                            </Button>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    Foreground="{ThemeResource AbText2}"
+                    TextWrapping="Wrap"
+                    Text="Line breaks go to the session as spaces: it takes a reply as one line."
+                    Visibility="{x:Bind local:Ui.Show(Card.Reply.LineBreakHint), Mode=OneWay, FallbackValue=Collapsed}" />
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource AbDangerText}"
+                    Text="{x:Bind Card.Reply.Error, Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Show(Card.Reply.HasError), Mode=OneWay, FallbackValue=Collapsed}" />
+                <TextBlock
+                    Style="{StaticResource AbTypeMeta}"
+                    TextWrapping="Wrap"
+                    IsTextSelectionEnabled="True"
+                    AutomationProperties.AutomationId="ReplyStatus"
+                    Text="{x:Bind Card.Reply.StatusText, Mode=OneWay}"
+                    Foreground="{x:Bind local:Ui.ToneBrush(Card.Reply.StatusTone), Mode=OneWay}"
+                    Visibility="{x:Bind local:Ui.Some(Card.Reply.StatusText), Mode=OneWay, FallbackValue=Collapsed}" />
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </UserControl>
