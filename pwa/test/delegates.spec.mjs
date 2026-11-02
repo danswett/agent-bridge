@@ -337,8 +337,9 @@ test('in the inspector a delegate\'s name, parent and time wrap as words, and no
   await card(page).locator('.delegates-finished > summary').click();
   const review = delegate(page, 'demo-agent-review');
   await expect(review.locator('.delegate-under')).toBeVisible();
-  // "Review the witness change" fits the inspector's line: it isn't squeezed to a word a line.
-  expect((await review.locator('.delegate-name').boundingBox()).height).toBeLessThanOrEqual(24);
+  // "Review the witness change" wraps at most once, whatever the system face: squeezed beside
+  // its parent and time it took a line a word (four lines of the head's 20 px).
+  expect((await review.locator('.delegate-name').boundingBox()).height).toBeLessThanOrEqual(44);
   const starts = await card(page).locator('.inspector .delegate-words').evaluateAll((els) => els.flatMap((w) => {
     const left = w.getBoundingClientRect().left;
     return [...w.querySelectorAll('.delegate-under, .delegate-time:not(:empty)')].map((sep) => sep.getClientRects()[0].left - left);
