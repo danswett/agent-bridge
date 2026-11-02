@@ -162,12 +162,9 @@ public sealed partial class MainWindow : Window
 
     internal void SearchFor(string text) => SearchBox.ItemsSource = ViewModel.Search(text);
 
-    void OnSearchChosen(AutoSuggestBox sender, AutoSuggestBoxSuggestionChosenEventArgs args)
-    {
-        if (args.SelectedItem is SearchHit hit) { OpenHit(hit); }
-    }
-
-    // Enter opens the suggestion picked, or the first one found.
+    // Enter, a click or a tap opens the suggestion picked, or the first one found. Not on
+    // SuggestionChosen: that comes as the arrow keys move through the suggestions, and opening
+    // then would leave the keyboard no way past the first.
     void OnSearchSubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
         var hit = args.ChosenSuggestion as SearchHit ?? ViewModel.Search(args.QueryText).FirstOrDefault();
@@ -189,7 +186,8 @@ public sealed partial class MainWindow : Window
     void KeepSmallest()
     {
         if (AppWindow.Presenter is not OverlappedPresenter p) { return; }
-        var (w, h) = WindowPlacement.Smallest(Scale);
+        var area = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        var (w, h) = area is null ? WindowPlacement.Smallest(Scale) : WindowPlacement.Smallest(new Display(new PixelRect(area.WorkArea.X, area.WorkArea.Y, area.WorkArea.Width, area.WorkArea.Height), Scale));
         p.PreferredMinimumWidth = w;
         p.PreferredMinimumHeight = h;
     }
@@ -240,7 +238,8 @@ public sealed partial class MainWindow : Window
     internal void SavePlacement()
     {
         if (placementFile is null || normal is not { } r || AppWindow.Presenter is not OverlappedPresenter p || p.State == OverlappedPresenterState.Minimized) { return; }
-        try { new WindowPlacement(r.X, r.Y, r.Width, r.Height, p.State == OverlappedPresenterState.Maximized).Save(placementFile); }
+        // A window started hidden in the tray keeps the maximised state it has yet to be shown in.
+        try { new WindowPlacement(r.X, r.Y, r.Width, r.Height, maximizeWhenShown || p.State == OverlappedPresenterState.Maximized).Save(placementFile); }
         // A nicety: the window opens at the first start's place instead.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { AppLog.Write($"window placement not kept: {e.Message}"); }
     }

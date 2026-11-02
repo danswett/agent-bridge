@@ -49,6 +49,15 @@ public sealed record WindowPlacement(int X, int Y, int Width, int Height, bool M
     public static (int Width, int Height) Smallest(double scale) =>
         ((int)Math.Ceiling(DesignLayout.MinWidth * scale), (int)Math.Ceiling(DesignLayout.MinHeight * scale));
 
+    // The smallest window that fits a display's work area: a 1920×1040 work area at 200 % is 520
+    // effective pixels high, under the 600 a window may otherwise shrink to, and a minimum taller
+    // than the screen would push the window off its bottom edge.
+    public static (int Width, int Height) Smallest(Display d)
+    {
+        var (w, h) = Smallest(d.Scale);
+        return (d.WorkArea.Width > 0 ? Math.Min(w, d.WorkArea.Width) : w, d.WorkArea.Height > 0 ? Math.Min(h, d.WorkArea.Height) : h);
+    }
+
     // Where the window opens: where it was, if enough of its title bar is on a display; otherwise
     // centred on the primary display at the first start's size. Never larger than the display it
     // opens on, nor smaller than the smallest window.
@@ -70,7 +79,7 @@ public sealed record WindowPlacement(int X, int Y, int Width, int Height, bool M
 
     static WindowPlacement Fit(WindowPlacement p, Display d)
     {
-        var (minW, minH) = Smallest(d.Scale);
+        var (minW, minH) = Smallest(d);
         var a = d.WorkArea;
         var w = Math.Max(minW, Math.Min(p.Width, a.Width));
         var h = Math.Max(minH, Math.Min(p.Height, a.Height));
