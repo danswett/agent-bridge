@@ -265,6 +265,86 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(v).toBeVisible();
   });
 
+  // The demo machine's update to the delegating session: a delegate finished, or no longer listed.
+  const update = (page, agent, how) => page.evaluate(({ id, agent, how, at }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id);
+    const subagents = how === 'gone' ? s.subagents.filter((a) => a.id !== agent)
+      : s.subagents.map((a) => (a.id === agent ? { ...a, status: 'ended', outcome: 'done', endedAt: at } : a));
+    d.upsert({ ...s, updatedAt: at, subagents });
+  }, { id: DELEGATING, agent, how, at: new Date(Date.now() + 1000).toISOString() });
+  const step = (page) => page.evaluate(() => history.state?.delegate ?? null);
+
+  test('a delegate that finishes after Back is in view again on Forward, with the finished fold it moved into opened', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    const detail = delegateRow(page).locator('.delegate-detail');
+    await page.goBack();
+    await expect(detail).not.toHaveAttribute('open', '');
+    await update(page, 'demo-agent-suite', 'finished');
+    await expect(v.locator('.delegates-finished > summary')).toHaveText('3 finished');
+    await expect(v.locator('.delegates-finished')).not.toHaveAttribute('open', '');
+    await page.goForward();
+    await expect(detail).toHaveAttribute('open', '');
+    await expect(v.locator('.delegates-finished')).toHaveAttribute('open', '');
+    await expect(delegateRow(page).locator('.delegate-body')).toBeVisible();
+  });
+
+  test('a delegate its machine stops listing takes its step with it, so Back from its session is the list', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    await update(page, 'demo-agent-suite', 'gone');
+    await expect(delegateRow(page)).toHaveCount(0);
+    await expect.poll(() => step(page), { message: 'the gone delegate\'s step is taken back' }).toBeNull();
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('with two delegates open, closing the later one by hand leaves the first open, and Back from there closes it', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    const first = delegateRow(page).locator('.delegate-detail');
+    const later = v.locator('.delegate[data-id="demo-agent-witness"]');
+    await later.locator('.delegate-summary').click();
+    await expect.poll(() => step(page)).toBe('demo-agent-witness');
+    await later.locator('.delegate-summary').click();
+    await expect(later.locator('.delegate-detail')).not.toHaveAttribute('open', '');
+    await expect.poll(() => step(page), { message: 'the step is the first delegate\'s now' }).toBe('demo-agent-suite');
+    await expect(first).toHaveAttribute('open', '');
+    await page.goBack();
+    await expect(first).not.toHaveAttribute('open', '');
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('a delegate open as the window narrows to a phone\'s is a step again, whether it was opened on a phone or wider', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    const detail = delegateRow(page).locator('.delegate-detail');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(() => step(page)).toBeNull();
+    await expect(detail).toHaveAttribute('open', '');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => step(page), { message: 'opened on a phone, widened and narrowed' }).toBe('demo-agent-suite');
+    await page.goBack();
+    await expect(detail).not.toHaveAttribute('open', '');
+    await expect(v).toBeVisible();
+    // Opened wider, where a delegate is no step of its own, then narrowed.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await delegateRow(page).locator('.delegate-summary').click();
+    await expect(detail).toHaveAttribute('open', '');
+    await page.waitForTimeout(200);
+    expect(await step(page)).toBeNull();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => step(page), { message: 'opened wider and narrowed' }).toBe('demo-agent-suite');
+    await page.goBack();
+    await expect(detail).not.toHaveAttribute('open', '');
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
   test('installed on an iPhone, a swipe in from the left edge goes from a delegate to its session, then to the list', async ({ page }) => {
     const v = await openDelegate(page, AS.iosInstalled);
     // A swipe as iOS delivers it: a touch from the edge, moved most of the way across.

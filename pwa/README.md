@@ -437,7 +437,9 @@ running another checkout's tests at the same time.
   reads: ⌘ in the hints on a Mac and Ctrl on Windows; with an iPhone's or an iPad's insets reported,
   the app bar, bottom navigation or rail and reply box clear of them only when installed on iOS or
   iPadOS; the system's Back (Android's, and iOS's edge swipe) from a delegate to its session, to the
-  list, then out of the app; and a platform nobody recognises drawn and behaving as Windows.
+  list, then out of the app, with the delegate's step kept in line with what shows (two open, one
+  closed by hand, one its machine stops listing, one that finished before Forward, a resize to a
+  phone's width and back); and a platform nobody recognises drawn and behaving as Windows.
   `test/unit/platform.test.mjs` holds the detection table.
 * `test/machines.spec.mjs`, in demo mode with three machines (`?machines=3`): All machines
   first and chosen at first, every machine's sessions in one list (each machine's newest first
