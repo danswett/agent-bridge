@@ -111,6 +111,7 @@ public class SoakTests
         public readonly List<string> Calls = [];
         public readonly List<JsonNode> Launches = [];
         public string? Request;
+        public HashSet<string> OffResumeList = [];
         public DateTimeOffset Now = DateTimeOffset.UnixEpoch;
         int polls;
         int unseen;
@@ -153,6 +154,12 @@ public class SoakTests
             Calls.Add($"{domain}.{service} {id}{(data["option"] is { } o ? " " + o : "")}");
             if (id == "button.agent_bridge_rehearsal_m_new_session")
             {
+                if ((string?)Launches[^1]["settings"]!["resume"] is { } resume && OffResumeList.Contains(resume))
+                {
+                    States["sensor.agent_bridge_rehearsal_m_new_session_result"] = State("sensor.agent_bridge_rehearsal_m_new_session_result", "refused",
+                        new { recent = new[] { new { request = Request, outcome = "refused", note = $"No resumable session '{resume}' on this machine - it is not on its resume list" } } });
+                    return Task.CompletedTask;
+                }
                 States["sensor.agent_bridge_rehearsal_m_new_session_result"] = State("sensor.agent_bridge_rehearsal_m_new_session_result", "started",
                     new { recent = new[] { new { request = Request, outcome = "started", session = "14867bc704dd45aa" } } });
                 launched = true;
@@ -240,6 +247,34 @@ public class SoakTests
             var episodes = SoakDriver.Load(Path.Combine(dir, "state")).Episodes;
             Assert.Equal([3, 12], episodes.Select(e => e.Index));
             Assert.Equal("0894c91f-f3f5-4546-8684-a8f9e6ad58e7", episodes[1].ResumedFrom);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task A_resume_whose_session_has_left_the_resume_list_takes_up_the_next_newest_of_that_agent()
+    {
+        var dir = Directory.CreateTempSubdirectory("soak-test").FullName;
+        try
+        {
+            // The newest Copilot session's worktree was reclaimed, so agent-ha-bridge no longer offers it.
+            Directory.CreateDirectory(Path.Combine(dir, "state"));
+            var earlier = new SoakState
+            {
+                Began = DateTimeOffset.UnixEpoch,
+                Episodes =
+                [
+                    new SoakRecord { Index = 3, Scenario = "copilot-questions", Agent = "Copilot", Session = "0894c91f-f3f5-4546-8684-a8f9e6ad58e7", Ended = DateTimeOffset.UnixEpoch },
+                    new SoakRecord { Index = 6, Scenario = "copilot-background", Agent = "Copilot", Session = "6acbee71-954a-4938-a7e9-4c6d3c611dc8", Ended = DateTimeOffset.UnixEpoch },
+                ],
+            };
+            File.WriteAllText(Path.Combine(dir, "state", "soak.json"), JsonSerializer.Serialize(earlier, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            var fake = new FakeHa { Now = DateTimeOffset.UnixEpoch.AddHours(10), OffResumeList = ["6acbee71-954a-4938-a7e9-4c6d3c611dc8"] };
+            await Driver(fake, Options("copilot-resume", count: 13), dir).RunAsync(CancellationToken.None);
+            Assert.Equal(["6acbee71-954a-4938-a7e9-4c6d3c611dc8", "0894c91f-f3f5-4546-8684-a8f9e6ad58e7"], fake.Launches.Select(l => (string?)l["settings"]!["resume"]));
+            var record = SoakDriver.Load(Path.Combine(dir, "state")).Episodes[^1];
+            Assert.Equal("0894c91f-f3f5-4546-8684-a8f9e6ad58e7", record.ResumedFrom);
+            Assert.Empty(record.Problems);
         }
         finally { Directory.Delete(dir, true); }
     }

@@ -310,7 +310,7 @@ from an agent session, and the #67 guard does not stand in its way.
 * **`-Prepare`** starts VM-W's Mosquitto (agent-ha-bridge publishes through Home Assistant's
   MQTT; a container stopped by hand stayed stopped across a restart), keeps VM-M's tunnel to
   VM-W's Home Assistant up as a logon task, checks agent-ha-bridge is beating and pointed at the
-  tunnel, and raises its `newSession.worktreeLimit` to 30 and lowers `worktreeIdleHours` to 1
+  tunnel, and raises its `newSession.worktreeLimit` to 30 and lowers `worktreeIdleHours` to 3
   (every launch into the isolated workspace makes a worktree, and at the defaults a launch every
   22 minutes reached the cap of 10 in under four hours, so launches were refused; the old config
   is kept as `config.json.pre-soak`, and the daemon is restarted to read it). It installs the .NET SDK for the VM's user, and builds the shadow host from `-HostRef` and
@@ -331,7 +331,8 @@ are the sub-agent scenarios: Copilot with a nested sub-agent and a background ag
 two `Task` sub-agents, one nested, and a background Bash, and Codex with a `spawn_agent` thread.
 Then a block of twelve repeats: for each agent a question-heavy, a background (shells and
 sub-agents), and a compaction session, Codex with approvals asked on the card, and a resume of
-each agent's last session. Each is launched by the launch request agent-ha-bridge's MCP tool
+each agent's newest session still on agent-ha-bridge's resume list (it drops one whose worktree
+it has reclaimed). Each is launched by the launch request agent-ha-bridge's MCP tool
 publishes (agent, workspace, a small model, permissions) and the Launch button, then prompted by
 the reply card's publish, not the reply box and Send: after a form was answered with Send,
 agent-ha-bridge 1.33.33 armed that press as a reply too, and the prompt typed next was lost.

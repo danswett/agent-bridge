@@ -14,7 +14,7 @@
     -Prepare   VM-W: Mosquitto running (the disposable instance's MQTT, which agent-ha-bridge
                publishes through). VM-M: the tunnel to VM-W's Home Assistant as a logon task of
                `rehearsal`; agent-ha-bridge checked (installed, daemon beating, pointed at
-               127.0.0.1, with newSession.worktreeLimit 30 and worktreeIdleHours 1 so the
+               127.0.0.1, with newSession.worktreeLimit 30 and worktreeIdleHours 3 so the
                soak's launches are not refused at the worktree cap; the old config is kept as
                config.json.pre-soak); the .NET SDK for `rehearsal`; the shadow host built from -HostRef and
                installed (build/shadow-week.ps1 -Install, or -Update once installed); the driver
@@ -194,7 +194,7 @@ $slug = (($env:COMPUTERNAME.ToLowerInvariant() -replace '[^a-z0-9]+', '_').Trim(
 # protected by every other cleanup check; only the age and the cap are loosened, on VM-M only.
 $n = $config.newSession
 $loosened = $false
-foreach ($kv in @(@('worktreeLimit', 30), @('worktreeIdleHours', 1))) {
+foreach ($kv in @(@('worktreeLimit', 30), @('worktreeIdleHours', 3))) {
     $cur = $n.PSObject.Properties[$kv[0]]
     if ($null -eq $cur) { $n | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1]; $loosened = $true }
     elseif ($cur.Value -ne $kv[1]) { $cur.Value = $kv[1]; $loosened = $true }

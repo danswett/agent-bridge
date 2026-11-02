@@ -74,6 +74,8 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
     string StatePath => Path.Combine(stateDir, "soak.json");
     string LogPath => Path.Combine(stateDir, "soak.log");
     string M(string domain, string key) => $"{domain}.agent_bridge_{options.Slug}_{key}";
+    // Why the last launch was refused, as agent-ha-bridge put it.
+    string? lastRefusal;
 
     public static SoakState Load(string dir)
     {
@@ -191,17 +193,28 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
     {
         var s = episode.Scenario;
         string? resume = null;
+        IReadOnlyList<string?> candidates = [null];
         if (s.Resume)
         {
-            var from = state.Episodes.LastOrDefault(e => e.Agent == s.Agent && e.Index < record.Index && e.Session is not null && e.Ended is not null && e.Problems.Count == 0);
-            if (from is null) { record.Problems.Add("nothing of this agent to resume yet"); return; }
-            resume = from.Session;
-            record.ResumedFrom = from.Session;
+            // Newest first. agent-ha-bridge offers a session only while its folder is there, and
+            // reclaims a finished worktree after newSession.worktreeIdleHours, so the newest one
+            // can already be off its list; an older one still on it is taken instead.
+            candidates = [.. state.Episodes
+                .Where(e => e.Agent == s.Agent && e.Index < record.Index && e.Session is not null && e.Ended is not null && e.Problems.Count == 0)
+                .OrderByDescending(e => e.Index).Select(e => e.Session).Distinct(StringComparer.Ordinal).Take(4)];
+            if (candidates.Count == 0) { record.Problems.Add("nothing of this agent to resume yet"); return; }
         }
         var turns = s.Turns;
         var first = SoakScript.Prompt(turns[0], episode);
-        var started = await LaunchAsync(s, first, resume, ct);
+        string? started = null;
+        foreach (var candidate in candidates)
+        {
+            resume = candidate;
+            started = await LaunchAsync(s, first, resume, ct);
+            if (started is not null || resume is null || lastRefusal?.Contains("not on its resume list", StringComparison.Ordinal) != true) { break; }
+        }
         if (started is null) { record.Problems.Add("the launch did not start"); return; }
+        record.ResumedFrom = resume;
         record.Node = started;
         record.Session = FullId(started) ?? resume;
         Log($"episode {record.Index} {s.Name}: started {s.Agent} {started}{(resume is null ? "" : " resuming " + resume)}");
@@ -229,6 +242,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
 
     async Task<string?> LaunchAsync(SoakScenario s, string prompt, string? resume, CancellationToken ct)
     {
+        lastRefusal = null;
         var settings = new JsonObject
         {
             ["agent"] = s.Agent,
@@ -263,7 +277,7 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
                 {
                     if (o.Outcome == "started" && o.Session is { Length: > 0 } sid) { return NodeOf(sid); }
                     Log($"launch {o.Outcome}: {o.Note}");
-                    if (o.Outcome is "refused" or "failed") { return null; }
+                    if (o.Outcome is "refused" or "failed") { lastRefusal = o.Note; return null; }
                     busy = o.Outcome == "busy";
                     if (!busy) { break; }
                 }
