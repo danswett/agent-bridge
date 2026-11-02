@@ -18,8 +18,6 @@ public sealed partial class SessionsPage : UserControl
     MainViewModel? viewModel;
     // Set while the list is being told what is selected, so its event is not taken for a choice.
     bool syncing;
-    // An arrow key, Home, End or Page Up/Down moving through the rows, until the list has handled it.
-    bool navigating;
 
     public SessionsPage()
     {
@@ -134,8 +132,8 @@ public sealed partial class SessionsPage : UserControl
         var alt = e.KeyStatus.IsMenuKeyDown || Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (!alt && e.Key is VirtualKey.Up or VirtualKey.Down or VirtualKey.Home or VirtualKey.End or VirtualKey.PageUp or VirtualKey.PageDown)
         {
-            navigating = true;
-            DispatcherQueue.TryEnqueue(() => navigating = false);
+            // After the list has moved focus for the key, in its own handler.
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FollowFocus);
             return;
         }
         if (e.Key is not (VirtualKey.Up or VirtualKey.Down)) { return; }
@@ -147,16 +145,14 @@ public sealed partial class SessionsPage : UserControl
     // The list's own selection-follows-focus is off: with it, any keyboard focus on a row chose
     // it, so a row given focus back after a move, or a focused row drawn again as the list
     // reordered, took the open session from one opened by a toast, search or Needs you. Moving
-    // through the rows with the keys still opens each row reached, here.
-    // GettingFocus, raised as the key moves focus; GotFocus comes later, after the flag is reset.
-    // Chosen once the focus change is done.
-    void OnListFocus(UIElement sender, GettingFocusEventArgs e)
+    // through the rows with the keys still opens each row reached: once the list has moved focus
+    // for the key, the row with focus is chosen.
+    internal void FollowFocus()
     {
-        if (!navigating || viewModel is null || e.NewFocusedElement is not ListViewItem { Content: SessionCardViewModel card }) { return; }
-        navigating = false;
-        DispatcherQueue.TryEnqueue(() => { if (viewModel.Sessions.Contains(card)) { viewModel.Selected = card; } });
+        if (viewModel is null || XamlRoot is null) { return; }
+        if (FocusManager.GetFocusedElement(XamlRoot) is not ListViewItem { Content: SessionCardViewModel card } item || ItemsControl.ItemsControlFromItemContainer(item) != List) { return; }
+        if (viewModel.Selected != card) { viewModel.Selected = card; }
     }
-
     // Shift+F10 or the menu key on a row: its menu, as right-click opens it.
     void OnListMenu(UIElement sender, ContextRequestedEventArgs e)
     {
