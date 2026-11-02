@@ -60,6 +60,9 @@ test('a question that opens with a fenced example shows the question after it, n
   assert.equal(questionLine({ kind: 'form', message: '```\nport: 8080\n```\n\nWhich option?' }), 'Which option?');
   assert.equal(questionLine({ kind: 'form', message: '~~~\na\n```\nb\n~~~\nAfter the tildes' }), 'After the tildes');
   assert.equal(questionLine({ kind: 'form', message: '```\rport: 8080\r```\r\rWhich option?' }), 'Which option?');
+  // A fence in a quote or a list item is skipped too.
+  assert.equal(questionLine({ kind: 'form', message: '> ```\n> port: 8080\n> ```\n\nWhich option?' }), 'Which option?');
+  assert.equal(questionLine({ kind: 'form', message: '- ```\n  port: 8080\n  ```\n\nWhich option?' }), 'Which option?');
 });
 
 test('an approval whose prompt a fence or a link could make draw differently from what it allows opens its session', () => {

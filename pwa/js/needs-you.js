@@ -29,6 +29,7 @@ export function plainLine(text, max = LINE_MAX) {
 }
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const CONTAINER = /^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+/;
 // Whether line closes a fence opened by `open` (its first match): the same character, at least as
 // many, and nothing after them.
 const closes = (open, line) => new RegExp(`^ {0,3}${open[0] === '`' ? '`' : '~'}{${open.length},}\\s*$`).test(line);
@@ -39,14 +40,17 @@ export function questionLine(q) {
   let open = null;
   let code = null;
   // Any line ending the renderer breaks on: a bare CR too.
-  for (const l of (q?.message ?? '').split(/\r\n?|\n/)) {
+  for (const raw of (q?.message ?? '').split(/\r\n?|\n/)) {
+    // A fence in a quote or a list item is a fence too: read past their markers.
+    const l = raw.replace(CONTAINER, '');
     if (open) {
       if (closes(open, l)) { open = null; } else if (l.trim()) { code ??= l; }
       continue;
     }
     const m = FENCE.exec(l);
     if (m) { open = m[1]; continue; }
-    if (l.trim()) { return plainLine(l); }
+    const line = plainLine(raw);
+    if (line) { return line; }
   }
   return plainLine(code ?? '');
 }
