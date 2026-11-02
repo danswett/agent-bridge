@@ -1,8 +1,9 @@
 // One session's card: the old dashboard's session card, rebuilt for the phone. Its status is a
 // glyph and words from docs/design/ui.md §2.2 (js/status.js): no coloured edge or glow, which
 // the glyphs replaced (#178). An agent driving it adds the violet diamond to the glyph and says
-// so in words. A header stays visible when the card is folded, and the response, reasoning,
-// history and question are below it, a box to reply to the session, and End session at the foot.
+// so in words. A header stays visible when the card is folded, and the main agent's own response
+// and reasoning (attribution.js), its delegates, history and question are below it, a box to
+// reply to the session, and End session at the foot.
 import { h, icon } from './dom.js';
 import { glyph, setGlyph } from './glyph.js';
 import { ago, duration, localTime } from './time.js';
@@ -12,6 +13,8 @@ import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.j
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
+import { DelegatesBlock } from './delegates-view.js';
+import { mainVoice } from '../attribution.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -42,8 +45,8 @@ export class SessionCard {
   // questions, sends replies and ends sessions, and whether the card's machine takes each at
   // all. labelled: whether the card names its machine, as it does with every machine shown.
   // onFold(folded): told whenever the card is folded or opened, by its title or from outside.
-  constructor(session, { hostId = null, folds, fetchDetail, machineName, labelled = false, answering = () => null, onFold = () => {} }) {
-    Object.assign(this, { hostId, folds, fetchDetail, machineName, labelled, answering, onFold });
+  constructor(session, { hostId = null, folds, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onFold = () => {} }) {
+    Object.assign(this, { hostId, folds, fetchDetail, fetchDelegate, machineName, labelled, answering, onFold });
     const n = ++seq;
     this.ids = { title: `s${n}-title`, body: `s${n}-body` };
     this.#build();
@@ -82,10 +85,14 @@ export class SessionCard {
       e.toolGlyph, e.toolName, e.toolSummary);
 
     e.question = h('div', { class: 'question-slot' });
+    // The main agent's words only (ui.md §1 principle 3): a delegate's are in its own row below.
+    e.voice = h('p', { class: 'voice-label', hidden: true }, 'Main agent');
     e.truncated = h('p', { class: 'note truncated', hidden: true }, 'Earlier text not shown: the response was longer than the machine sends.');
+    e.dropped = h('p', { class: 'note dropped', hidden: true }, 'The main agent\'s latest response was left out: too long to send with its delegates.');
     e.response = h('div', { class: 'md response' });
     e.reasoningText = h('p', { class: 'plain' });
     e.reasoning = h('details', { class: 'reasoning', hidden: true }, h('summary', null, 'Reasoning'), e.reasoningText);
+    this.delegates = new DelegatesBlock({ fetchDelegate: this.fetchDelegate ? (agent) => this.fetchDelegate(this.#s.id, agent) : null });
     e.userText = h('p', { class: 'plain' });
     e.user = h('details', { class: 'user-message', hidden: true }, h('summary', null, 'Your last message'), e.userText);
     e.historyBody = h('div', { class: 'history-body' });
@@ -96,7 +103,7 @@ export class SessionCard {
     // End session is the card's footer, last and furthest from Send, as on the old dashboard.
     e.stop = h('div', { class: 'stop-slot' });
     e.body = h('div', { class: 'body', id: this.ids.body },
-      e.question, e.truncated, e.response, e.reasoning, e.user, e.reply, e.history, e.facts, e.stop);
+      e.question, e.voice, e.truncated, e.dropped, e.response, e.reasoning, this.delegates.element, e.user, e.reply, e.history, e.facts, e.stop);
 
     e.frame = h('div', { class: 'frame' },
       h('header', { class: 'head' }, h('h3', { class: 'title' }, e.fold), e.meta, e.statusLine, e.tool),
@@ -166,13 +173,17 @@ export class SessionCard {
     this.#renderQuestion(s);
     this.#renderReply(s);
     this.#renderStop(s);
-    if (this.#changed('response', s.activity.response ?? '')) {
-      e.response.replaceChildren(renderMarkdown(s.activity.response ?? ''));
+    const voice = mainVoice(s);
+    if (this.#changed('response', voice.response ?? '')) {
+      e.response.replaceChildren(renderMarkdown(voice.response ?? ''));
     }
-    e.response.hidden = !s.activity.response;
-    e.truncated.hidden = !(s.activity.responseTruncated && s.activity.response);
-    e.reasoning.hidden = !s.activity.reasoning;
-    e.reasoningText.textContent = s.activity.reasoning ?? '';
+    e.response.hidden = !voice.response;
+    e.truncated.hidden = !voice.responseTruncated;
+    e.dropped.hidden = !voice.responseDropped;
+    e.voice.hidden = !(voice.attributed && (voice.response || voice.responseDropped));
+    e.reasoning.hidden = !voice.reasoning;
+    e.reasoningText.textContent = voice.reasoning ?? '';
+    this.delegates.update(s);
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
 
@@ -232,6 +243,7 @@ export class SessionCard {
     this.#stop?.destroy();
     this.#stop = null;
     this.#dropReceipt();
+    this.delegates.dispose();
     clearTimeout(this.#history.timer);
   }
 
@@ -360,6 +372,7 @@ export class SessionCard {
     this.els.since.textContent = since ? `for ${since}` : '';
     const u = ago(s.updatedAt, now);
     this.els.updated.textContent = u ? `updated ${u}` : '';
+    this.delegates.refreshTimes(now);
   }
 
   get folded() { return this.els.frame.classList.contains('collapsed'); }

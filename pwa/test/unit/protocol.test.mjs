@@ -51,7 +51,8 @@ test('sub-agents are read tolerantly: unknown kinds are tasks, unknown statuses 
     waitingOn: 'a',
     question: { id: 'q', agent: 'a' },
   });
-  assert.deepEqual(s.subagents, [
+  const pick = ({ id, parent, kind, name, status, outcome }) => ({ id, parent, kind, name, status, outcome });
+  assert.deepEqual(s.subagents.map(pick), [
     { id: 'a', parent: null, kind: 'background', name: 'Run the suite', status: 'working', outcome: null },
     { id: 'b', parent: 'a', kind: 'task', name: null, status: 'idle', outcome: null },
     { id: 'c', parent: null, kind: 'task', name: null, status: 'ended', outcome: 'done' },

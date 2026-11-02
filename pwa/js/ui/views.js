@@ -30,13 +30,14 @@ export class SessionListView {
   #swallowClick = false;
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
-  // fetchDetail(hostId, id) -> Promise<Session|null>; machine(hostId) -> { name, show }: what to
+  // fetchDetail(hostId, id) -> Promise<Session|null>; fetchDelegate(hostId, id, agent) ->
+  // Promise<Subagent|null>, one delegate's own words; machine(hostId) -> { name, show }: what to
   // call the machine, and whether its cards say so (with every machine shown).
   // answering(hostId) -> { service, replies, stops, hostId, capabilities, readOnly } | null.
   // order: the person's order (SessionOrder). shows(hostId): whether a machine is shown.
   // settled(hostId): whether a machine has sent its whole list yet.
-  constructor(container, sessions, { fetchDetail, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, machine, folds, answering, order, shows, settled });
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, folds, answering, order, shows, settled });
     sessions.onChange((change) => {
       this.order.observe(change);
       if (change?.type === 'synced' && change.hostId) {
@@ -87,6 +88,7 @@ export class SessionListView {
           const m = this.machine(hostId);
           card = new SessionCard(s, {
             hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
+            fetchDelegate: this.fetchDelegate ? (id, agent) => this.fetchDelegate(hostId, id, agent) : null,
             machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
             // Opened, by its title, a notification or a launch, its news is seen.
             onFold: () => this.schedule(),

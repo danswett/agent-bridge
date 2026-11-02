@@ -5,6 +5,7 @@
 // docs/approval.png: a permission request, answered with a tap.
 // docs/all-machines.png: every machine at once, each card (folded here) naming its machine.
 // docs/needs-you-light.png, needs-you-dark.png and needs-you-wide.png: Needs you (#165) on a phone and wide.
+// docs/delegates-light.png and delegates-dark.png: a card's main agent and its delegates (#176).
 import { webkit, devices } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -128,6 +129,23 @@ try {
     await page.screenshot({ path: out(name), fullPage: true, clip: { x: 0, y: lane.y - 8, width: page.viewportSize().width, height: list.y - lane.y + 160 } });
     await context.close();
     console.log(`docs/${name}`);
+  }
+
+  // The main agent and its delegates on one card (#176): the main agent's own words, then each
+  // delegate under its name, one of them opened to its own latest response.
+  for (const scheme of ['light', 'dark']) {
+    const { context, page } = await open(scheme, '&delegates=1');
+    const card = page.locator('.session[data-id="demo-delegates"]');
+    const suite = card.locator('.delegate[data-id="demo-agent-suite"]');
+    await suite.locator('.delegate-summary').click();
+    await suite.locator('.delegate-latest:not([hidden])').waitFor();
+    await card.locator('.delegates-finished > summary').click();
+    await fixTimes(page);
+    await page.evaluate(() => { for (const t of document.querySelectorAll('.delegate-time')) { t.textContent = /finished/.test(t.textContent) ? 'finished 11m ago' : t.closest('[data-depth="1"]') ? '2m' : '16m'; } });
+    await hideBar(page);
+    await card.locator('.frame').screenshot({ path: out(`delegates-${scheme}.png`) });
+    await context.close();
+    console.log(`docs/delegates-${scheme}.png`);
   }
 } finally {
   await browser.close();

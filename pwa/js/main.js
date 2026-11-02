@@ -36,7 +36,7 @@ import { FleetStatus } from './fleet.js';
 import { ForgetControl, CONFIRM_MS, vanished } from './forget.js';
 import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
-import { DemoBlobStore, DemoConnection, DemoHost, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
+import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
 
 const $ = (id) => document.getElementById(id);
@@ -161,6 +161,8 @@ async function startDemo() {
   $('demo-banner').hidden = false;
   setPill('Demo', 'warn');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
+  // ?delegates=1: a session with delegates at work, the main agent's words apart from theirs (#176).
+  if (params.get('delegates') === '1') { fixture.sessions.push(demoDelegating()); }
   // ?ahb=1: a machine where agent-ha-bridge runs, so it takes nothing from the phone and says why.
   const ahb = params.get('ahb') === '1';
   const answerDelayMs = Number(params.get('answerDelay') ?? 700);
