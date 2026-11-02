@@ -59,7 +59,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | Machine | State |
 |---|---|
 | DSWETT-ULTRA | **Migrated** from agent-ha-bridge on 2026-10-31. HA connector on since 2026-11-01 08:48 (online in HA). Updated to 0.1.700 on 2026-11-01 11:06 by **Install from the PWA**, the first remote install on a real machine (#161). It then auto-updated through the unchanged x64 channel to 0.1.914 (11-01 23:47), the first release with Arm64 too. The first real machine; watch it |
-| DSWETT-DEV-VM1 | agent-ha-bridge plus a **read-only shadow host** (profile `shadow`, 83385c7) comparing with the daemon (#40). A **Dev Box**: migrate disables agent-ha-bridge's keep-awake task, so it waited for the host's own keep-awake (#47, merged in #224, 0.1.977). **Ready to migrate**: the owner has the commands. Afterwards, remove the shadow host (`build/shadow-week.ps1 -Uninstall`) and check `devbox status` |
+| DSWETT-DEV-VM1 | agent-ha-bridge plus a **read-only shadow host** (profile `shadow`, 83385c7) comparing with the daemon (#40). A **Dev Box**: migrate disables agent-ha-bridge's keep-awake task, so it waited for the host's own keep-awake (#47, merged in #224, 0.1.977). **Ready to migrate**: the owner has the commands. On 11-02 migrate refused, correctly, because sessions started with agent-ha-bridge's PowerShell hooks were running, both coordinators among them. Plan (owner, 11-02): once the release with the HA backoff (#234) ships, which waits on #242, both coordinators write handoffs, the owner ends every session, migrates, and resumes them from the app. Afterwards, remove the shadow host (`build/shadow-week.ps1 -Uninstall`) and check `devbox status` |
 | DSWETT-HOME | agent-ha-bridge, and the **dashboard publication writer**: migrate refuses there (G7), so it moves last. Since 2026-11-01 13:39 also a **view-only app install** (0.1.730 or later; `delivery.readOnly`, push off, HA connector off). The PWA lists it online and read-only, and its Claude and Codex usage rows are back. agent-ha-bridge there is unaffected |
 | DSWETT-ARM8 (ARM laptop) | **Migrated** 2026-11-01 23:54 on the native **Arm64** build (0.1.914, #222). Device key in the TPM; an answer from the PWA was typed into a session, so injection works on Arm64. HA connector online since 11-02 00:13, after an IP ban (below) |
 | Mac, DASDESK | agent-ha-bridge only. The Mac waits for P5 (macOS host) |
@@ -89,10 +89,16 @@ The read-only host has run beside the daemon since 2026-10-29, and the gate is c
 ```
 
 - **2026-11-01:** FAIL, from 43 `background.shells` episodes in one session before 09:57 PST. These are agent-ha-bridge#276, which the daemon gets wrong: a shell restarted under the same id is lost. #162 now labels them as a known difference (the shadow build is at 350bce6, which has it). The FAIL clears when they leave the 24 h window (about 10:00 PST on 11-02). Before that the verdict was **NOT YET**, on coverage; at 11:00 PST on 11-01 it read questions 40 of 100, sessions 10 of 30, status transitions 408 of 500. Claude and Codex have no sessions there yet.
+- **2026-11-02 10:05 PST:** the `background.shells` FAIL has cleared. Two short episodes still hold it at FAIL, and both leave the window by 13:53 PST today:
+  - `session.missingOnHost`, 74 s at 11:03 PST on 11-01: a session the daemon saw end;
+  - `status`, 76 s at 13:52 PST on 11-01.
+  
+  Both look like timing just over the 60 s threshold. Coverage is still short: questions 31/100, sessions 7/30, status transitions 353/500, resume snapshots 65/100. DEV-VM1's shadow ends with its migration, so VM-M carries the gate.
 - **Scripted soak on Azure VM-M (decided 2026-11-01, so as not to wait for organic use).** VM-M runs agent-ha-bridge and a read-only shadow host built from main, against VM-W's disposable HA. The driver is `build/shadow-soak-vm.ps1` (#208), and its sessions cover Copilot, Claude and Codex. Coverage from VM-M counts toward the gate.
   - Two agent-ha-bridge bugs are labelled as known differences under narrow rules (#226): Copilot's `name:` titles in the resume list (agent-ha-bridge#278) and Codex compactions (agent-ha-bridge#279).
   - At 11-02 03:05 PT: no unexplained mismatch since the #226 host went on (00:45 PT). Coverage: sessions 21, questions 42, status transitions 163, background 10, compactions 1, resume snapshots 58.
   - The earliest pass is about 01:00 PT on 11-03, when the older mismatches leave the 24 h window.
+  - At 11-02 10:05 PT `-Status` read FAIL: compactions 1, model 2, resumable 17, session 1, status 2, usage.missingOnDaemon 3 in the last 24 h. Coverage: sessions 42 (Copilot 19, Claude 18, Codex 5), questions 133, status transitions 501, responses 300, background 50, compactions 7, resume snapshots 124. Being triaged: which of the mismatches came after 00:45 PT.
   - Codex is capped: its weekly allowance read 95% used.
   - Check VM-M's gate with `./build/shadow-soak-vm.ps1 -Subscription <id> -Status`. It runs `shadow summary --gate` on VM-M; the DEV-VM1 command above reads only DEV-VM1's own reports. Run `-Finish` only after that reads PASS.
 - DEV-VM1's own shadow ends when it migrates, and VM-M stays the comparator.
