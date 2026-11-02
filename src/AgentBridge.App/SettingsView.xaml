@@ -93,14 +93,19 @@
                     Foreground="{ThemeResource AbDangerText}"
                     Text="{x:Bind ViewModel.SignInError, Mode=OneWay}"
                     Visibility="{x:Bind local:Ui.Some(ViewModel.SignInError), Mode=OneWay}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <!-- The field takes the column's width and the button stays beside it, so neither is cut
+                     off at the 360 px window. -->
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <TextBox
-                        Width="360"
                         Header="This machine's name on your devices"
                         AutomationProperties.AutomationId="MachineName"
                         Text="{x:Bind ViewModel.MachineName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                    <Button VerticalAlignment="Bottom" Content="Save name" Click="OnSaveName" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" />
-                </StackPanel>
+                    <Button Grid.Column="1" VerticalAlignment="Bottom" Content="Save name" Click="OnSaveName" IsEnabled="{x:Bind ViewModel.HostRunning, Mode=OneWay}" />
+                </Grid>
                 <ToggleSwitch
                     Header="Let this app and my devices approve Copilot permission prompts"
                     AutomationProperties.AutomationId="RemoteApproval"
