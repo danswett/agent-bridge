@@ -300,4 +300,12 @@ public class SoakTests
         }
         finally { Directory.Delete(dir, true); }
     }
+
+    [Fact]
+    public void A_cap_named_in_any_case_binds_to_the_agent_and_an_unknown_agent_is_refused()
+    {
+        var caps = Program.Caps(new Dictionary<string, string> { ["codex"] = "0" });
+        Assert.Equal(0, caps["Codex"]);
+        Assert.Throws<UsageException>(() => Program.Caps(new Dictionary<string, string> { ["gemini"] = "1" }));
+    }
 }

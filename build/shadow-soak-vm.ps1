@@ -260,7 +260,8 @@ if ($Start) {
         '--restart-daemon-at', $RestartDaemonAt, '--restart-shadow-at', $RestartShadowAt)
     foreach ($k in $Models.Keys) { $arguments += @('--model', "$k=$($Models[$k])") }
     foreach ($k in $Efforts.Keys) { $arguments += @('--effort', "$k=$($Efforts[$k])") }
-    foreach ($k in $Caps.Keys) { $arguments += @('--cap', "$k=$([int]$Caps[$k])") }
+    # -notin is case-insensitive but the driver's lookup is not: pass the canonical name.
+    foreach ($k in $Caps.Keys) { $agent = @('Copilot', 'Claude', 'Codex') | Where-Object { $_ -eq $k }; $arguments += @('--cap', "$agent=$([int]$Caps[$k])") }
     $line = ($arguments | ForEach-Object { if ("$_" -match '\s') { "'$_'" } else { "$_" } }) -join ' '
     foreach ($role in 'W', 'M') { & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown Off 6>$null }
     Invoke-Guest M -Script @'

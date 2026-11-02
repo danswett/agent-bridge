@@ -214,7 +214,7 @@ internal static class Program
                         TimeSpan.FromMinutes(p.Int("--every") ?? 22), TimeSpan.FromSeconds(p.Int("--hold") ?? 35),
                         TimeSpan.FromMinutes(p.Int("--turn-timeout") ?? 6), p.Int("--count") ?? 66,
                         p.Int("--restart-daemon-at"), p.Int("--restart-shadow-at"), p.Option("--only"),
-                        Pairs(p.All("--cap"), "--cap").ToDictionary(kv => kv.Key, kv => int.TryParse(kv.Value, out var n) && n >= 0 ? n : throw new UsageException("--cap is <Agent>=<sessions>")));
+                        Caps(Pairs(p.All("--cap"), "--cap")));
                     if (options.Only is { } only && SoakScript.All.All(s => s.Name != only)) { throw new UsageException($"--only takes one of {string.Join(", ", SoakScript.All.Select(s => s.Name).Distinct())}"); }
                     await new SoakDriver(ha, options, Path.GetFullPath(p.Option("--state")!), homes).RunAsync(ct);
                     // Done with the plan either way; the episodes that went wrong make it a FAIL
@@ -259,6 +259,21 @@ internal static class Program
         // As the shadow judges them: the counts, and each side's labels in the other's, not the order.
         var same = daemon.Count == host.Count && !data.missingOnHost.Any() && !data.missingOnDaemon.Any();
         return same ? Outcome.Pass($"both offer the same {host.Count}", data) : Outcome.Fail($"daemon {daemon.Count}, host {host.Count}", data);
+    }
+
+    // Keyed by the scenario's own agent name: the driver's lookup is exact, so `codex=0`
+    // would otherwise be accepted and silently ignored, spending the allowance it protects.
+    internal static Dictionary<string, int> Caps(IReadOnlyDictionary<string, string> pairs)
+    {
+        var agents = SoakScript.All.Select(s => s.Agent).Distinct(StringComparer.Ordinal).ToList();
+        var caps = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (key, value) in pairs)
+        {
+            var agent = agents.FirstOrDefault(a => string.Equals(a, key, StringComparison.OrdinalIgnoreCase))
+                ?? throw new UsageException($"--cap takes one of {string.Join(", ", agents)}, not {key}");
+            caps[agent] = int.TryParse(value, out var n) && n >= 0 ? n : throw new UsageException("--cap is <Agent>=<sessions>");
+        }
+        return caps;
     }
 
     static Dictionary<string, string> Pairs(IReadOnlyList<string> values, string option)
