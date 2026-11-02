@@ -35,6 +35,7 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<IReadOnlyList<string>> approved = [];
     readonly List<bool> keptAwake = [];
     DevBoxStatus? devBox;
+    string? haRefused;
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -69,6 +70,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
             ApplyDevBoxKeepAwake = on => { lock (applied) { keptAwake.Add(on); } },
             DevBox = () => devBox,
+            HomeAssistant = () => Volatile.Read(ref haRefused),
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -193,6 +195,26 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(HostOps.StatusEvent, ev.Name);
         var status = ev.Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
         Assert.Equal((RelayState.Connected, "as octo"), (status.Relay.State, status.Relay.Detail));
+    }
+
+    // What Home Assistant's refusals say (HaAuthGuard.Problem) is in the status, and a change to it
+    // (the guard's Changed, wired to Refresh) reaches a subscriber, set and cleared alike.
+    [Fact]
+    public async Task Home_Assistant_refusing_this_machine_is_in_the_status_and_its_changes_reach_a_subscriber()
+    {
+        var ch = await ConnectAsync();
+        Assert.Null((await ch.CallAsync<HostStatus>(HostOps.Subscribe)).HomeAssistant);
+
+        const string rejected = "Home Assistant rejected the token: run `agent-bridge-host ha token set`, then restart the host";
+        Volatile.Write(ref haRefused, rejected);
+        control.Refresh();
+        var ev = await NextAsync(ch);
+        Assert.Equal(HostOps.StatusEvent, ev.Name);
+        Assert.Equal(rejected, ev.Data.GetProperty("homeAssistant").GetString());
+
+        Volatile.Write(ref haRefused, null);
+        control.Refresh();
+        Assert.Null((await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!.HomeAssistant);
     }
 
     [Fact]
