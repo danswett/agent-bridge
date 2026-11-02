@@ -28,16 +28,19 @@ public sealed partial class MainViewModel
             .ThenBy(e => e.Card.Id, StringComparer.Ordinal)
             .ToList();
         var had = NeedsYou.Count;
+        var current = NeedsYou.ToDictionary(e => e.Key);
         var entries = new List<NeedsYouEntry>();
         foreach (var (key, card, m) in want)
         {
-            var existing = NeedsYou.FirstOrDefault(e => e.Key == key);
             var q = card.Session.Question!;
-            var prompt = q.Kind == AgentBridge.Protocol.QuestionKind.Approval && NeedsYouEntry.WholePrompt(q) ? q.Message : null;
-            // A same-id update can change what the entry says (a budget-trimmed message restored,
-            // say), not only what it offers: either rebuilds it.
-            if (existing is not null && (existing.QuestionId != q.Id || existing.QuestionModel != card.Question || existing.Mode != NeedsYouEntry.ModeOf(q, card.Agent, card.Question)
-                || existing.Prompt != prompt || existing.Line != NeedsYouEntry.LineOf(q)))
+            current.TryGetValue(key, out var existing);
+            // What an entry says is parsed once per message: an upsert that leaves the question's
+            // words alone (most are another session's activity) parses nothing. A same-id update
+            // that changes them (a budget-trimmed message restored, say) rebuilds the entry, as
+            // does a change in what it offers.
+            var sameWords = existing is not null && existing.QuestionId == q.Id && string.Equals(existing.Message, q.Message, StringComparison.Ordinal);
+            var whole = sameWords ? existing!.Whole : NeedsYouEntry.WholeApproval(q);
+            if (existing is not null && (!sameWords || existing.QuestionModel != card.Question || existing.Mode != NeedsYouEntry.ModeOf(q, card.Agent, card.Question, whole)))
             {
                 existing.Detach();
                 NeedsYou.Remove(existing);
@@ -47,16 +50,18 @@ public sealed partial class MainViewModel
             entry.Refresh(several ? m.Name : null, now);
             entries.Add(entry);
         }
-        foreach (var gone in NeedsYou.Except(entries).ToList())
+        var kept = entries.ToHashSet();
+        foreach (var gone in NeedsYou.Where(e => !kept.Contains(e)).ToList())
         {
             gone.Detach();
             NeedsYou.Remove(gone);
         }
         for (var i = 0; i < entries.Count; i++)
         {
+            if (i < NeedsYou.Count && NeedsYou[i] == entries[i]) { continue; }
             var at = NeedsYou.IndexOf(entries[i]);
             if (at < 0) { NeedsYou.Insert(i, entries[i]); }
-            else if (at != i) { NeedsYou.Move(at, i); }
+            else { NeedsYou.Move(at, i); }
         }
         if (had != NeedsYou.Count)
         {

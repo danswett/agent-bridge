@@ -42,12 +42,19 @@ public sealed partial class NeedsYouEntry : Observable
         if (question is not null) { question.PropertyChanged += OnQuestion; }
         var q = card.Session.Question!;
         QuestionId = q.Id;
+        Message = q.Message;
         AskedAt = q.AskedAt;
         Line = LineOf(q);
-        Prompt = q.Kind == QuestionKind.Approval && WholePrompt(q) ? q.Message : null;
+        Whole = WholeApproval(q);
+        Prompt = Whole ? q.Message : null;
         delegateName = DelegateOf(card.Session);
-        Mode = ModeOf(q, card.Agent, question);
+        Mode = ModeOf(q, card.Agent, question, Whole);
     }
+
+    // The words it was built from, and whether they are an approval's whole prompt: parsed once,
+    // and reused while an upsert leaves them alone (MainViewModel.SyncNeedsYou).
+    internal string Message { get; }
+    internal bool Whole { get; }
 
     public string Key { get; }
     public string MachineKey { get; }
@@ -144,11 +151,16 @@ public sealed partial class NeedsYouEntry : Observable
     // Only Copilot's prompts are answered here: a host writes them whole and literal
     // (CopilotPermission, code in a fence the command cannot close), while a Codex approval's command
     // reaches the host cut short with nothing saying so, and is answered on its card.
-    public static NeedsYouMode ModeOf(Question q, AgentKind agent, QuestionViewModel? vm) =>
+    public static NeedsYouMode ModeOf(Question q, AgentKind agent, QuestionViewModel? vm) => ModeOf(q, agent, vm, WholeApproval(q));
+
+    // As above, with whether the question is an approval's whole prompt already worked out.
+    internal static NeedsYouMode ModeOf(Question q, AgentKind agent, QuestionViewModel? vm, bool whole) =>
         q.AnswerAtMachine == true ? NeedsYouMode.AtMachine
-        : agent == AgentKind.Copilot && q.Truncated != true && vm is { Answerable: true, Approval: true, Tap: true } && WholePrompt(q)
+        : agent == AgentKind.Copilot && q.Truncated != true && vm is { Answerable: true, Approval: true, Tap: true } && whole
             && vm.Fields[0].Options.Any(o => o.Value == "approve") && vm.Fields[0].Options.Any(o => o.Value == "deny") ? NeedsYouMode.Approve
         : NeedsYouMode.Open;
+
+    internal static bool WholeApproval(Question q) => q.Kind == QuestionKind.Approval && WholePrompt(q);
 
     // A table scrolls sideways, so a prompt with one is not whole on screen; nor is one not shaped as
     // a host writes a permission (LiteralShape).

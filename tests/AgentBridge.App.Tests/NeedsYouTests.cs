@@ -248,6 +248,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "- - ```\n    example\n    ```\n\nWhich option?" }));
         Assert.Equal("After", NeedsYouEntry.LineOf(Make.Form() with { Message = "~~~\n> ~~~\nexample\n~~~\nAfter" }));
         Assert.Equal("Which database?", NeedsYouEntry.LineOf(Make.Form() with { Message = "Which **database**?\nPick one." }));
+        Assert.Equal("Which option", NeedsYouEntry.LineOf(Make.Form() with { Message = "Which **option\nshould I use**?" }));
     }
 
     [Fact]
