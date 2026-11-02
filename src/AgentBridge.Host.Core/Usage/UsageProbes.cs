@@ -65,8 +65,7 @@ public sealed class UsageProbes
     // /r/real/home). A part that cannot be looked at is taken as it is.
     internal static string Physical(string path)
     {
-        var start = OperatingSystem.IsWindows() ? Path.GetFullPath(path)
-            : Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
+        var start = Absolute(path);
         var root = Path.GetPathRoot(start) ?? "";
         var pending = new Stack<string>(start[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries).Reverse());
         var current = root;
@@ -103,6 +102,11 @@ public sealed class UsageProbes
         }
         return current;
     }
+
+    // Rooted at the current folder, as the system would take it: on Windows `..` and `.` are
+    // resolved from the text (GetFullPath), elsewhere left for the walk past any link before them.
+    internal static string Absolute(string path) => OperatingSystem.IsWindows() ? Path.GetFullPath(path)
+        : Path.IsPathRooted(path) ? path : Path.Combine(Directory.GetCurrentDirectory(), path);
 
     sealed class NoLease : IDisposable
     {
@@ -226,7 +230,7 @@ internal static class ProbeEnvironment
         {
             if (Path.IsPathFullyQualified(inherited)) { return environment; }
             if (namespaced) { return null; }
-            environment[variable] = Path.GetFullPath(inherited);
+            environment[variable] = UsageProbes.Absolute(inherited);
             return environment;
         }
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -238,7 +242,7 @@ internal static class ProbeEnvironment
         if (!Path.IsPathFullyQualified(home))
         {
             if (namespaced) { return null; }
-            home = Path.GetFullPath(home);
+            home = UsageProbes.Absolute(home);
         }
         environment[variable] = home;
         return environment;

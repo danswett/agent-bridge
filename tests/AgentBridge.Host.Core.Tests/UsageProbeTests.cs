@@ -891,6 +891,10 @@ public sealed class UsageProbeTests : IDisposable
 
         // Configured: made absolute where the text names nothing more; refused where it names the credential.
         Assert.Equal(Path.GetFullPath(relative), ProbeEnvironment.Home(variable, relative, ".codex")![variable]);
+        // A `..` is left for the system, which off Windows takes it after any link before it.
+        var dotted = Path.Combine("link", "..", ".codex");
+        Assert.Equal(OperatingSystem.IsWindows() ? Path.GetFullPath(dotted) : Path.Combine(Directory.GetCurrentDirectory(), dotted),
+            ProbeEnvironment.Home(variable, dotted, ".codex")![variable]);
         Assert.Null(ProbeEnvironment.Home(variable, relative, ".claude", namespaced: true));
 
         // Inherited, as the host itself was started: the same.

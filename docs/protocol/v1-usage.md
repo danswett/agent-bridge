@@ -236,7 +236,8 @@ refresh and locking, and runs no model turn.
   last bars after a sign-out.
 * **Codex.** The route follows what Codex runs here:
   * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
-    made absolute, for a home that is not the default);
+    made absolute without resolving its `..` off Windows, which the system takes after any link
+    before it, for a home that is not the default);
   * the managed daemon running: a WebSocket on its control socket
     (`<CODEX_HOME>/app-server-control/app-server-control.sock`, path `/`), one message per text
     frame, ended with a close frame that is not waited for, since the daemon never answers one;
