@@ -1,7 +1,4 @@
 import SwiftUI
-#if canImport(AgentBridgeClientState)
-    import AgentBridgeClientState
-#endif
 
 struct SettingsNotificationsView: View {
     @Bindable var notifications: BridgeNotificationManager
@@ -14,6 +11,8 @@ struct SettingsNotificationsView: View {
                 }))
                 .disabled(notifications.isRequestingPermission)
                 Toggle("Quiet mode", isOn: $notifications.quiet)
+                    .disabled(!notifications.enabled)
+                Toggle("Notify when a turn finishes", isOn: $notifications.notifyFinished)
                     .disabled(!notifications.enabled)
                 Toggle("Show session and question previews", isOn: $notifications.showPreviews)
                     .disabled(!notifications.enabled)

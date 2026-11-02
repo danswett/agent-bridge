@@ -14,6 +14,8 @@ public actor BridgeUsageCache {
     private let directory: URL
     private var active: BridgeUsageCacheSession?
     private var entries: [BridgeAgentUsage] = []
+    private var rosterRevision = -1
+    private var allowedMachines = Set<String>()
     public private(set) var statusMessage: String?
 
     private struct Disk: Codable {
@@ -40,10 +42,10 @@ public actor BridgeUsageCache {
     }
 
     public func activate(relay: String, account: String, now: Date = Date()) throws -> BridgeUsageCacheSession {
-        guard !account.isEmpty, let url = URL(string: relay), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw Failure.invalidScope }
-        let session = BridgeUsageCacheSession(relay: url.absoluteString, account: account, generation: UUID())
+        let session = try scope(relay: relay, account: account)
         active = session
+        rosterRevision = -1
+        allowedMachines = []
         entries = []
         statusMessage = nil
         let path = file(for: session)
@@ -72,9 +74,10 @@ public actor BridgeUsageCache {
     /// A peer reading is retained only while its originating machine belongs to this
     /// account's known machines. Passing a current roster also removes forgotten hosts.
     public func merge(report: BridgeUsageReport, machineID: String, machineName: String, allowedMachineIDs: Set<String>,
-                      session: BridgeUsageCacheSession, now: Date = Date()) throws -> JSONValue
+                      session: BridgeUsageCacheSession, now: Date = Date(), revision: Int? = nil) throws -> JSONValue
     {
         try require(session)
+        let allowedMachineIDs = membership(allowedMachineIDs, revision: revision)
         entries.removeAll { !allowedMachineIDs.contains($0.readByID ?? "") }
         let additions = report.agents.compactMap { usage -> BridgeAgentUsage? in
             guard allowedMachineIDs.contains(machineID) else { return nil }
@@ -98,15 +101,47 @@ public actor BridgeUsageCache {
         try persist(session)
     }
 
+    public func prune(allowedMachineIDs: Set<String>, session: BridgeUsageCacheSession, revision: Int? = nil) throws {
+        try require(session)
+        let allowedMachineIDs = membership(allowedMachineIDs, revision: revision)
+        entries.removeAll { !allowedMachineIDs.contains($0.readByID ?? "") }
+        try persist(session)
+    }
+
+    private func membership(_ proposed: Set<String>, revision: Int?) -> Set<String> {
+        guard let revision else { return proposed }
+        if revision >= rosterRevision {
+            rosterRevision = revision
+            allowedMachines = proposed
+        }
+        return allowedMachines
+    }
+
     public func clear(session: BridgeUsageCacheSession) throws {
         try require(session)
-        // Revoke first so even a failed deletion cannot let an old update repopulate it.
-        active = nil
-        entries = []
-        let path = file(for: session)
+        try clearScope(relay: session.relay, account: session.account)
+    }
+
+    /// Sign-out names the immutable account scope, not a lease that may have rotated
+    /// during reconnect. Deleting an old scope never revokes another account's lease.
+    public func clearScope(relay: String, account: String) throws {
+        let target = try scope(relay: relay, account: account)
+        if active?.relay == target.relay, active?.account == target.account {
+            // Revoke first so even failed deletion cannot let an old update restore it.
+            active = nil
+            entries = []
+            statusMessage = nil
+        }
+        let path = file(for: target)
         if FileManager.default.fileExists(atPath: path.path) {
             try FileManager.default.removeItem(at: path)
         }
+    }
+
+    private func scope(relay: String, account: String) throws -> BridgeUsageCacheSession {
+        guard !account.isEmpty, let url = URL(string: relay), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { throw Failure.invalidScope }
+        return BridgeUsageCacheSession(relay: url.absoluteString, account: account, generation: UUID())
     }
 
     private func require(_ session: BridgeUsageCacheSession) throws {

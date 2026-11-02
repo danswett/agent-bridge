@@ -120,3 +120,16 @@ private func usageDirectory() throws -> URL {
     let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
     #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
 }
+
+@Test func lateUsageWithAnOldRosterCannotRestoreAForgottenMachine() async throws {
+    let directory = try usageDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let cache = BridgeUsageCache(directory: directory)
+    let session = try await cache.activate(relay: "https://relay.example", account: "one", now: cacheNow)
+    _ = try await cache.merge(report: usageReport(), machineID: "m", machineName: "Mac", allowedMachineIDs: ["m"], session: session, now: cacheNow, revision: 1)
+    try await cache.prune(allowedMachineIDs: [], session: session, revision: 2)
+    let result = try await cache.merge(report: usageReport(), machineID: "m", machineName: "Mac", allowedMachineIDs: ["m"], session: session, now: cacheNow, revision: 1)
+    #expect(result["agents"]?.array?.isEmpty == true)
+    try await cache.prune(allowedMachineIDs: ["m"], session: session, revision: 1)
+    #expect(try await cache.report(session: session, now: cacheNow)["agents"]?.array?.isEmpty == true)
+}

@@ -12,6 +12,7 @@ struct ConnectionView: View {
     @State private var deviceName: String
     @State private var profile: String
     @State private var copiedCode = false
+    @AppStorage("bridge.reading.showDetails") private var showDetails = true
 
     init(store: BridgeStore) {
         self.store = store
@@ -28,9 +29,12 @@ struct ConnectionView: View {
                     if !store.isSample {
                         Text(store.remoteStatus).font(.caption).foregroundStyle(.secondary)
                     }
-                    Button("Reconnect", action: connect).disabled(store.isSigningIn)
+                    if let cacheStatus = store.cacheStatus {
+                        Text(cacheStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("Reconnect", action: connect).disabled(store.isSigningIn || store.isFixture)
                     if store.isLive || store.isConnecting {
-                        Button("Disconnect", action: store.disconnect)
+                        Button("Disconnect", action: store.disconnect).disabled(store.isFixture)
                     }
                 }
                 Section("GitHub account") {
@@ -59,7 +63,7 @@ struct ConnectionView: View {
                     if let status = store.signInStatus {
                         Text(status).font(.callout).foregroundStyle(.secondary)
                     }
-                }
+                }.disabled(store.isFixture)
                 Section {
                     TextField("Relay address", text: $relayAddress)
                         .autocorrectionDisabled()
@@ -77,7 +81,31 @@ struct ConnectionView: View {
                 } footer: {
                     Text("Sign in with the same GitHub account as your hosts to connect your machines.")
                 }
-                .disabled(store.isSigningIn)
+                .disabled(store.isSigningIn || store.isFixture)
+                Section {
+                    NavigationLink { SettingsNotificationsView(notifications: store.notifications) } label: { Label("Notifications", systemImage: "bell") }
+                }
+                Section("Reading") {
+                    Toggle("Show reasoning and tool history", isOn: $showDetails)
+                }
+                #if os(macOS)
+                    MacLoginItemView().disabled(store.isFixture)
+                #endif
+                Section("About Agent Bridge") {
+                    if let version = bundleValue("CFBundleShortVersionString") {
+                        LabeledContent("Version", value: version)
+                    }
+                    if let build = bundleValue("CFBundleVersion") {
+                        LabeledContent("Build", value: build)
+                    }
+                    #if DEBUG
+                        Text("Development build").font(.caption).foregroundStyle(.secondary)
+                    #else
+                        if bundleValue("CFBundleShortVersionString") == nil, bundleValue("CFBundleVersion") == nil {
+                            Text("Version information is unavailable.").foregroundStyle(.secondary)
+                        }
+                    #endif
+                }
                 Section("Preview") {
                     Button(store.isSample ? "Close Sample Sessions" : "Explore Sample Sessions") {
                         store.cancelSignIn()
@@ -88,7 +116,7 @@ struct ConnectionView: View {
                         }
                         dismiss()
                     }
-                }
+                }.disabled(store.isFixture)
             }
             .formStyle(.grouped)
             .navigationTitle("Connection")
@@ -97,6 +125,11 @@ struct ConnectionView: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
         #endif
+    }
+
+    private func bundleValue(_ key: String) -> String? {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) as? String, !value.isEmpty else { return nil }
+        return value
     }
 
     private func applySettings() {
