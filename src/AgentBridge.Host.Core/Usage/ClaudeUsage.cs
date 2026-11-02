@@ -152,10 +152,14 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         {
             if (checkAuth) { await CheckAuthAsync(key, now); }
             if (!probe) { return; }
+            // auth status took time: a session may have refreshed the saved reading, or another
+            // account signed in, meanwhile. Decided again from the file and the clock as they are.
+            var current = Read(options.ClaudeAccountPath, options.MaxStateBytes);
+            var at = clock.GetUtcNow();
             lock (gate)
             {
-                if (auth != Auth.ClaudeAi || authKey != key) { return; }
-                pace.Started(now);
+                if (auth != Auth.ClaudeAi || authKey != key || current.Key != key || !pace.Due(current.Reading?.MeasuredAt, busy, at)) { return; }
+                pace.Started(at);
             }
             var ok = await ProbeAsync();
             lock (gate)

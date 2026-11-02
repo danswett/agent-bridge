@@ -163,8 +163,20 @@ public sealed class UsageMonitor : IAsyncDisposable
                 read = UsageRead.Failure(collector.Agent, $"Usage for {collector.Agent.ToString().ToLowerInvariant()} could not be collected: {UsageFetch.Describe(e)}", now) with { Slot = collector.Slot };
                 plain = read.Error;
             }
-            // Nothing to say: whatever was read before stands and ages.
-            if (read is null) { continue; }
+            // Nothing to say: whatever was read before stands and ages, unless the collector has
+            // withdrawn it.
+            if (read is null)
+            {
+                if (collector.TakeWithdrawal() && state.Latest is not null)
+                {
+                    lock (sync) { state.Latest = null; }
+                    state.Signature = "";
+                    state.PublishedAt = now;
+                    state.Said = null;
+                    announce = true;
+                }
+                continue;
+            }
             read = UsageProtocol.FitAgent(read);
             Say(collector, state, read, plain);
             lock (sync) { state.Latest = read; }

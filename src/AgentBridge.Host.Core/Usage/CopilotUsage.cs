@@ -43,6 +43,12 @@ public interface IUsageCollector
     // The host is about to stop or be updated (#238): no probe whose process goes with it starts
     // before until. Returns whether one is still running, or within its grace, so the caller waits.
     bool Hold(DateTimeOffset until) => false;
+
+    // Asked when CollectAsync has nothing to say: whether what it said before is no longer this
+    // machine's to stand by (Codex's login changed to one no probe reads, with no transcript
+    // reading to take its place), so the monitor drops it rather than letting it stand and age.
+    // Once: it is cleared by asking. What peers and clients kept of it is theirs.
+    bool TakeWithdrawal() => false;
 }
 
 // Copilot's monthly allowance of AI credits, asked of GitHub (api.github.com/copilot_internal/

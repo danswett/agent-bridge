@@ -232,7 +232,8 @@ refresh and locking, and runs no model turn.
   login's key and timed when auth status first answered so (so newer than the last reading, which a
   client keeps and shows it beside), with no probe until it says otherwise. What auth status said
   holds only for the account it was asked about: another signed in since is shown by its own
-  reading until the next hourly check. The probe's exit code cannot say this: it exits 0 with the
+  reading until the next hourly check. A probe is decided again once auth status has answered,
+  from the saved reading and account as they are then. The probe's exit code cannot say this: it exits 0 with the
   last bars after a sign-out.
 * **Codex.** The route follows what Codex runs here:
   * no Codex process: a standalone `codex app-server` over stdio (JSON lines, `CODEX_HOME` set,
@@ -254,7 +255,9 @@ refresh and locking, and runs no model turn.
   A daemon-route reading never has one: another client can switch the daemon's login unseen.
   An API-key login, another provider or no `codex` falls back to the transcripts with no error
   (one the second `account/read` finds drops that probe's usage read, which may be the old login's),
-  and clears an earlier sign-out failure and the last probe reading, which was another login's.
+  and clears an earlier sign-out failure and the last probe reading, which was another login's;
+  with no transcript reading to stand instead, the host serves no Codex entry at all (what peers
+  and clients kept of the old one stays theirs).
   Codex reported as needing sign-in (its `-32603` "...Please log out and sign in again", including
   a reused refresh token, an authentication failure from the usage read after Codex's own recovery,
   or no account where OpenAI sign-in is required, whether the first or the second `account/read`

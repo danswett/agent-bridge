@@ -311,6 +311,30 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reading_a_session_saved_while_auth_status_was_asked_starts_no_probe()
+    {
+        ClaudeSaved(Now.AddHours(-2));
+        FakeProbe? asked = null;
+        launcher.Next = c =>
+        {
+            var p = new FakeProbe(c, time);
+            if (c.Arguments is ["auth", "status"]) { asked = p; }
+            return p;
+        };
+        var claude = Claude();
+        await claude.CollectAsync();
+        await Until(() => asked is not null);
+
+        // A Claude session refreshed the saved reading meanwhile.
+        ClaudeSaved(time.GetUtcNow(), session: 30);
+        asked!.Answer(SignedInClaudeAi, 0);
+        await Settled(claude);
+
+        Assert.Empty(UsageProbesStarted);
+        Assert.Equal(30, (await claude.CollectAsync())!.Windows[0].Percent);
+    }
+
+    [Fact]
     public async Task A_Claude_signed_in_with_an_api_key_is_never_probed()
     {
         ClaudeSaved(Now.AddHours(-2));
@@ -1155,6 +1179,31 @@ public sealed class UsageProbeTests : IDisposable
 
         Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
         Assert.Null(outcome.Reading!.AccountKey);
+    }
+
+    [Fact]
+    public async Task A_switch_to_an_api_key_with_no_transcript_reading_withdraws_the_hosts_Codex_entry()
+    {
+        CodexUsed();
+        AppServer();
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await monitor.PassAsync();
+        Assert.Contains(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
+
+        AppServer(s => s.Answers["account/read"] = _ => FakeAppServer.Result(new { account = new { type = "apiKey" }, requiresOpenaiAuth = true }));
+        time.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1));
+        await monitor.PassAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        var version = monitor.Current.Version;
+        await monitor.PassAsync();
+
+        // The ChatGPT login's reading is no longer this machine's to serve, and the change is announced.
+        Assert.DoesNotContain(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
+        Assert.True(monitor.Current.Version > version);
     }
 
     [Fact]

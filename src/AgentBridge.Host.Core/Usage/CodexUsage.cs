@@ -21,6 +21,8 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     DateTimeOffset? signedOutAt;
     // The reading taken by the probe that found the sign-out (its second account/read), if any.
     AgentUsage? signedOutReading;
+    // A login no probe reads replaced one whose reading or sign-out was published (TakeWithdrawal).
+    bool withdrawn;
     bool sessionOpen, busy, wasOpen;
     Task? running;
     Task? answering;
@@ -75,6 +77,16 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         }
     }
 
+    public bool TakeWithdrawal()
+    {
+        lock (gate)
+        {
+            var was = withdrawn;
+            withdrawn = false;
+            return was;
+        }
+    }
+
     public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow();
@@ -89,6 +101,8 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         lock (gate)
         {
             newest = Newer(transcript, probed);
+            // Something to say again replaces what was withdrawn.
+            if (newest is not null) { withdrawn = false; }
             if (signedOutAt is { } at)
             {
                 // The probe that found the sign-out read the allowance first: that reading is
@@ -203,6 +217,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     // Signed in some other way now (an API key, another provider): no longer a
                     // sign-out to report, and an earlier probe's reading is not this login's, so
                     // the transcripts stand alone.
+                    withdrawn |= probed is not null || signedOutAt is not null;
                     signedOutAt = null;
                     probed = null;
                     pace.Hold(now);
