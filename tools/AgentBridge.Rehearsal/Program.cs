@@ -213,7 +213,8 @@ internal static class Program
                         Pairs(p.All("--model"), "--model"), Pairs(p.All("--effort"), "--effort"),
                         TimeSpan.FromMinutes(p.Int("--every") ?? 22), TimeSpan.FromSeconds(p.Int("--hold") ?? 35),
                         TimeSpan.FromMinutes(p.Int("--turn-timeout") ?? 6), p.Int("--count") ?? 66,
-                        p.Int("--restart-daemon-at"), p.Int("--restart-shadow-at"), p.Option("--only"));
+                        p.Int("--restart-daemon-at"), p.Int("--restart-shadow-at"), p.Option("--only"),
+                        Pairs(p.All("--cap"), "--cap").ToDictionary(kv => kv.Key, kv => int.TryParse(kv.Value, out var n) && n >= 0 ? n : throw new UsageException("--cap is <Agent>=<sessions>")));
                     if (options.Only is { } only && SoakScript.All.All(s => s.Name != only)) { throw new UsageException($"--only takes one of {string.Join(", ", SoakScript.All.Select(s => s.Name).Distinct())}"); }
                     await new SoakDriver(ha, options, Path.GetFullPath(p.Option("--state")!), homes).RunAsync(ct);
                     // Done with the plan either way; the episodes that went wrong make it a FAIL

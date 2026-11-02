@@ -196,8 +196,8 @@ public class SoakTests
         }
     }
 
-    static SoakOptions Options(string only, int count = 66) => new("rehearsal_m", "Rehearsal", new Dictionary<string, string> { ["Copilot"] = "claude-haiku-4.5" }, new Dictionary<string, string>(),
-        TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(35), TimeSpan.FromMinutes(6), count, null, null, only);
+    static SoakOptions Options(string only, int count = 66, IReadOnlyDictionary<string, int>? caps = null) => new("rehearsal_m", "Rehearsal", new Dictionary<string, string> { ["Copilot"] = "claude-haiku-4.5" }, new Dictionary<string, string>(),
+        TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(35), TimeSpan.FromMinutes(6), count, null, null, only, caps);
 
     static SoakDriver Driver(FakeHa fake, SoakOptions options, string dir) =>
         new(fake, options, Path.Combine(dir, "state"), Homes.For(dir), () => fake.Now, (d, _) => { fake.Now += d; return Task.CompletedTask; });
@@ -275,6 +275,28 @@ public class SoakTests
             var record = SoakDriver.Load(Path.Combine(dir, "state")).Episodes[^1];
             Assert.Equal("0894c91f-f3f5-4546-8684-a8f9e6ad58e7", record.ResumedFrom);
             Assert.Empty(record.Problems);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task An_agent_at_its_cap_has_its_episodes_passed_over_and_the_others_still_run()
+    {
+        var dir = Directory.CreateTempSubdirectory("soak-test").FullName;
+        try
+        {
+            // One Copilot session already; a cap of one passes over the next Copilot episode.
+            Directory.CreateDirectory(Path.Combine(dir, "state"));
+            var earlier = new SoakState { Began = DateTimeOffset.UnixEpoch, Episodes = [new SoakRecord { Index = 0, Scenario = "copilot-nested", Agent = "Copilot", Session = "0894c91f-f3f5-4546-8684-a8f9e6ad58e7", Ended = DateTimeOffset.UnixEpoch }] };
+            File.WriteAllText(Path.Combine(dir, "state", "soak.json"), JsonSerializer.Serialize(earlier, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            var fake = new FakeHa { Now = DateTimeOffset.UnixEpoch.AddHours(10) };
+            await Driver(fake, Options("copilot-questions", count: 4, caps: new Dictionary<string, int> { ["Copilot"] = 1 }), dir).RunAsync(CancellationToken.None);
+            Assert.Empty(fake.Launches);
+            Assert.Single(SoakDriver.Load(Path.Combine(dir, "state")).Episodes);
+
+            // Under its cap, the same episode runs.
+            await Driver(fake, Options("copilot-questions", count: 4, caps: new Dictionary<string, int> { ["Copilot"] = 2 }), dir).RunAsync(CancellationToken.None);
+            Assert.Single(fake.Launches);
         }
         finally { Directory.Delete(dir, true); }
     }

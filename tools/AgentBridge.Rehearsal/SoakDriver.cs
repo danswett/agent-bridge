@@ -35,7 +35,8 @@ internal sealed record SoakOptions(
     int Count,
     int? RestartDaemonAt,
     int? RestartShadowAt,
-    string? Only);
+    string? Only,
+    IReadOnlyDictionary<string, int>? Caps = null);
 
 // One episode's record in soak.json, so a driver restarted carries on where it stopped and the
 // report can say what was done.
@@ -119,6 +120,11 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         {
             var episode = plan[i];
             if (options.Only is { } only && episode.Scenario.Name != only) { continue; }
+            // An agent at its cap has started as many sessions (resumes included) as it may: its
+            // episodes are passed over, leaving their slots empty, so an allowance that is running
+            // out is spent only on what the gate needs.
+            if (options.Caps?.TryGetValue(episode.Scenario.Agent, out var cap) == true
+                && state.Episodes.Count(e => e.Agent == episode.Scenario.Agent && e.Session is not null) >= cap) { continue; }
             var due = state.Began + options.Every * i;
             // After a stop, the overdue ones are spread out again rather than run back to back.
             if (state.Episodes.LastOrDefault()?.Ended is { } last && last + options.Every / 4 > due) { due = last + options.Every / 4; }

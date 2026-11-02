@@ -318,7 +318,9 @@ from an agent session, and the #67 guard does not stand in its way.
   whose Home Assistant connector would wake while the daemon restarts; `-Finish` starts it again.
   `-DriverOnly` rebuilds the driver alone, between `-Stop` and `-Start`.
 * **`-Start`** runs `agent-bridge-rehearsal soak run` as a logon task, restarted if it fails, and
-  turns both VMs' auto-shutdown off so the run lasts the night. Its state is
+  turns both VMs' auto-shutdown off so the run lasts the night. `-Caps @{ Codex = 6 }` caps an
+  agent's sessions, resumes included, passing over its later episodes, for an allowance running
+  low. Its state is
   `C:\rehearsal\soak\state\soak.json` on VM-M, so a restart carries on from the next episode
   (ending a session one left under way); `-Fresh` starts again from the first.
 * **`-Collect`** zips a session's raw transcripts and its sub-agents' on VM-M

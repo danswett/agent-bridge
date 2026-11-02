@@ -73,6 +73,8 @@ param(
     # Small, cheap models: the soak is for coverage of events, not quality.
     [Parameter(ParameterSetName = 'Start')][hashtable] $Models = @{ Copilot = 'claude-haiku-4.5'; Claude = 'haiku'; Codex = 'gpt-5.6-luna' },
     [Parameter(ParameterSetName = 'Start')][hashtable] $Efforts = @{ Codex = 'low' },
+    # At most this many sessions of an agent, resumes included, for an allowance running low.
+    [Parameter(ParameterSetName = 'Start')][hashtable] $Caps = @{},
 
     [Parameter(Mandatory, ParameterSetName = 'Collect')][string] $OutDir,
 
@@ -253,10 +255,12 @@ foreach ($p in Get-Process agent-bridge-host, agent-bridge-hostw -ErrorAction Si
 }
 
 if ($Start) {
+    foreach ($k in $Caps.Keys) { if ($k -notin 'Copilot', 'Claude', 'Codex') { throw "-Caps takes Copilot, Claude or Codex, not $k" } }
     $arguments = @('soak', 'run', '--token-file', 'C:\rehearsal\ha.token', '--state', "$soak\state", '--count', $Count, '--every', $EveryMinutes,
         '--restart-daemon-at', $RestartDaemonAt, '--restart-shadow-at', $RestartShadowAt)
     foreach ($k in $Models.Keys) { $arguments += @('--model', "$k=$($Models[$k])") }
     foreach ($k in $Efforts.Keys) { $arguments += @('--effort', "$k=$($Efforts[$k])") }
+    foreach ($k in $Caps.Keys) { $arguments += @('--cap', "$k=$([int]$Caps[$k])") }
     $line = ($arguments | ForEach-Object { if ("$_" -match '\s') { "'$_'" } else { "$_" } }) -join ' '
     foreach ($role in 'W', 'M') { & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $role -AutoShutdown Off 6>$null }
     Invoke-Guest M -Script @'
