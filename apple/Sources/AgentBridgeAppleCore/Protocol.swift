@@ -4,9 +4,9 @@ import Foundation
 public struct BridgeRequest: Encodable, Sendable {
     public let id: Int
     public let op: String
-    public let data: [String: String]
+    public let data: [String: JSONValue]
 
-    public init(id: Int, op: String, data: [String: String] = [:]) {
+    public init(id: Int, op: String, data: [String: JSONValue] = [:]) {
         self.id = id
         self.op = op
         self.data = data
@@ -33,53 +33,67 @@ public indirect enum JSONValue: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if container.decodeNil() { self = .null }
-        else if let value = try? container.decode(Bool.self) { self = .bool(value) }
-        else if let value = try? container.decode(String.self) { self = .string(value) }
-        else if let value = try? container.decode(Double.self) { self = .number(value) }
-        else if let value = try? container.decode([String: JSONValue].self) { self = .object(value) }
-        else { self = .array(try container.decode([JSONValue].self)) }
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else {
+            self = try .array(container.decode([JSONValue].self))
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
-        case .object(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .string(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .bool(let value): try container.encode(value)
+        case let .object(value): try container.encode(value)
+        case let .array(value): try container.encode(value)
+        case let .string(value): try container.encode(value)
+        case let .number(value): try container.encode(value)
+        case let .bool(value): try container.encode(value)
         case .null: try container.encodeNil()
         }
     }
 
     public subscript(_ key: String) -> JSONValue? {
-        if case .object(let object) = self { return object[key] }
+        if case let .object(object) = self {
+            return object[key]
+        }
         return nil
     }
 
     public var string: String? {
-        if case .string(let value) = self { return value }
+        if case let .string(value) = self {
+            return value
+        }
         return nil
     }
 
     public var array: [JSONValue]? {
-        if case .array(let value) = self { return value }
+        if case let .array(value) = self {
+            return value
+        }
         return nil
     }
 }
 
-public struct BridgeSession: Identifiable, Sendable, Equatable {
-    public let id: String
-    public let agent: String
-    public let status: String
-    public let title: String
+public extension JSONValue {
+    var bool: Bool? {
+        if case let .bool(value) = self {
+            return value
+        }
+        return nil
+    }
 
-    public init?(json: JSONValue) {
-        guard let id = json["id"]?.string else { return nil }
-        self.id = id
-        self.agent = json["agent"]?.string ?? "unknown"
-        self.status = json["status"]?.string ?? "idle"
-        self.title = json["title"]?.string ?? json["workspace"]?.string ?? id
+    var number: Double? {
+        if case let .number(value) = self {
+            return value
+        }
+        return nil
     }
 }
