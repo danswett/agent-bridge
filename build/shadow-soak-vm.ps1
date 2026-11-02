@@ -87,7 +87,7 @@ function Invoke-Guest([string] $Role, [string] $Script, [switch] $AsDesktopUser,
     $file = Join-Path $scratch "soak-$([guid]::NewGuid().ToString('n')).ps1"
     Set-Content -Path $file -Value $Script -Encoding utf8
     try {
-        $extra = if ($AsDesktopUser) { @('-AsDesktopUser', '-TimeoutMinutes', $TimeoutMinutes) } else { @() }
+        $extra = if ($AsDesktopUser) { @{ AsDesktopUser = $true; TimeoutMinutes = $TimeoutMinutes } } else { @{} }
         $out = & $vmScript -Subscription $Subscription -AzureConfigDir $AzureConfigDir -Role $Role -InvokeScript $file @extra 6>$null
         return (($out | Out-String) -replace '(?m)^JOB-DONE\s*$', '').Trim()
     } finally { Remove-Item $file -ErrorAction SilentlyContinue }
