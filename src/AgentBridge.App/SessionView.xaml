@@ -259,7 +259,7 @@
                 Spacing="8"
                 AutomationProperties.AutomationId="DelegatesPanel"
                 Visibility="{x:Bind local:Ui.Show(Layout.ShowDelegates), Mode=OneWay}">
-                <TextBlock Style="{StaticResource AbTypeRow}" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
+                <TextBlock Style="{StaticResource AbTypeRow}" TextWrapping="Wrap" AutomationProperties.AutomationId="DelegatesText" Text="{x:Bind Card.DelegatesText, Mode=OneWay}" />
             </StackPanel>
 
             <ScrollViewer AutomationProperties.AutomationId="ToolsPanel" Visibility="{x:Bind local:Ui.Show(Layout.ShowTools), Mode=OneWay}">
