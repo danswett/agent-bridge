@@ -83,6 +83,9 @@ public sealed class PeerUsage
         if (saved.Account is null || saved.Account != account)
         {
             store.log("usage: other machines' readings kept here are another account's; ignoring them");
+            // Replaced, not just ignored, when this host is on another account: left on disk, they
+            // would come back at a later start as the account they were read for.
+            if (account is not null) { lock (store.gate) { store.SaveLocked(); } }
             return store;
         }
         lock (store.gate)

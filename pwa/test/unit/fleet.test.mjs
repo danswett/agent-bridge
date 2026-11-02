@@ -275,6 +275,24 @@ test('a machine forgotten while it is being looked at keeps nothing from that lo
   assert.equal(fleet.status('a'), '');
 });
 
+test('a look still under way at sign-out puts nothing back in the book', async () => {
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const { connection, book, fleet } = fleetWith({
+    a: { machine: { hostVersion: '0.1.0', sessions: 3 }, capabilities: ['sessions.read', 'usage'], usage: usage(40) },
+  });
+  const makeClient = fakeClient(connection);
+  fleet.makeClient = (channel) => ({ ...makeClient(channel), async usage() { await held; return connection.hosts.a.usage; } });
+
+  fleet.probe();
+  await flush();
+  fleet.clear();
+  release();
+  await fleet.idle();
+
+  assert.equal(book.size, 0);
+});
+
 test('a forgotten machine whose look then fails is not remembered as looked at', async () => {
   const { connection, fleet } = fleetWith({ a: { fail: true } });
   connection.openChannel = async (id) => { connection.opened.push(id); fleet.forget(id); throw new Error('gone'); };

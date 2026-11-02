@@ -328,6 +328,17 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Readings_kept_for_another_account_are_replaced_when_the_host_starts_on_this_one()
+    {
+        var first = PeerUsage.Load(folder, Id('d'), "1", time);
+        first.Take([Claude(10, Now)], new UsageReader(Id('a'), "VM"));
+
+        Assert.Empty(PeerUsage.Load(folder, Id('d'), "2", time).Entries);
+        // Back on the first account later: what was kept for it went when the host ran as the other.
+        Assert.Empty(PeerUsage.Load(folder, Id('d'), "1", time).Entries);
+    }
+
+    [Fact]
     public void Readings_kept_for_one_account_are_never_served_to_another()
     {
         var store = PeerUsage.Load(folder, Id('d'), "1", time);

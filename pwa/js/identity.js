@@ -24,8 +24,14 @@ async function kv(mode, key, value) {
       const t = db.transaction(STORE, mode === 'delete' ? 'readwrite' : mode);
       const store = t.objectStore(STORE);
       const r = mode === 'readonly' ? store.get(key) : mode === 'delete' ? store.delete(key) : store.put(value, key);
-      r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
+      // A write is done once its transaction commits, not when its request succeeds: signing out
+      // awaits the kept usage's deletion before the page goes (#172), and an abort after the
+      // request would otherwise go unreported.
+      if (mode === 'readonly') { r.onsuccess = () => resolve(r.result); return; }
+      t.oncomplete = () => resolve(r.result);
+      t.onabort = () => reject(t.error ?? new Error('IndexedDB transaction aborted'));
+      t.onerror = () => reject(t.error ?? r.error);
     });
   } finally { db.close(); }
 }

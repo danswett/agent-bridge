@@ -19,6 +19,8 @@ export class FleetStatus {
   #machines = new Map();
   // Bumped when a machine is forgotten, so a look at it already on its way changes nothing.
   #epochs = new Map();
+  // Advanced by clear(): one sign-in's looks from another's.
+  #generation = 0;
   #queue = Promise.resolve();
   #queued = new Set();
   // Each machine shown: the client its usage is followed on, and when it was last asked for its
@@ -153,6 +155,7 @@ export class FleetStatus {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.#generation++;
     this.#started = false;
     this.#stopTimer();
     this.#machines.clear();
@@ -252,7 +255,10 @@ export class FleetStatus {
     let channel = null;
     let client = null;
     const epoch = this.#epochs.get(id) ?? 0;
-    const forgotten = () => (this.#epochs.get(id) ?? 0) !== epoch;
+    const generation = this.#generation;
+    // Forgotten, or everything forgotten (signed out): an answer still on its way then would put a
+    // last account's readings back, to be kept for the next one.
+    const forgotten = () => (this.#epochs.get(id) ?? 0) !== epoch || this.#generation !== generation;
     try {
       channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
       client = this.makeClient(channel);
