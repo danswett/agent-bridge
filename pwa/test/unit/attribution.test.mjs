@@ -122,6 +122,11 @@ test('the main agent\'s words are dated by when it wrote them, not by a delegate
   assert.equal(mainVoice({ activity: { response: 'Done.', source: { reasoning: 'agent-1' }, own: { reasoning: 'Mine.', at } } }).at, at);
   // The top-level words are the main agent's: the session's own time dates them.
   assert.equal(mainVoice({ activity: { response: 'Done.' } }).at, null);
+  // The top-level answer is the main agent's and its reasoning comes from own (the host skimmed
+  // it): own.at, which the host moves on every write of the main agent's, dates them both.
+  const skimmed = mainVoice({ activity: { response: 'Done.', own: { reasoning: 'Mine.', at } } });
+  assert.equal(skimmed.reasoning, 'Mine.');
+  assert.equal(skimmed.at, at);
   // A host that sends no own.at: the session's time, as before.
   assert.equal(mainVoice({ activity: { response: 'Bisecting.', source: { response: 'agent-1' }, own: { response: 'Started.' } } }).at, null);
 });
