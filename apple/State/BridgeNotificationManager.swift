@@ -88,12 +88,12 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             }
         }
         do {
-            let settings = await center.notificationSettings()
+            let authorization = await authorizationStatus()
             guard token == permissionGeneration else { return }
-            let authorized: Bool = if settings.authorizationStatus == .notDetermined {
+            let authorized: Bool = if authorization == .notDetermined {
                 try await center.requestAuthorization(options: [.alert, .sound, .badge])
             } else {
-                settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                authorization == .authorized || authorization == .provisional
             }
             guard token == permissionGeneration else { return }
             enabled = authorized
@@ -111,9 +111,9 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
 
     public func refreshAuthorization() async {
         let token = permissionGeneration
-        let settings = await center.notificationSettings()
+        let authorization = await authorizationStatus()
         guard token == permissionGeneration else { return }
-        if enabled, settings.authorizationStatus != .authorized, settings.authorizationStatus != .provisional {
+        if enabled, authorization != .authorized, authorization != .provisional {
             enabled = false
             defaults.set(false, forKey: "bridge.notifications.enabled")
             status = "Notifications are disabled in System Settings."
@@ -122,6 +122,17 @@ public final class BridgeNotificationManager: NSObject, UNUserNotificationCenter
             status = enabled ? "Notifications are on." : "Notifications are off."
         }
         updateBadge()
+    }
+
+    private func authorizationStatus() async -> UNAuthorizationStatus {
+        // Older SDKs do not make UNNotificationSettings Sendable. Extract its
+        // scalar inside the callback instead of moving the object across actors.
+        let raw: Int = await withCheckedContinuation { continuation in
+            center.getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus.rawValue)
+            }
+        }
+        return UNAuthorizationStatus(rawValue: raw) ?? .denied
     }
 
     public func setForeground(_ value: Bool) {
