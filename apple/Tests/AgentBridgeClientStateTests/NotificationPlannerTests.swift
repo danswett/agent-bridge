@@ -4,7 +4,7 @@ import Foundation
 import Testing
 
 private func noticeSession(id: String = "s", status: String = "waiting", question: String? = "q", message: String = "Secret prompt", background: Int = 0, version: String = "v1") throws -> BridgeSession {
-    var json: [String: JSONValue] = ["id": .string(id), "title": .string("/private/workspace"), "agent": .string("codex"), "status": .string(status), "updatedAt": .string(version), "activity": .object(["background": .object(["agents": .number(Double(background))])])]
+    var json: [String: JSONValue] = ["id": .string(id), "title": .string("/private/workspace"), "agent": .string("codex"), "status": .string(status), "updatedAt": .string(version), "activity": .object(["response": .string("A completed turn."), "background": .object(["agents": .number(Double(background))])])]
     if let question {
         json["question"] = .object(["id": .string(question), "message": .string(message)])
     }
@@ -47,10 +47,13 @@ private func noticeSession(id: String = "s", status: String = "waiting", questio
     #expect(BridgeNotificationPlanner.isCurrent(newNotice, session: next))
 }
 
-@Test func initialSnapshotsCountBadgesWithoutSendingANotificationBurst() throws {
+@Test func initialSnapshotsNotifyPendingQuestionsButDoNotAnnounceOldFinishedTurns() throws {
     let plan = try BridgeNotificationPlanner.plan(machineID: "m", machineName: "Mac", before: [], after: [noticeSession()], initialSnapshot: true)
-    #expect(plan.notices.isEmpty)
+    #expect(plan.notices.count == 1)
+    #expect(plan.notices.first?.kind == .question)
     #expect(plan.waitingCount == 1)
+    let oldFinish = try noticeSession(status: "idle", question: nil)
+    #expect(BridgeNotificationPlanner.plan(machineID: "m", machineName: "Mac", before: [], after: [oldFinish], initialSnapshot: true).notices.isEmpty)
 }
 
 @Test func delegatedAndEndingSessionsDoNotPretendTheTurnHasFinished() throws {

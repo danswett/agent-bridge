@@ -5,12 +5,20 @@ struct MachinesView: View {
     @Bindable var store: BridgeStore
     @Environment(\.dismiss) private var dismiss
     @State private var usageHost: HostStore?
+    @State private var showingAccountUsage = false
+    @State private var forgetRequest: ForgetRequest?
+    @State private var forgetTask: Task<Void, Never>?
+    @State private var forgetError: String?
+
+    private struct ForgetRequest {
+        let machine: RelayMachine
+        let displayedName: String
+        let relayAddress: String
+        let accountID: String?
+    }
 
     private var displayedHosts: [HostStore] {
-        guard !store.isSample else { return [] }
-        let localIDs = Set(store.hosts.filter(\.isLocal).compactMap { $0.hello?["machine"]?["id"]?.string })
-        return store.hosts.filter { $0.isLocal || !localIDs.contains($0.hello?["machine"]?["id"]?.string ?? "") }
-            .sorted { $0.isLocal && !$1.isLocal }
+        store.isSample ? [] : store.canonicalHosts
     }
 
     private func remoteConnection(for host: HostStore) -> HostStore? {
@@ -24,16 +32,40 @@ struct MachinesView: View {
         return store.roster.filter { !knownIDs.contains($0.id) }
     }
 
+    private var updateTargets: [HostStore] {
+        displayedHosts.map { remoteConnection(for: $0) ?? $0 }.filter(\.canCheckForUpdates)
+    }
+
     var body: some View {
         NavigationStack {
             List {
                 Section {
                     Text(store.connectionStatus).foregroundStyle(.secondary)
+                    if store.cachedUsage != nil {
+                        Button("Usage Across Machines", systemImage: "chart.bar") { showingAccountUsage = true }
+                    }
+                    Button("Check All for Updates", systemImage: "arrow.clockwise") {
+                        for host in updateTargets {
+                            let connection = host.connectionID
+                            let instance = host.instance
+                            Task { @MainActor in
+                                guard connection == host.connectionID, instance == host.instance, host.canCheckForUpdates else { return }
+                                let request = UUID()
+                                await host.perform(BridgeOperation(op: "update.check", data: ["request": .string(request.uuidString.lowercased())], requestID: request), slot: "update")
+                            }
+                        }
+                    }.disabled(updateTargets.isEmpty)
                     if store.isSample {
                         Text("Sample sessions have no connected machine.")
                     } else if store.hosts.isEmpty, knownWithoutHost.isEmpty {
                         ContentUnavailableView("No machines connected", systemImage: "desktopcomputer",
                                                description: Text("Connect a local host or sign in from Connection settings."))
+                    }
+                    if let forgetError {
+                        Text(forgetError).foregroundStyle(.red)
+                    }
+                    if forgetTask != nil {
+                        ProgressView("Forgetting machine…")
                     }
                 }
                 ForEach(displayedHosts) { host in
@@ -41,6 +73,10 @@ struct MachinesView: View {
                         MachineView(host: host, updateHost: remoteConnection(for: host), onUsage: { usageHost = host }) {
                             store.selectedMachine = host.id
                             dismiss()
+                        }
+                        if !host.isLocal, let machine = store.roster.first(where: { $0.id == host.id && !$0.online }) {
+                            Button("Forget", role: .destructive) { prepareForget(machine, displayedName: host.name) }
+                                .disabled(forgetTask != nil)
                         }
                     }
                 }
@@ -58,25 +94,79 @@ struct MachinesView: View {
                             }
                         }
                         .accessibilityElement(children: .combine)
+                        if !machine.online {
+                            Button("Forget", role: .destructive) { prepareForget(machine, displayedName: machine.name) }
+                                .disabled(forgetTask != nil)
+                        }
                     }
                 }
             }
             .navigationTitle("Machines")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(forgetTask != nil) } }
+            .interactiveDismissDisabled(forgetTask != nil)
+            .confirmationDialog("Forget this machine?", isPresented: Binding(get: { forgetRequest != nil }, set: {
+                if !$0 {
+                    forgetRequest = nil
+                }
+            }), presenting: forgetRequest) { request in
+                Button("Forget \(request.displayedName)", role: .destructive) { forget(request) }
+                Button("Cancel", role: .cancel) { forgetRequest = nil }
+            } message: { request in
+                Text("Remove “\(request.displayedName)” from remembered machines? It can appear again when it reconnects.")
+            }
             .sheet(item: $usageHost) { host in
                 NavigationStack {
                     UsageView(report: host.usage, machineName: host.name, status: host.status,
-                              onRefresh: host.can("usage") ? { @MainActor @Sendable in await Task { await host.refreshUsage() }.value } : nil)
+                              onRefresh: usageRefresh(for: host))
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { usageHost = nil } } }
                 }
                 #if os(macOS)
                 .frame(minWidth: 440, idealWidth: 560, minHeight: 480, idealHeight: 640)
                 #endif
             }
+            .sheet(isPresented: $showingAccountUsage) {
+                NavigationStack {
+                    UsageView(report: store.cachedUsage, machineName: "All machines", status: store.cacheStatus ?? "Saved readings retain their original age.")
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingAccountUsage = false } } }
+                }
+                #if os(macOS)
+                .frame(minWidth: 480, idealWidth: 600, minHeight: 500, idealHeight: 700)
+                #endif
+            }
         }
         #if os(macOS)
         .frame(minWidth: 500, idealWidth: 620, minHeight: 500, idealHeight: 700)
         #endif
+    }
+
+    private func usageRefresh(for host: HostStore) -> (@MainActor () async -> Void)? {
+        guard host.can("usage") else { return nil }
+        return {
+            let request = Task<Void, Never> { @MainActor in await host.refreshUsage() }
+            await request.value
+        }
+    }
+
+    private func prepareForget(_ machine: RelayMachine, displayedName: String) {
+        guard !machine.online, forgetTask == nil else { return }
+        forgetRequest = ForgetRequest(machine: machine, displayedName: displayedName,
+                                      relayAddress: store.relayAddress, accountID: store.account?.accountId)
+    }
+
+    private func forget(_ request: ForgetRequest) {
+        guard forgetTask == nil else { return }
+        forgetError = nil
+        forgetTask = Task { @MainActor in
+            defer { forgetTask = nil }
+            guard store.relayAddress == request.relayAddress, store.account?.accountId == request.accountID,
+                  store.roster.contains(where: { $0.id == request.machine.id && $0.name == request.machine.name && !$0.online })
+            else {
+                forgetError = "The connection or machine changed. Review the list before forgetting it."
+                return
+            }
+            do { try await store.forget(request.machine.id) }
+            catch { forgetError = "Couldn’t forget \(request.displayedName): \(error.localizedDescription)" }
+        }
     }
 }
 
@@ -85,6 +175,7 @@ private struct MachineView: View {
     let updateHost: HostStore?
     let onUsage: () -> Void
     let onSessions: () -> Void
+    @State private var showingDiagnostics = false
     private var updateSource: HostStore {
         updateHost ?? host
     }
@@ -112,6 +203,9 @@ private struct MachineView: View {
                 if host.can("usage") || host.usage != nil {
                     Button("Usage", action: onUsage)
                 }
+                if host.isLocal {
+                    Button("Host Details") { showingDiagnostics = true }.disabled(!host.isLive)
+                }
             }
             .buttonStyle(.bordered)
             if updateSource.capabilities.contains("update") || updateSource.update != nil {
@@ -120,6 +214,7 @@ private struct MachineView: View {
             }
         }
         .padding(.vertical, 4)
+        .sheet(isPresented: $showingDiagnostics) { LocalHostDetailsView(host: host) }
     }
 }
 
@@ -155,8 +250,7 @@ private struct MachineUpdateView: View {
     }
 
     private var canCheck: Bool {
-        host.can("update") && state?["installer"]?.bool == true && phase == "idle"
-            && attempt?.isSending != true && !unconfirmed && requestTask == nil
+        host.canCheckForUpdates && requestTask == nil
     }
 
     private var available: String? {
@@ -197,7 +291,10 @@ private struct MachineUpdateView: View {
                             requestTask = nil
                         }
                     }
-                    .disabled(!host.can("update") || attempt.hostInstance != host.instance || requestTask != nil)
+                    .disabled(!host.can("update") || !attempt.canRetry || attempt.hostInstance != host.instance || requestTask != nil)
+                    if !attempt.canRetry {
+                        Text("This request can no longer be retried here. Check the update at the machine.").font(.caption).foregroundStyle(.secondary)
+                    }
                 } else if let result = attempt.result {
                     Text(result["outcome"]?.string == "accepted"
                         ? "Request accepted. The machine will report its progress here."
@@ -275,5 +372,13 @@ private struct MachineUpdateView: View {
             }
             await host.perform(operation, slot: "update")
         }
+    }
+}
+
+private extension HostStore {
+    var canCheckForUpdates: Bool {
+        can("update") && update?["installer"]?.bool == true
+            && !["checking", "downloading", "waiting", "installing"].contains(update?["phase"]?.string ?? "idle")
+            && attempts["update"]?.isSending != true && attempts["update"]?.uncertain != true
     }
 }
