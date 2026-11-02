@@ -196,7 +196,7 @@ switch (command)
             return 0;
         }
     case "serve":
-        return await ServeAsync();
+        return await HostHandover.RunAsync(ServeAsync, RestartSelf);
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
             await using var source = new SessionSource(options);
@@ -293,13 +293,14 @@ static Uri? SavedRelay(Identity identity)
     return File.Exists(saved) && Uri.TryCreate(File.ReadAllText(saved).Trim(), UriKind.Absolute, out var u) ? u : null;
 }
 
-async Task<int> ServeAsync()
+async Task<int> ServeAsync(HostHandover handover)
 {
     var identity = LoadIdentity();
     var profile = Option("--profile") ?? "default";
     var localOnly = Flag("--local-only");
     // One host per profile on this machine. A host restarting itself (host.restart) starts its
-    // replacement first, which waits here for it to go.
+    // replacement once it has let go of this (HostHandover); the wait covers a host something else
+    // started just before.
     using var hostLock = HostLock.TryAcquire(identity.Folder, TimeSpan.FromSeconds(15));
     if (hostLock is null)
     {
@@ -487,7 +488,7 @@ async Task<int> ServeAsync()
         Stop = () => stop.Cancel(),
         Restart = () =>
         {
-            RestartSelf();
+            handover.Request();
             stop.Cancel();
         },
     }, Log);
@@ -680,8 +681,8 @@ static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
 
 static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
-// host.restart: the same command again, without a window, which waits for this process to let
-// go of the profile's lock before it starts.
+// host.restart: the same command again, without a window, started once this process has stopped
+// serving and let go of the profile's lock (HostHandover).
 void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
