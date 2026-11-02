@@ -32,8 +32,8 @@ public sealed partial class SessionRow : UserControl
     public SessionRow()
     {
         InitializeComponent();
-        Loaded += (_, _) => Attach("loaded");
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach("unloaded"); } };
+        Loaded += (_, _) => { if (!parked) { Attach(); } };
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
     }
 
@@ -61,12 +61,25 @@ public sealed partial class SessionRow : UserControl
         ShowWords();
     }
 
-    // What attached and detached rows, for the self-test to say when a row listens where it should not.
-    internal static Action<string>? Trace;
+    // Put aside by the list for reuse (SessionsPage), still loaded and still holding its old
+    // session: Loaded comes again there, and must not have it listen to that session.
+    bool parked;
 
-    internal void Attach(string why)
+    // Given a session to show again, by the list.
+    internal void Unpark()
     {
-        Trace?.Invoke($"attach {Card?.Id} ({why}, attached {attached})");
+        parked = false;
+        if (IsLoaded) { Attach(); }
+    }
+
+    internal void Park()
+    {
+        parked = true;
+        Detach();
+    }
+
+    void Attach()
+    {
         if (attached) { return; }
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
@@ -77,9 +90,8 @@ public sealed partial class SessionRow : UserControl
         TakeFocus();
     }
 
-    internal void Detach(string why)
+    void Detach()
     {
-        Trace?.Invoke($"detach {Card?.Id} ({why}, attached {attached})");
         if (!attached) { return; }
         attached = false;
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; }

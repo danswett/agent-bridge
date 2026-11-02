@@ -91,13 +91,13 @@ public sealed partial class SessionsPage : UserControl
         if (viewModel.Selected is not null) { DispatcherQueue.TryEnqueue(SyncList); }
     }
     // A row put aside for reuse stays loaded in the list's recycle queue, still holding its old
-    // session: it lets go of it there, rather than listening to a session no longer listed, and
-    // listens again once it is given one.
+    // session, and is loaded again there: it lets go of that session, rather than listening to one
+    // no longer listed, and listens again only once it is given one to show.
     void OnRowRecycled(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
         if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
-        if (args.InRecycleQueue) { row.Detach("recycled"); }
-        else if (row.IsLoaded) { row.Attach("reused"); }
+        if (args.InRecycleQueue) { row.Park(); }
+        else { row.Unpark(); }
     }
     // A row whose session leaves the list (its machine's tab, its end) can stay loaded in the
     // list's panel, put aside for reuse without being told: it lets go of the session once the
@@ -113,7 +113,7 @@ public sealed partial class SessionsPage : UserControl
         if (viewModel is null) { return; }
         foreach (var row in RowsUnder(List))
         {
-            if (row.Card is { } card && !viewModel.Sessions.Contains(card)) { row.Detach("unlisted"); }
+            if (row.Card is { } card && !viewModel.Sessions.Contains(card)) { row.Park(); }
         }
     }
 
