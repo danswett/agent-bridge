@@ -234,7 +234,8 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   of a state's attributes, less room for End session's hint and its own), the lines go, then
   entries from the end, each counted in `subagents_more`. A session whose card text fills
   that alone, or whose every entry the host's own budget dropped, publishes `subagents: []`
-  with the count. The card draws neither yet.
+  with the count. Room for that much is kept before the card text is fitted, so the 15 KiB
+  holds with it too. The card draws neither yet.
 
 ### What is withdrawn
 
@@ -622,7 +623,10 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   wrote last, its words neither finish a turn nor appear in the push (design/subagents.md
   §7). A delegate's question is pushed as the session's are, titled "*name* asks · " before
   the usual title, its text led by "*name* asks:". Its answer buttons are titled the same
-  way, under the session's tag.
+  way, under the session's tag. The hooks' pushes carry no tag at all, the session's own
+  questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
+  so on that path a delegate's question is treated as the session's are and neither
+  replaces the other; the answer buttons are where the newer replaces the older.
 
 Where stage 5b knowingly differs from the daemon:
 

@@ -366,8 +366,10 @@ public class ContractTests
         Assert.NotEmpty(listed);
         Assert.Equal(6 - listed.Count, detail["subagents_more"]!.GetValue<int>());
 
-        // A reply that fills the budget on its own: none listed, all counted.
+        // A reply that fills the budget on its own: none listed, all counted, and the list and
+        // count inside the budget too (found in review).
         var full = Detail(string.Concat(Enumerable.Repeat("\U0001F680", 3000)), delegates, more: 2);
+        Assert.True(Bytes(full) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(full)} bytes");
         Assert.Empty(full["subagents"]!.AsArray());
         Assert.Equal(8, full["subagents_more"]!.GetValue<int>());
 

@@ -154,10 +154,16 @@ public static class HaPayloads
         // Add-DaemonAnswerStamp: the reply-card publish last used, on every update, so a card
         // that sent it can tell it was.
         if (!string.IsNullOrWhiteSpace(answerConsumedAt)) { detail["answer_consumed_at"] = answerConsumedAt; }
+        // The least the delegates take, an empty list and the count, is reserved before the card is
+        // fitted: a card fitted to the budget alone left them over it (found in review). They then
+        // take what room is left, and at worst come back to exactly this.
+        if (SubagentCount(full) > 0) { detail["subagents"] = new JsonArray(); detail["subagents_more"] = SubagentCount(full); }
         FitCard(detail);
         AddSubagents(detail, full);
         return detail;
     }
+
+    static int SubagentCount(Session s) => (s.Subagents?.Count ?? 0) + (s.SubagentsMore ?? 0);
 
     static int Bytes(JsonObject o) => System.Text.Encoding.UTF8.GetByteCount(HaContract.Serialize(o));
 
@@ -220,7 +226,7 @@ public static class HaPayloads
     internal static void AddSubagents(JsonObject detail, Session full)
     {
         var list = full.Subagents ?? [];
-        if (list.Count == 0 && full.SubagentsMore is not > 0) { return; }
+        if (SubagentCount(full) == 0) { return; }
         var entries = new List<JsonObject>();
         foreach (var a in list.Take(SubagentsShown))
         {
