@@ -332,4 +332,49 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         });
         await Wait.UntilAsync(() => TestUi.Read(() => busy.Response) == "Skimmed main answer.", "own's answer in place of an absent one");
     }
+
+    async Task<SessionCardViewModel> ShowAsync(Session session, string what)
+    {
+        await host.SendAsync(Events.SessionUpsert, session);
+        var card = Card(session.Id);
+        await Wait.UntilAsync(() => TestUi.Read(() => card.Response) == session.Activity.Response || TestUi.Read(() => card.Response) == session.Activity.Own?.Response, what);
+        return card;
+    }
+
+    [Fact]
+    public async Task Words_from_a_host_that_says_nothing_of_whose_they_are_are_labelled_with_the_agents_name_not_main_agent()
+    {
+        // Claude, Codex or an older host: the top-level response may be a delegate's.
+        var card = await ShowAsync(Make.Session("busy", response: "Maybe a delegate's words.", updated: Make.T0.AddMinutes(1)) with { Agent = AgentKind.Claude }, "the unattributed response");
+
+        Assert.Equal(("Maybe a delegate's words.", false, "Claude"), TestUi.Read(() => (card.Response, card.Attributed, card.Speaker)));
+    }
+
+    [Fact]
+    public async Task Words_the_host_attributes_with_source_are_the_main_agents_own_and_labelled_main_agent()
+    {
+        var card = await ShowAsync(Make.Session("busy", updated: Make.T0.AddMinutes(1)) with
+        {
+            Activity = new Activity
+            {
+                Response = "The delegate's findings.",
+                Source = new ActivitySource { Response = "agent-1" },
+                Own = new OwnActivity { Response = "The main agent's answer." },
+            },
+        }, "the attributed response");
+
+        Assert.Equal(("The main agent's answer.", "Main agent"), TestUi.Read(() => (card.Response, card.Speaker)));
+    }
+
+    [Fact]
+    public async Task A_host_listing_delegates_without_a_source_has_its_top_level_words_labelled_main_agent()
+    {
+        // A host that attributes says nothing more while the main agent wrote last.
+        var card = await ShowAsync(Make.Session("busy", response: "Main's own reply.", updated: Make.T0.AddMinutes(1)) with
+        {
+            Subagents = [new Subagent { Id = "agent-1", Kind = SubagentKind.Task, Status = SubagentStatus.Working, Name = "Read the logs" }],
+        }, "the response beside a delegate list");
+
+        Assert.Equal(("Main's own reply.", "Main agent"), TestUi.Read(() => (card.Response, card.Speaker)));
+    }
 }

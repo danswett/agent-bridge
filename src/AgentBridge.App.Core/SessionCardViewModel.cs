@@ -103,7 +103,14 @@ public sealed partial class SessionCardViewModel : Observable
     // text is whoever wrote last: where activity.source names a delegate for it, activity.own
     // carries the main agent's, and own's stands in when the top-level text is absent
     // (docs/design/subagents.md, "New clients"). A delegate's words are U8's (#176).
-    bool ResponseByDelegate => !string.IsNullOrEmpty(session.Activity.Source?.Response) || session.Activity.Response is null;
+    bool ResponseByDelegate => !string.IsNullOrEmpty(session.Activity.Source?.Response) || string.IsNullOrEmpty(session.Activity.Response);
+    // Whether the host says whose the words are (pwa/js/attribution.js): source, own or a delegate
+    // list. A host that doesn't (Claude and Codex until #84's later slices, an older host on another
+    // machine) may send a delegate's words as the top-level response (v1-sessions.md), so they are
+    // labelled with the agent's name, never "Main agent": a delegate's text, after reading something
+    // untrusted, must not pass as the main agent's.
+    public bool Attributed => session.Activity.Source is not null || session.Activity.Own is not null || session.Subagents is not null || session.SubagentsMore > 0;
+    public string Speaker => Attributed ? "Main agent" : AgentName;
     public string Response => (ResponseByDelegate ? session.Activity.Own?.Response : session.Activity.Response) ?? "";
     public bool HasResponse => Response.Length > 0;
     public bool ResponseTruncated => (ResponseByDelegate ? session.Activity.Own?.ResponseTruncated : session.Activity.ResponseTruncated) == true && HasResponse;

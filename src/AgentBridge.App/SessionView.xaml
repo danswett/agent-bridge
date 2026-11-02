@@ -206,10 +206,10 @@
                         <TextBlock Style="{StaticResource AbTypeReading}" TextWrapping="Wrap" IsTextSelectionEnabled="True" Text="{x:Bind Card.UserMessage, Mode=OneWay}" />
                     </Border>
 
-                    <!-- The main agent: a label line, then its words; its reasoning behind a disclosure. -->
+                    <!-- The main agent: a label line ("Main agent" only where the host says whose the words are, else the agent's name), then its words; its reasoning behind a disclosure. -->
                     <StackPanel Spacing="8" Visibility="{x:Bind local:Ui.Show(Card.HasResponse), Mode=OneWay}">
                         <TextBlock Style="{StaticResource AbTypeMeta}" Foreground="{ThemeResource AbText2}">
-                            <Run Text="Main agent" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.AgeText, Mode=OneWay}" />
+                            <Run Text="{x:Bind Card.Speaker, Mode=OneWay}" FontWeight="SemiBold" Foreground="{ThemeResource AbText}" /><Run Text="  " /><Run Text="{x:Bind Card.AgeText, Mode=OneWay}" />
                         </TextBlock>
                         <TextBlock
                             Style="{StaticResource AbTypeMeta}"
