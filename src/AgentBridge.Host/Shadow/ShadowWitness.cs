@@ -108,6 +108,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         var plains = new List<string>();
         var changed = false;
         var dropped = false;
+        var fromName = new HashSet<string>(StringComparer.Ordinal);
         foreach (var e in entries)
         {
             var (plain, repeated) = Unrepeated(e.Label, e.Id);
@@ -121,7 +122,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
                 if (!plains.Contains(plain, StringComparer.OrdinalIgnoreCase)) { return null; }
             }
             plains.Add(plain);
-            var yaml = e.Agent == "copilot" && Guid.TryParseExact(e.Id, "D", out _)
+            var yaml = e.Agent == "copilot" && e.Launcher == "copilot" && Guid.TryParseExact(e.Id, "D", out _)
                 ? ResumableStore.ReadYaml(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "workspace.yaml"))
                 : [];
             if (yaml.ContainsKey("summary") || !yaml.TryGetValue("name", out var name))
@@ -136,7 +137,7 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             if (!prefixed && LaunchService.Title(entry, prefixed: false) != plain) { return null; }
             changed = true;
             var prompt = ResumableStore.FirstPrompt(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "events.jsonl"), DaemonPromptEnds);
-            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); }
+            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); fromName.Add(e.Id); }
             else { dropped = true; }
         }
         if (!changed) { return null; }
@@ -158,6 +159,15 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             }
         }
         var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The host also reserves labels for live sessions, which are eligible but not offered. A
+        // title the daemon makes from a first prompt can meet one of those where the name did not
+        // (found in review), and the daemon would then tell it apart. So a relabelled title that a
+        // live session could hold leaves the list unexplained.
+        if (LiveTitles(host, entries) is not { } live) { return null; }
+        foreach (var (title, id, _, _) in relabelled)
+        {
+            if (fromName.Contains(id) && live.Contains(title)) { return null; }
+        }
         var mine = new List<string>();
         foreach (var (title, id, _, _) in relabelled)
         {
@@ -174,6 +184,31 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
 
     // Read-BridgeFileEnds's default: the first and last 128 KiB of a transcript.
     const int DaemonPromptEnds = 128 * 1024;
+
+    // Every label a live Copilot session not in the list could hold in the daemon's list, named
+    // or not: its summary, or else its first prompt, with its folder. Null when a live session of
+    // another agent could hold one too, which only a list naming every agent rules out.
+    HashSet<string>? LiveTitles(ShadowView host, IReadOnlyList<ShadowResumeEntry> entries)
+    {
+        var offered = entries.Select(e => e.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var named = entries.Select(e => e.Agent).Distinct(StringComparer.Ordinal).Count() > 1;
+        foreach (var s in host.Sessions.Values)
+        {
+            if (offered.Contains(s.Id)) { continue; }
+            if (s.Agent != "copilot") { if (named) { continue; } return null; }
+            if (!Guid.TryParseExact(s.Id, "D", out _)) { return null; }
+            var dir = Path.Combine(paths.CopilotHome, "session-state", s.Id.ToLowerInvariant());
+            if (!Directory.Exists(dir)) { return null; }
+            var yaml = ResumableStore.ReadYaml(Path.Combine(dir, "workspace.yaml"));
+            var summary = yaml.TryGetValue("summary", out var v) ? v : ResumableStore.FirstPrompt(Path.Combine(dir, "events.jsonl"), DaemonPromptEnds);
+            if (string.IsNullOrWhiteSpace(summary)) { continue; }
+            var entry = new ResumeEntry(s.Id, AgentKind.Copilot, "copilot", summary, yaml.GetValueOrDefault("cwd"), null);
+            titles.Add(LaunchService.Title(entry, prefixed: true));
+            titles.Add(LaunchService.Title(entry, prefixed: false));
+        }
+        return titles;
+    }
 
     // A label the host told apart with " (<first 8 of its id>)", and the label before that.
     static (string Plain, bool Repeated) Unrepeated(string label, string id)

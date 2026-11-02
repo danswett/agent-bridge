@@ -613,10 +613,12 @@ public sealed class ShadowWitnessTests : IDisposable
 
     IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, params ShadowResumeEntry[] host) => Resume(daemon, null, host);
 
-    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, string? liveAgent, params ShadowResumeEntry[] host)
+    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, string? liveAgent, params ShadowResumeEntry[] host) => Resume(daemon, liveAgent, "live", host);
+
+    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, string? liveAgent, string liveId, params ShadowResumeEntry[] host)
     {
         var d = new ShadowView { Resumable = [.. daemon.Select(ShadowHash.Normalize)] };
-        var live = liveAgent is null ? new Dictionary<string, ShadowSession>() : new Dictionary<string, ShadowSession> { ["live"] = new() { Id = "live", Agent = liveAgent, Status = "working" } };
+        var live = liveAgent is null ? new Dictionary<string, ShadowSession>() : new Dictionary<string, ShadowSession> { [liveId] = new() { Id = liveId, Agent = liveAgent, Status = "working" } };
         var h = new ShadowView { Sessions = live, Resumable = [.. host.Select(e => ShadowHash.Normalize(e.Label))], ResumableEntries = host, SeesAgentHaBridge = true };
         var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
         return [.. differences.Where(x => x.Kind.StartsWith("resumable.", StringComparison.Ordinal))];
@@ -675,6 +677,27 @@ public sealed class ShadowWitnessTests : IDisposable
         // plain label is not shown to be right, so it stays a mismatch.
         Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Tidy up - repo", "Claude: Hello - repo"],
             Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Copilot: Tidy up - repo (22222222)", Summarised, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")),
+            x => Assert.Null(x.Known));
+    }
+
+    [Fact]
+    public void A_relabelled_title_a_live_session_could_hold_or_an_agency_label_is_not_put_down_to_it()
+    {
+        const string Live = "55555555-5555-4555-8555-555555555555";
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
+        ShadowResumeEntry[] host = [Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")];
+        string[] daemon = ["Copilot: fix the widget please - repo", "Claude: Hello - repo"];
+
+        // A live session elsewhere, or of another agent in a list that names agents, holds no such title.
+        CopilotSession(Live, "cwd: C:\\r\\repo\nname: Other\n", "something else");
+        Assert.All(Resume(daemon, "copilot", Live, host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
+        Assert.All(Resume(daemon, "claude", host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
+        // One begun with the same prompt in the same folder would have the daemon tell the two apart.
+        CopilotSession(Live, "cwd: C:\\r\\repo\nname: Other\n", "fix the widget please");
+        Assert.All(Resume(daemon, "copilot", Live, host), x => Assert.Null(x.Known));
+
+        // Agency's entries are Copilot sessions too, but their labels come from Agency, not workspace.yaml.
+        Assert.All(Resume(daemon, new ShadowResumeEntry("Copilot: Fix The Widget - repo", Named, "copilot", "agency", @"C:\r\repo", null), Entry("Claude: Hello - repo", Claude, "claude")),
             x => Assert.Null(x.Known));
     }
 
