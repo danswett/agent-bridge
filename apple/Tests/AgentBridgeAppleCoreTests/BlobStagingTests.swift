@@ -77,6 +77,43 @@ private func stagingAttachment() throws -> BridgeBlobAttachment {
     try BridgeBlobAttachment(name: "fixture.bin", size: 300_000, sha256: Data(repeating: 3, count: 32))
 }
 
+private actor BlobValidationGate {
+    let entered = AsyncStream<Void>.makeStream()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var paused = false
+
+    func validate() async {
+        guard !paused else { return }
+        paused = true
+        entered.continuation.yield(())
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test func cancellationDuringBlobConnectionValidationDoesNotStartANewFetch() async throws {
+    let attachment = try stagingAttachment()
+    let peer = BlobStagingPeer([(attachment.size, true)])
+    let gate = BlobValidationGate()
+    let task = Task {
+        try await BridgeBlobStaging.confirm(attachment, ticket: "AAAAAAAAAAAAAAAAAAAAAA.AA.AA", key: Data(repeating: 7, count: 32),
+                                            capabilities: ["sessions.reply", "sessions.attach", "sessions.attach.blob"],
+                                            validateConnection: { await gate.validate() }, send: { try await peer.send($0, timeout: $1) },
+                                            deleteBlob: { try await peer.delete() })
+    }
+    var entered = gate.entered.stream.makeAsyncIterator()
+    _ = await entered.next()
+    task.cancel()
+    await gate.release()
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await peer.requests.map(\.op) == ["attachment.discard"])
+    #expect(await peer.deleted)
+}
+
 @Test func blobStagingPollsUnchangedMetadataUntilTheHostFinishesVerification() async throws {
     let attachment = try stagingAttachment()
     let peer = BlobStagingPeer([(0, false), (120_000, false), (attachment.size, false), (attachment.size, true)])
