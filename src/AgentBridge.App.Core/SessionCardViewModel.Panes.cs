@@ -53,6 +53,8 @@ public sealed partial class SessionCardViewModel
             if (session.Branch is { Length: > 0 } branch) { rows.Add(new("Branch", branch, Mono: true)); }
             if (session.Cwd is { Length: > 0 } cwd) { rows.Add(new("Folder", Words.Middle(cwd, PathMost), Mono: true, Full: cwd)); }
             if (Driven) { rows.Add(new("Driven by", DriverPrincipal ?? "an agent")); }
+            // In three panes there is no Delegates tab: the inspector carries the counts until U8 (#176).
+            if (HasDelegates) { rows.Add(new("Background", DelegatesText)); }
             if (session.Activity.TurnCount is { } t) { rows.Add(new("Turns", t.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
             if (session.Activity.Compactions is > 0 and var c) { rows.Add(new("Compactions", c.ToString(System.Globalization.CultureInfo.InvariantCulture))); }
             if (session.ProcessId is { } pid) { rows.Add(new("Process", pid.ToString(System.Globalization.CultureInfo.InvariantCulture), Mono: true)); }

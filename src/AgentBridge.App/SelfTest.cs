@@ -117,10 +117,12 @@ static partial class SelfTest
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".remote.png"));
             await Task.Delay(500);
             var hidden = Listeners(watched);
+            var hiddenBy = ListenersBy(watched);
             main.SelectedMachine = main.Machines[0];
             await Until(() => Rows(window).Count == expected, TimeSpan.FromSeconds(10));
             await Task.Delay(500);
             var shown = Listeners(watched);
+            var shownBy = ListenersBy(watched);
 
             // Back and forth: each time the rows get new controls, and the old ones let go.
             for (var i = 0; i < 5; i++)
@@ -135,7 +137,7 @@ static partial class SelfTest
             var settled = await Until(() => Listeners(watched) is var n && n <= shown && n > hidden, TimeSpan.FromSeconds(10));
             var again = await Choose(window, main, "demo-approval", "Option:approve");
             Check(again is not null && ById<Button>(again, "Option:approve") is { IsEnabled: true }, "still shows a question's choices on a session chosen again after the tabs change");
-            Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden, {shown} shown, {Listeners(watched)} after five more changes)");
+            Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
             await CheckPanes(window, main, Check, outFile);
 
@@ -762,6 +764,11 @@ static partial class SelfTest
 
     // How many are listening to a card: its controls (on screen, once each) and the app's own.
     // -1 when the event cannot be found at all, so the check cannot pass by not looking.
+    // Who listens, by the listener's type, for a failure to say.
+    static string ListenersBy(AgentBridge.App.Core.Observable o) =>
+        typeof(AgentBridge.App.Core.Observable).GetField(nameof(o.PropertyChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(o) is Delegate d
+            ? string.Join(", ", d.GetInvocationList().Select(l => l.Target?.GetType().Name ?? "static"))
+            : "none";
     static int Listeners(AgentBridge.App.Core.Observable o) =>
         typeof(AgentBridge.App.Core.Observable).GetField(nameof(o.PropertyChanged), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance) is { } field
             ? (field.GetValue(o) as Delegate)?.GetInvocationList().Length ?? 0
