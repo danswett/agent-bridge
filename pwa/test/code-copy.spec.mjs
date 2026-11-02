@@ -1,10 +1,11 @@
 // Code blocks in agent text: a Copy button on each, and long lines wrapped rather than
 // scrolled, so a long command can be copied whole from a phone.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const CODEX = '019a1b2c-codex-example';
 const later = () => new Date(Date.now() + 1000).toISOString();
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+const card = (page, id) => view(page, id);
 
 // A 1000-character base64 token: the shape of a pwsh -EncodedCommand.
 const BLOB = 'QUJD'.repeat(244) + 'ZGVmZ2g=';
@@ -17,6 +18,8 @@ async function openDemo(page) {
   });
   await page.goto('?demo=1&static=1');
   await page.waitForSelector('html[data-demo-ready]');
+  // The Codex session's response is where these copy from: it is opened, as a person would.
+  await open(page, CODEX);
 }
 
 // Shows a response on the Codex card and waits for its code block, whose text is `code`.

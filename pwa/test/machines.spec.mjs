@@ -1,16 +1,18 @@
 // Every machine at once, in demo mode with more than one simulated machine (?machines=2 or 3):
 // All, in the machine tabs above the sessions and on the Machines page, as the Windows app's
 // picker offers it; every machine's
-// sessions in one list, newest first, each card naming its machine; what each card sends going
+// sessions in one list, newest first, each row naming its machine; what each session sends going
 // to its own machine; a read-only shadow machine beside the others; a machine that can't be
 // reached saying so on its own; and the launch panel asking which machine to launch on.
 import { test, expect } from '@playwright/test';
-import { go } from './nav.mjs';
+import { go, open, view } from './nav.mjs';
 
 const LAPTOP = 'demo-laptop';
 const SHADOW = 'demo-shadow';
 
+// A session's row, and (sv) its view, on its machine (#179).
 const card = (page, host, id) => page.locator(`.session[data-host-id="${host}"][data-id="${id}"]`);
+const sv = (page, host, id) => view(page, id, host);
 const row = (page, id) => page.locator(`#machine-list [data-device-id="${id}"] button`);
 // The machine tabs above the sessions: All, then each machine.
 const tab = (page, id) => page.locator(`#machine-tabs [data-device-id="${id}"]`);
@@ -31,7 +33,7 @@ test.afterEach(async ({ page }) => {
 
 test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
-test('with more than one machine, every machine is shown at first: one list, newest first, each card naming its machine', async ({ page }) => {
+test('with more than one machine, every machine is shown at first: one list, newest first, each row naming its machine', async ({ page }) => {
   await openDemo(page);
   await expect(tab(page, 'all')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#machine-tabs [role="tab"]')).toHaveText(['All', 'Demo machine', 'Laptop', 'DEV-VM1 (shadow)']);
@@ -60,9 +62,12 @@ test('with more than one machine, every machine is shown at first: one list, new
   const updated = await page.evaluate(() => window.agentBridgeDemo.store.list().map((e) => e.session.updatedAt));
   expect(updated).toEqual([...updated].sort().reverse());
 
-  await expect(card(page, LAPTOP, 'laptop-ask-1').locator('.meta .machine-label')).toHaveText('Laptop');
-  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.meta .machine-label')).toHaveText('DEV-VM1 (shadow)');
-  await expect(card(page, 'demo', '6f1c2b7e-claude-example').locator('.meta .machine-label')).toHaveText('Demo machine');
+  await expect(card(page, LAPTOP, 'laptop-ask-1').locator('.row-facts .machine-label')).toHaveText('Laptop');
+  await expect(card(page, SHADOW, 'shadow-ask-1').locator('.row-facts .machine-label')).toHaveText('DEV-VM1 (shadow)');
+  await expect(card(page, 'demo', '6f1c2b7e-claude-example').locator('.row-facts .machine-label')).toHaveText('Demo machine');
+  // In text colour, not Bridge: a machine's name is not a link (#214).
+  expect(await card(page, LAPTOP, 'laptop-ask-1').locator('.machine-label').evaluate((e) => getComputedStyle(e).color))
+    .toBe(await card(page, LAPTOP, 'laptop-ask-1').locator('.row-facts').evaluate((e) => getComputedStyle(e).color));
 
   // The tabs say what is shown, and the app bar how many are online.
   await expect(page.locator('#machine-tabs [aria-selected="true"]')).toHaveText('All');
@@ -100,9 +105,9 @@ test('picking one machine shows only its sessions, unlabelled, and the choice is
   await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(2);
 });
 
-test('an answer, a reply with files, and End session from a card go to the machine the card is on', async ({ page }) => {
+test('an answer, a reply with files, and End session from a session go to the machine the session is on', async ({ page }) => {
   await openDemo(page);
-  const asked = card(page, LAPTOP, 'laptop-ask-1');
+  const asked = await open(page, 'laptop-ask-1', LAPTOP);
   await asked.locator('.choice[data-value="now"]').click();
   await expect(asked.locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
   expect((await machine(page, LAPTOP, 'typed')).map((t) => t.said)).toEqual(['answer: "now"']);
@@ -110,7 +115,7 @@ test('an answer, a reply with files, and End session from a card go to the machi
 
   // A small file through the channel and a large one through the relay's blob store, both
   // for the laptop.
-  const idle = card(page, LAPTOP, 'laptop-copilot-1');
+  const idle = await open(page, 'laptop-copilot-1', LAPTOP);
   const reply = idle.locator('form.reply');
   await reply.locator('input.file-picker').setInputFiles([
     { name: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.alloc(40, 'a') },
@@ -124,9 +129,12 @@ test('an answer, a reply with files, and End session from a card go to the machi
   expect(await machine(page, 'demo', 'replyLog')).toEqual([]);
   expect(await machine(page, 'demo', 'attachmentLog')).toEqual([]);
 
-  // The laptop's session is working on the reply now: ending it takes two presses.
+  // The laptop's session is working on the reply now: ending it takes two presses. On a phone,
+  // End session is in the header's overflow menu (ui.md §6.2), and its second press in Details.
   const end = idle.locator('.end-session .end-button');
-  await end.click();
+  await idle.locator('.session-header .more').click();
+  await idle.getByRole('menuitem', { name: 'End session' }).click();
+  await expect(end).toBeVisible();
   await expect(end).toHaveAttribute('aria-label', /press again to confirm/);
   await end.click();
   await expect(idle).toHaveCount(0);
@@ -136,12 +144,12 @@ test('an answer, a reply with files, and End session from a card go to the machi
 
 test('a read-only shadow machine\'s cards take nothing from the phone and say why, beside machines that do', async ({ page }) => {
   await openDemo(page);
-  const shadow = card(page, SHADOW, 'shadow-ask-1');
+  const shadow = sv(page, SHADOW, 'shadow-ask-1');
   await expect(shadow.locator('.question')).toHaveAttribute('data-answerable', 'false');
   await expect(shadow.locator('.question')).toContainText('agent-ha-bridge is running for this user');
   await expect(shadow.locator('form.reply')).toHaveCount(0);
   await expect(shadow.locator('.end-session')).toHaveCount(0);
-  await expect(card(page, LAPTOP, 'laptop-ask-1').locator('.question')).toHaveAttribute('data-answerable', 'true');
+  await expect(sv(page, LAPTOP, 'laptop-ask-1').locator('.question')).toHaveAttribute('data-answerable', 'true');
   await go(page, 'machines');
   await expect(row(page, SHADOW).locator('.machine-status')).toContainText('View only');
 });
@@ -158,7 +166,7 @@ test('a machine that can\'t be reached says so in a line of its own, keeps its c
   await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(2);
   await expect(page.locator('#host-state .host-note')).toHaveCount(1);
   // The other machine still answers.
-  const asked = card(page, 'demo', '02d9e5d5-6b35-49bd-b083-39572fbff648');
+  const asked = sv(page, 'demo', '02d9e5d5-6b35-49bd-b083-39572fbff648');
   await expect(asked.locator('.question')).toHaveAttribute('data-answerable', 'true');
 
   // Back: picked again, it is tried at once rather than at the next retry.
@@ -216,13 +224,16 @@ test('with every machine shown, the launch panel asks which machine to launch on
   await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Demo machine');
 });
 
-test('a card\'s fold is remembered for its machine and session, so a session of the same id elsewhere keeps its own', async ({ page }) => {
+test('a session chosen is named by its machine and session, so a session of the same id elsewhere is not chosen with it', async ({ page }) => {
   await openDemo(page);
-  await card(page, LAPTOP, 'laptop-copilot-1').locator('.fold').click();
-  const folds = await page.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('agent-bridge.app.fold.')).map((k) => [k.slice(22), JSON.parse(localStorage.getItem(k))])));
-  expect(folds['demo-laptop/laptop-copilot-1']).toEqual({ folded: true });
-  // Every card's record, its question's included, is its machine's.
-  expect(Object.keys(folds).every((k) => /^demo(-laptop|-shadow)?\//.test(k))).toBe(true);
+  await open(page, 'laptop-copilot-1', LAPTOP);
+  expect(await page.evaluate(() => location.hash)).toBe(`#/sessions/${LAPTOP}/laptop-copilot-1`);
+  await expect(page.locator('.session.selected')).toHaveCount(1);
+  await expect(page.locator(`.session.selected[data-host-id="${LAPTOP}"][data-id="laptop-copilot-1"]`)).toHaveCount(1);
+  // And it comes back so after a reload.
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(sv(page, LAPTOP, 'laptop-copilot-1')).toBeVisible();
 });
 
 test('the launch machine picked holds even where the device cannot store it', async ({ page }) => {

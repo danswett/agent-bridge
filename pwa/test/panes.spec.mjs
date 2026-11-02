@@ -1,0 +1,354 @@
+// The sessions page's panes (docs/design/ui.md §1 principle 4, §5.2, §6.1, §6.2; #179, #214):
+// three panes from 1280 px (list 320 · session · inspector 336, which can be hidden), two from
+// 760 with Conversation and Tools as tabs, and one column below with the session pushed over the
+// list and the browser's own back. What a row and a header say, and how their facts wrap.
+import { test, expect } from '@playwright/test';
+import { open, row, view } from './nav.mjs';
+
+const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
+const CLAUDE = '6f1c2b7e-claude-example';
+const CODEX = '019a1b2c-codex-example';
+const later = () => new Date(Date.now() + 1000).toISOString();
+
+async function openDemo(page, query = '') {
+  await page.addInitScript(() => {
+    window.__cspViolations = [];
+    document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
+  });
+  await page.goto(`?demo=1&static=1${query}`);
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(page.locator('.session')).not.toHaveCount(0);
+}
+
+async function upsert(page, id, change) {
+  await page.evaluate(({ id, change }) => {
+    const d = window.agentBridgeDemo;
+    const s = d.host.get(id) ?? { id };
+    d.upsert({ ...s, ...change, activity: { ...(s.activity ?? {}), ...(change.activity ?? {}) } });
+  }, { id, change });
+}
+
+const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+const box = (locator) => locator.boundingBox();
+
+test.afterEach(async ({ page }) => {
+  expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
+});
+
+test('at 1440 px three panes: the list at 320, the session, and the inspector at 336, side by side', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  const list = await box(page.locator('#list-pane'));
+  const conversation = await box(v.locator('.conversation'));
+  const inspector = await box(v.locator('.inspector'));
+  expect(list.width).toBe(320);
+  expect(Math.round(inspector.width)).toBe(336);
+  expect(list.x + list.width).toBeLessThanOrEqual(conversation.x + 0.5);
+  expect(conversation.x + conversation.width).toBeLessThanOrEqual(inspector.x + 0.5);
+  expect(inspector.x + inspector.width).toBeLessThanOrEqual(1440.5);
+  // Details and Tools both in the inspector; no tabs.
+  await expect(v.locator('.details')).toBeVisible();
+  await expect(v.locator('.tools-panel')).toBeVisible();
+  await expect(v.locator('.view-tabs')).toBeHidden();
+  expect(await overflow(page)).toBeLessThanOrEqual(0);
+});
+
+test('at 900 px two panes: the list and the session, with Conversation and Tools as tabs and Details in the header', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  const list = await box(page.locator('#list-pane'));
+  const conversation = await box(v.locator('.conversation'));
+  expect(list.width).toBeGreaterThanOrEqual(264);
+  expect(list.width).toBeLessThanOrEqual(320);
+  expect(list.x + list.width).toBeLessThanOrEqual(conversation.x + 0.5);
+  await expect(v.locator('.inspector')).toBeHidden();
+  await expect(v.locator('.inspector-button')).toBeHidden();
+  const tabs = v.getByRole('tab');
+  await expect(tabs).toHaveText(['Conversation', 'Tools']);
+  await expect(v.getByRole('tab', { name: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
+
+  await v.getByRole('tab', { name: 'Tools' }).click();
+  await expect(v.locator('.tools-panel li.tool')).toHaveCount(6);
+  await expect(v.locator('.conversation')).toBeHidden();
+  await expect(v.locator('.details')).toBeHidden();
+  // Arrows go between the tabs.
+  await page.keyboard.press('ArrowLeft');
+  await expect(v.getByRole('tab', { name: 'Conversation' })).toBeFocused();
+  await expect(v.locator('.conversation')).toBeVisible();
+
+  // Details, from the header: in place of the conversation, and again goes back.
+  await v.locator('.details-button').click();
+  await expect(v.locator('.details-button')).toHaveAttribute('aria-pressed', 'true');
+  await expect(v.locator('.details')).toBeVisible();
+  await expect(v.locator('.details')).toContainText('7 turns');
+  await expect(v.locator('.conversation')).toBeHidden();
+  await v.locator('.details-button').click();
+  await expect(v.locator('.conversation')).toBeVisible();
+  expect(await overflow(page)).toBeLessThanOrEqual(0);
+});
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('one column: a session is pushed over the list, and the browser\'s own back returns to it', async ({ page }) => {
+    await openDemo(page);
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await expect(page.locator('.session-view:not([hidden])')).toHaveCount(0);
+    expect(await overflow(page)).toBeLessThanOrEqual(0);
+
+    await row(page, CODEX).locator('.row-main').tap();
+    const v = view(page, CODEX);
+    await expect(v).toBeVisible();
+    await expect(page.locator('#list-pane')).toBeHidden();
+    // Full width, the reply box at its foot, and the bottom navigation out of its way.
+    const pane = await box(page.locator('#session-pane'));
+    expect(pane.width).toBe(390);
+    await expect(page.locator('#nav')).toBeHidden();
+    const reply = await box(v.locator('.reply-slot'));
+    expect(reply.y + reply.height).toBeGreaterThan(844 - 4);
+    expect(await overflow(page)).toBeLessThanOrEqual(0);
+
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+    await expect(page.locator('#nav')).toBeVisible();
+
+    // And the header's Back does the same.
+    await row(page, CLAUDE).locator('.row-main').tap();
+    await expect(view(page, CLAUDE)).toBeVisible();
+    await view(page, CLAUDE).getByRole('button', { name: 'Sessions' }).tap();
+    await expect(view(page, CLAUDE)).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, CODEX);
+    await expect(v.locator('.pin')).toBeHidden();
+    await v.getByRole('button', { name: 'More' }).tap();
+    await expect(v.getByRole('menuitem')).toHaveText(['Pin', 'Details', 'End session']);
+    await v.getByRole('menuitem', { name: 'Pin' }).tap();
+    await expect(row(page, CODEX)).toHaveAttribute('data-pinned', 'true');
+    await v.getByRole('button', { name: 'More' }).tap();
+    await v.getByRole('menuitem', { name: 'Details' }).tap();
+    await expect(v.locator('.details')).toBeVisible();
+    await expect(v.locator('.details .end-button')).toBeVisible();
+  });
+});
+
+test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the phone', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  await open(page, CODEX);
+  for (const width of [900, 390, 900, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(view(page, CODEX)).toBeVisible();
+    await expect(page.locator('.session-view:not([hidden])')).toHaveCount(1);
+    await expect(row(page, CODEX)).toHaveClass(/\bselected\b/);
+    expect(await overflow(page)).toBeLessThanOrEqual(0);
+  }
+  // Pushed when the window became a phone's: the browser's back goes to the list, not away.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(view(page, CODEX)).toBeVisible();
+  await page.goBack();
+  await expect(page.locator('#list-pane')).toBeVisible();
+  await expect(view(page, CODEX)).toBeHidden();
+  expect(new URL(page.url()).hash).toBe('#/sessions');
+});
+
+test('a desktop-wide window puts the list and the session side by side, a phone keeps one column', async ({ page }) => {
+  const columns = () => page.locator('#list-pane, #session-pane').evaluateAll((els) => new Set(els.filter((e) => e.getBoundingClientRect().width > 0).map((e) => Math.round(e.getBoundingClientRect().left))).size);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  expect(await columns()).toBe(2);
+  expect(await overflow(page)).toBeLessThanOrEqual(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(columns).toBe(1);
+  expect(await overflow(page)).toBeLessThanOrEqual(0);
+});
+
+test('the inspector can be hidden at three panes, Tools then a tab, and it stays hidden after a reload', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CLAUDE);
+  const toggle = v.locator('.inspector-button');
+  await expect(toggle).toHaveAccessibleName('Hide inspector');
+  await toggle.click();
+  await expect(v.locator('.inspector')).toBeHidden();
+  await expect(v.getByRole('tab', { name: 'Tools' })).toBeVisible();
+  await expect(toggle).toHaveAccessibleName('Show inspector');
+  const conversation = await box(v.locator('.conversation'));
+  const pane = await box(page.locator('#session-pane'));
+  expect(Math.abs(conversation.width - pane.width)).toBeLessThan(1);
+
+  await page.reload();
+  await page.waitForSelector('html[data-demo-ready]');
+  await expect(view(page, CLAUDE)).toBeVisible();
+  await expect(view(page, CLAUDE).locator('.inspector')).toBeHidden();
+  await view(page, CLAUDE).locator('.inspector-button').click();
+  await expect(view(page, CLAUDE).locator('.inspector')).toBeVisible();
+  await expect(view(page, CLAUDE).locator('.view-tabs')).toBeHidden();
+});
+
+test('a row is two lines: the title, then the status and the repository, never the model, SHA, counts or pid', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const r = row(page, COPILOT);
+  await expect(r.locator('.row-title')).toHaveText('Plan Migration to Windows App');
+  await expect(r.locator('.row-facts')).toHaveText('Waiting on you · danswett/agent-ha-bridge');
+  await expect(r.locator('.row-age')).toHaveText(/ago$/);
+  for (const never of ['claude-opus-5.5', 'detached@5e59309', '412', 'compaction', 'pid', '39844']) {
+    await expect(r).not.toContainText(never);
+  }
+  // Two lines, the glyph on the first.
+  const title = await box(r.locator('.row-title'));
+  const facts = await box(r.locator('.row-facts'));
+  expect(facts.y).toBeGreaterThanOrEqual(title.y + title.height - 0.5);
+  const main = await box(r.locator('.row-main'));
+  expect(main.height).toBeLessThanOrEqual(title.height + facts.height + 16 + 1);
+  // The header carries one meta line: status, machine, repository; the rest is in Details.
+  const v = view(page, COPILOT);
+  await expect(v.locator('.status-line')).toHaveText('Waiting on you · Demo machine · danswett/agent-ha-bridge');
+  await expect(v.locator('.fact-model dd')).toHaveText('claude-opus-5.5');
+  await expect(v.locator('.fact-branch dd')).toHaveText('detached@5e59309');
+  await expect(v.locator('.fact-pid dd')).toHaveText('pid 39844');
+});
+
+test('the header\'s Pin pins the session, and its row goes to Pinned', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  await v.getByRole('button', { name: 'Pin' }).click();
+  await expect(row(page, CODEX)).toHaveAttribute('data-pinned', 'true');
+  await expect(page.locator('.list-group').first()).toHaveText('Pinned');
+  await expect(v.locator('.pin')).toHaveAttribute('aria-pressed', 'true');
+  await expect(v.locator('.pin')).toBeFocused();
+  await v.getByRole('button', { name: 'Unpin' }).click();
+  await expect(row(page, CODEX)).not.toHaveAttribute('data-pinned', 'true');
+});
+
+// #214: facts wrap as words do, a separator with the fact before it, and never starting a line;
+// a long repository and machine name at a phone's width.
+for (const width of [390, 900, 1440]) {
+  test(`at ${width} px no line of a row or a header starts with a separator, even with a long repository and machine name`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openDemo(page, `&machines=2&name=${encodeURIComponent('A demo machine with a remarkably long name in the lab')}`);
+    await upsert(page, CODEX, {
+      updatedAt: later(), driver: 'agent', status: 'waiting', statusSince: later(),
+      repository: 'danswett/an-unusually-long-repository-name-that-has-to-wrap-somewhere',
+      subagents: [{ id: 'b1', kind: 'background', name: 'Check the Ubuntu CI failure', status: 'working' }],
+      question: { id: 'q-long', kind: 'form', message: 'Which?', fields: [], askedAt: later() },
+    });
+    const v = await open(page, CODEX);
+    const starts = await page.evaluate(() => {
+      const bad = [];
+      const check = (tag) => {
+        for (const host of document.querySelectorAll('.session-view:not([hidden]) .meta-facts, .session .row-facts')) {
+          const left = host.getBoundingClientRect().left;
+          // Every piece of each separator, on whichever line it fell.
+          for (const s of host.querySelectorAll('.sep')) {
+            for (const r of s.getClientRects()) {
+              if (r.width > 1 && r.left - left < 1) { bad.push(`${tag} ${host.className}: ${host.textContent}`); }
+            }
+          }
+        }
+      };
+      check('as laid out');
+      // And at every width the header's text could have, 4 px apart, so a break falls before
+      // each separator in turn if it ever could.
+      const main = document.querySelector('.session-view:not([hidden]) .header-main');
+      const widest = main.getBoundingClientRect().width;
+      for (let w = 120; w <= widest; w += 4) {
+        main.style.width = `${w}px`;
+        check(`at ${w} px`);
+      }
+      main.style.width = '';
+      return bad;
+    });
+    expect(starts).toEqual([]);
+    // It did wrap at a phone's width: the test is of something.
+    if (width === 390) {
+      const lines = await v.locator('.meta-facts').evaluate((e) => {
+        const r = document.createRange();
+        r.selectNodeContents(e);
+        return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size;
+      });
+      expect(lines).toBeGreaterThan(1);
+    }
+    // The machine is in text colour, not Bridge (#214).
+    const colours = await v.locator('.session-machine').evaluate((e) => [getComputedStyle(e).color, getComputedStyle(document.body).color]);
+    expect(colours[0]).toBe(colours[1]);
+    expect(await overflow(page)).toBeLessThanOrEqual(0);
+  });
+}
+
+test('a folder\'s path in Details is mono, on one line, and gives up its middle rather than a word', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDemo(page);
+  const cwd = 'C:\\Users\\demo\\repos\\wt\\agent-bridge-a-worktree-with-a-long-name\\src\\AgentBridge.Host.Sessions\\Copilot';
+  await upsert(page, CODEX, { updatedAt: later(), cwd });
+  const v = await open(page, CODEX);
+  const path = v.locator('.fact-folder .path');
+  await expect(path).toHaveAttribute('title', cwd);
+  expect(await path.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Agent Bridge Mono"?/);
+  const shape = await path.evaluate((e) => {
+    const head = e.querySelector('.path-head');
+    const tail = e.querySelector('.path-tail');
+    return { lines: e.getClientRects().length, height: e.getBoundingClientRect().height, line: parseFloat(getComputedStyle(e).lineHeight), cut: head.scrollWidth > head.clientWidth, tail: tail.textContent, whole: tail.scrollWidth <= tail.clientWidth + 1 };
+  });
+  expect(shape.lines).toBe(1);
+  expect(shape.height).toBeLessThanOrEqual(shape.line + 1);
+  expect(shape.cut).toBe(true);
+  expect(shape.tail).toBe('\\Copilot');
+  expect(shape.whole).toBe(true);
+});
+
+// Secondary text is text2 over whatever it sits on: 4.5:1 or better, on a row selected or not,
+// in the header, the conversation and Details, light and dark.
+for (const scheme of ['light', 'dark']) {
+  test(`in ${scheme}, secondary text on the panes reads at 4.5:1 or better`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openDemo(page);
+    await open(page, CODEX);
+    const ratios = await page.evaluate(() => {
+      const parse = (c) => { const m = c.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 }; };
+      const over = (fg, bg) => ({ r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a), a: 1 });
+      const background = (el) => {
+        const layers = [];
+        for (let e = el; e; e = e.parentElement) {
+          const c = parse(getComputedStyle(e).backgroundColor);
+          if (c.a > 0) { layers.push(c); if (c.a === 1) { break; } }
+        }
+        return layers.reverse().reduce((acc, c) => over(c, acc), { r: 255, g: 255, b: 255, a: 1 });
+      };
+      const lum = ({ r, g, b }) => [r, g, b].map((v) => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }).reduce((a, v, i) => a + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const ratio = (el) => {
+        const bg = background(el);
+        const fg = over(parse(getComputedStyle(el).color), bg);
+        const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
+      };
+      const pick = ['.session.selected .row-facts', '.session:not(.selected) .row-facts', '.session:not(.selected) .row-age', '.session-view:not([hidden]) .status-line', '.session-view:not([hidden]) .speaker', '.session-view:not([hidden]) .fact dt', '.session-view:not([hidden]) .section-head', '#session-count'];
+      return Object.fromEntries(pick.map((s) => [s, document.querySelector(s) ? Math.round(ratio(document.querySelector(s)) * 100) / 100 : null]));
+    });
+    for (const [what, r] of Object.entries(ratios)) {
+      expect(r, what).not.toBeNull();
+      expect(r, what).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+}
+
+test('in forced colours the selected row and the tabs keep a system colour for their marks', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'forced colours are emulated in Chromium only');
+  await page.emulateMedia({ forcedColors: 'active' });
+  await page.setViewportSize({ width: 900, height: 900 });
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  const pill = await row(page, CODEX).locator('.row-main').evaluate((e) => [getComputedStyle(e, '::before').forcedColorAdjust, getComputedStyle(e, '::before').content]);
+  expect(pill).toEqual(['none', '""']);
+  const tab = await v.getByRole('tab', { name: 'Conversation' }).evaluate((e) => getComputedStyle(e, '::after').forcedColorAdjust);
+  expect(tab).toBe('none');
+});

@@ -1,9 +1,10 @@
 // Screenshots of demo mode in WebKit at an iPhone's size, for the README and pull requests:
 //   node test/screenshots.mjs
 // docs/demo-light.png and docs/demo-dark.png: the sessions list, light and dark.
-// docs/answer.png: answering the worked example's question, on its way to the machine.
+// docs/answer.png: answering the worked example's question, on its way to the machine, in its
+// session pushed over the list.
 // docs/approval.png: a permission request, answered with a tap.
-// docs/all-machines.png: every machine at once, each card (folded here) naming its machine.
+// docs/all-machines.png: every machine at once, each row naming its machine.
 // docs/needs-you-light.png, needs-you-dark.png and needs-you-wide.png: Needs you (#165) on a phone and wide.
 // docs/delegates-light.png and delegates-dark.png: a card's main agent and its delegates (#176).
 import { webkit, devices } from '@playwright/test';
@@ -22,15 +23,25 @@ async function open(scheme, query = '', device = devices['iPhone 13']) {
   const page = await context.newPage();
   await page.goto(url + query);
   await page.waitForSelector('html[data-demo-ready]');
-  // Fixed relative times, so the pictures don't change with the clock.
-  await page.evaluate(() => { for (const t of document.querySelectorAll('.since:not(:empty), .updated')) { t.textContent = t.classList.contains('since') ? 'for 4m' : 'updated 1m ago'; } });
+  await fixTimes(page);
   return { context, page };
 }
 
 const out = (name) => path.join(pwa, 'docs', name);
-// For a picture of one card: the bottom navigation, fixed over the page, would otherwise sit across it.
-const fixTimes = (page) => page.evaluate(() => { for (const t of document.querySelectorAll('.since:not(:empty), .updated')) { t.textContent = t.classList.contains('since') ? 'for 4m' : 'updated 1m ago'; } });
-const hideBar = (page) => page.evaluate(() => { document.getElementById('nav').hidden = true; });
+// Fixed relative times, so the pictures don't change with the clock.
+async function fixTimes(page) {
+  await page.evaluate(() => {
+    for (const t of document.querySelectorAll('.since:not(:empty)')) { t.textContent = 'for 4m'; }
+    for (const t of document.querySelectorAll('.row-age, .speaker-age')) { t.textContent = '1m ago'; }
+  });
+}
+// A session, opened from its row as a person would: pushed over the list on a phone.
+async function show(page, id) {
+  await page.locator(`.session[data-id="${id}"] .row-main`).click();
+  await page.locator(`.session-view[data-id="${id}"]`).waitFor();
+  await fixTimes(page);
+  return page.locator(`.session-view[data-id="${id}"]`);
+}
 
 try {
   for (const scheme of ['light', 'dark']) {
@@ -43,15 +54,15 @@ try {
   {
     // An answer that never comes back, so the picture holds it on its way.
     const { context, page } = await open('light', '&answerDelay=600000');
-    const card = page.locator('.session').first();
+    const card = await show(page, '02d9e5d5-6b35-49bd-b083-39572fbff648');
     const q = card.locator('.question');
     await q.getByRole('checkbox', { name: 'pwa' }).check();
     await q.getByRole('textbox', { name: 'Notes (optional)' }).fill('Start with the answer form; Web Push after.');
     await q.locator('input[type="number"]').fill('3');
     await q.getByRole('button', { name: 'Send answer' }).click();
     await q.locator('.answer-status').waitFor();
-    await hideBar(page);
-    await card.locator('.frame').screenshot({ path: out('answer.png') });
+    await q.locator('.answer-status').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: out('answer.png') });
     await context.close();
     console.log('docs/answer.png');
   }
@@ -70,27 +81,19 @@ try {
         },
       });
     });
-    const card = page.locator('.session[data-id="019a1b2c-codex-example"]');
+    const card = await show(page, '019a1b2c-codex-example');
     await card.locator('.question[data-question="approval-shot"]').waitFor();
-    await fixTimes(page);
-    await hideBar(page);
-    await card.locator('.frame').screenshot({ path: out('approval.png') });
+    await card.locator('.question').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: out('approval.png') });
     await context.close();
     console.log('docs/approval.png');
   }
 
   {
     const { context, page } = await open('light', '&machines=3');
-    // Folded, so the picture holds the machine tabs and every card's machine and status.
-    for (const fold of await page.locator('.session .fold').all()) { await fold.click(); }
+    // The machine tabs and every row's machine and status.
     await fixTimes(page);
-    await hideBar(page);
-    // In the page's own coordinates: folding scrolled it.
-    const [top, bottom] = await page.evaluate(() => ['sessions', 'sessions'].map((id) => {
-      const r = document.getElementById(id).getBoundingClientRect();
-      return { y: r.top + scrollY, end: r.bottom + scrollY };
-    }));
-    await page.screenshot({ path: out('all-machines.png'), fullPage: true, clip: { x: 0, y: top.y - 8, width: page.viewportSize().width, height: bottom.end - top.y + 16 } });
+    await page.locator('#list-pane').screenshot({ path: out('all-machines.png') });
     await context.close();
     console.log('docs/all-machines.png');
   }

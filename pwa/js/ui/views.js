@@ -2,7 +2,6 @@
 import { h, icon } from './dom.js';
 import { ALL } from '../host-session.js';
 import { SessionCard } from './session-card.js';
-import { FoldStore } from './fold-store.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
@@ -12,14 +11,16 @@ const LONG_PRESS_MS = 500;
 // A finger that moves further than this is scrolling, not pressing.
 const LONG_PRESS_SLOP = 10;
 
-// Keeps one card per session, from every machine shown, in the person's order (session-order.js):
-// Pinned, then the rest, then an Ended group (ui.md §6.1). Cards are updated in place so an open
-// disclosure, scroll position or focus survives an upsert, and an upsert never moves one. A card
-// is its machine's and session's: two machines may each have a session of the same id, and each
-// card acts only on its own machine.
+// Keeps one row per session, from every machine shown, in the person's order (session-order.js):
+// Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
+// pane, the selected one shown (./session-card.js). Both are updated in place so an open
+// disclosure, scroll position or focus survives an upsert, and an upsert never moves a row. A
+// session is its machine's: two machines may each have a session of the same id, and each acts
+// only on its own machine.
 //
-// Rows move only when the person moves them: Alt+Up/Down on a card's title, a drag by the handle
-// that shows on hover, or the row menu (a long press on a phone, a right-click, Shift+F10).
+// Rows move only when the person moves them: Alt+Up/Down on a row, a drag by the handle that
+// shows on hover, or the row menu (a long press on a phone, a right-click, Shift+F10). Up and
+// Down alone go from row to row.
 export class SessionListView {
   #cards = new Map();
   #scheduled = false;
@@ -28,16 +29,20 @@ export class SessionListView {
   #ended = null;
   #press = null;
   #swallowClick = false;
+  #selected = null;
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
   // fetchDetail(hostId, id) -> Promise<Session|null>; fetchDelegate(hostId, id, agent) ->
   // Promise<Subagent|null>, one delegate's own words; machine(hostId) -> { name, show }: what to
-  // call the machine, and whether its cards say so (with every machine shown).
+  // call the machine, and whether its rows say so (with every machine shown).
   // answering(hostId) -> { service, replies, stops, hostId, capabilities, readOnly } | null.
   // order: the person's order (SessionOrder). shows(hostId): whether a machine is shown.
-  // settled(hostId): whether a machine has sent its whole list yet.
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), folds = new FoldStore(), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, visible = () => true } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, folds, answering, order, shows, settled, visible });
+  // settled(hostId): whether a machine has sent its whole list yet. views: where the sessions'
+  // views go (the session pane). layout() -> { inspector }: whether the inspector is a pane now.
+  // viewing() -> whether the selected session's view is on screen (on a phone, only once pushed).
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing });
+    this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
       if (change?.type === 'synced' && change.hostId) {
@@ -114,23 +119,27 @@ export class SessionListView {
         if (!card) {
           const m = this.machine(hostId);
           card = new SessionCard(s, {
-            hostId, folds: this.folds, fetchDetail: (id) => this.fetchDetail(hostId, id),
+            hostId, fetchDetail: (id) => this.fetchDetail(hostId, id),
             fetchDelegate: this.fetchDelegate ? (id, agent) => this.fetchDelegate(hostId, id, agent) : null,
             machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
-            // Opened, by its title, a notification or a launch, its news is seen.
-            onFold: () => this.schedule(),
+            onSelect: (c) => this.onSelect?.(c),
+            onPin: (c, pinned) => this.#pin(c, pinned, c.els.pin),
+            onBack: (c) => this.onBack?.(c),
+            layout: this.layout,
           });
+          card.onInspector = () => this.onInspector?.();
           card.element.dataset.key = key;
-          card.els.frame.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
+          card.view.dataset.key = key;
+          card.element.prepend(h('span', { class: 'drag-handle', 'aria-hidden': 'true', title: 'Drag to move' }));
+          this.views.append(card.view);
           this.#cards.set(key, card);
         } else if (card.session !== s) {
           card.update(s);
         }
         card.setPinned(isPinned);
         if (!keep(entry)) { continue; }
-        // Open on screen, its news is seen as it comes; folded, it gets the dot.
-        // Seen only while it is on screen: news that comes while another page shows waits for Sessions.
-        if (!card.folded && this.visible()) { this.order.markSeen(key, s.updatedAt); }
+        // On screen, its news is seen as it comes; otherwise its row gets the dot.
+        if (card.selected && this.viewing()) { this.order.markSeen(key, s.updatedAt); }
         card.setUnread(this.order.unread(key, s.updatedAt));
         want.push(card.element);
         shown += 1;
@@ -152,7 +161,13 @@ export class SessionListView {
     }
     while (prev ? prev.nextSibling : this.container.firstChild) { (prev ? prev.nextSibling : this.container.firstChild).remove(); }
     for (const [key, card] of this.#cards) {
-      if (!live.has(key)) { card.dispose(); card.element.remove(); this.#cards.delete(key); }
+      if (!live.has(key)) {
+        card.dispose();
+        card.element.remove();
+        card.view.remove();
+        this.#cards.delete(key);
+        if (this.#selected === key) { this.#selected = null; }
+      }
     }
     if (focused && focused.isConnected && document.activeElement !== focused) {
       focused.focus({ preventScroll: true });
@@ -200,16 +215,17 @@ export class SessionListView {
   #move(card, delta) {
     if (this.filter || !this.order.move(this.#keyOf(card), delta)) { return false; }
     this.render();
-    card.els.fold.focus({ preventScroll: true });
+    card.els.open.focus({ preventScroll: true });
     card.element.scrollIntoView({ block: 'nearest' });
     this.#say(delta < 0 ? 'Moved up' : 'Moved down');
     return true;
   }
 
-  #pin(card, pinned) {
+  // back: what has focus after, the row's own button unless the header's Pin was pressed.
+  #pin(card, pinned, back = card.els.open) {
     this.order.setPinned(this.#keyOf(card), pinned);
     this.render();
-    card.els.fold.focus({ preventScroll: true });
+    back.focus({ preventScroll: true });
     this.#say(pinned ? 'Pinned' : 'Unpinned');
   }
 
@@ -222,13 +238,13 @@ export class SessionListView {
       { label: 'Move up', disabled: !!this.filter || !this.order.canMove(key, -1), run: () => this.#move(card, -1) },
       { label: 'Move down', disabled: !!this.filter || !this.order.canMove(key, 1), run: () => this.#move(card, 1) },
       { label: pinned ? 'Unpin' : 'Pin', run: () => this.#pin(card, !pinned) },
-    ], { back: card.els.fold, label: `${card.session.title || 'Session'}: actions` });
+    ], { back: card.els.open, label: `${card.session.title || 'Session'}: actions` });
   }
 
   #listen() {
     const c = this.container;
     c.addEventListener('keydown', (e) => {
-      const card = e.target.closest?.('.fold') ? this.#cardOf(e.target) : null;
+      const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
       if (!card) { return; }
       // The context-menu key, or Shift+F10: Safari has neither as a contextmenu event.
       if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey)) {
@@ -236,28 +252,31 @@ export class SessionListView {
         this.openMenu(card);
         return;
       }
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) { return; }
+      if (e.ctrlKey || e.metaKey || e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) { return; }
       e.preventDefault();
-      this.#move(card, e.key === 'ArrowUp' ? -1 : 1);
+      if (e.altKey) { this.#move(card, e.key === 'ArrowUp' ? -1 : 1); return; }
+      // Up and Down alone go between rows, as a list does (ui.md §9).
+      const rows = [...this.container.querySelectorAll('.session > .row-main')];
+      rows[rows.indexOf(card.els.open) + (e.key === 'ArrowUp' ? -1 : 1)]?.focus();
     });
     c.addEventListener('contextmenu', (e) => {
-      const card = e.target.closest?.('.fold') ? this.#cardOf(e.target) : null;
+      const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
       if (!card) { return; }
       e.preventDefault();
       this.#cancelPress();
       this.openMenu(card);
     });
-    // The tap that ends a long press doesn't fold the card.
+    // The tap that ends a long press doesn't open the session.
     c.addEventListener('click', (e) => {
-      if (this.#swallowClick && e.target.closest?.('.fold')) { this.#swallowClick = false; e.preventDefault(); e.stopPropagation(); }
+      if (this.#swallowClick && e.target.closest?.('.row-main')) { this.#swallowClick = false; e.preventDefault(); e.stopPropagation(); }
     }, true);
     c.addEventListener('pointerdown', (e) => {
       if (e.target.closest?.('.drag-handle')) { this.#drag(e); return; }
-      if (e.pointerType === 'touch' && e.target.closest?.('.fold')) { this.#longPress(e); }
+      if (e.pointerType === 'touch' && e.target.closest?.('.row-main')) { this.#longPress(e); }
     });
   }
 
-  // A long press on a card's title opens its menu; the tap it ends with doesn't fold the card.
+  // A long press on a row opens its menu; the tap it ends with doesn't open the session.
   #longPress(e) {
     const card = this.#cardOf(e.target);
     if (!card) { return; }
@@ -268,7 +287,7 @@ export class SessionListView {
       press.off();
       this.#press = null;
       this.#swallowClick = true;
-      // The tap the finger ends with must not fold the card, however long it is held; once it has
+      // The tap the finger ends with must not open the session, however long it is held; once it has
       // lifted, a click that never came (the finger slid off) mustn't swallow the next tap.
       const lifted = (ev) => {
         if (ev.pointerId !== press.id) { return; }
@@ -350,23 +369,45 @@ export class SessionListView {
     document.addEventListener('keydown', esc, true);
   }
 
-  // Whether a machine takes answers may have changed: every question of its cards (of every
-  // card, without one) is drawn again, keeping what was typed.
+  // Whether a machine takes answers may have changed: every question of its sessions (of every
+  // session, without one) is drawn again, keeping what was typed.
   refreshQuestions(hostId = null) {
     for (const c of this.#cards.values()) { if (hostId === null || c.hostId === hostId) { c.refreshQuestion(); } }
   }
 
-  // A machine's name, or whether cards name their machine, may have changed.
+  // A machine's name, or whether rows name their machine, may have changed.
   refreshMachines() {
     for (const c of this.#cards.values()) { const m = this.machine(c.hostId); c.setMachine(m.name, m.show); }
     // Search matches machine names too: a renamed machine's sessions come into it or leave it.
     if (this.filter) { this.schedule(); }
   }
 
-  // Whether search is hiding a card: it exists, and is not in the list.
+  // Whether search is hiding a session's row: it exists, and is not in the list.
   hidden(card) { return !!card && !card.element.isConnected; }
 
-  // A machine's session's card; without a machine, the first card for that session.
+  // The session selected, by its key, or none: its row marked, its view the one shown.
+  select(key) {
+    const next = key && this.#cards.has(key) ? key : null;
+    if (next !== this.#selected) {
+      this.#selected = next;
+      for (const [k, c] of this.#cards) { c.setSelected(k === next); }
+      // Shown now, its news is seen.
+      this.schedule();
+    }
+    return next ? this.#cards.get(next) : null;
+  }
+
+  get selected() { return this.#selected ? this.#cards.get(this.#selected) ?? null : null; }
+
+  // The rows shown, in order: what a desktop selects when nothing is chosen yet.
+  shownCards() {
+    return [...this.container.querySelectorAll(':scope > .session')].map((el) => this.#cards.get(el.dataset.key)).filter(Boolean);
+  }
+
+  // The inspector became a pane, or stopped being one.
+  layoutChanged() { for (const c of this.#cards.values()) { c.layoutChanged(); } }
+
+  // A machine's session; without a machine, the first for that session id.
   card(hostId, id) {
     if (hostId) { return this.#cards.get(SessionListView.key(hostId, id)) ?? null; }
     for (const c of this.#cards.values()) { if (c.id === id) { return c; } }

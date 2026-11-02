@@ -2,6 +2,7 @@
 // in light, dark and forced colours, and the generated sprite drawing a glyph under the CSP.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { open } from './nav.mjs';
 
 const tokens = JSON.parse(readFileSync(new URL('../../design/tokens.json', import.meta.url), 'utf8'));
 const role = tokens.color.role;
@@ -35,9 +36,10 @@ for (const scheme of ['light', 'dark']) {
     await openDemo(page);
     const v = (r) => r[scheme];
     expect(await page.locator('body').evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(rgb(surface[scheme].shell));
-    const copilot = page.locator(`.session[data-id="${COPILOT}"]`);
-    const claude = page.locator(`.session[data-id="${CLAUDE}"]`);
-    expect(await settled(copilot.locator('.frame'), 'backgroundColor')).toBe(rgb(surface[scheme].card));
+    // The sessions' views (#179): the card surface is your message's bubble.
+    const copilot = page.locator(`.session-view[data-id="${COPILOT}"]`);
+    const claude = page.locator(`.session-view[data-id="${CLAUDE}"]`);
+    expect(await settled(copilot.locator('.bubble'), 'backgroundColor')).toBe(rgb(surface[scheme].card));
     // Status in the status roles, drawn by the glyph: working in active, waiting in needs, its
     // words in needs' text.
     expect(await claude.locator('.status-line .glyph').evaluate((e) => getComputedStyle(e).color)).toBe(rgb(v(role.active)));
@@ -153,7 +155,8 @@ test('code is set in Agent Bridge Mono, loaded from the site under the CSP, with
   const fonts = [];
   page.on('response', (r) => { if (r.url().includes('/design/fonts/')) { fonts.push(`${r.status()} ${r.url().split('/').pop()}`); } });
   await openDemo(page);
-  const code = page.locator('.md code').first();
+  // The Claude session's reply has code in it.
+  const code = (await open(page, CLAUDE)).locator('.md code').first();
   await expect(code).toBeVisible();
   expect(await code.evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/^"?Agent Bridge Mono"?, "?Cascadia Mono"?, "?SF Mono"?, "?Roboto Mono"?, ui-monospace, monospace$/);
   const loaded = await page.evaluate(async () => {

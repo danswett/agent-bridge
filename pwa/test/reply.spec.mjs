@@ -4,13 +4,15 @@
 // as the session's latest message. Every outcome, the text kept or taken out, a resend
 // after a lost response, the box held while a question is pending, and the keyboard.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const ASKING = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const CODEX = '019a1b2c-codex-example';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+// A session's view (#179), where its reply box is.
+const card = (page, id) => view(page, id);
 const box = (page, id) => card(page, id).locator('form.reply');
 const later = () => new Date(Date.now() + 1000).toISOString();
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.replyLog);
@@ -28,6 +30,8 @@ async function openDemo(page, query = '') {
   });
   await page.goto(`?demo=1&static=1&answerDelay=300${query}`);
   await page.waitForSelector('html[data-demo-ready]');
+  // These are about the idle session's reply box: its session is opened, as a person would.
+  await open(page, IDLE);
 }
 
 test.afterEach(async ({ page }) => {
@@ -83,6 +87,7 @@ test.describe('on a phone', () => {
 
   test('a refusal keeps the words and says why: an agent the machine cannot reply to yet', async ({ page }) => {
     await openDemo(page);
+    await open(page, CODEX);
     const reply = box(page, CODEX);
     await reply.getByRole('textbox', { name: 'Reply' }).fill('please rerun');
     await reply.getByRole('button', { name: 'Send' }).tap();
@@ -95,6 +100,7 @@ test.describe('on a phone', () => {
 
   test('while the session asks a question the box is held and says to answer first, keeping the words', async ({ page }) => {
     await openDemo(page);
+    await open(page, ASKING);
     const reply = box(page, ASKING);
     const input = reply.getByRole('textbox', { name: 'Reply' });
     await expect(input).toBeDisabled();
@@ -102,6 +108,7 @@ test.describe('on a phone', () => {
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
 
     // A question arriving takes the box away from words already typed, and gives it back.
+    await open(page, IDLE);
     const other = box(page, IDLE);
     await other.getByRole('textbox', { name: 'Reply' }).fill('half a thought');
     await page.evaluate(({ id, t }) => {

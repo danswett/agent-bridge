@@ -2,7 +2,7 @@
 // a real one does (session.launch): it refuses what it does not offer, in its words, and a
 // started session arrives as any other, with the panel jumping to its card.
 import { test, expect } from '@playwright/test';
-import { go } from './nav.mjs';
+import { go, view } from './nav.mjs';
 
 const RESUMABLE = '7d3c1a2e-5b6f-4c8d-9e0a-1b2c3d4e5f60';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -68,7 +68,8 @@ test.describe('on a phone', () => {
       model: 'gpt-6-sol', effort: 'high', context: '', permissions: 'allowAll', prompt,
     });
     const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
-    const card = page.locator(`.session[data-id="${id}"]`);
+    // Jumped to: its session's view, pushed on a phone (#179).
+    const card = view(page, id);
     await expect(card).toBeInViewport();
     await expect(card).toHaveAttribute('data-status', 'working');
     await expect(field(page, 'prompt')).toHaveValue('');
@@ -88,7 +89,7 @@ test.describe('on a phone', () => {
     const [sent] = await log(page);
     expect(sent.resume).toBe(RESUMABLE);
     expect(sent.workspace).toBeUndefined();
-    await expect(page.locator(`.session[data-id="${RESUMABLE}"]`)).toBeInViewport();
+    await expect(view(page, RESUMABLE)).toBeInViewport();
     await expect(field(page, 'resume').locator(`option[value="${RESUMABLE}"]`)).toHaveCount(0);
   });
 
@@ -182,7 +183,8 @@ test.describe('bringing a session from another machine', () => {
     // A new session, under a new id, with the original's title.
     const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
     expect(id).not.toBe(AWAY);
-    const card = page.locator(`.session[data-id="${id}"]`);
+    // Jumped to: its session's view, pushed on a phone (#179).
+    const card = view(page, id);
     await expect(card).toBeInViewport();
     await expect(card).toContainText('Draft the transfer docs');
   });

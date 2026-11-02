@@ -15,10 +15,15 @@
 // relay take them (`sessions.attach.blob`), through the relay's blob store, with progress and a
 // Cancel until the reply itself goes. Without that, an image over the limit is made smaller.
 import { h, icon } from './dom.js';
+import { designIcon } from './glyph.js';
 import { utf8Bytes } from '../answers.js';
 import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
+
+// The shortcut Send's tooltip names: ⌘↩ on Apple's platforms, Ctrl+Enter elsewhere (ui.md §6.5).
+// The platform layer (#168) may take this over.
+const SEND_KEYS = /Mac|iPhone|iPad|iPod/.test(globalThis.navigator?.userAgent ?? '') ? '\u2318\u21a9' : 'Ctrl+Enter';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -124,7 +129,7 @@ export class ReplyBox {
   #build() {
     const id = this.idBase;
     const e = this.els = {};
-    e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Reply to the session…', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
+    e.input = h('textarea', { id: `${id}-text`, rows: 2, class: 'text-input reply-input', placeholder: 'Message the main agent', 'aria-describedby': `${id}-hint ${id}-bytes ${id}-held` });
     e.input.addEventListener('input', () => { this.#clearError(); this.#sync(); });
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
     e.input.addEventListener('keydown', (ev) => {
@@ -148,18 +153,21 @@ export class ReplyBox {
       e.picker.value = '';
       this.#add(files);
     });
-    e.attach = h('button', { type: 'button', class: 'button secondary attach', 'aria-label': 'Attach a file or image', hidden: !this.#attach, onclick: () => e.picker.click() }, icon('paperclip'), h('span', { class: 'attach-label' }, 'Attach'));
-    e.send = h('button', { type: 'submit', class: 'button send' }, 'Send');
+    // Attach, then Send (ui.md §6.5): icons, named, with the shortcut in Send's tooltip.
+    e.attach = h('button', { type: 'button', class: 'icon-button attach', 'aria-label': 'Attach a file or image', title: 'Attach a file or image', hidden: !this.#attach, onclick: () => e.picker.click() }, icon('paperclip'), h('span', { class: 'attach-label' }, 'Attach'));
+    e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: `Send (${SEND_KEYS})` }, designIcon('send', { cls: 'ab-icon-20' }));
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.cancel = h('button', { type: 'button', class: 'button secondary cancel', hidden: true, onclick: () => this.#cancel() }, 'Cancel');
     e.status = h('p', { class: 'answer-status reply-status', role: 'status', 'aria-live': 'polite' });
     e.form = h('form', { class: 'reply', novalidate: true, 'aria-labelledby': `${id}-label` },
-      h('label', { for: `${id}-text`, class: 'text-label', id: `${id}-label` }, 'Reply'),
+      h('label', { for: `${id}-text`, class: 'text-label sr-only', id: `${id}-label` }, 'Reply'),
       e.held,
-      h('div', { class: 'text-wrap' }, e.input, e.bytes),
-      e.files,
+      h('div', { class: 'reply-box' },
+        h('div', { class: 'text-wrap' }, e.input, e.bytes),
+        e.files,
+        h('div', { class: 'reply-tools' }, e.attach, e.send)),
       e.hint, e.error,
-      h('div', { class: 'answer-actions' }, e.send, e.attach, e.resend, e.cancel),
+      h('div', { class: 'answer-actions' }, e.resend, e.cancel),
       e.picker,
       e.status);
     e.form.addEventListener('submit', (ev) => { ev.preventDefault(); this.#send(); });

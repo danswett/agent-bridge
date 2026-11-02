@@ -3,6 +3,7 @@
 // reduced motion, and at the head of every card's status line at a phone's, a tablet's and a
 // desktop's width.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const GLYPHS = ['idle', 'working', 'delegating', 'needs', 'done', 'failed', 'ended'];
 const SIZES = [12, 14, 16, 20, 24];
@@ -25,15 +26,17 @@ async function gallery(page, names = GLYPHS, { sizes = SIZES, driven = true } = 
     document.getElementById('glyph-gallery')?.remove();
     const box = document.createElement('div');
     box.id = 'glyph-gallery';
-    box.className = 'frame';
+    // On the card surface, spaced as the old card's status line spaced them, so the snapshots
+    // are of the glyphs alone and not of whichever layout holds them (#179 replaced the card).
+    Object.assign(box.style, { background: 'var(--ab-card)', padding: '4px 14px 12px' });
     for (const name of names) {
       const row = document.createElement('p');
-      row.className = 'status-line';
       row.dataset.row = name;
       // Tight around its glyphs, so a snapshot's tolerance is a share of the glyphs.
-      Object.assign(row.style, { display: 'inline-flex', gap: '6px', padding: '4px', alignItems: 'center' });
-      for (const size of sizes) { row.append(glyph(name, { size, label: `${name} ${size}` })); }
-      if (driven) { row.append(glyph(name, { size: 24, driven: true, label: `${name} driven` })); }
+      Object.assign(row.style, { display: 'inline-flex', gap: '6px', padding: '4px', alignItems: 'center', margin: '2px 0', fontSize: '.9rem' });
+      const add = (g) => { g.style.marginRight = '7px'; row.append(g); };
+      for (const size of sizes) { add(glyph(name, { size, label: `${name} ${size}` })); }
+      if (driven) { add(glyph(name, { size: 24, driven: true, label: `${name} driven` })); }
       box.append(row);
     }
     document.body.prepend(box);
@@ -178,11 +181,11 @@ test('reduced motion stops every glyph\'s animation', async ({ page }) => {
 });
 
 for (const width of [390, 900, 1440]) {
-  test(`at ${width} px every card's status line leads with its glyph, at 16 px, beside its words however long they are`, async ({ page }) => {
+  test(`at ${width} px every session's row and header lead with its glyph, at 16 px, on their first line, beside words however long they are`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openDemo(page);
     // Words long enough to wrap on a phone, and a name with nowhere to break (the protocol allows
-    // 120 bytes): they wrap beside the glyph, never leaving it alone or running out of the card.
+    // 120 bytes): they wrap beside the glyph, never leaving it alone or running out of the pane.
     await page.evaluate(() => {
       const d = window.agentBridgeDemo;
       const s = d.host.get('019a1b2c-codex-example');
@@ -194,18 +197,33 @@ for (const width of [390, 900, 1440]) {
       });
     });
     await expect(page.locator('.session[data-rule="2"]')).toHaveCount(1);
-    const lines = await page.locator('.session .status-line').evaluateAll((els) => els.map((line) => {
-      const g = line.querySelector('.glyph');
-      const text = line.querySelector('.status-text');
-      const gr = g.getBoundingClientRect();
-      const tr = text.getBoundingClientRect();
-      const cr = line.closest('.frame').getBoundingClientRect();
-      return { inside: tr.right <= cr.right, first: line.firstElementChild.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
+    // Rows: the glyph before the title, centred on the title's line (ui.md §5.1).
+    const rows = await page.locator('.session .row-main').evaluateAll((els) => els.map((b) => {
+      const gr = b.querySelector('.glyph').getBoundingClientRect();
+      const tr = b.querySelector('.row-title').getBoundingClientRect();
+      const cr = b.getBoundingClientRect();
+      return { inside: tr.right <= cr.right, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
     }));
-    expect(lines).toHaveLength(4);
-    for (const l of lines) { expect(l).toEqual({ inside: true, first: true, w: 16, h: 16, before: true, centred: true }); }
+    expect(rows).toHaveLength(4);
+    for (const r of rows) { expect(r).toEqual({ inside: true, w: 16, h: 16, before: true, centred: true }); }
+    // Headers: the glyph leads the meta line, centred on the words' first line, and the words stay
+    // inside the pane.
+    for (const id of await page.locator('.session').evaluateAll((els) => els.map((e) => e.dataset.id))) {
+      const v = await open(page, id);
+      const l = await v.locator('.status-line').evaluate((line) => {
+        const g = line.querySelector('.glyph');
+        const text = line.querySelector('.status-text');
+        const gr = g.getBoundingClientRect();
+        const first = text.getClientRects()[0];
+        const tr = text.getBoundingClientRect();
+        const cr = line.closest('.session-header').getBoundingClientRect();
+        return { inside: tr.right <= cr.right, first: line.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= first.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (first.top + first.bottom) / 2) <= 3 };
+      });
+      expect(l, id).toEqual({ inside: true, first: true, w: 16, h: 16, before: true, centred: true });
+    }
     // A running tool's glyph is the working one, at 12.
-    const tool = page.locator(`.session[data-id="${CLAUDE}"] .tool-line .glyph`);
+    await open(page, CLAUDE);
+    const tool = view(page, CLAUDE).locator('.tool-line .glyph');
     await expect(tool).toHaveAttribute('data-glyph', 'working');
     expect(await tool.evaluate((e) => e.getBoundingClientRect().width)).toBe(12);
   });

@@ -3,12 +3,14 @@
 // upsert when it types an answer, and plays any outcome a test scripts. Every field type,
 // every outcome, resends, a question changing under the person, and the keyboard.
 import { test, expect } from '@playwright/test';
+import { open, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CODEX = '019a1b2c-codex-example';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const card = (page, id) => page.locator(`.session[data-id="${id}"]`);
+// A session's view (#179), where its question is answered.
+const card = (page, id) => view(page, id);
 const later = () => new Date(Date.now() + 1000).toISOString();
 const log = (page) => page.evaluate(() => window.agentBridgeDemo.host.answerLog);
 const typed = (page) => page.evaluate(() => window.agentBridgeDemo.host.typed);
@@ -34,6 +36,7 @@ async function ask(page, question, id = CODEX) {
   }, { id, question, t: later() });
   const q = card(page, id).locator('.question');
   await expect(q).toHaveAttribute('data-question', question.id);
+  await open(page, id);
   return q;
 }
 
@@ -198,6 +201,7 @@ test.describe('on a phone', () => {
 
   test('the worked example\'s form is pre-filled from its defaults and sends them as they stand', async ({ page }) => {
     await openDemo(page);
+    await open(page, COPILOT);
     const q = card(page, COPILOT).locator('.question');
     await expect(q).toHaveAttribute('data-answerable', 'true');
     await expect(q.getByRole('radio', { name: 'Go: protocol, read-only host, PWA cards in parallel (Recommended)' })).toBeChecked();
@@ -227,7 +231,7 @@ test.describe('on a phone', () => {
       id: 'q-approval', kind: 'approval', message: 'Run `rm -rf build`?',
       fields: [{ name: 'decision', type: 'choice', required: true, options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No, and tell the agent what to do' }] }],
     });
-    await expect(q.locator('.question-head')).toHaveText('Permission requested');
+    await expect(q.locator('.question-head')).toHaveText('Main agent asks');
     const allow = q.getByRole('button', { name: 'Yes' });
     const deny = q.getByRole('button', { name: 'No, and tell the agent what to do' });
     await expect(allow).toHaveClass(/\btone-allow\b/);
@@ -249,7 +253,7 @@ test.describe('on a phone', () => {
     await openDemo(page);
     const q = await ask(page, permission, COPILOT);
     await expect(q).toHaveAttribute('data-answerable', 'true');
-    await expect(q.locator('.question-head')).toHaveText('Permission requested');
+    await expect(q.locator('.question-head')).toHaveText('Main agent asks');
     await expect(q.locator('.question-message pre')).toHaveText('git push origin main --force-with-lease');
     // The command can be copied; the only answers are the two decisions.
     await expect(q.locator('.question-message').getByRole('button', { name: 'Copy code' })).toHaveCount(1);
@@ -275,10 +279,14 @@ test.describe('on a phone', () => {
   test('every control is at least 44 px tall', async ({ page }) => {
     await openDemo(page);
     await ask(page, choice({ allowOther: true }));
-    const sizes = await page.locator('.question.answerable').evaluateAll((qs) => qs.flatMap((q) =>
+    const measure = () => page.locator('.question.answerable').evaluateAll((qs) => qs.flatMap((q) =>
       [...q.querySelectorAll('button:not([hidden]), label.opt, textarea, input[type="number"]')]
         .filter((e) => e.offsetParent !== null)
         .map((e) => ({ what: e.className || e.tagName, h: e.getBoundingClientRect().height }))));
+    // This question, then the worked example's form, each in its session's view.
+    const sizes = await measure();
+    await open(page, COPILOT);
+    sizes.push(...await measure());
     expect(sizes.length).toBeGreaterThan(10);
     for (const s of sizes) { expect(s.h, s.what).toBeGreaterThanOrEqual(44); }
   });
@@ -436,10 +444,10 @@ test.describe('from a keyboard', () => {
         { name: 'notes', title: 'Notes', type: 'text' },
       ],
     });
-    await expect(q.locator('.answer')).toHaveAccessibleName('Waiting on you');
+    await expect(q.locator('.answer')).toHaveAccessibleName('Main agent asks');
     await expect(q.getByRole('group', { name: 'Mode required Choose one' })).toBeVisible();
-    // Recommended first, so the first radio Tab reaches from the card's title is Full.
-    await card(page, CODEX).locator('button.fold').focus();
+    // Recommended first, so the first radio Tab reaches from the question's heading is Full.
+    await q.locator('.question-head').evaluate((e) => { e.tabIndex = -1; e.focus(); });
     await page.keyboard.press('Tab');
     await expect(q.getByRole('radio', { name: 'Full (Recommended)' })).toBeFocused();
     await page.keyboard.press('ArrowDown');

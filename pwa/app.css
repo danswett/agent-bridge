@@ -222,6 +222,54 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .page, #signin { max-width: 760px; }
 }
 
+/* ---- the sessions page's panes (ui.md §5.2, #179) ----
+   The window decides, not the device. Below 760, one column: the list, or the session pushed over
+   it at full height with the reply box at its foot (the bottom navigation makes room for it).
+   From 760, the list and the session side by side, each scrolling on its own, Conversation and
+   Tools as tabs. From 1280, a third pane: the inspector, which can be hidden. */
+.session-pane { display: none; }
+.session-view:not([hidden]) { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+.view-body { min-height: 0; }
+.no-session { margin: auto; color: var(--ab-text2); }
+@media (max-width: 759px) {
+  body[data-page="sessions"][data-session-open="true"] .list-pane { display: none; }
+  body[data-page="sessions"][data-session-open="true"] .session-pane {
+    display: flex; flex-direction: column; position: fixed; inset: 0; z-index: 15; background: var(--ab-shell);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  body[data-page="sessions"][data-session-open="true"] .nav { display: none; }
+  .session-views { flex: 1; min-height: 0; }
+  .no-session { display: none; }
+  .session-header { padding: var(--ab-space-2) var(--ab-space-4) var(--ab-space-3) var(--ab-space-4); }
+  .session-header .pin, .session-header .details-button, .session-header .inspector-button { display: none; }
+  .view-tabs { padding: 0 var(--ab-space-4); }
+  .stream-scroll { padding: var(--ab-space-4); }
+  .reply-slot { padding: var(--ab-space-2) var(--ab-space-4) var(--ab-space-3); }
+  .inspector { padding: var(--ab-space-4); }
+}
+@media (min-width: 760px) {
+  body[data-page="sessions"] .content { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+  body[data-page="sessions"] .content > .banner { margin: var(--ab-space-3) var(--ab-space-6) 0; }
+  .route-sessions:not([hidden]) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .sessions:not([hidden]) { display: grid; grid-template-columns: clamp(264px, 26vw, 320px) minmax(0, 1fr); flex: 1; min-height: 0; }
+  .list-pane { min-height: 0; overflow: auto; padding: var(--ab-space-5) var(--ab-space-2) var(--ab-space-4); border-right: 1px solid var(--ab-stroke2); }
+  .list-pane > :not(.session-list) { margin-left: var(--ab-space-3); margin-right: var(--ab-space-3); }
+  .session-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .session-views { flex: 1; min-height: 0; }
+  .session-header .back, .session-header .more { display: none; }
+  .session-header .icon-button { width: 32px; height: 32px; }
+  .session-header .inspector-button { display: none; }
+}
+@media (min-width: 1280px) {
+  .sessions:not([hidden]) { grid-template-columns: 320px minmax(0, 1fr); }
+  .session-header .inspector-button { display: inline-grid; }
+  body[data-inspector="shown"] .view-tabs { display: none; }
+  body[data-inspector="shown"] .view-body { grid-template-columns: minmax(0, 1fr) 336px; }
+  body[data-inspector="shown"] .session-view .conversation { display: flex; }
+  body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
+  body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
+}
+
 /* ---- shared ---- */
 .panel, .banner {
   background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--radius);
@@ -370,6 +418,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .new-session.attention::after { top: 6px; right: 6px; box-shadow: 0 0 0 2px var(--ab-shell); }
 }
 @media (min-width: 760px) {
+  /* In the list pane: the title and New, then the count and the sort menu. */
+  .sessions-head { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "title actions" "count sort"; row-gap: var(--ab-space-1); }
   .new-session { min-height: 32px; padding: 0 var(--ab-space-3); border-radius: var(--ab-radius-control); font-size: var(--type-row); }
   .new-session .ab-icon { width: 16px; height: 16px; --ab-icon-stroke: 1.7; }
   .new-session.attention::after { top: -3px; right: -3px; box-shadow: 0 0 0 2px var(--ab-layer); }
@@ -402,19 +452,17 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .appbar .brand, .appbar .online { min-height: var(--tap); }
   .new-session { min-height: var(--tap); }
 }
-.session-list { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+.session-list { display: grid; gap: 2px; grid-template-columns: minmax(0, 1fr); }
 
 /* The person's order (ui.md §6.1, #164): Pinned and Sessions headers once anything is pinned,
    then Ended · N, folded. */
-.list-group { grid-column: 1 / -1; margin: 4px 0 -6px; font-size: .8125rem; line-height: 1.125rem; font-weight: 600; color: var(--ab-text2); }
-/* Both span every column of the wide grid: a heading beside its first card, or Ended beside the
-   last live one, would read as part of the row. */
-.ended-group { grid-column: 1 / -1; }
-.ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: .8125rem; min-height: var(--tap); display: flex; align-items: center; }
+.list-group { margin: var(--ab-space-3) 0 var(--ab-space-1); padding: 0 var(--ab-space-3); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.list-group:first-child { margin-top: 0; }
+.ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: var(--type-section); line-height: var(--type-section-line); min-height: var(--tap); padding: 0 var(--ab-space-3); display: flex; align-items: center; }
 .ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.ended { display: flex; flex-wrap: wrap; gap: 0 8px; padding: 6px 14px; color: var(--ab-text2); }
+.ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-3) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
 .ended-title { color: var(--ab-text); overflow-wrap: anywhere; min-width: 0; }
-.ended-meta { font-size: .8rem; }
+.ended-meta { font-size: var(--type-meta); }
 /* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
 .unread-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ab-bridge); flex: none; }
 @media (forced-colors: active) { .unread-dot { background: Highlight; forced-color-adjust: none; } }
@@ -461,7 +509,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
 .drag-handle { display: none; }
 @media (hover: hover) and (pointer: fine) {
   .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
-    display: block; position: absolute; left: 1px; top: 14px; width: 12px; height: 32px;
+    display: block; position: absolute; left: 0; top: 8px; width: 12px; height: 24px; z-index: 1;
     cursor: grab; opacity: 0; color: var(--ab-text2);
     background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
     background-size: 6px 6px; background-position: center;
@@ -473,8 +521,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
 .session.drop-before::before, .session.drop-after::after {
   content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--ab-bridge);
 }
-.session.drop-before::before { top: -8px; }
-.session.drop-after::after { bottom: -8px; }
+.session.drop-before::before { top: -2px; }
+.session.drop-after::after { bottom: -2px; }
 /* High contrast drops background images and colours: the grip and the drop line keep system
    colours so they can still be seen. */
 @media (forced-colors: active) {
@@ -482,7 +530,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
 }
 .row-menu {
-  position: absolute; right: 8px; top: 48px; z-index: 5; min-width: 168px;
+  position: absolute; right: var(--ab-space-2); top: calc(100% - var(--ab-space-1)); z-index: 5; min-width: 168px;
   display: grid; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2);
   border-radius: 8px; box-shadow: 0 8px 24px var(--ab-shadow);
   scroll-margin-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-2));
@@ -497,22 +545,51 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
 .row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { background: var(--ab-subtle); }
 .row-menu-item:disabled { color: var(--ab-text2); cursor: default; }
 
-/* A grid item is min-width:auto, so one long unbroken path in a card (a tool summary, a title,
-   a question option) made the card wider than the screen and iOS zoomed the page out. */
-.session { position: relative; min-width: 0; }
-/* The session a notification was about, for a moment after it opens the app. */
-.session.linked .frame { border-color: var(--ab-bridge); box-shadow: 0 0 0 2px var(--ab-bridge); }
-.frame {
-  position: relative;
-  background: var(--ab-card);
-  border: 1px solid var(--ab-stroke2);
-  border-radius: var(--radius);
-  padding: 4px 14px 12px;
-  overflow: hidden;
-  transition: border-color .4s ease, box-shadow .4s ease;
+/* ---- a session's row (ui.md §6.1) ----
+   Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
+   activity dot at the trailing edge. A grid item is min-width:auto, so a long unbroken title or
+   path would otherwise make the row wider than the screen. */
+.session { position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
+.row-main {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: var(--ab-space-3); align-items: start;
+  width: 100%; min-height: var(--tap); padding: var(--ab-space-2) var(--ab-space-3); margin: 0;
+  font: inherit; color: var(--ab-text); text-align: left; background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
 }
-/* Status is the glyph and its words (docs/design/ui.md §2), not the card's edge: the coloured
-   edges and the breathing glow that stood in for them are gone (#178). */
+.row-main:hover { background: var(--ab-subtle); }
+/* The glyph sits on line 1, centred on its line, never on the row's middle (§5.1). */
+.row-glyph { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: var(--type-row-line); }
+.row-text { grid-column: 2; grid-row: 1; min-width: 0; display: grid; }
+.row-line1 { display: flex; align-items: center; min-width: 0; }
+.row-title { min-width: 0; font-size: var(--type-row); line-height: var(--type-row-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session.unread .row-title { font-weight: 600; }
+/* Line 2: one line, cut short at its end; a separator never starts it. */
+.row-facts {
+  min-width: 0; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.row-status[data-tone="needs"] { color: var(--ab-needs-text); }
+.row-status[data-tone="agent"] { color: var(--ab-agent-text); }
+.row-age {
+  grid-column: 3; grid-row: 1; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-row-line);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.session.unread .row-age { display: none; }
+.session.unread .unread-dot { margin-left: auto; padding-left: var(--ab-space-2); box-sizing: content-box; background-clip: content-box; }
+/* Selected: a quiet fill and the 3 x 16 Bridge pill at the leading edge, never a status colour. */
+.session.selected .row-main { background: var(--ab-selected); }
+.row-main { position: relative; }
+.session.selected > .row-main::before {
+  content: ""; position: absolute; left: 0; top: calc(var(--ab-space-2) + 2px); width: 3px; height: 16px; border-radius: 2px; background: var(--ab-bridge);
+}
+@media (forced-colors: active) {
+  .session.selected > .row-main::before { forced-color-adjust: none; background: Highlight; }
+  .session.selected .row-main { outline: 1px solid Highlight; }
+}
+/* The session a notification or a launch opened, for a moment. */
+.session.linked .row-main, .session-view.linked .session-header { box-shadow: inset 0 0 0 2px var(--ab-bridge); }
+/* Facts on a line (meta.js): a separator is in the text face whatever face its neighbours are
+   in, and stays with the fact before it. */
+.sep { font-family: var(--font-text); font-weight: 400; letter-spacing: normal; color: var(--ab-text2); }
 
 /* ---- status glyphs and icons (design/README.md) ----
    The glyph draws in its role's colour; the active colour turns to agent while an agent
@@ -540,64 +617,115 @@ svg.ab-icon-16:not([width]) { width: 16px; height: 16px; }
 svg.ab-icon-20:not([width]) { width: 20px; height: 20px; }
 svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 
-.head { padding-top: 6px; }
-.title { margin: 0; font-size: 1.05rem; }
-.fold {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  min-height: var(--tap); padding: 6px 0; margin: 0;
-  font: inherit; font-weight: 600; color: var(--ab-text); text-align: left;
-  background: none; border: 0; cursor: pointer;
+/* ---- the session pane: header (ui.md §6.2) ---- */
+.session-view { min-width: 0; }
+.session-header {
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: var(--ab-space-2);
+  padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
-.title-text { flex: 1; overflow-wrap: anywhere; }
-/* The design chevron points along the line; open, it points down into the card. */
-.chevron { width: 20px; height: 20px; transform: rotate(90deg); transition: transform .2s ease; color: var(--ab-text2); }
-.collapsed .chevron { transform: none; }
-
-/* Which agent, by its mark alone: the design language has no colours for agents' brands. */
-.agent-badge {
-  display: inline-grid; place-items: center; width: 30px; height: 30px; flex: none;
-  border-radius: 8px; color: var(--ab-text); background: var(--ab-selected);
+.header-main { grid-column: 2; min-width: 0; }
+.session-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; overflow-wrap: anywhere; }
+.header-actions { grid-column: 3; display: flex; align-items: center; gap: var(--ab-space-1); }
+.session-header .back { grid-column: 1; margin-left: calc(-1 * var(--ab-space-3)); }
+.session-header .icon-button[aria-pressed="true"] { color: var(--ab-bridge); background: var(--ab-selected); }
+/* One meta line: glyph · status · machine · repository. It flows as text so a separator stays
+   with the fact before it, and never starts a line (#214). */
+/* The glyph in a column of its own, on the first line, so words that wrap (a delegate's name
+   with nowhere to break) wrap beside it rather than leaving it alone on a line. */
+.status-line {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--ab-space-2); align-items: start;
+  margin: var(--ab-space-1) 0 0; color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line); overflow-wrap: anywhere;
 }
-.agent-badge .icon { width: 18px; height: 18px; }
-
-.meta { margin: 0 0 2px; color: var(--ab-text2); font-size: .88rem; display: flex; flex-wrap: wrap; gap: 0 6px; }
-.meta > * + *::before { content: "·"; margin-right: 6px; }
-/* A separator is in the text face, whichever face the item it leads is in (ui.md §4.2, rule 4). */
-.meta > * + *::before { font-family: var(--font-text); font-size-adjust: none; font-weight: 400; letter-spacing: normal; }
-.agent-name { color: var(--ab-text); font-weight: 600; }
-/* With every machine shown, the machine a card is on leads its meta line. */
-.machine-label { color: var(--ab-bridge); font-weight: 600; overflow-wrap: anywhere; }
-.repo, .branch, .model { overflow-wrap: anywhere; }
-
-
-.status-line { margin: 2px 0; font-size: .9rem; color: var(--ab-text2); display: flex; flex-wrap: wrap; align-items: center; }
-.status-line .glyph { margin-right: 7px; }
-.status-lead { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
+.status-line .glyph { margin-top: calc((var(--type-meta-line) - 16px) / 2); }
 /* The words take a role only where §3 allows one: needs' text for a question, agent's text
    while an agent drives (rule 7). Active and neutral are glyph colours, never words. */
-.status-text { font-weight: 600; color: var(--ab-text); min-width: 0; overflow-wrap: anywhere; }
+.status-text { color: var(--ab-text); }
 .status-text[data-tone="needs"] { color: var(--ab-needs-text); }
 .status-text[data-tone="agent"] { color: var(--ab-agent-text); }
 .status-text[data-tone="muted"] { color: var(--ab-text2); }
-.status-line .since:not(:empty)::before, .status-line .updated:not(:empty)::before { content: "·"; margin: 0 6px; }
-.driver { color: var(--ab-agent-text); font-weight: 600; }
-.status-line .driver::before { content: "·"; margin: 0 6px; color: var(--ab-text2); font-weight: 400; }
+.driver { color: var(--ab-agent-text); }
+/* The machine in text colour: Bridge is for actions and selection (§3, #214). */
+.session-machine, .machine-label { color: inherit; }
+.session-machine { color: var(--ab-text); }
 
-.tool-line { margin: 4px 0 0; font-size: .88rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+/* Conversation and Tools, where the inspector isn't a pane of its own. */
+.view-tabs { display: flex; gap: var(--ab-space-5); padding: 0 var(--ab-space-6); border-bottom: 1px solid var(--ab-stroke2); }
+.view-tab {
+  position: relative; flex: none; min-height: var(--tap); padding: 0 2px;
+  font: inherit; font-size: var(--type-row); line-height: var(--type-row-line); color: var(--ab-text2);
+  background: none; border: 0; cursor: pointer; white-space: nowrap;
+}
+.view-tab:hover { color: var(--ab-text); }
+.view-tab[aria-selected="true"] { color: var(--ab-text); font-weight: 600; }
+.view-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--ab-bridge);
+}
+@media (forced-colors: active) { .view-tab[aria-selected="true"]::after { forced-color-adjust: none; background: Highlight; } }
+@media (min-width: 760px) { .view-tab { min-height: 36px; } }
+/* A desktop's width on a touch screen: the header's buttons and the tabs back to 44 (§9). */
+@media (min-width: 760px) and (pointer: coarse) {
+  .session-header .icon-button { width: var(--tap); height: var(--tap); }
+  .view-tab { min-height: var(--tap); }
+}
+.view-body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; }
+.session-view[data-tab="conversation"] .inspector { display: none; }
+.session-view[data-tab="tools"] .conversation, .session-view[data-tab="details"] .conversation { display: none; }
+.session-view[data-tab="tools"] .details { display: none; }
+.session-view[data-tab="details"] .tools-panel { display: none; }
+
+/* ---- the conversation (ui.md §6.4) ---- */
+.conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.stream-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--ab-space-6); }
+/* The reading measure: about 68 characters, a step larger than the UI around it. */
+.stream {
+  max-width: 712px; margin: 0 auto; display: grid; gap: var(--ab-space-6);
+  font-size: var(--type-reading); line-height: var(--type-reading-line);
+}
+.stream > [hidden] { display: none; }
+.user-message { justify-self: end; max-width: 85%; min-width: 0; }
+.bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
+.bubble .plain { margin: 0; }
+.agent-block { min-width: 0; }
+.speaker { display: flex; align-items: baseline; gap: var(--ab-space-2); margin: 0 0 var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums; }
+.speaker-name { color: var(--ab-text); font-weight: 600; }
+.reasoning { margin: 0 0 var(--ab-space-2); }
+.reasoning > summary { min-height: 32px; padding: var(--ab-space-1) 0; font-size: var(--type-meta); }
+.reasoning .plain { color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
+.response > :first-child { margin-top: 0; }
+.response > :last-child { margin-bottom: 0; }
+.question-slot:empty { display: none; }
+.question-slot > .question { margin: 0; }
+/* What the main agent is doing now: the tool's glyph, its name and arguments, in mono. */
+.tool-line { margin: var(--ab-space-2) 0 0; display: flex; gap: var(--ab-space-2); align-items: baseline; min-width: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
 .tool-line .glyph { align-self: center; }
-
 .tool-line .tool-summary { color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* What is mono (ui.md §4.1): commands, paths, ids, branch@SHA, a tool's name and arguments. */
+.mono, .branch, .tool-name, .tool-summary { font-family: var(--ab-font-mono); }
 
 /* Reduced motion stops every glyph (ui.md §9): the state is in the shape, never the motion. */
 @media (prefers-reduced-motion: reduce) {
   .glyph .glyph-spin, .glyph .glyph-orbit { animation: none; }
-  .frame, .chevron { transition: none; }
 }
 
-.body { border-top: 1px solid var(--ab-stroke2); margin-top: 8px; padding-top: 4px; }
 .note.truncated, .note.dropped { font-style: italic; }
 .plain { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
-.facts { color: var(--ab-text2); font-size: .8rem; margin: 10px 0 0; overflow-wrap: anywhere; }
+
+/* ---- the inspector: Details and Tools ---- */
+.inspector { min-width: 0; min-height: 0; overflow: auto; padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-6); display: grid; align-content: start; gap: var(--ab-space-6); }
+.section-head { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
+.section-head:focus { outline: none; }
+.facts {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--ab-space-1) var(--ab-space-3); margin: 0;
+  font-size: var(--type-meta); line-height: var(--type-meta-line); font-variant-numeric: tabular-nums;
+}
+.fact { display: contents; }
+.fact dt { color: var(--ab-text2); }
+.fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.agent-name { color: var(--ab-text); }
+/* A path gives up its middle, not a word: the start shortens to an ellipsis, the last part stays. */
+.path { display: inline-flex; max-width: 100%; min-width: 0; vertical-align: bottom; overflow: hidden; }
+.path-head { flex: 0 1000 auto; min-width: 2ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path-tail { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 details { margin: 8px 0; }
 summary {
@@ -605,11 +733,11 @@ summary {
   color: var(--ab-text2); font-weight: 600; font-size: .92rem;
 }
 
-.tools { list-style: none; margin: 0; padding: 0; font-size: .86rem; }
-.tool { display: grid; grid-template-columns: 1.4em auto 1fr auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--ab-stroke2); align-items: baseline; }
+.tools { list-style: none; margin: 0; padding: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); }
+.tool { display: grid; grid-template-columns: 1.4em auto minmax(0, 1fr) auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--ab-stroke2); align-items: baseline; }
 .tool:last-child { border-bottom: 0; }
-
-.tool .tool-summary { color: var(--ab-text2); overflow-wrap: anywhere; }
+.tool .tool-name { font-family: var(--ab-font-mono); font-weight: 600; }
+.tool .tool-summary { min-width: 0; color: var(--ab-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .tool-time { color: var(--ab-text2); font-size: .78rem; white-space: nowrap; }
 .tool .tool-mark { align-self: center; display: flex; }
 
@@ -774,11 +902,28 @@ summary {
 .trust-path { overflow-wrap: anywhere; word-break: break-all; white-space: pre-wrap; }
 .trust-warning { margin: 0; white-space: pre-line; }
 .trust-at-machine, .trust-status { margin: 0; }
-/* ---- replying ---- */
+/* ---- replying (ui.md §6.5) ---- */
+/* Under the conversation, at the reading measure: a card with a 2 px Bridge bottom edge, the box,
+   then Attach and an icon-only Send. */
+.reply-slot { flex: none; padding: var(--ab-space-3) var(--ab-space-6) var(--ab-space-4); border-top: 1px solid var(--ab-stroke2); }
 .reply-slot:empty { display: none; }
-.reply { margin: 12px 0 4px; padding-top: 10px; border-top: 1px solid var(--ab-stroke2); }
-.reply .text-wrap { margin-top: 0; }
-.reply .note { margin: 4px 0; }
+.reply { max-width: 712px; margin: 0 auto; }
+.reply .note { margin: var(--ab-space-1) 0; }
+.reply-box {
+  background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-bottom: 2px solid var(--ab-bridge);
+  border-radius: var(--ab-radius-control);
+}
+.reply-box:focus-within { border-color: var(--ab-bridge); }
+.reply .text-wrap { margin: 0; }
+.reply .reply-input { border: 0; border-radius: var(--ab-radius-control) var(--ab-radius-control) 0 0; background: none; resize: none; min-height: var(--tap); }
+.reply .reply-input:focus-visible { outline: none; }
+.reply .reply-input:disabled { background: none; }
+.reply .attachments { margin: 0; padding: 0 var(--ab-space-2) var(--ab-space-2); }
+.reply-tools { display: flex; align-items: center; justify-content: flex-end; gap: var(--ab-space-1); padding: 0 var(--ab-space-1) var(--ab-space-1); }
+.reply-tools .attach { margin-right: auto; color: var(--ab-text2); }
+.reply-tools .attach .attach-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.button.send { width: 32px; min-height: 32px; padding: 0; border-radius: var(--ab-radius-control); }
+@media (pointer: coarse) { .button.send { width: var(--tap); min-height: var(--tap); } }
 .bytes { display: block; color: var(--ab-text2); font-size: .8rem; text-align: right; min-height: 0; }
 .bytes:empty { display: none; }
 .bytes.over { color: var(--ab-danger-text); font-weight: 600; }
@@ -797,7 +942,6 @@ summary {
   border: 0; border-radius: 8px; background: transparent; color: var(--ab-text2); font: inherit; font-size: 1.4rem; cursor: pointer;
 }
 .attachment .remove:disabled { opacity: .4; cursor: default; }
-.button.attach { gap: 6px; }
 .field.invalid > .field-set > legend .field-title, .field.invalid .field-head .field-title { color: var(--ab-danger-text); }
 
 .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
@@ -849,10 +993,9 @@ summary {
 }
 
 /* ---- ending a session ---- */
-/* A footer link rather than another control in the stack: small, muted and pinned left,
-   furthest from Send, behind a hairline that closes the card off, as on the old dashboard. */
+/* In Details (ui.md §6.2): small and muted, under a hairline, furthest from Send. */
 .stop-slot:empty { display: none; }
-.end-session { margin-top: 10px; padding-top: 2px; border-top: 1px solid var(--ab-stroke2); }
+.end-session { margin-top: var(--ab-space-3); padding-top: var(--ab-space-1); border-top: 1px solid var(--ab-stroke2); }
 .end-button {
   display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); padding: 6px 2px;
   font: inherit; font-size: .88rem; color: var(--ab-text2); background: none; border: 0; cursor: pointer;
@@ -867,11 +1010,3 @@ summary {
 .notify h3, .account h3 { margin: 0 0 var(--ab-space-2); font-size: var(--type-section); line-height: var(--type-section-line); font-weight: 600; color: var(--ab-text2); }
 .account p { margin: 0; color: var(--ab-text2); overflow-wrap: anywhere; }
 
-/* Wide windows (a desktop browser) put the sessions side by side instead of one long stack:
-   each column stays at least as wide as a phone, so a card's question form, reply box and
-   buttons keep their phone layout. Rows start at the top so a tall card does not stretch the
-   ones beside it. */
-@media (min-width: 960px) {
-  .session-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); align-items: start; }
-  .needs-you-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); }
-}

@@ -5,11 +5,12 @@
 // Files over 256 KiB through the relay's blob store, simulated in the page (DemoBlobStore):
 // sealed and uploaded with progress, fetched and checked by the host, cancelled, refused.
 import { test, expect } from '@playwright/test';
+import { open } from './nav.mjs';
 
 const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 const STAGED = /^@C:\\Users\\demo\\AppData\\Local\\AgentBridge\\default\\attachments\\[0-9a-f]{32}-/;
 
-const box = (page) => page.locator(`.session[data-id="${IDLE}"] form.reply`);
+const box = (page) => page.locator(`.session-view[data-id="${IDLE}"] form.reply`);
 const typed = (page) => page.evaluate(() => window.agentBridgeDemo.host.typedReplies);
 const ops = (page) => page.evaluate(() => window.agentBridgeDemo.host.attachmentLog.map((l) => l.op));
 
@@ -20,6 +21,8 @@ async function openDemo(page, query = '') {
   });
   await page.goto(`?demo=1&static=1&answerDelay=200${query}`);
   await page.waitForSelector('html[data-demo-ready]');
+  // These are about the idle session's reply box: its session is opened, as a person would.
+  await open(page, IDLE);
 }
 
 test.afterEach(async ({ page }) => {
