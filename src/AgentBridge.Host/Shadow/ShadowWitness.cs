@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host.Shadow;
 
@@ -25,7 +27,14 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     public IReadOnlyList<ShadowDifference> Explain(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
     {
         foreach (var gone in evidence.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { evidence.Remove(gone); }
+        foreach (var gone in rollouts.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { rollouts.Remove(gone); }
         differences = [.. differences, .. OtherAgents(daemon, host, differences)];
+        // The resume list is the machine's, not a session's, so every difference in it is
+        // explained together or not at all.
+        if (differences.Any(d => d.Known is null && d.Kind.StartsWith("resumable.", StringComparison.Ordinal)) && CopilotNames(daemon, host) is { } names)
+        {
+            differences = [.. differences.Select(d => d.Known is null && d.Kind.StartsWith("resumable.", StringComparison.Ordinal) ? d with { Known = names } : d)];
+        }
         if (!differences.Any(Explainable)) { return differences; }
         var ids = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var id in daemon.Sessions.Keys) { ids.TryAdd(ShadowHash.Session(id), id); }
@@ -33,7 +42,12 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
         foreach (var d in differences)
         {
             string? known = null;
-            if (Explainable(d) && ids.TryGetValue(d.Session!, out var id)
+            if (Explainable(d) && d.Kind == ShadowKinds.Compactions && ids.TryGetValue(d.Session!, out var cid)
+                && daemon.Sessions.TryGetValue(cid, out var dc) && host.Sessions.TryGetValue(cid, out var hc))
+            {
+                known = CodexCompactions(cid, dc, hc);
+            }
+            else if (Explainable(d) && ids.TryGetValue(d.Session!, out var id)
                 && daemon.Sessions.TryGetValue(id, out var ds) && host.Sessions.TryGetValue(id, out var hs)
                 && ds.Agent == "copilot" && Evidence(id) is { } e)
             {
@@ -63,7 +77,155 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
 
     static bool Explainable(ShadowDifference d) =>
         d.Known is null && d.Session is not null && d.Kind is ShadowKinds.BackgroundAgents or ShadowKinds.BackgroundShells or ShadowKinds.Model
-            or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status;
+            or ShadowKinds.QuestionMissingOnHost or ShadowKinds.Status or ShadowKinds.Compactions;
+
+    // agent-ha-bridge#279: the daemon counts no compaction for a Codex session (its Codex adapter's
+    // CountCompactions is a fixed 0). Put down to that only when the daemon says 0 and the host's
+    // count is exactly the compactions Codex wrote in the session's rollout, the one the
+    // daemon's own registration for it names. Claude's and Copilot's stay mismatches.
+    string? CodexCompactions(string id, ShadowSession daemon, ShadowSession host)
+    {
+        if (daemon.Agent != "codex" || host.Agent != "codex" || daemon.Compactions != 0 || host.Compactions <= 0) { return null; }
+        if (paths.CodexRollout(id) is not { } path) { return null; }
+        if (!rollouts.TryGetValue(id, out var count) || count.Path != path) { rollouts[id] = count = new RolloutCompactions(path); }
+        return count.Count() == host.Compactions ? Issue(279) : null;
+    }
+
+    readonly Dictionary<string, RolloutCompactions> rollouts = new(StringComparer.Ordinal);
+
+    // agent-ha-bridge#278: the daemon reads only `summary:` from a Copilot session's
+    // workspace.yaml, where Copilot CLI 1.0.105 writes the title as `name:`, so it labels such a
+    // session by its first prompt, or leaves it out when its transcript's ends hold none. The
+    // host's list is relabelled as the daemon would label it: each Copilot session with a name and
+    // no summary takes its first prompt (from the daemon's 128 KiB ends) or is dropped, and the
+    // labels are told apart again. Put down to #278 only when at least one was relabelled and
+    // the result is exactly the daemon's list, in count and in labels; anything else stays a
+    // mismatch, and so does a label the host's own rule cannot be shown to have made.
+    string? CopilotNames(ShadowView daemon, ShadowView host)
+    {
+        if (daemon.Resumable is not { } theirs || host.ResumableEntries is not { } entries) { return null; }
+        var relabelled = new List<(string Title, string Id, string Agent, string Launcher)>();
+        var plains = new List<string>();
+        var changed = false;
+        var dropped = false;
+        foreach (var e in entries)
+        {
+            var (plain, repeated) = Unrepeated(e.Label, e.Id);
+            if (repeated)
+            {
+                if (!string.Equals(LaunchService.Repeated(plain, e.Id), e.Label, StringComparison.Ordinal)) { return null; }
+                // The host tells labels apart over every eligible session, live ones included, so
+                // a suffix with no earlier namesake offered here was reserved by one that is not:
+                // that collision cannot be shown from this list, and stripping it would let a
+                // daemon list missing a suffix it needs pass as #278 (found in review).
+                if (!plains.Contains(plain, StringComparer.OrdinalIgnoreCase)) { return null; }
+            }
+            plains.Add(plain);
+            var yaml = e.Agent == "copilot" && e.Launcher == "copilot" && Guid.TryParseExact(e.Id, "D", out _)
+                ? ResumableStore.ReadYaml(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "workspace.yaml"))
+                : [];
+            if (yaml.ContainsKey("summary") || !yaml.TryGetValue("name", out var name))
+            {
+                relabelled.Add((plain, e.Id, e.Agent, e.Launcher));
+                continue;
+            }
+            // The host's label must be the one its rule makes from the name, so only the title
+            // changes.
+            var entry = new ResumeEntry(e.Id, AgentKind.Copilot, e.Launcher, name, e.Folder, e.Updated);
+            var prefixed = LaunchService.Title(entry, prefixed: true) == plain;
+            if (!prefixed && LaunchService.Title(entry, prefixed: false) != plain) { return null; }
+            changed = true;
+            var prompt = Prompt(Path.Combine(paths.CopilotHome, "session-state", e.Id.ToLowerInvariant(), "events.jsonl"));
+            if (prompt is null) { return null; }
+            if (prompt.Length > 0) { relabelled.Add((LaunchService.Title(entry with { Summary = prompt }, prefixed), e.Id, e.Agent, e.Launcher)); }
+            else { dropped = true; }
+        }
+        if (!changed) { return null; }
+        // The agent is named while the eligible sessions are of more than one kind. Dropping the
+        // only one of a kind can make the daemon's list single-kind and unnamed (found in review),
+        // unless a live session of another kind, which is eligible but not offered, keeps it
+        // named. That cannot be told from here, so it is left a mismatch.
+        var agents = relabelled.Select(r => r.Agent).Distinct(StringComparer.Ordinal).ToList();
+        if (dropped && agents.Count == 1 && entries.Select(e => e.Agent).Distinct(StringComparer.Ordinal).Count() > 1)
+        {
+            if (host.Sessions.Values.Any(s => s.Agent != agents[0])) { return null; }
+            for (var i = 0; i < relabelled.Count; i++)
+            {
+                var r = relabelled[i];
+                var named = $"{Launchers.Find(r.Launcher)?.Label ?? r.Launcher}: ";
+                // A label cut to fit was cut with its name in it; without the name more of it fits.
+                if (!r.Title.StartsWith(named, StringComparison.Ordinal) || r.Title.EndsWith("...", StringComparison.Ordinal)) { return null; }
+                relabelled[i] = r with { Title = r.Title[named.Length..] };
+            }
+        }
+        var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // The host also reserves labels for live sessions, which are eligible but not offered. A
+        // title the daemon makes from a first prompt can meet one of those where the name did not
+        // (found in review), and so can a title freed of its suffix. The daemon would then tell
+        // them apart, so any title a live session could hold leaves the list unexplained.
+        if (LiveTitles(host, entries) is not { } live) { return null; }
+        if (relabelled.Any(r => live.Contains(r.Title))) { return null; }
+        var mine = new List<string>();
+        foreach (var (title, id, _, _) in relabelled)
+        {
+            var label = title;
+            if (!labels.Add(label))
+            {
+                label = LaunchService.Repeated(title, id);
+                if (!labels.Add(label)) { continue; }
+            }
+            mine.Add(ShadowHash.Normalize(label));
+        }
+        return mine.Count == theirs.Count && mine.ToHashSet(StringComparer.Ordinal).SetEquals(theirs) ? Issue(278) : null;
+    }
+
+    // Read-BridgeFileEnds's default: the first and last 128 KiB of a transcript.
+    const int DaemonPromptEnds = 128 * 1024;
+
+    // Every label a live Copilot session not in the list could hold in the daemon's list, named
+    // or not: its summary, or else its first prompt, with its folder. Null when a live session of
+    // another agent could hold one too, which only a list naming every agent rules out.
+    HashSet<string>? LiveTitles(ShadowView host, IReadOnlyList<ShadowResumeEntry> entries)
+    {
+        var offered = entries.Select(e => e.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var titles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var named = entries.Select(e => e.Agent).Distinct(StringComparer.Ordinal).Count() > 1;
+        foreach (var s in host.Sessions.Values)
+        {
+            if (offered.Contains(s.Id)) { continue; }
+            if (s.Agent != "copilot") { if (named) { continue; } return null; }
+            if (!Guid.TryParseExact(s.Id, "D", out _)) { return null; }
+            var dir = Path.Combine(paths.CopilotHome, "session-state", s.Id.ToLowerInvariant());
+            if (!Directory.Exists(dir)) { return null; }
+            var yamlPath = Path.Combine(dir, "workspace.yaml");
+            var yaml = ResumableStore.ReadYaml(yamlPath);
+            if (yaml.Count == 0 && File.Exists(yamlPath)) { return null; }
+            var summary = yaml.TryGetValue("summary", out var v) ? v : Prompt(Path.Combine(dir, "events.jsonl"));
+            if (summary is null) { return null; }
+            if (string.IsNullOrWhiteSpace(summary)) { continue; }
+            var entry = new ResumeEntry(s.Id, AgentKind.Copilot, "copilot", summary, yaml.GetValueOrDefault("cwd"), null);
+            titles.Add(LaunchService.Title(entry, prefixed: true));
+            titles.Add(LaunchService.Title(entry, prefixed: false));
+        }
+        return titles;
+    }
+
+    // The daemon's first prompt for a Copilot session: "" when it has none, as when its transcript
+    // is missing, and null when the transcript is there but could not be read, which tells nothing
+    // about what the daemon read (found in review).
+    static string? Prompt(string events)
+    {
+        if (!File.Exists(events)) { return ""; }
+        var prompt = ResumableStore.FirstPrompt(events, DaemonPromptEnds, out var read);
+        return read ? prompt : null;
+    }
+
+    // A label the host told apart with " (<first 8 of its id>)", and the label before that.
+    static (string Plain, bool Repeated) Unrepeated(string label, string id)
+    {
+        var suffix = $" ({id[..Math.Min(8, id.Length)]})";
+        return label.EndsWith(suffix, StringComparison.Ordinal) ? (label[..^suffix.Length], true) : (label, false);
+    }
 
     // Background agents compared entry by entry (#175): the same number on both sides can still be
     // different agents, a daemon bug on each side cancelling out, or a host bug hidden behind one.
@@ -745,4 +907,78 @@ public sealed partial class TranscriptEvidence(string path)
 
     [GeneratedRegex(@"\A<command with shellId: (\S+?) moved to background by the user[^\r\n]*>\z", RegexOptions.CultureInvariant)]
     private static partial Regex Moved();
+}
+
+// The compactions Codex wrote in one rollout: its top-level "compacted" lines, as CodexParser
+// counts them. Read once from the start, then only what is appended; -1 when it cannot be read.
+public sealed class RolloutCompactions(string path)
+{
+    const int MaxLine = 64 * 1024 * 1024;
+    static readonly byte[] Marker = "\"compacted\""u8.ToArray();
+    const int AnchorBytes = 64;
+    long offset;
+    int count;
+    byte[] anchor = [];
+
+    public string Path => path;
+
+    public int Count()
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            // A rollout that shrank, or whose bytes before the offset changed (replaced at the
+            // same size, or truncated and regrown), is counted again from its start, as
+            // TranscriptTail does: length alone kept a replaced rollout's old count (found in review).
+            if (stream.Length < offset || !Anchor(stream, offset).AsSpan().SequenceEqual(anchor)) { (offset, count, anchor) = (0, 0, []); }
+            stream.Seek(offset, SeekOrigin.Begin);
+            var line = new MemoryStream();
+            var buffer = new byte[1 << 20];
+            var position = offset;
+            var tooLong = false;
+            int read;
+            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                var start = 0;
+                for (var i = 0; i < read; i++)
+                {
+                    if (buffer[i] != (byte)'\n') { continue; }
+                    if (!tooLong && line.Length + (i - start) <= MaxLine) { line.Write(buffer, start, i - start); } else { tooLong = true; }
+                    if (!tooLong && Compacted(line.GetBuffer().AsSpan(0, (int)line.Length))) { count++; }
+                    line.SetLength(0);
+                    tooLong = false;
+                    start = i + 1;
+                    // Only whole lines are counted; a line still being written is read again next time.
+                    offset = position + start;
+                }
+                if (!tooLong && line.Length + (read - start) <= MaxLine) { line.Write(buffer, start, read - start); } else { tooLong = true; }
+                position += read;
+            }
+            anchor = Anchor(stream, offset);
+            return count;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return -1; }
+    }
+
+    static byte[] Anchor(FileStream stream, long end)
+    {
+        var length = (int)Math.Min(AnchorBytes, end);
+        if (length == 0) { return []; }
+        var bytes = new byte[length];
+        stream.Seek(end - length, SeekOrigin.Begin);
+        stream.ReadExactly(bytes);
+        return bytes;
+    }
+
+    static bool Compacted(ReadOnlySpan<byte> line)
+    {
+        if (line.IndexOf(Marker) < 0) { return false; }
+        try
+        {
+            using var doc = JsonDocument.Parse(line.ToArray());
+            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty("type", out var t)
+                && t.ValueKind == JsonValueKind.String && t.GetString() == "compacted";
+        }
+        catch (JsonException) { return false; }
+    }
 }

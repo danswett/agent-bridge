@@ -66,6 +66,9 @@ public sealed record ShadowQuestion
 
 public sealed record ShadowField(string Type, int Options, string? OptionsHash);
 
+// One session the host offers to resume, in memory only.
+public sealed record ShadowResumeEntry(string Label, string Id, string Agent, string Launcher, string? Folder, DateTimeOffset? Updated);
+
 public sealed record ShadowView
 {
     // Null when the view could be read; otherwise why not, from a fixed vocabulary.
@@ -84,6 +87,9 @@ public sealed record ShadowView
     // not read, with why in ResumableProblem.
     public IReadOnlyList<string>? Resumable { get; init; }
     public string? ResumableProblem { get; init; }
+    // The host only: the entries behind Resumable, in the same order, with the label as offered
+    // (before Normalize), so a difference can be checked against a known cause (ShadowWitness).
+    public IReadOnlyList<ShadowResumeEntry>? ResumableEntries { get; init; }
     // When this side's process started, so a restart between two samples is seen: the daemon's
     // from its runtime/daemon.process.json, the host's from host.status.
     public DateTimeOffset? StartedAt { get; init; }

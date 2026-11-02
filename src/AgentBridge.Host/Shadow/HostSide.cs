@@ -106,6 +106,10 @@ public static class HostSide
         options.Workspaces.Count == 0
             ? (null, "the host approves no workspace, so offers nothing to resume")
             : ([.. options.Resumable.Select(r => ShadowHash.Normalize(r.Title))], null);
+
+    public static IReadOnlyList<ShadowResumeEntry>? ResumableEntries(LaunchOptions options) =>
+        options.Workspaces.Count == 0 ? null
+            : [.. options.Resumable.Select(r => new ShadowResumeEntry(r.Title, r.Id, r.Agent.ToString().ToLowerInvariant(), r.Launcher, r.Cwd, r.UpdatedAt))];
 }
 
 // The running host for a profile, through its own pipe (docs/protocol/local-pipe.md): what this
@@ -119,7 +123,7 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
     readonly TimeProvider clock = time ?? TimeProvider.System;
     readonly TimeSpan every = refresh ?? TimeSpan.FromMinutes(1);
     DateTimeOffset? asked;
-    (IReadOnlyDictionary<string, ShadowUsage>? Usage, string? UsageProblem, IReadOnlyList<string>? Resumable, string? ResumableProblem) extras;
+    (IReadOnlyDictionary<string, ShadowUsage>? Usage, string? UsageProblem, IReadOnlyList<string>? Resumable, string? ResumableProblem, IReadOnlyList<ShadowResumeEntry>? Entries) extras;
 
     public async Task<ShadowView> ObserveAsync(CancellationToken ct = default)
     {
@@ -157,6 +161,7 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
                 UsageProblem = extras.UsageProblem,
                 Resumable = extras.Resumable,
                 ResumableProblem = extras.ResumableProblem,
+                ResumableEntries = extras.Entries,
             };
         }
         catch (HostNotRunningException) { return new() { Problem = "the host is not running for this profile" }; }
@@ -170,7 +175,7 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
     }
 
     // Each asked on its own, so a host that does not answer one still has the other compared.
-    static async Task<(IReadOnlyDictionary<string, ShadowUsage>?, string?, IReadOnlyList<string>?, string?)> ExtrasAsync(LocalChannel channel, bool offersUsage, CancellationToken ct)
+    static async Task<(IReadOnlyDictionary<string, ShadowUsage>?, string?, IReadOnlyList<string>?, string?, IReadOnlyList<ShadowResumeEntry>?)> ExtrasAsync(LocalChannel channel, bool offersUsage, CancellationToken ct)
     {
         IReadOnlyDictionary<string, ShadowUsage>? usage = null;
         string? usageProblem = null;
@@ -182,14 +187,16 @@ public sealed class PipeShadowHost(LocalEndpoint endpoint, TimeProvider? time = 
         }
         IReadOnlyList<string>? resumable = null;
         string? resumableProblem = null;
+        IReadOnlyList<ShadowResumeEntry>? entries = null;
         try
         {
             // Listing resumable sessions asks Agency, which a cold machine can take a while to answer.
             var options = await channel.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: TimeSpan.FromSeconds(60), ct: ct);
             (resumable, resumableProblem) = HostSide.Resumable(options);
+            entries = HostSide.ResumableEntries(options);
         }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested) { resumableProblem = "the host did not answer launch.options"; }
-        return (usage, usageProblem, resumable, resumableProblem);
+        return (usage, usageProblem, resumable, resumableProblem, entries);
     }
 }
 
