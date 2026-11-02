@@ -245,6 +245,105 @@ public sealed class SettingsViewModel : Observable
         device.Reraise();
     }
 
+    // devBox.keepAwake, offered on a Dev Box only (the host's status has DevBox only there): the host
+    // skips or delays the Dev Box's pending stop-on-disconnect, so it does not hibernate under the
+    // sessions it runs. Applies at once.
+    public bool ShowDevBox => Status?.DevBox is not null;
+
+    // While changes are on their way, and until the host's status says what it last acknowledged,
+    // the value asked for (1 on, 0 off, -1 none): otherwise a switch turned on and straight back
+    // off, or off again after the reply but before its status event, is taken for no change and
+    // left on. Sent one at a time, each with what was asked last.
+    int keepAwakeWanted = -1;
+    int keepAwakePending;
+    readonly SemaphoreSlim keepAwakeGate = new(1, 1);
+
+    public bool DevBoxKeepAwake
+    {
+        get => Volatile.Read(ref keepAwakeWanted) is var w and >= 0 ? w == 1 : Status?.Settings.DevBoxKeepAwake ?? false;
+        set
+        {
+            if (Status?.DevBox is null || DevBoxKeepAwake == value) { return; }
+            Volatile.Write(ref keepAwakeWanted, value ? 1 : 0);
+            Interlocked.Increment(ref keepAwakePending);
+            _ = RunAsync(async () =>
+            {
+                await keepAwakeGate.WaitAsync();
+                SettingsResult? saved = null;
+                try
+                {
+                    if (Volatile.Read(ref keepAwakeWanted) is var w and >= 0)
+                    {
+                        saved = await host.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(DevBoxKeepAwake: w == 1));
+                    }
+                }
+                finally
+                {
+                    keepAwakeGate.Release();
+                    // The last one in: the switch shows what the host acknowledged until its status
+                    // says so too, or the host's word when nothing was acknowledged.
+                    if (Interlocked.Decrement(ref keepAwakePending) == 0)
+                    {
+                        Volatile.Write(ref keepAwakeWanted, saved is null ? -1 : saved.Settings.DevBoxKeepAwake ? 1 : 0);
+                        CaughtUp();
+                    }
+                }
+            });
+        }
+    }
+
+    // The host's status now says what it acknowledged: from here the switch follows the host. A
+    // status that disagrees, with nothing on its way, is either an older one arriving late or a
+    // change made elsewhere (another app, a person's terminal), which only the host can say: it is
+    // read again, once per status, as TrustEditor does. Waiting for a status that agrees could
+    // wait for ever after a missed event, the switch showing on while the host is off, and turning
+    // it on then discarded as no change.
+    HostStatus? keepAwakeChecked;
+
+    void CaughtUp()
+    {
+        var s = Status;
+        if (s is null || Volatile.Read(ref keepAwakePending) > 0 || Volatile.Read(ref keepAwakeWanted) is not (var w and >= 0)) { return; }
+        if ((w == 1) == s.Settings.DevBoxKeepAwake)
+        {
+            Volatile.Write(ref keepAwakeWanted, -1);
+            return;
+        }
+        if (ReferenceEquals(s, keepAwakeChecked)) { return; }
+        keepAwakeChecked = s;
+        _ = RereadKeepAwakeAsync();
+    }
+
+    async Task RereadKeepAwakeAsync()
+    {
+        await keepAwakeGate.WaitAsync();
+        try
+        {
+            if (Volatile.Read(ref keepAwakePending) > 0) { return; }
+            var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings.DevBoxKeepAwake;
+            // A change asked for meanwhile is what the switch shows; its own reply settles it.
+            if (Volatile.Read(ref keepAwakePending) == 0) { Volatile.Write(ref keepAwakeWanted, Status?.Settings.DevBoxKeepAwake == now ? -1 : now ? 1 : 0); }
+        }
+        // Not read: what was acknowledged stands until a status agrees or the next is checked.
+        catch (Exception e) when (e is not OutOfMemoryException) { }
+        finally { keepAwakeGate.Release(); }
+        Raise(nameof(DevBoxKeepAwake));
+        // A status that came during the read was let pass, and the read may be older than it.
+        CaughtUp();
+    }
+
+    public string DevBoxText => Status?.DevBox is not { } d ? ""
+        : !d.KeepAwake ? "Off: this host does not keep the Dev Box awake. If its pool stops it on disconnect, it hibernates once your last session has been gone for the pool's grace period, sessions running here or not, unless agent-ha-bridge keeps it awake."
+        : d.Last is not { } last ? $"On: the first pass runs shortly, then one every {d.IntervalMinutes} minutes."
+        : $"On, every {d.IntervalMinutes} minutes. Last pass at {last.At.ToLocalTime():t}: {last.Outcome}, {last.Detail}.{(d.NextAt is { } next ? $" Next at {next.ToLocalTime():t}." : "")}";
+
+    // What a person should act on: the Dev Box agent's settings could not be used, or the last pass
+    // failed (az not signed in, say), could not move the stop, or stood back with no evidence that
+    // agent-ha-bridge keeps it awake, so the Dev Box may hibernate.
+    public string? DevBoxAlarm => Status?.DevBox is not { KeepAwake: true } d ? null
+        : d.Problem is { } problem ? $"This Dev Box's agent settings could not be used, so it cannot be kept awake and may hibernate when you disconnect: {problem}"
+        : d.Last is { Alarming: true } last ? $"The last pass did not keep this Dev Box awake ({last.Outcome}), so it may hibernate when you disconnect: {last.Detail}" : null;
+
     // Each setter acts only on a change: a binding refreshing pushes the same value back.
     public bool StartAtSignIn
     {
@@ -284,6 +383,7 @@ public sealed class SettingsViewModel : Observable
     {
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
         if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
+        CaughtUp();
         DrawDevices();
         RaiseAll();
     }

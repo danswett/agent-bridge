@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text.RegularExpressions;
+using AgentBridge.Host.Core.DevBox;
 
 namespace AgentBridge.Host.Delivery.Windows;
 
@@ -32,6 +33,119 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
 
     [GeneratedRegex("^(AgentBridgeDaemon|CopilotBridgeDaemon)(_[0-9A-Fa-f]{1,64})?$")]
     private static partial Regex TaskName();
+
+    // agent-ha-bridge's Dev Box keep-awake: its task, AgentBridgeDevBoxKeepAwake_<id> (or without
+    // the id on a pre-metadata install), and the mutex of the same name each pass holds.
+    [GeneratedRegex("^AgentBridgeDevBoxKeepAwake(_[0-9A-Fa-f]{1,64})?$")]
+    private static partial Regex KeepAwakeName();
+
+    // Why agent-ha-bridge's own Dev Box keep-awake owns this Dev Box's schedule now, or null when
+    // this host may: any of its tasks enabled or running, or a pass of it holding its mutex. Two
+    // writers to one schedule is the double-writer problem G5 exists for, so a host beside
+    // agent-ha-bridge (read-only or not) stands back while it is on; migrate disables the task and
+    // the host takes over, and rollback enables it again. Not being able to read the scheduler is
+    // not permission, but it is not evidence either: the result says so (Known false), so a stand-
+    // back on it alarms instead of passing for agent-ha-bridge keeping the Dev Box awake.
+    public KeepAwakeOwner? KeepAwakeActive()
+    {
+        var tasks = KeepAwakeTasks();
+        var passes = new SortedSet<string>(StringComparer.Ordinal);
+        NamedMutexes(passes, KeepAwakeName());
+        Probe("AgentBridgeDevBoxKeepAwake", passes);
+        foreach (var (name, _, _) in tasks ?? []) { Probe(name, passes); }
+        return KeepAwakeReason(tasks, passes);
+    }
+
+    internal static KeepAwakeOwner? KeepAwakeReason(IReadOnlyList<(string Name, bool Enabled, bool Running)>? tasks, IEnumerable<string> passes)
+    {
+        var owning = (tasks ?? []).Where(t => t.Enabled || t.Running).Select(t => $"task {t.Name} ({(t.Running ? "running" : "enabled")})")
+            .Concat(passes.Select(p => $"{p} (a pass is running)")).Distinct().ToList();
+        if (owning.Count > 0)
+        {
+            return new($"agent-ha-bridge's own Dev Box keep-awake is on here ({string.Join(", ", owning)}), so it keeps this Dev Box awake and this host stands back");
+        }
+        return tasks is null
+            ? new("Task Scheduler could not be read to tell whether agent-ha-bridge's own Dev Box keep-awake is on, so this host stands back rather than be a second writer to the schedule, and nothing may be keeping this Dev Box awake", Known: false)
+            : null;
+    }
+
+    // For as long as a pass of this host's runs, the mutex each of agent-ha-bridge's keep-awake
+    // passes takes (Local\<its task name>) for every keep-awake task registered here, so that a
+    // pass of it started meanwhile (a rollback re-enables and starts its task) finds one running
+    // and exits without a cloud call, as its own second pass would. Null when a pass of it holds
+    // one now. When the scheduler cannot be read it throws rather than say "a pass of it runs":
+    // that would be a quiet busy, while nothing may be keeping the Dev Box awake (the pass is a
+    // loud failure instead).
+    public IDisposable? HoldKeepAwake() => HoldKeepAwake(KeepAwakeTasks());
+
+    internal static IDisposable? HoldKeepAwake(IReadOnlyList<(string Name, bool Enabled, bool Running)>? tasks) => tasks is null
+        ? throw new IOException("Task Scheduler could not be read, so whether a pass of agent-ha-bridge's own keep-awake runs now cannot be told")
+        : HoldMutexes([.. tasks.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase)]);
+
+    // A mutex belongs to the thread that took it and a pass awaits across threads, so they are
+    // taken, held and let go on a thread of their own.
+    internal static IDisposable? HoldMutexes(IReadOnlyList<string> names)
+    {
+        if (names.Count == 0) { return new Held(null, null); }
+        var taken = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim();
+        var thread = new Thread(() =>
+        {
+            var held = new List<Mutex>();
+            try
+            {
+                foreach (var name in names)
+                {
+                    Mutex mutex;
+                    // One that exists under an owner that will not share it is a pass of someone's.
+                    try { mutex = new Mutex(false, @"Local\" + name); }
+                    catch (Exception e) when (e is UnauthorizedAccessException or IOException or WaitHandleCannotBeOpenedException) { taken.TrySetResult(false); return; }
+                    bool got;
+                    try { got = mutex.WaitOne(0); }
+                    catch (AbandonedMutexException) { got = true; }
+                    if (!got) { mutex.Dispose(); taken.TrySetResult(false); return; }
+                    held.Add(mutex);
+                }
+                taken.TrySetResult(true);
+                release.Wait();
+            }
+            catch (Exception e) { taken.TrySetException(e); }
+            finally
+            {
+                foreach (var mutex in held)
+                {
+                    mutex.ReleaseMutex();
+                    mutex.Dispose();
+                }
+            }
+        }) { IsBackground = true, Name = "keep-awake mutexes" };
+        thread.Start();
+        bool ok;
+        try { ok = taken.Task.GetAwaiter().GetResult(); }
+        catch
+        {
+            thread.Join();
+            release.Dispose();
+            throw;
+        }
+        if (ok) { return new Held(release, thread); }
+        thread.Join();
+        release.Dispose();
+        return null;
+    }
+
+    sealed class Held(ManualResetEventSlim? release, Thread? thread) : IDisposable
+    {
+        int disposed;
+
+        public void Dispose()
+        {
+            if (release is null || Interlocked.Exchange(ref disposed, 1) == 1) { return; }
+            release.Set();
+            thread!.Join();
+            release.Dispose();
+        }
+    }
 
     // Whether that installation's daemon itself was seen running: unlike Active, not knowing is not
     // a yes here, and nor is its supervisor or task alone (either can run while the daemon fails
@@ -101,7 +215,9 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
 
     // The mutexes in this logon session's Local namespace (\Sessions\<n>\BaseNamedObjects),
     // listed rather than guessed, so an installation id this host cannot derive is found.
-    internal static bool NamedMutexes(ISet<string> found)
+    internal static bool NamedMutexes(ISet<string> found) => NamedMutexes(found, OwnName());
+
+    internal static bool NamedMutexes(ISet<string> found, Regex names)
     {
         try
         {
@@ -109,45 +225,67 @@ public sealed partial class AgentHaBridgeProbe : IAgentHaBridgeProbe
             var directory = session == 0 ? @"\BaseNamedObjects" : $@"\Sessions\{session}\BaseNamedObjects";
             foreach (var (name, type) in ObjectDirectory(directory))
             {
-                if (type == "Mutant" && OwnName().IsMatch(name)) { found.Add(name); }
+                if (type == "Mutant" && names.IsMatch(name)) { found.Add(name); }
             }
             return true;
         }
         catch (Exception e) when (e is InvalidOperationException or ExternalException or DllNotFoundException or EntryPointNotFoundException) { return false; }
     }
 
+    // agent-ha-bridge's keep-awake tasks, enabled and running; null when the scheduler could not
+    // be asked.
+    internal static List<(string Name, bool Enabled, bool Running)>? KeepAwakeTasks()
+    {
+        var list = new List<(string, bool, bool)>();
+        return EachTask(task =>
+        {
+            var name = (string)Get(task, "Name")!;
+            // TASK_STATE_RUNNING
+            if (KeepAwakeName().IsMatch(name)) { list.Add((name, (bool)Get(task, "Enabled")!, (int)Get(task, "State")! == 4)); }
+        }) ? list : null;
+    }
+
     // Registered scheduled tasks named like agent-ha-bridge's daemon, with whether each is
     // running now; null when the scheduler could not be asked.
     internal static List<(string Name, bool Running)>? Tasks()
+    {
+        var list = new List<(string, bool)>();
+        return EachTask(task =>
+        {
+            var name = (string)Get(task, "Name")!;
+            // TASK_STATE_RUNNING
+            if (TaskName().IsMatch(name)) { list.Add((name, (int)Get(task, "State")! == 4)); }
+        }) ? list : null;
+    }
+
+    // Every task in the scheduler's root folder, hidden ones too; false when it could not be asked.
+    static bool EachTask(Action<object> visit)
     {
         object? service = null;
         try
         {
             var type = Type.GetTypeFromProgID("Schedule.Service");
-            if (type is null) { return null; }
+            if (type is null) { return false; }
             service = Activator.CreateInstance(type);
-            if (service is null) { return null; }
+            if (service is null) { return false; }
             Call(service, "Connect");
             var folder = Call(service, "GetFolder", @"\")!;
             // TASK_ENUM_HIDDEN: a hidden task is still the daemon's.
             var tasks = Call(folder, "GetTasks", 1)!;
             var count = (int)Get(tasks, "Count")!;
-            var list = new List<(string, bool)>();
             for (var i = 1; i <= count; i++)
             {
                 var task = Get(tasks, "Item", i)!;
-                var name = (string)Get(task, "Name")!;
-                // TASK_STATE_RUNNING
-                if (TaskName().IsMatch(name)) { list.Add((name, (int)Get(task, "State")! == 4)); }
-                Marshal.ReleaseComObject(task);
+                try { visit(task); }
+                finally { Marshal.ReleaseComObject(task); }
             }
             Marshal.ReleaseComObject(tasks);
             Marshal.ReleaseComObject(folder);
-            return list;
+            return true;
         }
         catch (Exception e) when (e is COMException or TargetInvocationException or InvalidCastException or MissingMethodException or NullReferenceException or UnauthorizedAccessException)
         {
-            return null;
+            return false;
         }
         finally
         {

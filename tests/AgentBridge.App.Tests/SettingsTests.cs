@@ -135,6 +135,85 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_and_turned_on_through_the_host()
+    {
+        Saves(d => new HostSettingsView(true, DevBoxKeepAwake: d.GetProperty("devBoxKeepAwake").GetBoolean()));
+        await Connected();
+        Assert.False(settings.ShowDevBox);
+        // Not a Dev Box: nothing to offer, and nothing is sent.
+        settings.DevBoxKeepAwake = true;
+        Assert.Empty(host.Sent(HostOps.Settings));
+
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowDevBox, "the Dev Box's setting");
+        Assert.False(settings.DevBoxKeepAwake);
+        Assert.StartsWith("Off:", settings.DevBoxText);
+
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "host.settings");
+        Assert.True(host.Sent(HostOps.Settings)[0].GetProperty("devBoxKeepAwake").GetBoolean());
+        // Acknowledged, but the host's status event has not come yet: the switch says on, and
+        // turning it off then is a change, not lost as none.
+        Assert.True(settings.DevBoxKeepAwake);
+        settings.DevBoxKeepAwake = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2 && !settings.Busy, "the change back");
+        Assert.False(host.Sent(HostOps.Settings)[1].GetProperty("devBoxKeepAwake").GetBoolean());
+        // Turned on and straight back off before either is answered: off is what is kept.
+        settings.DevBoxKeepAwake = true;
+        settings.DevBoxKeepAwake = false;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 4 && !settings.Busy, "both changes");
+        Assert.False(host.Sent(HostOps.Settings)[3].GetProperty("devBoxKeepAwake").GetBoolean());
+        Assert.False(settings.DevBoxKeepAwake);
+
+        // A pass that failed is said in words a person can act on.
+        host.Status = FakeHost.StatusOf() with
+        {
+            Settings = new HostSettingsView(true, DevBoxKeepAwake: true),
+            DevBox = new DevBoxStatus(true, 15, new DevBoxPass(DateTimeOffset.UtcNow, "failed", "No Dev Center token. Run 'az login' as this user.", Alarming: true)),
+        };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.DevBoxAlarm is not null, "the alarm");
+        Assert.True(settings.DevBoxKeepAwake);
+        Assert.Contains("az login", settings.DevBoxAlarm);
+        Assert.Contains("Last pass at", settings.DevBoxText);
+
+        // A Dev Box whose agent settings the host cannot use is still shown, with its alarm,
+        // before any pass has run.
+        host.Status = FakeHost.StatusOf() with
+        {
+            Settings = new HostSettingsView(true, DevBoxKeepAwake: true),
+            DevBox = new DevBoxStatus(true, 15, Problem: "its devCenterUri is not a Dev Center address"),
+        };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.DevBoxAlarm?.Contains("could not be used") == true, "the settings alarm");
+        Assert.True(settings.ShowDevBox);
+        Assert.Contains("not a Dev Center address", settings.DevBoxAlarm);
+    }
+
+    [Fact]
+    public async Task A_keep_awake_change_made_elsewhere_after_this_apps_is_shown_even_when_its_own_status_event_was_missed()
+    {
+        Saves(d => new HostSettingsView(true, DevBoxKeepAwake: d.GetProperty("devBoxKeepAwake").GetBoolean()));
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await Connected();
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowDevBox, "the Dev Box's setting");
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "host.settings");
+
+        // Its status event never came; another app turned it off since, and this status says so.
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+
+        await Wait.UntilAsync(() => !settings.DevBoxKeepAwake, "the host's word, read again");
+        // And turning it on again is a change, not discarded as none.
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "host.settings again");
+        Assert.True(host.Sent(HostOps.Settings)[1].GetProperty("devBoxKeepAwake").GetBoolean());
+    }
+
+    [Fact]
     public async Task Answering_folder_trust_from_devices_is_turned_on_here_with_this_app_approved_and_each_device_is_approved_here()
     {
         const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", gone = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";

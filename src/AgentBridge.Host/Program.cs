@@ -4,6 +4,7 @@ using System.Text.Json;
 using AgentBridge.Hooks;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.DevBox;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
@@ -55,6 +56,9 @@ using AgentBridge.Transport;
 //                                               move this machine's hooks and settings from
 //                                               agent-ha-bridge to this host, and back
 //                                               (docs/migration.md; Windows)
+//   agent-bridge-host devbox status | dry-run   the Dev Box keep-awake serve runs (devBox.*): whether
+//                                               this is a Dev Box and who keeps it awake, and one
+//                                               pass that only reads (docs/host-config.md)
 //
 // Roots default to the current user's; --copilot-home, --claude-home and --codex-home
 // point elsewhere. Nothing under them is ever written. sign-in, serve and whoami take
@@ -83,7 +87,7 @@ var defaults = SessionSourceOptions.ForCurrentUser();
 var serveFolder = command == "serve" || (command == "ha" && arguments.ElementAtOrDefault(1) == "shadow") ? LoadIdentity().Folder : null;
 var (settings, settingsProblem) = serveFolder is not null
     ? HostSettings.Load(serveFolder)
-    : command == "usage" && Identity.IsValidProfile(Option("--profile") ?? "default")
+    : command is "usage" or "devbox" && Identity.IsValidProfile(Option("--profile") ?? "default")
         ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
         // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
@@ -244,11 +248,21 @@ switch (command)
                 ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(o.ProfileFolder), new AgentBridge.Host.Migration.ProcessHookRunner())
                 : throw new PlatformNotSupportedException(), stop.Token);
         }
+    case "devbox":
+        {
+            if (!Identity.IsValidProfile(profileName)) { Console.Error.WriteLine($"\"{profileName}\" is not a profile name: use letters, digits, '-', '_' and '.'"); return 2; }
+            using var stop = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+            using var devCenter = new AgentBridge.Host.Core.DevBox.DevCenterHttp(TimeSpan.FromSeconds(30));
+            return await DevBoxCommands.RunAsync(arguments, settings, settingsProblem, Path.Combine(Identity.DefaultRoot, profileName, "logs", "host.log"),
+                FindDevBox, AgentHaBridgeKeepAwakeOwner, () => NewKeepAwake(devCenter), Console.Out, Console.Error, stop.Token);
+        }
     default:
         Console.Error.WriteLine("usage: agent-bridge-host sessions [--compact] | get <id> | watch [--json] | usage | sign-in --relay <url> | serve [--relay <url>] [--name <name>] [--local-only] | whoami");
         Console.Error.WriteLine("       agent-bridge-host workspace list | workspace add <folder> [--label <label>] [--isolate] | workspace remove <label or folder> | config show | config set <key> <value> | config unset <key> | ha status | ha token set | ha token clear | ha shadow [--json] [--window <seconds>]");
         Console.Error.WriteLine("       " + AgentBridge.Host.Shadow.ShadowCommand.Usage);
         Console.Error.WriteLine("       agent-bridge-host hooks status | migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
+        Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
         return command == "help" ? 0 : 2;
 }
@@ -344,6 +358,13 @@ async Task<int> ServeAsync()
         : PeerUsage.Load(Path.Combine(identity.Folder, "usage"), machine.Id, identity.Account?.AccountId, log: Log);
     await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log);
     usagePeers?.Start();
+    // The Dev Box keep-awake (docs/host-config.md, #47): on a Dev Box, a pass soon after starting and
+    // then every devBox.intervalMinutes while devBox.keepAwake is on, standing back while
+    // agent-ha-bridge's own keep-awake task is on. Off Windows there is no Dev Box.
+    foreach (var problem in settings.DevBoxProblems) { Log($"config.json: {problem}"); }
+    using var devCenter = new DevCenterHttp(TimeSpan.FromSeconds(30));
+    await using var keepAwake = OperatingSystem.IsWindows() ? NewKeepAwake(devCenter) : null;
+    keepAwake?.Start();
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
@@ -432,6 +453,8 @@ async Task<int> ServeAsync()
             Log($"folder-trust questions from devices: {(on ? "on" : "off")} (set by the app; applies now)");
         },
         ApplyRemoteFolderTrustDevices = ids => launcher.TrustDevices = ids,
+        ApplyDevBoxKeepAwake = keepAwake is null ? null : on => keepAwake.Enabled = on,
+        DevBox = () => DevBoxCommands.Status(keepAwake?.State),
         Updates = updates,
         Account = () => identity.Account is { } a ? new HostAccount(a.Login, a.AccountId) : null,
         Credential = () => Volatile.Read(ref credential),
@@ -464,6 +487,8 @@ async Task<int> ServeAsync()
             stop.Cancel();
         },
     }, Log);
+    // A pass, or keep-awake turned on or off, changes what the app's Settings shows.
+    if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
     LocalServer? local = null;
     try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log), Log); }
     catch (EndpointInUseException e)
@@ -627,6 +652,28 @@ UsageMonitor NewUsageMonitor(ISessionSource source, IUsageHttp http, Action<stri
     return new UsageMonitor(UsageMonitor.Collectors(usageOptions, http, new CommandRunner(), log: log, accounts: settings.Usage.CopilotAccounts), source, usageOptions,
         agentHaBridge: agentHaBridge, log: log);
 }
+
+// The Dev Box keep-awake as config.json's devBox section says to run it (docs/host-config.md): az
+// through the windowless runner (az.cmd through cmd.exe), one pass at a time for this user, and
+// never while agent-ha-bridge's own keep-awake is on.
+KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
+{
+    Settings = settings.DevBox,
+    FindIdentity = FindDevBox,
+    Token = new AzCliToken(new BatchFileRunner(new CommandRunner()), AzCliToken.Find),
+    Http = http,
+    Lock = OperatingSystem.IsWindows()
+        ? new KeepAwakeLocks(new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+            new DelegateKeepAwakeLock(() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().HoldKeepAwake() : null))
+        : new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+    AgentHaBridgeKeepAwake = AgentHaBridgeKeepAwakeOwner,
+}, Log);
+
+// Dev Boxes are Windows machines: anywhere else this is not one.
+static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
+    OperatingSystem.IsWindows() ? DevBoxIdentity.Find() : (null, null);
+
+static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
 // host.restart: the same command again, without a window, which waits for this process to let
 // go of the profile's lock before it starts.

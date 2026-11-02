@@ -160,6 +160,9 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             return new(false, lines);
         }
         if (install.PublicationProblem() is { } publication) { Say("Refused: " + publication); return new(false, lines); }
+        // Whether agent-ha-bridge's keep-awake task is what keeps this Dev Box awake now: migrate
+        // disables it, so the host must take it over (ConfigImport carries it as on).
+        var keepAwakeTaskEnabled = false;
         foreach (var name in new[] { install.TaskName, install.DevBoxTaskName })
         {
             ScheduledTaskState? state;
@@ -169,6 +172,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
                 Say($"Refused: Task Scheduler could not be asked about {name} ({e.Message}); nothing was changed.");
                 return new(false, lines);
             }
+            if (name == install.DevBoxTaskName && state is { Enabled: true }) { keepAwakeTaskEnabled = true; }
             if (state is { Enabled: true, Modifiable: false })
             {
                 Say($"Refused: {name} was registered from an administrator (elevated) prompt, so Task Scheduler lets this Windows user read it but not disable it, and agent-ha-bridge could not be handed over. Re-register it as this user: remove it from an elevated prompt (Unregister-ScheduledTask -TaskName {name}), then run agent-ha-bridge's installer again from a normal one, and migrate again.");
@@ -198,7 +202,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // Read once: these bytes are what the import is built from, what is snapshotted, and what
         // the file must still be when it is written.
         var hostBytes = File.Exists(hostConfig) ? File.ReadAllBytes(hostConfig) : null;
-        var import = ConfigImport.Build(install.Config, hostBytes is null ? null : Decode(hostBytes));
+        var import = ConfigImport.Build(install.Config, hostBytes is null ? null : Decode(hostBytes), keepAwakeTaskEnabled);
         if (import.Problems.Count > 0)
         {
             Say("Refused: the settings carried over would leave this profile's config.json with problems: " + string.Join("; ", import.Problems));
@@ -216,6 +220,11 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // Snapshot, recorded before anything changes.
         var record = new MigrationRecord { InstallationId = install.Id, BridgeHome = install.BridgeHome, StartedAt = _time.GetUtcNow() };
         var snapshot = MigrationRecord.SnapshotIn(options.ProfileFolder);
+        void Unsnapshot()
+        {
+            try { File.Delete(MigrationRecord.PathIn(options.ProfileFolder)); Directory.Delete(snapshot, recursive: true); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+        }
         try
         {
             Directory.CreateDirectory(snapshot);
@@ -235,6 +244,16 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled) { Disabled = false }); }
             }
+            // The import carried keep-awake from the task as preflight saw it. Enabled since (an
+            // agent-ha-bridge install or a person, meanwhile), it would be disabled here with the
+            // host's keep-awake left off, and the Dev Box would hibernate; so whatever changed, the
+            // import is no longer what is about to be handed over.
+            if (record.Tasks.Any(t => t.Name == install.DevBoxTaskName && t.Enabled) != keepAwakeTaskEnabled)
+            {
+                Unsnapshot();
+                Say($"Refused: {install.DevBoxTaskName} was {(keepAwakeTaskEnabled ? "disabled" : "enabled")} while the migration was being prepared, so the Dev Box keep-awake carried over no longer matches it; nothing was changed. Migrate again.");
+                return new(false, lines);
+            }
             // Known stopped only when nothing of agent-ha-bridge's is seen for this user; a probe
             // that cannot tell, or another daemon, leaves it unknown, and a rollback waits.
             record.DaemonRunning = runtime.Seen(install.Id) ? true : runtime.Active() is null ? false : null;
@@ -243,8 +262,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // Nothing has changed yet, so nothing is left behind to roll back.
-            try { File.Delete(MigrationRecord.PathIn(options.ProfileFolder)); Directory.Delete(snapshot, recursive: true); }
-            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            Unsnapshot();
             Say($"Refused: the snapshot a rollback needs could not be written ({e.Message}); nothing was changed.");
             return new(false, lines);
         }

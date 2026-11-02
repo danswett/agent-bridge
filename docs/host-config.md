@@ -63,7 +63,8 @@ follow.
     "intervalSeconds": 120,
     "idleIntervalSeconds": 900,
     "copilotAccounts": ["dswett_microsoft"]
-  }
+  },
+  "devBox": { "keepAwake": false, "intervalMinutes": 15 }
 }
 ```
 
@@ -117,6 +118,8 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 | `usage.intervalSeconds` | `120` | How often an agent's allowance is read while a session of that agent is open here, from 30 to 86400. While agent-ha-bridge runs for this user the host reads only at `idleIntervalSeconds`, since that bridge is already asking |
 | `usage.idleIntervalSeconds` | `900` | How often it is read while none is, from 30 to 86400, and never more often than `intervalSeconds` |
 | `usage.copilotAccounts` | `[]` | Further GitHub logins whose Copilot allowance this machine reports beside the account Copilot is signed in as, as agent-ha-bridge's own setting: up to three, each its own row on the phone and the app, under its login, and on the Home Assistant connector's `usage_copilot_2`, `_3` or `_4` by its place in the list. Each is read with the token `gh` holds for exactly that login (`gh auth token --user <login>`) and nothing else, at the idle pace, one at a time; a reading that answers for another login is refused. So `gh auth login` as that account is all the setup there is. Logins only, never tokens |
+| `devBox.keepAwake` | `false` | On a Microsoft Dev Box, keep the machine from hibernating on disconnect while the host runs ([below](#dev-box-keep-awake)), as agent-ha-bridge's own setting. Set it in the Windows app's Settings (shown on a Dev Box only; applies at once) or here (applies when the host restarts). `migrate` carries agent-ha-bridge's. Nothing happens on a machine that is not a Dev Box |
+| `devBox.intervalMinutes` | `15` | How often a pass runs, from 1 to 30. More than 30 is read as 30 and said, and `config set` refuses it: a pass less often than the pool's grace period (never under 60 minutes) can miss the pending stop entirely |
 
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
@@ -129,7 +132,9 @@ purpose, and is not a problem: `["", "second-login"]` reports `second-login` sec
 one shaped like a token is refused. In `launch`, a workspace entry that is wrong (no path, a relative path, an `isolate`
 that is not `true` or `false`) is left out and said in the log, and any other value that is
 wrong turns launching off. In `homeAssistant`, any value that is wrong turns the connector off
-and is said in the log. A setting someone may have meant as off is never read as on.
+and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
+is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. A
+setting someone may have meant as off is never read as on.
 
 ## Approving a workspace at the machine
 
@@ -168,3 +173,74 @@ commands rewrite the file without its comments.
 
 Then restart `serve`. It logs `launching sessions is on: 1 workspace(s) approved (Bridge
 [worktrees])`, or why launching is off.
+
+## Dev Box keep-awake
+
+A Microsoft Dev Box pool commonly has **stop-on-disconnect** on: the Dev Box agent hibernates
+the machine a grace period after the last RDP or tunnel session goes, however busy it is, since
+idleness there is counted in sessions, not load. The host stops mid-turn and its machine reads as
+offline with nothing saying why. With `devBox.keepAwake` on, the host does what agent-ha-bridge's
+`AgentBridgeDevBoxKeepAwake_<id>` task did (design §6.1, `Host.DevBox`, #47), inside the host
+instead of as a task of its own:
+
+* **Which Dev Box.** Read from the Dev Box agent's own settings
+  (`C:\Program Files\Microsoft Dev Box Agent\…\appsettings.Production.json`): its Dev Center, project
+  and name, afresh for every pass, so a reprovision is followed. A machine without the Dev Box
+  agent is not a Dev Box (`not-a-devbox`, said once), and nothing is done. A Dev Center address
+  that is not `https://<name>.devcenter.azure.com` is not followed, since the user's token would go
+  there. Settings that are there but cannot be used (not JSON, a shape not known, such an address,
+  or the agent installed with no settings file found or searchable under it) are a Dev Box that
+  cannot be kept awake: with keep-awake on, every pass is `failed` and says so, and the app keeps
+  showing the section with the alarm.
+* **As whom.** The Azure CLI's sign-in: `az account get-access-token --resource
+  https://devcenter.azure.com`, run with no window (`az.cmd` through `cmd.exe`). Dev Center's
+  developer API under `users/me` is the only scope that lets a user skip or delay their own Dev
+  Box's actions; nothing on the Dev Box agent is reconfigured. The token is never logged.
+* **What a pass does.** It lists this Dev Box's actions (`api-version=2024-02-01`) and, for each
+  `Stop` action with an occurrence scheduled, asks to **skip** it; if that is refused, to
+  **delay** it by 8, 6, 4, 2 or 1 hours, largest first (a delay may not land more than 8 hours past
+  where the occurrence first was, and the service never says where that was). A stop more than
+  **24 hours** away cannot be moved and need not be: that is `safe`, and only the list is read.
+  Nothing else is ever read or moved: no other action, no other Dev Box, nothing of the pool's.
+* **When.** A first pass 30 seconds after the host starts (a Dev Box nobody is connected to may
+  have a stop already pending), then every `devBox.intervalMinutes`. The occurrence exists only from
+  the last session leaving until one grace period later, and the grace is never under 60 minutes,
+  so a pass every 15 minutes sees it four times; 30 is the most that still sees it twice. Turned on
+  from the app, a pass runs at once.
+* **One at a time.** A pass takes `%LOCALAPPDATA%\AgentBridge\devbox-keepawake.lock` without
+  waiting, so two profiles' hosts never move the schedule together, and holds the mutex each of
+  agent-ha-bridge's keep-awake passes takes (`Local\<its task name>`) for every such task registered
+  here, so a pass of that task started meanwhile (a rollback enables and starts it) exits without
+  a cloud call. A pass that finds either taken is `busy` and calls nothing; one that cannot read
+  Task Scheduler to tell is `failed`, not a quiet `busy`.
+* **Never beside agent-ha-bridge's own.** Before every pass, the host looks for agent-ha-bridge's
+  `AgentBridgeDevBoxKeepAwake[_<id>]` tasks and the mutex each of its passes holds. While any is
+  enabled or running, or the scheduler cannot be read, the host stands back (`stood-back`): two
+  writers to one schedule is the problem G5 exists for. Standing back only because the scheduler
+  could not be read is alarming, since nothing is then known to keep the Dev Box awake. This
+  holds for every host, read-only (`delivery.readOnly`) or not. `migrate` disables that task and
+  carries `devBox.*`, so the host takes over; `rollback` enables it again, and the host stands
+  back from its next pass.
+* **What it says.** Every pass is a line in the host's log, beginning `keep-awake:` and its
+  outcome: `skipped`, `delayed`, `safe`, `no-action` (nothing scheduled: the normal state while
+  anyone is connected), `blocked` (a stop the service would not move, or levers that never reached
+  it), `failed` (no `az login`, Dev Center unreachable or refusing, the lock file unusable, the
+  Dev Box agent's settings unusable), `stood-back` or `busy`. `failed`, `blocked` and a
+  `stood-back` with the scheduler unreadable add `THIS DEV BOX MAY HIBERNATE WHEN DISCONNECTED`,
+  on every pass. The app's Settings shows the switch on a Dev Box only, with the last pass and the
+  next, and those in red (`devBox` in the host's status, [local-pipe.md](protocol/local-pipe.md)).
+
+```
+agent-bridge-host devbox status
+agent-bridge-host devbox dry-run
+```
+
+`status` reads only this machine: whether it is a Dev Box, the profile's `devBox` settings, and
+whether agent-ha-bridge's keep-awake is on here. `dry-run` is agent-ha-bridge's `-DryRun`: one
+pass that signs in with `az`, lists this Dev Box's actions and says what it would clear,
+changing nothing (exit 1 when it failed). There is no pass by hand that moves the schedule:
+`serve` runs those.
+
+This is a reprieve per occurrence, not a policy change, and a Dev Box kept awake keeps costing
+money, so it is off unless turned on. The durable fix is for whoever runs the pool to raise its
+`stopOnDisconnect.gracePeriodMinutes` or turn stop-on-disconnect off.

@@ -28,6 +28,8 @@ namespace AgentBridge.Host.Migration;
 //   notifications.*, answerButtons.*            homeAssistant.notifications.*, homeAssistant.answerButtons.*
 //   updates.checkForUpdates, checkHours         homeAssistant.updates.checkForUpdates, checkHours (whether,
 //                                               and how often, the host looks for its own releases)
+//   devBox.keepAwake, intervalMinutes           devBox.keepAwake, intervalMinutes (1.25.0's intervalHours
+//                                               too; at most 30, as agent-ha-bridge ran it)
 //
 // A setting this profile already has is kept, and the report says so: the person set it here.
 public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, IReadOnlyList<string> Kept, IReadOnlyList<string> NotCarried, IReadOnlyList<string> Problems)
@@ -57,7 +59,9 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static bool Named(string key, params string[] names) => names.Any(n => string.Equals(n, key, StringComparison.OrdinalIgnoreCase));
     static bool Secret(string key) => Secrets.Contains(key, StringComparer.OrdinalIgnoreCase);
 
-    public static ConfigImport Build(JsonObject ahb, string? hostText)
+    // keepAwakeTaskEnabled: agent-ha-bridge's AgentBridgeDevBoxKeepAwake_<id> is registered and
+    // enabled, so it is what keeps this Dev Box awake now, and migrate is about to disable it.
+    public static ConfigImport Build(JsonObject ahb, string? hostText, bool keepAwakeTaskEnabled = false)
     {
         var imported = new List<string>();
         var kept = new List<string>();
@@ -239,7 +243,67 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                     notCarried.Add(Named(key, "publication") ? "dashboard.publication (this host never publishes the dashboard, G7)" : $"dashboard.{key}");
                 }
             }
-            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons", "updates")))
+            // The Dev Box keep-awake (#47), whose task migrate disables: without these the host
+            // would not take it over, and the Dev Box would hibernate on disconnect.
+            // agent-ha-bridge's keep-awake is its task: enabled, it runs every interval whatever
+            // devBox.keepAwake says (the pass never reads it, and install.ps1's [bool] reads any
+            // text but "" as true). So an enabled task is carried as on, whatever the file says,
+            // and a profile that would leave it off refuses the migration.
+            var devBox = ahb["devBox"] as JsonObject;
+            if (devBox is not null || keepAwakeTaskEnabled)
+            {
+                var target3 = new JsonObject();
+                if (keepAwakeTaskEnabled) { target3["keepAwake"] = true; }
+                else if (devBox is not null && Bool(devBox["keepAwake"]) is { } keepAwake) { target3["keepAwake"] = keepAwake; }
+                // As Get-BridgeDevBoxIntervalMinutes reads it: intervalMinutes, else 1.25.0's
+                // intervalHours; a nonsense value is the default, and none is more than the cap.
+                var hasMinutes = devBox?.ContainsKey("intervalMinutes") == true;
+                var from = devBox is null ? null : hasMinutes ? "devBox.intervalMinutes" : devBox.ContainsKey("intervalHours") ? "devBox.intervalHours" : null;
+                if (from is not null)
+                {
+                    // Each read with PowerShell's -as [int] before anything else, as there: hours
+                    // are made whole before they are made minutes (0.5 h ran every 15 minutes, the
+                    // default, not every 30).
+                    int? configured = hasMinutes ? AsInt(devBox!["intervalMinutes"]) : AsInt(devBox!["intervalHours"]) is { } h ? h * 60 : null;
+                    var interval = configured is not { } c || c < 1 ? AgentBridge.Host.Core.DevBox.DevBoxSettings.DefaultIntervalMinutes
+                        : Math.Min(c, AgentBridge.Host.Core.DevBox.DevBoxSettings.MaxIntervalMinutes);
+                    if (!hasMinutes || configured != interval)
+                    {
+                        kept.Add($"devBox.intervalMinutes: agent-ha-bridge's {from} is {devBox[hasMinutes ? "intervalMinutes" : "intervalHours"]?.ToJsonString() ?? "null"}; it ran every {interval} minutes, and so does this host");
+                    }
+                    target3["intervalMinutes"] = interval;
+                }
+                var written = devBox?["keepAwake"];
+                if (target3.Count > 0)
+                {
+                    var section = Section(host, "devBox");
+                    foreach (var (key, value) in target3.ToList())
+                    {
+                        var source = key == "intervalMinutes" ? from! : keepAwakeTaskEnabled ? "agent-ha-bridge's enabled keep-awake task" : $"devBox.{key}";
+                        Put(section, key, value!.DeepClone(), source, $"devBox.{key}");
+                    }
+                    var on = section["keepAwake"]?.GetValueKind() == JsonValueKind.True;
+                    if (keepAwakeTaskEnabled && !on)
+                    {
+                        problems.Add("agent-ha-bridge's keep-awake task is enabled, so it keeps this Dev Box awake, and migrate disables it; but this profile's devBox.keepAwake is not true, so nothing would. Turn it on first (agent-bridge-host config set devBox.keepAwake true), or disable that task in agent-ha-bridge if the Dev Box should sleep, and migrate again");
+                    }
+                    else if (keepAwakeTaskEnabled && written?.GetValueKind() != JsonValueKind.True)
+                    {
+                        kept.Add($"devBox.keepAwake: agent-ha-bridge's file says {written?.ToJsonString() ?? "nothing"}, but its keep-awake task is enabled, and that is what kept this Dev Box awake, so it is on here too");
+                    }
+                    // Said plainly: the person chose it here, but it is the difference between this
+                    // Dev Box staying up and hibernating once migrate disables the task.
+                    else if (Bool(written) == true && !on)
+                    {
+                        kept.Add("devBox.keepAwake: agent-ha-bridge keeps this Dev Box awake, but this profile does not, so once migrate disables agent-ha-bridge's keep-awake task nothing will (turn it on in the app's Settings, or with agent-bridge-host config set devBox.keepAwake true)");
+                    }
+                }
+                foreach (var (key, _) in devBox?.Where(p => !Named(p.Key, "keepAwake", "intervalMinutes", "intervalHours")) ?? [])
+                {
+                    notCarried.Add($"devBox.{key}");
+                }
+            }
+            foreach (var (key, value) in ahb.Where(p => !Named(p.Key, "newSession", "homeAssistant", "dashboard", "detailedActivity", "notifications", "answerButtons", "updates", "devBox")))
             {
                 notCarried.Add(value is JsonObject ? $"{key}.*" : key);
             }
@@ -394,7 +458,10 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             File.WriteAllText(System.IO.Path.Combine(check, HostSettings.FileName), text);
             var (settings, problem) = HostSettings.Load(check);
             return (problem is null ? [] : new[] { problem.Replace(check, "config.json", StringComparison.OrdinalIgnoreCase) })
-                .Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems).ToList();
+                .Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems)
+                // A devBox the host cannot read would leave keep-awake off while migrate disables
+                // agent-ha-bridge's task, and the Dev Box to hibernate.
+                .Concat(settings.DevBoxProblems).ToList();
         }
         finally { Directory.Delete(check, true); }
     }
@@ -422,6 +489,22 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
     static bool? Bool(JsonNode? n) => n is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
 
     static double? Number(JsonNode? n) => n is JsonValue v && v.TryGetValue<double>(out var d) ? d : null;
+
+    // A value as PowerShell's -as [int] reads it: a number or numeric text rounded half to even, a
+    // boolean as 1 or 0, anything else none. Kept to a range nothing reaches by accident.
+    static int? AsInt(JsonNode? n)
+    {
+        if (n is not JsonValue v) { return null; }
+        double? d = v.GetValueKind() switch
+        {
+            JsonValueKind.Number => v.GetValue<double>(),
+            JsonValueKind.String when double.TryParse(v.GetValue<string>().Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) => parsed,
+            JsonValueKind.True => 1,
+            JsonValueKind.False => 0,
+            _ => null,
+        };
+        return d is { } x && double.IsFinite(x) ? (int)Math.Round(Math.Clamp(x, -1_000_000, 1_000_000), MidpointRounding.ToEven) : null;
+    }
 
     // agent-ha-bridge reads its lists through @(...), so one string is a list of one.
     static List<string>? Strings(JsonNode? n) => n is JsonArray a ? a.Select(Str).OfType<string>().ToList() : Str(n) is { } one ? [one] : null;

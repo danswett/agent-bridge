@@ -253,7 +253,7 @@ Of the 15 §6.3 invariants: 8 `Verified`, 6 `Implemented, untested live`, 1 `Par
 | Elevated targets refused with an explicit message | All | `decision-inject.ps1`; README troubleshooting | `Verified` | `AgentAnswerFlowTests.An_elevated_Claude_or_Codex_session_is_refused_untyped`, `StopFlowTests.What_the_host_must_not_end_is_refused_on_the_first_press_and_nothing_is_typed_or_terminated`. Live: Progress › VM test method (processes Hyperloop starts elevated are refused) | |
 | Windowless child processes (no focus-stealing windows) | All | `Start-BridgeWindowlessProcess` | `Implemented, untested live` | `CreateNoWindow` in `CommandRunner.cs`, `BatchFileRunner.cs`, `Worktrees.cs` (git) and `WorkerInjector.cs`; `agent-bridge-hostw` starts the host with no console | #39 |
 | macOS and Linux: answer, reply, end and launch through tmux; Terminal or iTerm window | All | `Start-BridgeTmuxSession`; `tests/test-terminal-window.ps1`, `test-platform.ps1` | `Missing` | Read-only off Windows ("not supported on this platform yet") | #48 |
-| Dev Box keep-awake | All | `Invoke-BridgeDevBoxKeepAwake`; `tests/test-devbox-keepawake.ps1` | `Missing` | — | #47 |
+| Dev Box keep-awake | All | `Invoke-BridgeDevBoxKeepAwake`; `tests/test-devbox-keepawake.ps1` | `Implemented, untested live` | `KeepAwakeService` in the host (`docs/host-config.md#dev-box-keep-awake`): `DevBoxTests` (skip, delay fallback, the 8-hour ladder, > 24 h safe, nothing pending, login missing, a concurrent pass, standing back beside agent-ha-bridge's own, an unreadable scheduler and unusable agent settings alarming, the cadence), `AgentHaBridgeProbeTests.The_hosts_keep_awake_stands_back_…`, `MigrationTests.The_Dev_Box_keep_awake_is_carried_…` and `An_enabled_keep_awake_task_is_carried_as_on_…`, `DevBoxCommandTests.A_Dev_Box_whose_agent_settings_cannot_be_used_…`, `SettingsTests.Keeping_a_Dev_Box_awake_is_offered_on_a_Dev_Box_only_…`. Live read-only: `devbox status` on the owner's Dev Box found it and agent-ha-bridge's enabled task | #47 live check: on a Dev Box with stop-on-disconnect, keep-awake on, disconnect past the grace; the log shows `skipped` or `delayed` and the Dev Box stays up |
 
 ## 17. Security, identity and pairing
 
@@ -316,7 +316,7 @@ All 87 agent-ha-bridge suites, grouped by feature, with where the behaviour stan
 | Control and security | `test-control-policy`, `test-security`, `test-service-target` | §17 |
 | Restart and reliability | `test-restart-restore`, `test-reliability` [HA], `test-state-read` [HA], `test-state-snapshot` [HA], `test-auth-backoff` [HA], `test-http-session` [HA] | `ConnectionTests`, `PushNotifierTests.A_question_already_pending_when_the_host_starts_is_notified_as_after_a_daemon_restart`, the answer ledger (§2) |
 | Platforms | `test-platform`, `test-terminal-window` | #48 |
-| Dev Box | `test-devbox-keepawake` | #47 |
+| Dev Box | `test-devbox-keepawake` | `DevBoxTests` (§16); the installer's task decisions are replaced by `devBox.keepAwake` in the app's Settings |
 | Detail toggle | `test-verbose-toggle` [HA] | Intentionally different (§1) |
 | Test infrastructure | `test-runner`, `test-http-guard` | N/A |
 | MCP server | `mcp/test-config`, `test-ha` [HA], `test-http`, `test-http-e2e`, `test-sessions` | #45 |
@@ -378,13 +378,13 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
 | **Daemon** | Stop and **disable** (not delete) `AgentBridgeDaemon_<id>` and any `AgentBridgeDevBoxKeepAwake_<id>` | Re-enable both and start the daemon; G5 then puts the host back to read-only |
 | **Hooks** | agent-ha-bridge's own entries in the Copilot, Claude and Codex hook files are re-pointed at `agent-bridge-host-hook` (`docs/host-hooks.md` has why it is not the Go hook), installed in `%LOCALAPPDATA%\AgentBridge\bin\<installation id>`; the host's intake keeps the heartbeat so hooks spool to it | Restore the files byte for byte from the snapshot taken at migrate time (or, for one edited since, only the re-pointed entries). The installed hook stays, for sessions started while migrated |
 | **Instruction blocks** | Left in place (they name agent-ha-bridge's token, which still authenticates) and recorded by hash | Never written, so nothing to restore; a change made while migrated is reported |
-| **Config** | `newSession.*`, and the HA connector's address, dashboard and attribution settings, imported into the profile's `config.json` (`docs/migration.md` has the key map). Keys with no equivalent are reported and stay in the old file; no secret is copied. `~/.agent-ha-bridge` is never modified but for the Codex plugin's `hooks.json` | The profile's `config.json` is restored (or removed) unless changed since; the old file was never written |
+| **Config** | `newSession.*`, the HA connector's address, dashboard and attribution settings, and `devBox.keepAwake`/`intervalMinutes`, imported into the profile's `config.json` (`docs/migration.md` has the key map). Keys with no equivalent are reported and stay in the old file; no secret is copied. `~/.agent-ha-bridge` is never modified but for the Codex plugin's `hooks.json` | The profile's `config.json` is restored (or removed) unless changed since; the old file was never written |
 | **Approved workspaces and profiles** | `newSession.workspaces`, `defaultWorkspace`, `profiles`, `defaultProfile` go to `launch.*` with the same labels, so the phone's choices read the same | — |
 | **Worktrees** | Old trees carry `agent-bridge-created` and are neither counted, claimed nor deleted by the host. While migrated nobody reclaims them (they are a fixed set); the reclaimer covers the host's own | The daemon's reclaimer resumes on its own trees. Leaving agent-ha-bridge for good: run its `Remove-BridgeFinishedWorktree` once first |
 | **Attachments staging** | The old `install-<id>` staging is left as is, and its 24 h sweep pauses with the daemon; the host stages under its profile (`attachments`, protected, also 24 h) | The daemon's sweep resumes |
 | **Publication role** | Refused on the configured writer (`dashboard.publication.writer`, G7) and on any machine whose policy cannot be read. The writer, DSWETT-HOME, migrates last, at P7 | — |
 | **Home Assistant** | The in-flight HA connector publishes this machine's entities in agent-ha-bridge's contract (G9). It never touches the dashboard, Lovelace resources or policy | The connector stops; the daemon publishes again |
-| **Dev Box keep-awake** | Needs #47 on a Dev Box; not relevant to the VM or DEV-VM1 | Task re-enabled |
+| **Dev Box keep-awake** | `devBox.keepAwake` and `intervalMinutes` carried into the profile's `config.json`; the restarted host keeps the Dev Box awake in the task's place (#47) | Task re-enabled; the host sees it and stands back |
 
 ### (a) Before the migrate-and-rollback rehearsal on the disposable Hyperloop VM
 
@@ -449,6 +449,7 @@ agent-ha-bridge's manual checks, `tests/verify-mac-terminal.ps1`,
   remote update
 - #52 usage settings; #53 card wording; #56 Cancel request; #42 Claude free text
 - #54 hook registration for fresh installs; #55 device approval
-- #47 Dev Box keep-awake (before the Dev Box migrates); #48 tmux (before the Mac migrates,
+- #47 Dev Box keep-awake (before the Dev Box migrates; implemented, its live check is on the
+  Dev Box); #48 tmux (before the Mac migrates,
   P5)
 - #20 subagent labels (beyond parity)

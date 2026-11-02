@@ -231,12 +231,16 @@ sealed class FakeRuntime(FakeAgentHaBridge fake) : IAgentHaBridgeRuntime
     // Tasks it refuses to run, for now.
     public HashSet<string> StartRefused { get; } = [];
     public List<string> Calls { get; } = [];
+    // Called after each read of a task, so a test can change it between one read and the next.
+    public Action<string>? AfterRead { get; set; }
 
-    public ScheduledTaskState? Task(string name) => Unreadable.Contains(name)
-        ? throw new IOException($"Task Scheduler refused {name}: The RPC server is unavailable.")
-        : Tasks.TryGetValue(name, out var t)
-        ? new(t.Enabled, t.Running, RefusalVisible ? !Refused.Contains(name) : null)
-        : null;
+    public ScheduledTaskState? Task(string name)
+    {
+        if (Unreadable.Contains(name)) { throw new IOException($"Task Scheduler refused {name}: The RPC server is unavailable."); }
+        ScheduledTaskState? state = Tasks.TryGetValue(name, out var t) ? new(t.Enabled, t.Running, RefusalVisible ? !Refused.Contains(name) : null) : null;
+        AfterRead?.Invoke(name);
+        return state;
+    }
 
     public void SetEnabled(string name, bool enabled)
     {

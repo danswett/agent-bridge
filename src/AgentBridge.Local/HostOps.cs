@@ -64,16 +64,31 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // RemoteFolderTrust: launch.remoteFolderTrust, folder-trust questions answered from a person's devices.
 // RemoteFolderTrustDevices: launch.remoteFolderTrustDevices, the devices (by id) approved to answer
 // them; null when none is.
-public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null)
+// DevBoxKeepAwake: devBox.keepAwake, keeping this Dev Box from hibernating on disconnect.
+public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
+    bool DevBoxKeepAwake = false)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
     public bool Equals(HostSettingsView? other) =>
         other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
-        && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal);
+        && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
+        && DevBoxKeepAwake == other.DevBoxKeepAwake;
 
-    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0);
+    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake);
 }
+
+// The Dev Box keep-awake (devBox.*, docs/host-config.md), present when this machine is a Microsoft
+// Dev Box: when the Dev Box agent is installed, whether or not the host can use its settings.
+// KeepAwake: whether passes run now. Last: the last pass, its outcome in agent-ha-bridge's words
+// (skipped, delayed, safe, no-action, blocked, failed) or the host's own (stood-back, busy,
+// not-a-devbox), and what it did; Alarming when a person should look (failed, blocked, or a
+// stand-back with no evidence agent-ha-bridge keeps it awake: the Dev Box may hibernate). NextAt:
+// when the next pass is due, while on. Problem: why the agent's settings could not be used, when
+// they could not, so the Dev Box cannot be kept awake.
+public sealed record DevBoxStatus(bool KeepAwake, int IntervalMinutes, DevBoxPass? Last = null, DateTimeOffset? NextAt = null, string? Problem = null);
+
+public sealed record DevBoxPass(DateTimeOffset At, string Outcome, string Detail, bool Alarming = false);
 
 public sealed record HostStatus
 {
@@ -100,6 +115,8 @@ public sealed record HostStatus
     // Why the host acts on nothing from other devices now (delivery.readOnly, or agent-ha-bridge
     // running), absent when it does: an install a device asked for before is not carried out.
     public string? ReadOnly { get; init; }
+    // The Dev Box keep-awake, absent when this machine is not a Dev Box.
+    public DevBoxStatus? DevBox { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).
@@ -109,8 +126,9 @@ public sealed record SignInRequest(string? Relay = null);
 // RemoteFolderTrustDevices replaces the whole list ([] approves none). RemoteFolderTrustDevicesWas:
 // the list that one was made from; when the host's differs (another app, or a person's terminal,
 // changed it meanwhile), nothing is changed and the result says Conflict, so a device revoked
-// elsewhere is never approved again by a list made before.
+// elsewhere is never approved again by a list made before. DevBoxKeepAwake: devBox.keepAwake,
+// applied at once.
 public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name = null, bool? RemoteFolderTrust = null, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null);
+    IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);

@@ -33,6 +33,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     readonly List<bool> applied = [];
     Action<bool>? onApply;
     readonly List<IReadOnlyList<string>> approved = [];
+    readonly List<bool> keptAwake = [];
+    DevBoxStatus? devBox;
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
@@ -65,6 +67,8 @@ public sealed class LocalApiTests : IAsyncLifetime
             Running = new HostSettingsView(RemoteApproval: true),
             ApplyRemoteFolderTrust = on => { onApply?.Invoke(on); lock (applied) { applied.Add(on); } },
             ApplyRemoteFolderTrustDevices = ids => { lock (applied) { approved.Add(ids); } },
+            ApplyDevBoxKeepAwake = on => { lock (applied) { keptAwake.Add(on); } },
+            DevBox = () => devBox,
             Relay = () => new Uri("https://relay.example/"),
             Credential = () => credential,
             SignIn = (relay, show, ct) => signIn(relay, show, ct),
@@ -208,6 +212,49 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal("Desktop", saved["name"]!.GetValue<string>());
         Assert.False(HostSettings.Load(profile).Settings.RemoteApproval);
         Assert.True((await ch.CallAsync<HostStatus>(HostOps.Status)).RestartRequired);
+    }
+
+    [Fact]
+    public async Task Keeping_a_Dev_Box_awake_is_turned_on_from_the_app_beside_its_interval_and_applies_at_once()
+    {
+        File.WriteAllText(Path.Combine(profile, "config.json"), """{ "devBox": { "intervalMinutes": 20 } }""");
+        devBox = new DevBoxStatus(false, 20);
+        var ch = await ConnectAsync();
+        var before = await ch.CallAsync<HostStatus>(HostOps.Status);
+        Assert.False(before.Settings.DevBoxKeepAwake);
+        Assert.Equal(20, before.DevBox!.IntervalMinutes);
+
+        var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { devBoxKeepAwake = true });
+
+        Assert.True(result.Settings.DevBoxKeepAwake);
+        Assert.Equal([true], keptAwake);
+        Assert.False(result.RestartRequired);
+        var saved = HostSettings.Load(profile).Settings.DevBox;
+        Assert.Equal((true, 20), (saved.KeepAwake, saved.IntervalMinutes));
+        // What the keep-awake did, as the app's Settings shows it.
+        devBox = new DevBoxStatus(true, 20, new DevBoxPass(DateTimeOffset.UtcNow, "failed", "No Dev Center token. Run 'az login' as this user.", Alarming: true));
+        var status = await ch.CallAsync<HostStatus>(HostOps.Status);
+        Assert.Equal(("failed", true), (status.DevBox!.Last!.Outcome, status.DevBox.Last.Alarming));
+        Assert.False(status.RestartRequired);
+    }
+
+    // A file the host rejects for another setting reads as all defaults, keep-awake off: saved and
+    // applied anyway, the reply would say off while the service ran, and the next start would turn
+    // it off with nothing said.
+    [Fact]
+    public async Task Keep_awake_is_not_turned_on_in_a_config_the_host_would_read_back_as_off()
+    {
+        const string config = """{ "permissions": { "remoteApproval": "yes" } }""";
+        File.WriteAllText(Path.Combine(profile, "config.json"), config);
+        devBox = new DevBoxStatus(false, 15);
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { devBoxKeepAwake = true }));
+
+        Assert.Contains("Dev Box keep-awake was not changed", refused.Message);
+        Assert.Empty(keptAwake);
+        Assert.Equal(config, File.ReadAllText(Path.Combine(profile, "config.json")));
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.DevBoxKeepAwake);
     }
 
     [Fact]
