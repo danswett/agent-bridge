@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
         else { Place(); }
         KeepSmallest();
         Root.Loaded += (_, _) => { if (Root.XamlRoot is { } x) { x.Changed += (_, _) => KeepSmallest(); } };
+        Root.SizeChanged += (_, e) => FitSearch(e.NewSize.Width);
         AppWindow.Changed += OnWindowChanged;
 
         AppWindow.Closing += (_, e) => CloseRequested?.Invoke(e);
@@ -154,6 +155,10 @@ public sealed partial class MainWindow : Window
     {
         if (args.Reason == AutoSuggestionBoxTextChangeReason.UserInput) { SearchFor(sender.Text); }
     }
+
+    // Up to 400 px, centred; narrower with the window, so the mark, the name and the caption buttons
+    // keep their room down to the smallest window.
+    void FitSearch(double width) => SearchBox.Width = Math.Clamp(width - 400, 120, 400);
 
     internal void SearchFor(string text) => SearchBox.ItemsSource = ViewModel.Search(text);
 
