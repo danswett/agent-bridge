@@ -57,6 +57,7 @@ Larger files come next.
 | `js/update.js` | A machine's updates ([v1-update.md](../docs/protocol/v1-update.md), #51): the tolerant reader, the row's words (what the machine's app is doing, how the last update ended), and `UpdateControl`, Check and Install with a request of their own each, a refusal shown on the row, and Check all |
 | `js/forget.js` | Forgetting an offline machine ([roster.md](../docs/protocol/roster.md)): two presses, the first arming for 5 seconds; an arm goes with a machine that comes back; the relay's refusals in words |
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
+| `js/platform.js` | The platform layer (#168, [ui.md](../docs/design/ui.md) §7): `windows`, `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux` or `unknown`, from Chromium's client hints or else the user agent (a Mac with a touch screen is an iPad), and whether the app is installed (`display-mode: standalone`, or iOS's `navigator.standalone`), set once on `<html data-platform data-standalone>`. The hints (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere; either modifier works everywhere), the safe areas (`viewport-fit=cover` kept only when installed on iOS or iPadOS, where the app bar, the bottom navigation or rail and the reply box keep clear of the notch and the home indicator; elsewhere the browser keeps the page out of them), no double-tap wait there, and its edge swipe back. `unknown` is Windows; nothing depends on detection being right |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
@@ -432,6 +433,12 @@ running another checkout's tests at the same time.
   list, and on a phone the 24/32 title row with Search and New, the bottom bar with its Bridge
   indicator, the search row, and the app bar back as a strip for connection news; signed out,
   no navigation. `test/nav.mjs` goes to a page as a person does.
+* `test/platform.spec.mjs`, in demo mode (#168), each platform played through what `js/platform.js`
+  reads: ⌘ in the hints on a Mac and Ctrl on Windows; with an iPhone's or an iPad's insets reported,
+  the app bar, bottom navigation or rail and reply box clear of them only when installed on iOS or
+  iPadOS; the system's Back (Android's, and iOS's edge swipe) from a delegate to its session, to the
+  list, then out of the app; and a platform nobody recognises drawn and behaving as Windows.
+  `test/unit/platform.test.mjs` holds the detection table.
 * `test/machines.spec.mjs`, in demo mode with three machines (`?machines=3`): All machines
   first and chosen at first, every machine's sessions in one list (each machine's newest first
   when first seen, and newest first overall in Most recent) with each card naming its

@@ -32,7 +32,28 @@
   font-size: 16px;
   line-height: 1.45;
   -webkit-text-size-adjust: 100%;
+  /* The safe areas (#168): what the browser says is under a notch or the home indicator, and
+     what the page keeps clear of it. Only an app installed on iOS or iPadOS asks to draw there
+     (viewport-fit=cover, js/platform.js); everywhere else the browser keeps the page out of them
+     itself, so once the platform is known the page keeps nothing clear there. Until it is known,
+     the page keeps clear whatever the browser reports, as an iPhone needs from the first paint. */
+  --env-safe-top: env(safe-area-inset-top, 0px);
+  --env-safe-right: env(safe-area-inset-right, 0px);
+  --env-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --env-safe-left: env(safe-area-inset-left, 0px);
+  --safe-top: var(--env-safe-top);
+  --safe-right: var(--env-safe-right);
+  --safe-bottom: var(--env-safe-bottom);
+  --safe-left: var(--env-safe-left);
 }
+:root[data-platform]:not([data-standalone="true"][data-platform="ios"]):not([data-standalone="true"][data-platform="ipados"]) {
+  --safe-top: 0px;
+  --safe-right: 0px;
+  --safe-bottom: 0px;
+  --safe-left: 0px;
+}
+/* Installed on iOS or iPadOS, a tap is a tap: no wait to see whether it is a double tap. */
+:root[data-standalone="true"]:is([data-platform="ios"], [data-platform="ipados"]) { touch-action: manipulation; }
 @media (max-width: 759px) {
   :root {
     --type-title: 24px;
@@ -65,7 +86,7 @@ body {
 }
 
 .skip { position: absolute; left: -999px; top: 0; }
-.skip:focus { left: 12px; top: max(8px, env(safe-area-inset-top)); z-index: 30; background: var(--ab-card); padding: 8px 12px; border-radius: var(--ab-radius-card); }
+.skip:focus { left: 12px; top: max(8px, var(--safe-top)); z-index: 30; background: var(--ab-card); padding: 8px 12px; border-radius: var(--ab-radius-card); }
 
 a { color: var(--ab-bridge); }
 :focus-visible { outline: 3px solid var(--ab-bridge); outline-offset: 2px; border-radius: 6px; }
@@ -79,7 +100,7 @@ a { color: var(--ab-bridge); }
   position: sticky; top: 0; z-index: 20;
   display: none; align-items: center; gap: var(--ab-space-3);
   min-height: var(--appbar);
-  padding: max(var(--ab-space-2), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) var(--ab-space-2) max(var(--ab-space-4), env(safe-area-inset-left));
+  padding: max(var(--ab-space-2), var(--safe-top)) max(var(--ab-space-4), var(--safe-right)) var(--ab-space-2) max(var(--ab-space-4), var(--safe-left));
   background: var(--ab-shell);
 }
 body[data-conn="busy"] .appbar, body[data-conn="warn"] .appbar, body[data-conn="bad"] .appbar, body.searching .appbar { display: flex; }
@@ -128,7 +149,7 @@ body:not(.searching) .appbar .search { display: none; }
 .nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
   display: flex; justify-content: space-around;
-  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding: 0 var(--safe-right) var(--safe-bottom) var(--safe-left);
   background: var(--ab-layer); border-top: 1px solid var(--ab-stroke2);
 }
 .nav-item {
@@ -154,9 +175,9 @@ body:not(.searching) .appbar .search { display: none; }
 
 .content {
   display: block; outline: none;
-  padding: max(var(--ab-space-4), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-6)) max(var(--ab-space-4), env(safe-area-inset-left));
+  padding: max(var(--ab-space-4), var(--safe-top)) max(var(--ab-space-4), var(--safe-right)) calc(var(--tabbar) + var(--safe-bottom) + var(--ab-space-6)) max(var(--ab-space-4), var(--safe-left));
 }
-body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), env(safe-area-inset-bottom)); }
+body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), var(--safe-bottom)); }
 /* A phone's strip takes the top: the page starts closer under it. A desktop's bar never moves the page. */
 @media (max-width: 759px) { body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); } }
 .page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; }
@@ -171,6 +192,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   .shell {
     display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); grid-template-rows: var(--appbar) minmax(0, 1fr);
     height: 100vh; height: 100dvh;
+    /* Installed on iOS or iPadOS (an iPad, or an iPhone on its side), the whole window keeps clear
+       of the notch, the status bar and the home indicator: the app bar, the rail and the reply box. */
+    padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   }
   .appbar, body[data-conn] .appbar {
     grid-column: 1 / -1; display: grid;
@@ -178,7 +202,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
        what is left, up to 480, and stays centred while there is room. */
     grid-template-columns: minmax(max-content, 1fr) minmax(160px, 480px) minmax(max-content, 1fr);
     position: static; min-height: 0; height: var(--appbar);
-    padding: 0 max(var(--ab-space-4), env(safe-area-inset-right)) 0 max(var(--ab-space-4), env(safe-area-inset-left));
+    padding: 0 var(--ab-space-4);
   }
   .appbar .brand { display: flex; }
   .appbar .online { display: inline-flex; }
@@ -238,19 +262,19 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   body[data-page="sessions"][data-session-open="true"] .list-pane { display: none; }
   body[data-page="sessions"][data-session-open="true"] .session-pane {
     display: flex; flex-direction: column; position: fixed; inset: 0; z-index: 15; background: var(--ab-shell);
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
   }
   body[data-page="sessions"][data-session-open="true"] .nav { display: none; }
   /* Over a session the strip is only the connection's news, never the list's search, and the
      session starts under it rather than behind it: Back and its menu stay in reach. */
   body[data-page="sessions"][data-session-open="true"].searching .appbar { display: none; }
   body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .appbar {
-    display: flex; position: fixed; top: 0; left: 0; right: 0; height: calc(var(--appbar) + env(safe-area-inset-top));
+    display: flex; position: fixed; top: 0; left: 0; right: 0; height: calc(var(--appbar) + var(--safe-top));
   }
   body[data-page="sessions"][data-session-open="true"] .appbar .search { display: none; }
   body[data-page="sessions"][data-session-open="true"] .appbar .appbar-end { display: flex; }
   body[data-page="sessions"][data-session-open="true"]:is([data-conn="busy"], [data-conn="warn"], [data-conn="bad"]) .session-pane {
-    top: calc(var(--appbar) + env(safe-area-inset-top)); padding-top: 0;
+    top: calc(var(--appbar) + var(--safe-top)); padding-top: 0;
   }
   .session-views { flex: 1; min-height: 0; }
   .no-session { display: none; }
@@ -547,7 +571,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), e
   position: absolute; right: var(--ab-space-2); top: calc(100% - var(--ab-space-1)); z-index: 5; min-width: 168px;
   display: grid; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2);
   border-radius: 8px; box-shadow: 0 8px 24px var(--ab-shadow);
-  scroll-margin-bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-2));
+  scroll-margin-bottom: calc(var(--tabbar) + var(--safe-bottom) + var(--ab-space-2));
 }
 @media (min-width: 760px) { .row-menu { scroll-margin-bottom: var(--ab-space-2); } }
 /* Above its row, where below would be under the bottom navigation. */

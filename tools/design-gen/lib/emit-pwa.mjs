@@ -27,6 +27,11 @@ ${font.faces.map((f) => `@font-face {
 `;
 }
 
+// The values of <html data-platform> (pwa/js/platform.js, #168) set in each inline mono face of
+// tokens.json: Apple's on a Mac, an iPhone and an iPad. Any other face is its own platform's name.
+export const FACE_PLATFORMS = Object.freeze({ apple: ['macos', 'ios', 'ipados'] });
+export const platformSelector = (face) => (FACE_PLATFORMS[face] ?? [face]).map((p) => `:root[data-platform="${p}"]`).join(', ');
+
 export function tokensCss(tokens) {
   const roles = roleTokens(tokens);
   const surfaces = surfaceTokens(tokens);
@@ -67,8 +72,9 @@ ${block(surfaces, (t) => toCssColor(t.dark))}
   }
 }
 
-/* Inline mono beside each platform's system face (tokens.json type.inlineMono). */
-${inline.filter((p) => p.name !== 'windows').map((p) => `:root[data-platform="${p.name}"] { ${inlineVars(p)} }`).join('\n')}
+/* Inline mono beside each platform's system face (tokens.json type.inlineMono), on the platforms
+   whose face it is (pwa/js/platform.js names them on <html data-platform>). */
+${inline.filter((p) => p.name !== 'windows').map((p) => `${platformSelector(p.name)} { ${inlineVars(p)} }`).join('\n')}
 
 /* High contrast: every role and surface is a system colour (tokens.json hc). */
 @media (forced-colors: active) {

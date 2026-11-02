@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { repoRoot } from '../generate.mjs';
 import { loadTokens, fontXHeight, inlineMono, inlineMonoSizes, monoFont } from '../lib/tokens.mjs';
-import { tokensCss } from '../lib/emit-pwa.mjs';
+import { platformSelector, tokensCss } from '../lib/emit-pwa.mjs';
 import { designXaml } from '../lib/emit-xaml.mjs';
 
 // Inline mono beside the system face (docs/design/ui.md §4.2, #215): the x-heights the tokens
@@ -45,8 +45,15 @@ test('the PWA gets each platform\'s ratio and scale, with Windows\' as the defau
   const windows = platforms.find((p) => p.name === 'windows');
   assert.match(css, new RegExp(`:root \\{[\\s\\S]*--ab-inline-mono-x: ${windows.x}; --ab-inline-mono-scale: ${windows.scale};`));
   for (const p of platforms.filter((x) => x.name !== 'windows')) {
-    assert.ok(css.includes(`:root[data-platform="${p.name}"] { --ab-inline-mono-x: ${p.x}; --ab-inline-mono-scale: ${p.scale}; }`), p.name);
+    assert.ok(css.includes(`${platformSelector(p.name)} { --ab-inline-mono-x: ${p.x}; --ab-inline-mono-scale: ${p.scale}; }`), p.name);
   }
+});
+
+test('Apple\'s face is set on every platform the page names as Apple\'s: a Mac, an iPhone and an iPad', () => {
+  const css = tokensCss(tokens);
+  const apple = inlineMono(tokens).platforms.find((p) => p.name === 'apple');
+  assert.ok(css.includes(`:root[data-platform="macos"], :root[data-platform="ios"], :root[data-platform="ipados"] { --ab-inline-mono-x: ${apple.x};`));
+  assert.ok(!css.includes('data-platform="apple"'));
 });
 
 test('the app gets inline mono\'s size for each Windows ramp role: the role\'s size at Segoe\'s scale, never under 11 px', () => {

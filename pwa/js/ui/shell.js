@@ -4,6 +4,7 @@
 // back and forward go between them, a reload stays where it was, and nothing the GitHub Pages
 // server sees changes. Which page shows is decided here and nowhere else: a page's own panels
 // still hide themselves when they have nothing to show, inside it.
+import { isSearchKey, shortcutHints } from '../platform.js';
 
 export const ROUTES = Object.freeze(['sessions', 'machines', 'launch', 'usage', 'settings']);
 export const HOME = 'sessions';
@@ -41,12 +42,18 @@ export class Shell {
     // Back and forward between entries go() pushed fire popstate; a link's own fires hashchange.
     win.addEventListener('hashchange', () => this.#apply());
     win.addEventListener('popstate', () => this.#apply());
-    // Ctrl+K or Cmd+K focuses search (ui.md §9), from anywhere but a box being typed in.
+    // Ctrl+K or ⌘K focuses search (ui.md §9), from anywhere, on every platform (platform.js).
     doc.addEventListener('keydown', (e) => {
-      if (!this.#signedIn || e.key.toLowerCase() !== 'k' || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) { return; }
+      if (!this.#signedIn || !isSearchKey(e)) { return; }
       e.preventDefault();
       this.openSearch();
     });
+    // The search box names its shortcut as the platform writes it: ⌘K on Apple's, Ctrl+K elsewhere.
+    if (this.els.search) {
+      const hints = shortcutHints();
+      this.els.search.setAttribute('aria-keyshortcuts', hints.searchKeys);
+      this.els.search.title = `Search sessions (${hints.search})`;
+    }
     // Skip to content stays on the page it skips on: its #main is not a route (it would read as
     // Sessions), so it focuses the content itself and leaves the address alone.
     for (const a of doc.querySelectorAll('a.skip[href="#main"]')) {

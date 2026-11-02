@@ -20,10 +20,7 @@ import { utf8Bytes } from '../answers.js';
 import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
-
-// The shortcut Send's tooltip names: ⌘↩ on Apple's platforms, Ctrl+Enter elsewhere (ui.md §6.5).
-// The platform layer (#168) may take this over.
-const SEND_KEYS = /Mac|iPhone|iPad|iPod/.test(globalThis.navigator?.userAgent ?? '') ? '\u2318\u21a9' : 'Ctrl+Enter';
+import { isSendKey, shortcutHints } from '../platform.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -133,7 +130,7 @@ export class ReplyBox {
     e.input.addEventListener('input', () => { this.#clearError(); this.#sync(); });
     // Ctrl+Enter or Cmd+Enter sends, as in most chat boxes; Enter alone is a new line.
     e.input.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); this.#send(); }
+      if (isSendKey(ev)) { ev.preventDefault(); this.#send(); }
     });
     // A pasted screenshot or copied file is attached; pasted text is left to the box.
     e.input.addEventListener('paste', (ev) => {
@@ -153,9 +150,10 @@ export class ReplyBox {
       e.picker.value = '';
       this.#add(files);
     });
-    // Attach, then Send (ui.md §6.5): icons, named, with the shortcut in Send's tooltip.
+    // Attach, then Send (ui.md §6.5): icons, named, with the shortcut in Send's tooltip: ⌘↩ on
+    // Apple's platforms, Ctrl+Enter elsewhere (the platform layer, #168).
     e.attach = h('button', { type: 'button', class: 'icon-button attach', 'aria-label': 'Attach a file or image', title: 'Attach a file or image', hidden: !this.#attach, onclick: () => e.picker.click() }, icon('paperclip'), h('span', { class: 'attach-label' }, 'Attach'));
-    e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: `Send (${SEND_KEYS})` }, designIcon('send', { cls: 'ab-icon-20' }));
+    e.send = h('button', { type: 'submit', class: 'button send', 'aria-label': 'Send', title: `Send (${shortcutHints().send})` }, designIcon('send', { cls: 'ab-icon-20' }));
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.cancel = h('button', { type: 'button', class: 'button secondary cancel', hidden: true, onclick: () => this.#cancel() }, 'Cancel');
     e.status = h('p', { class: 'answer-status reply-status', role: 'status', 'aria-live': 'polite' });

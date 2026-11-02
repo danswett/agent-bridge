@@ -59,6 +59,12 @@ export function hostNote(link, name, { online, named = false }) {
 
 const OVER_LIST = Object.freeze({ overList: true });
 
+// A delegate opened in a session pushed over the list (a phone's, ui.md §5.2): one more entry, so
+// the system's Back (Android's button or gesture, iOS's edge swipe, platform.js) closes it before
+// it leaves the session, and the session before it leaves the list (#168).
+const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
+const DELEGATE = 'details.delegate-detail';
+
 export class SessionsPage {
   #shownCaps = new Map();
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
@@ -72,6 +78,9 @@ export class SessionsPage {
   // its storage allows, so a picker never depends on a write that may fail.
   #launchHost = null;
   #unroute = null;
+  // The delegate a phone's back stack has an entry for (#168), and the listeners that keep it.
+  #delegateShown = null;
+  #listening = null;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -165,8 +174,58 @@ export class SessionsPage {
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
+      this.#delegateBack($('session-views'));
     }
   }
+
+  // The delegate level of a phone's back stack: opening a delegate in a pushed session adds an
+  // entry (one, however many are opened), closing it by hand takes the entry back, and going back
+  // from it closes the delegate. The entry is the session's own address, so a reload or a link
+  // never lands on a delegate: a reload on one goes back to its session.
+  #delegateBack(views) {
+    const win = globalThis.window;
+    if (!views || !win) { return; }
+    this.#listening = new AbortController();
+    const { signal } = this.#listening;
+    if (this.#delegateLevel()) { win.history.back(); }
+    // toggle doesn't bubble: it is heard on its way down.
+    views.addEventListener('toggle', (e) => {
+      const d = e.target;
+      if (!d?.matches?.(DELEGATE)) { return; }
+      const id = d.closest('.delegate')?.dataset.id ?? '';
+      const state = win.history.state;
+      if (d.open) {
+        if (state?.delegate === id || !this.#pushed()) { return; }
+        const url = win.location.href;
+        if (this.#delegateLevel()) { win.history.replaceState(overDelegate(id), '', url); } else { win.history.pushState(overDelegate(id), '', url); }
+        this.#delegateShown = id;
+      } else if (state?.delegate === id && this.phone.matches) {
+        win.history.back();
+      }
+    }, { capture: true, signal });
+    win.addEventListener('popstate', () => {
+      const want = this.#delegateLevel() ? win.history.state.delegate : null;
+      const had = this.#delegateShown;
+      this.#delegateShown = want;
+      if ((had === null && want === null) || !this.phone.matches) { return; }
+      const v = this.view.selected?.view;
+      if (!v) { return; }
+      for (const d of v.querySelectorAll(`${DELEGATE}[open]`)) {
+        if (d.closest('.delegate')?.dataset.id !== want) { d.open = false; }
+      }
+      // Forward again: the delegate it was on, where it still is.
+      const row = want ? [...v.querySelectorAll('.delegate')].find((el) => el.dataset.id === want)?.querySelector(DELEGATE) : null;
+      if (row && !row.open) {
+        this.view.selected.setTab('delegates');
+        row.open = true;
+      }
+    }, { signal });
+  }
+
+  // On a phone, a session pushed over the list: where a delegate is a step of its own.
+  #pushed() { return this.phone.matches && this.#open && this.shell?.route === 'sessions' && this.#overList(); }
+
+  #delegateLevel() { return typeof globalThis.history?.state?.delegate === 'string'; }
 
   // Every machine shown, more than one of them: the cards say which machine each is on.
   #several() { return this.hosts.all && this.hosts.shownIds().length > 1; }
@@ -226,6 +285,12 @@ export class SessionsPage {
     // A phone's back from a session is always the list: one session replaces another, and from
     // another page (Launch, a notification's) the list goes in first.
     const onSession = onSessions && this.shell.rest.length >= 2;
+    if (onSession && this.#delegateLevel()) {
+      // Over a delegate's entry: back to its session's first, so the one chosen replaces that.
+      globalThis.addEventListener('popstate', () => this.#choose(card), { once: true });
+      globalThis.history.back();
+      return;
+    }
     if (onSession) {
       this.shell.go('sessions', { rest, replace: true, state: globalThis.history?.state ?? null });
     } else {
@@ -327,18 +392,21 @@ export class SessionsPage {
   }
 
   // Back to the list: the entry beneath, when it is the list, so the browser's own back and this
-  // agree; otherwise the list replaces the session's entry.
+  // agree; otherwise the list replaces the session's entry. From a delegate's entry, the list is
+  // two beneath.
   #back() {
     if (this.#overList() && globalThis.history?.length > 1) {
-      globalThis.history.back();
+      globalThis.history.go(this.#delegateLevel() ? -2 : -1);
       return;
     }
     this.shell?.go('sessions', { replace: true });
   }
 
   // The window crossed a width of §5.2. The session named stays selected; a phone that now shows
-  // one gets an entry under it, so its back goes to the list rather than out of the app.
+  // one gets an entry under it, so its back goes to the list rather than out of the app. A
+  // delegate's entry goes with the phone's width: wider, a delegate is not a step of its own.
   #resized() {
+    if (!this.phone.matches && this.#delegateLevel()) { globalThis.history.back(); }
     this.#listBeneath();
     this.#settleSelection();
     this.view.layoutChanged();
@@ -367,6 +435,8 @@ export class SessionsPage {
   clear() {
     this.#unroute?.();
     this.#unroute = null;
+    this.#listening?.abort();
+    this.#listening = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();
