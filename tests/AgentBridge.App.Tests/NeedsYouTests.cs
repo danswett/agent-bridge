@@ -244,6 +244,10 @@ public sealed class NeedsYouTests : IAsyncLifetime
         // A fence in a quote or a list item is skipped too.
         Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "> ```\n> port: 8080\n> ```\n\nWhich option?" }));
         Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "- ```\n  port: 8080\n  ```\n\nWhich option?" }));
+        // Nested lists, and a quote marker that is code, as the renderer reads them.
+        Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "- - ```\n    example\n    ```\n\nWhich option?" }));
+        Assert.Equal("After", NeedsYouEntry.LineOf(Make.Form() with { Message = "~~~\n> ~~~\nexample\n~~~\nAfter" }));
+        Assert.Equal("Which database?", NeedsYouEntry.LineOf(Make.Form() with { Message = "Which **database**?\nPick one." }));
     }
 
     [Fact]

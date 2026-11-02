@@ -238,25 +238,16 @@ public sealed partial class NeedsYouEntry : Observable
     }
 
     // A question's first line of prose, never a line of code; one that is all code shows its first.
+    // Where the prose starts is the parser's to say (MarkdownModel.Outline), as it draws the card:
+    // scanning lines for fences missed them in nested quotes and lists.
     public static string LineOf(Question q)
     {
-        string? open = null;
-        string? code = null;
         // Any line ending the renderer breaks on: a bare CR too.
-        foreach (var raw in q.Message.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
-        {
-            // A fence in a quote or a list item is a fence too: read past their markers.
-            var l = Container().Replace(raw, "");
-            if (open is not null)
-            {
-                if (Closes(open, l)) { open = null; } else if (l.Trim().Length > 0) { code ??= l; }
-                continue;
-            }
-            var m = Fence().Match(l);
-            if (m.Success) { open = m.Groups[1].Value; continue; }
-            if (PlainLine(raw) is { Length: > 0 } line) { return line; }
-        }
-        return PlainLine(code ?? "");
+        var message = q.Message.Replace("\r\n", "\n").Replace('\r', '\n');
+        var (prose, code) = MarkdownModel.Outline(message);
+        var lines = message.Split('\n');
+        if (prose is int at && at < lines.Length && PlainLine(Container().Replace(lines[at], "")) is { Length: > 0 } line) { return line; }
+        return code is null ? "" : Cut(Spaces().Replace(code, " ").Trim());
     }
 
     [GeneratedRegex(@"^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+")]
@@ -272,8 +263,10 @@ public sealed partial class NeedsYouEntry : Observable
         line = Emphasis().Replace(line, "$1$2");
         line = Link().Replace(line, "$1");
         line = Spaces().Replace(line, " ").Trim();
-        return line.Length > LineMax ? line[..(LineMax - 1)].TrimEnd() + "…" : line;
+        return Cut(line);
     }
+
+    static string Cut(string line) => line.Length > LineMax ? line[..(LineMax - 1)].TrimEnd() + "…" : line;
 
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
     private static partial Regex Fence();
