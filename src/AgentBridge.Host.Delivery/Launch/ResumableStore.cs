@@ -65,22 +65,27 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
             if (File.Exists(events))
             {
                 updated = File.GetLastWriteTimeUtc(events);
-                if (string.IsNullOrWhiteSpace(summary))
-                {
-                    foreach (var line in FileEnds(events))
-                    {
-                        if (!line.Contains("\"type\":\"user.message\"", StringComparison.Ordinal)) { continue; }
-                        if (Parse(line) is { } r && r.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("content", out var content))
-                        {
-                            summary = PromptSummary(content);
-                            if (summary.Length > 0) { break; }
-                        }
-                    }
-                }
+                if (string.IsNullOrWhiteSpace(summary)) { summary = FirstPrompt(events, Ends); }
             }
             if (string.IsNullOrWhiteSpace(summary)) { continue; }
             yield return new ResumeEntry(id.ToLowerInvariant(), AgentKind.Copilot, "copilot", summary, folder, updated);
         }
+    }
+
+    // A Copilot session's first prompt as a title, from the user.message lines in the first and
+    // last `ends` bytes of its events.jsonl; "" when none is one.
+    public static string FirstPrompt(string events, int ends)
+    {
+        foreach (var line in FileEnds(events, ends))
+        {
+            if (!line.Contains("\"type\":\"user.message\"", StringComparison.Ordinal)) { continue; }
+            if (Parse(line) is { } r && r.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("content", out var content)
+                && PromptSummary(content) is { Length: > 0 } prompt)
+            {
+                return prompt;
+            }
+        }
+        return "";
     }
 
     // When a Copilot session was last used: its transcript is appended to in place, which does
@@ -234,7 +239,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
 
     // The complete lines in the first and last 64 KiB of a file, without reading the middle:
     // transcripts run to tens of megabytes, and what a resume list needs sits at either end.
-    internal static IEnumerable<string> FileEnds(string path)
+    internal static IEnumerable<string> FileEnds(string path, int ends = Ends)
     {
         byte[] head, tail;
         long length;
@@ -242,16 +247,16 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             length = stream.Length;
-            head = new byte[(int)Math.Min(length, Ends)];
+            head = new byte[(int)Math.Min(length, ends)];
             stream.ReadExactly(head);
-            if (length <= Ends * 2)
+            if (length <= ends * 2L)
             {
                 tail = new byte[length - head.Length];
                 stream.ReadExactly(tail);
                 return Lines(Encoding.UTF8.GetString([.. head, .. tail]), dropFirst: false, dropLast: false);
             }
-            tail = new byte[Ends];
-            stream.Seek(-Ends, SeekOrigin.End);
+            tail = new byte[ends];
+            stream.Seek(-ends, SeekOrigin.End);
             stream.ReadExactly(tail);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
@@ -279,7 +284,7 @@ public sealed class ResumableStore(string copilotHome, string claudeHome, string
     static string? Str(JsonElement o, string name) => o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     // workspace.yaml's flat top-level `key: value` lines, as Host.Core reads them.
-    static Dictionary<string, string> ReadYaml(string path)
+    public static Dictionary<string, string> ReadYaml(string path)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         string text;

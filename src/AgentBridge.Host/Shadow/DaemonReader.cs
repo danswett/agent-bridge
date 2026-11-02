@@ -17,7 +17,9 @@ namespace AgentBridge.Host.Shadow;
 //   runtime/copilot-bridge-markers/<id>/agent-pending-decision.json
 //                                            a question its hook armed (Get-CopilotDecisionMarkerPath)
 // and, by ShadowWitness, <copilot>/session-state/<id>/events.jsonl, the transcript, for the
-// evidence of the daemon's known bugs.
+// evidence of the daemon's known bugs; <copilot>/session-state/<id>/workspace.yaml, for the
+// title the daemon does not read; and runtime/agent-bridge-codex/<id>.json, the daemon's
+// registration of a Codex session, with the rollout it names, for the compactions it counts none of.
 // Never config.json (it holds the Home Assistant token), never the spool, and no directory is
 // ever listed.
 public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
@@ -35,6 +37,28 @@ public sealed partial record AgentHaBridgePaths(string Home, string CopilotHome)
     // known bugs; null for an id that is not one Copilot would have made.
     public string? CopilotTranscript(string sessionId) =>
         Guid.TryParseExact(sessionId, "D", out _) ? Path.Combine(CopilotHome, "session-state", sessionId.ToLowerInvariant(), "events.jsonl") : null;
+
+    // A Codex session's rollout, as the daemon's own registration for it names it
+    // (runtime/agent-bridge-codex/<key>.json, written by its Codex hook), for the witness to count
+    // the compactions in; null when there is no registration, or it names anything but a rollout
+    // of this session.
+    public string? CodexRollout(string sessionId)
+    {
+        if (!Guid.TryParseExact(sessionId, "D", out _)) { return null; }
+        try
+        {
+            var registration = Path.Combine(Runtime, "agent-bridge-codex", SafeKey(sessionId) + ".json");
+            if (!File.Exists(registration) || new FileInfo(registration).Length > 64 * 1024) { return null; }
+            using var stream = new FileStream(registration, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var doc = JsonDocument.Parse(stream);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object || !doc.RootElement.TryGetProperty("TranscriptPath", out var t) || t.ValueKind != JsonValueKind.String) { return null; }
+            var path = t.GetString();
+            return path is { Length: > 0 } && Path.IsPathFullyQualified(path)
+                && Path.GetFileName(path) is { } name && name.StartsWith("rollout-", StringComparison.Ordinal)
+                && name.EndsWith($"-{sessionId}.jsonl", StringComparison.OrdinalIgnoreCase) && File.Exists(path) ? path : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
+    }
 
     // As Get-CopilotDecisionMarkerPath resolves it: beside a Copilot session's own state when that
     // folder exists, else in the bridge's fallback folder (Claude, Codex).

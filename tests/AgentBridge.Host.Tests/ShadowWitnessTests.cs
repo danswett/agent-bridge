@@ -541,4 +541,115 @@ public sealed class ShadowWitnessTests : IDisposable
         File.Delete(Paths.CopilotTranscript(Id)!);
         Assert.Null(Known(Daemon(through, shells: ["sub1"]), Host(), ShadowKinds.BackgroundShells));
     }
+
+    // A Codex session's rollout, registered as agent-ha-bridge's Codex hook registers it.
+    const string CodexId = "01a19aa3-e821-7952-bd5d-d080ec282632";
+
+    string CodexRollout(params string[] lines)
+    {
+        var rollout = Path.Combine(f.CodexHome, "sessions", "2026", "11", "02", $"rollout-2026-11-02T05-03-26-{CodexId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
+        File.AppendAllText(rollout, string.Concat(lines.Select(l => l + "\n")));
+        Directory.CreateDirectory(f.CodexRegistrations);
+        File.WriteAllText(Path.Combine(f.CodexRegistrations, CodexId + ".json"), JsonSerializer.Serialize(new { SessionId = CodexId, TranscriptPath = rollout }));
+        return rollout;
+    }
+
+    static string Compacted() => JsonSerializer.Serialize(new { timestamp = "2026-11-02T05:04:44Z", type = "compacted", payload = new { message = "summary" } });
+
+    string? CompactionsKnown(int daemon, int host, string agent = "codex")
+    {
+        ShadowSession Side(int n) => new() { Id = CodexId, Agent = agent, Status = "idle", Compactions = n };
+        var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [CodexId] = Side(daemon) } },
+            new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [CodexId] = Side(host) }, SeesAgentHaBridge = true });
+        var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        return Assert.Single(differences, x => x.Kind == ShadowKinds.Compactions).Known;
+    }
+
+    [Fact]
+    public void A_codex_compaction_the_daemon_does_not_count_is_put_down_to_it_only_when_the_rollout_holds_exactly_the_hosts_count()
+    {
+        CodexRollout(
+            JsonSerializer.Serialize(new { type = "session_meta", payload = new { id = CodexId } }),
+            Compacted(),
+            // The word in a message is no compaction.
+            JsonSerializer.Serialize(new { type = "event_msg", payload = new { type = "agent_message", message = "\"compacted\"" } }),
+            Compacted());
+
+        Assert.Equal("agent-ha-bridge#279", CompactionsKnown(daemon: 0, host: 2));
+        // More than the rollout records, a daemon that counts some, and another agent all stay mismatches.
+        Assert.Null(CompactionsKnown(daemon: 0, host: 3));
+        Assert.Null(CompactionsKnown(daemon: 1, host: 2));
+        Assert.Null(CompactionsKnown(daemon: 0, host: 2, agent: "claude"));
+        Assert.Null(CompactionsKnown(daemon: 0, host: 2, agent: "copilot"));
+        // As does one whose rollout the daemon has no registration for.
+        File.Delete(Path.Combine(f.CodexRegistrations, CodexId + ".json"));
+        Assert.Null(CompactionsKnown(daemon: 0, host: 2));
+    }
+
+    [Fact]
+    public void A_registration_naming_another_sessions_file_is_not_read()
+    {
+        var rollout = CodexRollout(Compacted());
+        var other = Path.Combine(Path.GetDirectoryName(rollout)!, "rollout-2026-11-02T05-03-26-01a19aa3-0000-7952-bd5d-d080ec282632.jsonl");
+        File.Copy(rollout, other);
+        File.WriteAllText(Path.Combine(f.CodexRegistrations, CodexId + ".json"), JsonSerializer.Serialize(new { SessionId = CodexId, TranscriptPath = other }));
+        Assert.Null(CompactionsKnown(daemon: 0, host: 1));
+    }
+
+    // Copilot sessions in the shape Copilot CLI 1.0.105 writes: workspace.yaml's title as `name:`,
+    // with no `summary:` (agent-ha-bridge#278).
+    void CopilotSession(string id, string yaml, string? prompt)
+    {
+        var dir = Path.Combine(f.CopilotHome, "session-state", id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "workspace.yaml"), yaml);
+        File.WriteAllText(Path.Combine(dir, "events.jsonl"), prompt is null ? Event("session.start", new { }) + "\n" : Event("user.message", new { content = prompt }) + "\n");
+    }
+
+    const string Named = "11111111-1111-4111-8111-111111111111", Summarised = "22222222-2222-4222-8222-222222222222", Claude = "33333333-3333-4333-8333-333333333333";
+
+    static ShadowResumeEntry Entry(string label, string id, string agent) => new(label, id, agent, agent, @"C:\r\repo", null);
+
+    IReadOnlyList<ShadowDifference> Resume(IReadOnlyList<string> daemon, params ShadowResumeEntry[] host)
+    {
+        var d = new ShadowView { Resumable = [.. daemon.Select(ShadowHash.Normalize)] };
+        var h = new ShadowView { Resumable = [.. host.Select(e => ShadowHash.Normalize(e.Label))], ResumableEntries = host, SeesAgentHaBridge = true };
+        var differences = new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        return [.. differences.Where(x => x.Kind.StartsWith("resumable.", StringComparison.Ordinal))];
+    }
+
+    [Fact]
+    public void A_resume_list_differing_only_by_the_name_the_daemon_does_not_read_is_put_down_to_it()
+    {
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
+        CopilotSession(Summarised, "cwd: C:\\r\\repo\nsummary: Tidy up\nname: Tidy Up Things\n", "tidy");
+        ShadowResumeEntry[] host = [Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Copilot: Tidy up - repo", Summarised, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")];
+
+        var differences = Resume(["Copilot: fix the widget please - repo", "Copilot: Tidy up - repo", "Claude: Hello - repo"], host);
+        Assert.NotEmpty(differences);
+        Assert.All(differences, x => Assert.Equal("agent-ha-bridge#278", x.Known));
+
+        // Any other difference beside it keeps the whole list a mismatch: a session with a summary
+        // labelled otherwise, one the daemon has and the host does not, or a prompt that is not the first.
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Tidy Up Things - repo", "Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+        Assert.All(Resume(["Copilot: fix the widget please - repo", "Copilot: Tidy up - repo", "Claude: Hello - repo", "Codex: More - repo"], host), x => Assert.Null(x.Known));
+        Assert.All(Resume(["Copilot: something else - repo", "Copilot: Tidy up - repo", "Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+    }
+
+    [Fact]
+    public void A_session_the_daemon_leaves_out_for_want_of_a_summary_is_put_down_to_it_only_when_its_transcript_has_no_prompt()
+    {
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", prompt: null);
+        ShadowResumeEntry[] host = [Entry("Copilot: Fix The Widget - repo", Named, "copilot"), Entry("Claude: Hello - repo", Claude, "claude")];
+
+        Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Equal("agent-ha-bridge#278", x.Known));
+
+        // With a prompt to label it by, the daemon would have offered it: leaving it out is something else.
+        CopilotSession(Named, "cwd: C:\\r\\repo\nname: Fix The Widget\n", "fix the widget please");
+        Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+        // And a session with no name is no case of it at all.
+        CopilotSession(Named, "cwd: C:\\r\\repo\n", prompt: null);
+        Assert.All(Resume(["Claude: Hello - repo"], host), x => Assert.Null(x.Known));
+    }
 }

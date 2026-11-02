@@ -406,7 +406,7 @@ public sealed partial class LaunchService : ISessionLauncher
             var title = Title(e, prefixed);
             if (!labels.Add(title))
             {
-                title = Limits.KeepStart($"{title} ({e.Id[..Math.Min(8, e.Id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+                title = Repeated(title, e.Id);
                 if (!labels.Add(title)) { continue; }
             }
             if (!excluded.Contains(e.Id)) { offered.Add(new Offered(e, title, workspace!.Label)); }
@@ -414,9 +414,12 @@ public sealed partial class LaunchService : ISessionLauncher
         return offered;
     }
 
+    // A label already offered, told apart by the start of its session's id.
+    public static string Repeated(string title, string id) => Limits.KeepStart($"{title} ({id[..Math.Min(8, id.Length)]})", LaunchProtocol.MaxLabel * 2)!;
+
     // "<summary> - <folder>", the agent named when the list holds more than one kind, cut to 120
     // characters, as agent-ha-bridge labels its resume list.
-    static string Title(ResumeEntry e, bool prefixed)
+    public static string Title(ResumeEntry e, bool prefixed)
     {
         var summary = ResumableStore.Collapse(e.Summary);
         if (summary.Length == 0) { summary = $"Session {e.Id[..8]}"; }
