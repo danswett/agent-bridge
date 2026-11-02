@@ -5,6 +5,16 @@ struct MachinesView: View {
     @Bindable var store: BridgeStore
     @Environment(\.dismiss) private var dismiss
     @State private var usageHost: HostStore?
+    @State private var forgetRequest: ForgetRequest?
+    @State private var forgetTask: Task<Void, Never>?
+    @State private var forgetError: String?
+
+    private struct ForgetRequest {
+        let machine: RelayMachine
+        let displayedName: String
+        let relayAddress: String
+        let accountID: String?
+    }
 
     private var displayedHosts: [HostStore] {
         guard !store.isSample else { return [] }
@@ -35,12 +45,22 @@ struct MachinesView: View {
                         ContentUnavailableView("No machines connected", systemImage: "desktopcomputer",
                                                description: Text("Connect a local host or sign in from Connection settings."))
                     }
+                    if let forgetError {
+                        Text(forgetError).foregroundStyle(.red)
+                    }
+                    if forgetTask != nil {
+                        ProgressView("Forgetting machine…")
+                    }
                 }
                 ForEach(displayedHosts) { host in
                     Section {
                         MachineView(host: host, updateHost: remoteConnection(for: host), onUsage: { usageHost = host }) {
                             store.selectedMachine = host.id
                             dismiss()
+                        }
+                        if !host.isLocal, let machine = store.roster.first(where: { $0.id == host.id && !$0.online }) {
+                            Button("Forget", role: .destructive) { prepareForget(machine, displayedName: host.name) }
+                                .disabled(forgetTask != nil)
                         }
                     }
                 }
@@ -58,11 +78,26 @@ struct MachinesView: View {
                             }
                         }
                         .accessibilityElement(children: .combine)
+                        if !machine.online {
+                            Button("Forget", role: .destructive) { prepareForget(machine, displayedName: machine.name) }
+                                .disabled(forgetTask != nil)
+                        }
                     }
                 }
             }
             .navigationTitle("Machines")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(forgetTask != nil) } }
+            .interactiveDismissDisabled(forgetTask != nil)
+            .confirmationDialog("Forget this machine?", isPresented: Binding(get: { forgetRequest != nil }, set: {
+                if !$0 {
+                    forgetRequest = nil
+                }
+            }), presenting: forgetRequest) { request in
+                Button("Forget \(request.displayedName)", role: .destructive) { forget(request) }
+                Button("Cancel", role: .cancel) { forgetRequest = nil }
+            } message: { request in
+                Text("Remove “\(request.displayedName)” from remembered machines? It can appear again when it reconnects.")
+            }
             .sheet(item: $usageHost) { host in
                 NavigationStack {
                     UsageView(report: host.usage, machineName: host.name, status: host.status,
@@ -84,6 +119,28 @@ struct MachinesView: View {
         return {
             let request = Task<Void, Never> { @MainActor in await host.refreshUsage() }
             await request.value
+        }
+    }
+
+    private func prepareForget(_ machine: RelayMachine, displayedName: String) {
+        guard !machine.online, forgetTask == nil else { return }
+        forgetRequest = ForgetRequest(machine: machine, displayedName: displayedName,
+                                      relayAddress: store.relayAddress, accountID: store.account?.accountId)
+    }
+
+    private func forget(_ request: ForgetRequest) {
+        guard forgetTask == nil else { return }
+        forgetError = nil
+        forgetTask = Task { @MainActor in
+            defer { forgetTask = nil }
+            guard store.relayAddress == request.relayAddress, store.account?.accountId == request.accountID,
+                  store.roster.contains(where: { $0.id == request.machine.id && $0.name == request.machine.name && !$0.online })
+            else {
+                forgetError = "The connection or machine changed. Review the list before forgetting it."
+                return
+            }
+            do { try await store.forget(request.machine.id) }
+            catch { forgetError = "Couldn’t forget \(request.displayedName): \(error.localizedDescription)" }
         }
     }
 }
@@ -207,7 +264,7 @@ private struct MachineUpdateView: View {
                     }
                     .disabled(!host.can("update") || !attempt.canRetry || attempt.hostInstance != host.instance || requestTask != nil)
                     if !attempt.canRetry {
-                        Text("The retry window ended. Check the update at the machine.").font(.caption).foregroundStyle(.secondary)
+                        Text("This request can no longer be retried here. Check the update at the machine.").font(.caption).foregroundStyle(.secondary)
                     }
                 } else if let result = attempt.result {
                     Text(result["outcome"]?.string == "accepted"
