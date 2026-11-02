@@ -64,6 +64,9 @@ const OVER_LIST = Object.freeze({ overList: true });
 // it leaves the session, and the session before it leaves the list (#168).
 const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
 const DELEGATE = 'details.delegate-detail';
+const FOLD = 'details.delegates-finished';
+// Open where it can be seen: not behind another tab or in the finished fold shut.
+const shown = (d) => (d.checkVisibility ? d.checkVisibility() : d.getClientRects().length > 0);
 
 export class SessionsPage {
   #shownCaps = new Map();
@@ -192,6 +195,8 @@ export class SessionsPage {
     // toggle doesn't bubble: it is heard on its way down.
     views.addEventListener('toggle', (e) => {
       const d = e.target;
+      // The finished fold shut hides the delegates in it; opened, it may show one again.
+      if (d?.matches?.(FOLD)) { this.#delegateStep(); return; }
       if (!d?.matches?.(DELEGATE)) { return; }
       const id = d.closest('.delegate')?.dataset.id ?? '';
       const state = win.history.state;
@@ -222,18 +227,24 @@ export class SessionsPage {
       if (row && !row.open) {
         this.view.selected.setTab('delegates');
         // One that finished since Back moved, closed, into the finished fold, which stays shut.
-        const fold = row.closest('details.delegates-finished');
+        const fold = row.closest(FOLD);
         if (fold) { fold.open = true; }
         row.open = true;
       }
+      // Forward to a delegate its machine has stopped listing shows nothing: no step.
+      this.#delegateStep();
     }, { signal });
+    // Another tab hides an open delegate as surely as closing it does.
+    const tabs = new MutationObserver(() => this.#delegateStep());
+    tabs.observe(views, { subtree: true, attributes: true, attributeFilter: ['data-tab'] });
+    signal.addEventListener('abort', () => tabs.disconnect());
   }
 
   // The delegate step matches what the selected session shows: one entry while a delegate is open
-  // in it, pushed over the list, and none otherwise. A row can close or go without anyone pressing
-  // Back: closed by hand with another still open, removed by its machine's update (no toggle), or
-  // left open across a phone → wider → phone resize, and each would leave Back an invisible step
-  // or skip a visible one.
+  // and in view in it, pushed over the list, and none otherwise. A row can close, hide or go
+  // without anyone pressing Back: closed by hand with another still open, behind another tab or
+  // the finished fold shut, removed by its machine's update (no toggle), or left open across a
+  // phone → wider → phone resize, and each would leave Back an invisible step or skip a visible one.
   #delegateStep() {
     const win = globalThis.window;
     if (!this.#listening || this.#stepping || !win) { return; }
@@ -243,7 +254,7 @@ export class SessionsPage {
       return;
     }
     if (!this.#pushed()) { return; }
-    const open = [...(this.view.selected?.view?.querySelectorAll(`${DELEGATE}[open]`) ?? [])].map((d) => d.closest('.delegate')?.dataset.id ?? '');
+    const open = [...(this.view.selected?.view?.querySelectorAll(`${DELEGATE}[open]`) ?? [])].filter(shown).map((d) => d.closest('.delegate')?.dataset.id ?? '');
     if (open.length === 0) {
       if (level) { this.#stepBack(); }
       return;

@@ -587,9 +587,10 @@ machine, online ones first, then the account's offline machines (#213):
     system's Back (Android's button and gesture, iOS's edge swipe in an installed app, the
     browser's) goes delegate → session → list, then leaves the app; the header's Back is
     always the list. The step follows what shows: one however many delegates are open, gone
-    once the last closes (by hand, or because its machine no longer lists it), and there again
-    when the window narrows to a phone's with one open. Forward to it shows the delegate again,
-    opening the finished fold if it has finished meanwhile.
+    once the last is closed or hidden (by hand, behind another tab or the finished fold shut, or
+    because its machine no longer lists it, even on Forward to it), and there again when the
+    window narrows to a phone's with one open. Forward to it shows the delegate again, opening
+    the finished fold if it has finished meanwhile.
 
 ## 8. Copy
 

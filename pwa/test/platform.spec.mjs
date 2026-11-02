@@ -300,6 +300,49 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(page.locator('#list-pane')).toBeVisible();
   });
 
+  test('a delegate its machine stops listing while Back has it closed is no step on Forward, so the next Back is the list', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    await page.goBack();
+    await expect(delegateRow(page).locator('.delegate-detail')).not.toHaveAttribute('open', '');
+    await update(page, 'demo-agent-suite', 'gone');
+    await expect(delegateRow(page)).toHaveCount(0);
+    await page.goForward();
+    await expect.poll(() => step(page), { message: 'Forward onto the gone delegate\'s step steps off it' }).toBeNull();
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('another tab over an open delegate takes its step, so Back from there is the list', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    await v.getByRole('tab', { name: 'Conversation' }).click();
+    await expect.poll(() => step(page), { message: 'the hidden delegate\'s step is taken back' }).toBeNull();
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
+  test('the finished fold shut over an open delegate takes its step, so Back from there is the list', async ({ page }) => {
+    const v = await openDelegate(page, AS.androidInstalled);
+    // The suite closed by hand, and a finished one opened in the fold instead.
+    await delegateRow(page).locator('.delegate-summary').click();
+    await expect.poll(() => step(page)).toBeNull();
+    const fold = v.locator('.delegates-finished');
+    await fold.locator(':scope > summary').click();
+    const review = v.locator('.delegate[data-id="demo-agent-review"]');
+    await review.locator('.delegate-summary').click();
+    await expect.poll(() => step(page)).toBe('demo-agent-review');
+    await fold.locator(':scope > summary').click();
+    await expect(fold).not.toHaveAttribute('open', '');
+    await expect.poll(() => step(page), { message: 'the folded delegate\'s step is taken back' }).toBeNull();
+    await expect(v).toBeVisible();
+    await page.goBack();
+    await expect(v).toBeHidden();
+    await expect(page.locator('#list-pane')).toBeVisible();
+  });
+
   test('with two delegates open, closing the later one by hand leaves the first open, and Back from there closes it', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
     const first = delegateRow(page).locator('.delegate-detail');
