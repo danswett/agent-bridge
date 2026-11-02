@@ -1,11 +1,33 @@
-# Agent Bridge Apple clients
+# Agent Bridge — native Apple clients
 
-Initial, non-production Swift 6 shared protocol package for macOS, iOS and iPadOS clients.
+Swift 6 protocol core and SwiftUI application targets for macOS, iOS and iPadOS.
 
-Run `swift test` from `apple/` on a machine with Swift 6.
+## Build
 
-The existing .NET host and Bridge Protocol v1 remain authoritative. The Apple clients must not duplicate agent control logic. The native macOS app will connect to the local Unix socket with 4-byte little-endian framing; remote clients must use the existing authenticated Noise XX over P-256 channel and approved device pairing. Never send commands directly to the relay without that channel.
+Install Xcode and XcodeGen. From this directory run:
 
-This first slice includes only JSON envelope/session decoding and unit tests. It does not yet contain app targets, working local transport, remote pairing, notifications, or session controls. It does not modify installed hooks, agents, relay or Home Assistant.
+```sh
+swift test
+xcodegen generate
+open AgentBridgeApple.xcodeproj
+```
 
-Next: local macOS transport and subscription tests, then Swift/.NET cryptographic interoperability, then adaptive SwiftUI clients.
+Build the **AgentBridgeMac** or **AgentBridgeMobile** scheme in Xcode. Both targets use the local `AgentBridgeAppleCore` Swift package. Set your own bundle identifiers and signing team.
+
+## Implemented
+
+- Protocol v1 JSON envelope and session models, frame codec, session snapshot reducer and unit tests.
+- SwiftUI navigation and session details on macOS, iPhone and iPad.
+- macOS local Unix socket transport with length-prefixed messages and response-ID checking.
+- macOS manual refresh using `hello` and paginated `sessions.list`.
+
+## Not yet implemented or verified
+
+- No macOS/iOS Xcode build has been run. The application code requires macOS compilation and testing.
+- Mobile clients have **no remote connection** yet; the screen displays a disconnected explanation.
+- No Noise XX / P-256 handshake, trusted device pairing, relay auth, APNs, notifications or session actions.
+- No streaming socket reader or live subscription. The local socket client is a blocking proof of concept and must become cancellation-aware and handle interleaved events before production.
+- macOS currently assumes `~/.agent-bridge/default/host.sock`; profile selection and the documented fallback socket path remain to be implemented.
+- Host installation, update and migration remain out of scope for this slice.
+
+The .NET host is authoritative for all agent operations. Never bypass the authenticated encrypted channel for remote actions. Do not modify existing hooks or live Home Assistant infrastructure.
