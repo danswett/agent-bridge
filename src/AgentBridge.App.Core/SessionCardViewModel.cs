@@ -99,11 +99,16 @@ public sealed partial class SessionCardViewModel : Observable
     public string ToolState => (session.Activity.CurrentTool?.Status ?? ToolStatus.Running).ToString().ToLowerInvariant();
     static StatusGlyph ToolGlyphOf(ToolStatus s) => s switch { ToolStatus.Running => StatusGlyph.Working, ToolStatus.Failed => StatusGlyph.Failed, _ => StatusGlyph.Done };
 
-    public string Response => session.Activity.Response ?? "";
-    public bool HasResponse => !string.IsNullOrEmpty(session.Activity.Response);
-    public bool ResponseTruncated => session.Activity.ResponseTruncated == true && HasResponse;
-    public string Reasoning => session.Activity.Reasoning ?? "";
-    public bool HasReasoning => ctx.ShowDetail() && !string.IsNullOrEmpty(session.Activity.Reasoning);
+    // The main agent's own words, which the session pane labels "Main agent" (§6.4). The top-level
+    // text is whoever wrote last: where activity.source names a delegate for it, activity.own
+    // carries the main agent's, and own's stands in when the top-level text is absent
+    // (docs/design/subagents.md, "New clients"). A delegate's words are U8's (#176).
+    bool ResponseByDelegate => !string.IsNullOrEmpty(session.Activity.Source?.Response) || session.Activity.Response is null;
+    public string Response => (ResponseByDelegate ? session.Activity.Own?.Response : session.Activity.Response) ?? "";
+    public bool HasResponse => Response.Length > 0;
+    public bool ResponseTruncated => (ResponseByDelegate ? session.Activity.Own?.ResponseTruncated : session.Activity.ResponseTruncated) == true && HasResponse;
+    public string Reasoning => (!string.IsNullOrEmpty(session.Activity.Source?.Reasoning) ? session.Activity.Own?.Reasoning : session.Activity.Reasoning ?? session.Activity.Own?.Reasoning) ?? "";
+    public bool HasReasoning => ctx.ShowDetail() && Reasoning.Length > 0;
     public string UserMessage => session.Activity.UserMessage ?? "";
     public bool HasUserMessage => !string.IsNullOrEmpty(session.Activity.UserMessage);
     public bool ShowHistory => ctx.ShowDetail();

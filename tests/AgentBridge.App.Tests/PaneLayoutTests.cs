@@ -283,4 +283,46 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         ui.Post(() => main.Open("busy"));
         Assert.Equal(SessionTab.Tools, Read(l => l.Tab));
     }
+
+    [Fact]
+    public async Task The_main_agent_label_shows_the_main_agents_own_words_never_a_delegates()
+    {
+        // A delegate wrote last: the top-level text is its, and own carries the main agent's.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(1)) with
+        {
+            Activity = new Activity
+            {
+                Response = "The delegate's findings.",
+                Reasoning = "The delegate's reasoning.",
+                Source = new ActivitySource { Response = "agent-1", Reasoning = "agent-1" },
+                Own = new OwnActivity { Response = "The main agent's answer.", ResponseTruncated = true },
+            },
+        });
+        var busy = Card("busy");
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Response) == "The main agent's answer.", "the main agent's own answer");
+        Assert.True(TestUi.Read(() => busy.ResponseTruncated));
+        // The main agent has no reasoning of its own: none is shown, not the delegate's.
+        Assert.Equal("", TestUi.Read(() => busy.Reasoning));
+
+        // Only reasoning by a delegate: the top-level response is the main agent's.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(2)) with
+        {
+            Activity = new Activity
+            {
+                Response = "Main's reply.",
+                Reasoning = "A delegate thinking.",
+                Source = new ActivitySource { Reasoning = "agent-2" },
+                Own = new OwnActivity { Reasoning = "Main thinking." },
+            },
+        });
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Response) == "Main's reply.", "the top-level reply");
+        Assert.Equal(("Main thinking.", false), TestUi.Read(() => (busy.Reasoning, busy.ResponseTruncated)));
+
+        // No source, the top-level text absent: own's stands in.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("busy", updated: Make.T0.AddMinutes(3)) with
+        {
+            Activity = new Activity { Own = new OwnActivity { Response = "Skimmed main answer." } },
+        });
+        await Wait.UntilAsync(() => TestUi.Read(() => busy.Response) == "Skimmed main answer.", "own's answer in place of an absent one");
+    }
 }
