@@ -43,7 +43,7 @@ public sealed class QuestionView : StackPanel
         BorderBrush = Ui.Brush("AbNeeds");
         AutomationId(this, "Question");
 
-        head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") };
+        head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsHead") };
         Children.Add(head);
         Children.Add(new MarkdownView { Markdown = vm.Message });
 
