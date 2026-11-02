@@ -1408,6 +1408,11 @@ if ($InvokeScript) {
     # so nothing about reaching the VM is duplicated. Only non-secret text may go in.
     if (-not (Test-VmRunning)) { throw "$VmName is not running; -Start it first" }
     $text = Get-Content -LiteralPath $InvokeScript -Raw
+    # A script that does not parse never reaches its end marker in the VM, so as the desktop user
+    # it held run-command for the whole -TimeoutMinutes before saying anything.
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$parseErrors)
+    if ($parseErrors) { throw "$InvokeScript does not parse: $($parseErrors[0].Message) (line $($parseErrors[0].Extent.StartLineNumber))" }
     if (-not $PSCmdlet.ShouldProcess($VmName, "Run $InvokeScript $(if ($AsDesktopUser) { "as $DesktopUser" } else { 'as SYSTEM' })")) { return }
     if ($AsDesktopUser) { return Invoke-VmAsDesktopUser -Script $text -TimeoutMinutes $TimeoutMinutes }
     return Invoke-VmRunCommand -Script $text
