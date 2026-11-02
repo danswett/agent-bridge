@@ -276,6 +276,38 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Empty(new ShadowWitness(Paths).Explain(d, h, ShadowCompare.Compare(d, h).Differences));
     }
 
+    // Found in review: a daemon a poll behind a handoff (one agent done, another started) lists the
+    // old agent and the host the new one, the same count. That is no difference, or successive
+    // handoffs, each caught for a sample, would join into one episode longer than the grace.
+    [Fact]
+    public void A_handoff_the_daemon_has_not_read_yet_is_no_difference_however_many_follow()
+    {
+        var witness = new ShadowWitness(Paths);
+        IReadOnlyList<ShadowDifference> Explain(long offset, string[] daemonCalls, string[] hostAgents)
+        {
+            var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
+                new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
+            return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        }
+        string[] Handoff(string from, string to) =>
+        [
+            Event("assistant.turn_end", new { }, agentId: "a" + from),
+            Event("subagent.completed", new { toolCallId = "c" + from }),
+            Event("subagent.started", new { toolCallId = "c" + to, executionMode = "background" }, agentId: "a" + to),
+        ];
+
+        var read = Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"));
+        Assert.Empty(Explain(read, ["c1"], ["a1"]));
+        for (var n = 1; n < 4; n++)
+        {
+            Write(Handoff($"{n}", $"{n + 1}"));
+            Assert.Empty(Explain(read, [$"c{n}"], [$"a{n + 1}"]));
+            read = new FileInfo(Paths.CopilotTranscript(Id)!).Length;
+        }
+        // Once the daemon has read the handoff, the same count of different agents is a mismatch.
+        Assert.Null(Assert.Single(Explain(read, ["c3"], ["a4"])).Known);
+    }
+
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start
     // that ruled the signature out.
     [Fact]

@@ -73,11 +73,11 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     {
         foreach (var (id, ds) in daemon.Sessions)
         {
-            if (ds.Agent != "copilot" || ds.Agents == 0 || !host.Sessions.TryGetValue(id, out var hs) || hs.Agents != ds.Agents
+            if (ds.Agent != "copilot" || ds.Agents == 0 || ds.Offset is not { } through || !host.Sessions.TryGetValue(id, out var hs) || hs.Agents != ds.Agents
                 || hs.RunningSubagents is not { } running || ds.AgentIds.Distinct(StringComparer.Ordinal).Count() != ds.Agents) { continue; }
             var s = ShadowHash.Session(id);
             if (differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { continue; }
-            if (Evidence(id)?.SameAgents(ds.AgentIds, running) == false)
+            if (Evidence(id)?.SameAgents(ds.AgentIds, running, through) == false)
             {
                 yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents");
             }
@@ -165,6 +165,9 @@ public sealed partial class TranscriptEvidence(string path)
         // Where its first subagent.completed is, and where it was last woken after that.
         public long CompletedAt = -1;
         public long WokenAt = -1;
+        // Where it last started, stopped, completed or was woken: a change the daemon has not read
+        // while it lies at or past the daemon's Offset.
+        public long ChangedAt = -1;
     }
 
     readonly Dictionary<string, Shell> shells = new(StringComparer.Ordinal);
@@ -312,6 +315,7 @@ public sealed partial class TranscriptEvidence(string path)
                     if (call is not null) { agentByCall[call] = key; }
                     var agent = AgentFor(key, at);
                     agent.Working = true;
+                    agent.ChangedAt = at;
                     agent.AskedForTools = false;
                     break;
                 }
@@ -323,7 +327,8 @@ public sealed partial class TranscriptEvidence(string path)
                     {
                         agent.Completed = true;
                         agent.CompletedAt = at;
-                        EndRun(agent);
+                        EndRun(agent, at);
+                        agent.ChangedAt = at;
                     }
                     break;
                 }
@@ -331,7 +336,7 @@ public sealed partial class TranscriptEvidence(string path)
                 switch (Str(kind, "type"))
                 {
                     case "agent_idle" when Str(kind, "agentId") is { } idle && agents.TryGetValue(idle, out var agent):
-                        if (agent.IdleOwed > 0) { agent.IdleOwed--; } else { agent.Working = false; }
+                        if (agent.IdleOwed > 0) { agent.IdleOwed--; } else if (agent.Working) { agent.Working = false; agent.ChangedAt = at; }
                         break;
                     case "shell_completed" when Str(kind, "shellId") is { } id:
                         ShellFor(id, at).Ended(at);
@@ -340,11 +345,11 @@ public sealed partial class TranscriptEvidence(string path)
                 }
                 break;
             case "session.shutdown" when agentId is null:
-                foreach (var a in agents.Values) { a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
+                foreach (var a in agents.Values) { if (a.Working) { a.ChangedAt = at; } a.Working = false; a.AskedForTools = false; a.IdleOwed = 0; }
                 shutdownAt = at;
                 break;
             case "abort" or "session.shutdown" when agentId is not null && agents.TryGetValue(agentId, out var ended):
-                EndRun(ended);
+                EndRun(ended, at);
                 ended.AskedForTools = false;
                 break;
             case "tool.execution_start" when agentId is null && Str(data, "toolName") == "ask_user" && Str(data, "toolCallId") is { } askId:
@@ -356,7 +361,7 @@ public sealed partial class TranscriptEvidence(string path)
                 Wake(active, at);
                 break;
             case "assistant.turn_end" when agentId is not null && agents.TryGetValue(agentId, out var turned):
-                if (!turned.AskedForTools) { EndRun(turned); }
+                if (!turned.AskedForTools) { EndRun(turned, at); }
                 turned.AskedForTools = false;
                 break;
             case "assistant.message":
@@ -559,17 +564,22 @@ public sealed partial class TranscriptEvidence(string path)
         return hostIds.All(id => daemonIds.Contains(id) || woken.Contains(id));
     }
 
-    // Whether the daemon's tool calls started exactly the agents the host lists; null when a call is
-    // one this transcript does not map to an agent, which says nothing either way.
-    public bool? SameAgents(IReadOnlyList<string> calls, IReadOnlyList<string> running)
+    // Whether the daemon's tool calls started exactly the agents the host lists, leaving out any
+    // agent that started, stopped, completed or was woken where the daemon has not yet read
+    // (through, its Offset): that is the daemon a poll behind a handoff, not a disagreement, and
+    // successive handoffs would otherwise join into one long episode (found in review). Null
+    // when a call or a listed agent is one this transcript does not know, which says nothing.
+    public bool? SameAgents(IReadOnlyList<string> calls, IReadOnlyList<string> running, long through)
     {
+        bool Settled(string id) => agents.TryGetValue(id, out var a) && a.ChangedAt < through;
         var daemonIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var call in calls)
         {
             if (!agentByCall.TryGetValue(call, out var key)) { return null; }
             daemonIds.Add(key);
         }
-        return daemonIds.SetEquals(running);
+        if (running.Any(id => !agents.ContainsKey(id))) { return null; }
+        return daemonIds.Where(Settled).ToHashSet(StringComparer.Ordinal).SetEquals(running.Where(Settled));
     }
 
     // The daemon's model is the one a subagent's message named, the last message it has read
@@ -641,14 +651,16 @@ public sealed partial class TranscriptEvidence(string path)
     static void Wake(Agent agent, long at)
     {
         if (!agent.Working && agent.Completed) { agent.WokenAt = at; }
+        if (!agent.Working) { agent.ChangedAt = at; }
         agent.Working = true;
         agent.Last = at;
     }
 
-    static void EndRun(Agent agent)
+    static void EndRun(Agent agent, long at)
     {
         if (!agent.Working) { return; }
         agent.Working = false;
+        agent.ChangedAt = at;
         agent.IdleOwed++;
     }
 

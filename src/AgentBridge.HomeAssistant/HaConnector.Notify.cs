@@ -130,7 +130,9 @@ public sealed partial class HaConnector
     {
         var marker = HaNotify.Marker(armed.Plan);
         var actions = HaNotify.Actions(marker, armed.Question.Id, HaNotify.Options(marker), Notify.MaxButtons, textAction: TakesWords(armed.Plan));
-        return (actions, HaNotify.Payload(sessionId, p.Name, marker, actions, options.DashboardUrlPath, options.MachineName,
+        // A sub-agent's question is titled with its name, under the session's tag as ever.
+        var title = armed.Plan.AgentName is { } asker ? HaNotify.AskerTitle(asker, p.Name) : p.Name;
+        return (actions, HaNotify.Payload(sessionId, title, marker, actions, options.DashboardUrlPath, options.MachineName,
             Notify.Icon, Notify.IconColor, Notify.Color, Notify.InterruptionLevel));
     }
 
@@ -486,12 +488,12 @@ public sealed partial class HaConnector
     }
 
     // The push the agent's hook sends for a question, by agent and kind. A sub-agent's says whose
-    // it is, as its card does (HaDecision.Plan).
+    // it is, in its title (subagents.md §7) and as its card does (HaDecision.Plan).
     (string Title, string Message)? QuestionPush(Session full, string name, Question question)
     {
         var plan = HaDecision.Plan(question, full);
         var message = question.Agent is null ? question.Message : $"{HaDecision.Asker(question, full)} asks:\n\n{question.Message}";
-        return (full.Agent, question.Kind) switch
+        (string Title, string Message)? push = (full.Agent, question.Kind) switch
         {
             (AgentKind.Copilot, QuestionKind.Approval) => HaNotify.CopilotPermission(message),
             (AgentKind.Copilot, _) => HaNotify.CopilotQuestion(name, options.MachineName, plan.Question, plan.Choices),
@@ -500,6 +502,7 @@ public sealed partial class HaConnector
             (AgentKind.Codex, QuestionKind.Approval) => HaNotify.CodexApproval(name, message),
             _ => null,
         };
+        return push is { } p && question.Agent is not null ? (HaNotify.NotificationTitle(HaNotify.AskerTitle(HaDecision.Asker(question, full), p.Title)), p.Message) : push;
     }
 
     // The ledger's record of which phones hold which session's notification.

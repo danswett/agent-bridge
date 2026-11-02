@@ -262,6 +262,9 @@ public static partial class HaNotify
     // Format-BridgeNotificationTitle.
     public static string NotificationTitle(string title) => title.Length > 190 ? title[..187] + "..." : title;
 
+    // A sub-agent's question, titled as the host's own push titles it (subagents.md §7).
+    public static string AskerTitle(string asker, string title) => $"{asker} asks · {title}";
+
     // Send-BridgeNotification's body: a ticker.* service also gets its own fields.
     public static JsonObject Notification(string service, string title, string message, string tickerCategory, string dashboardUrlPath)
     {

@@ -279,8 +279,8 @@ answers whichever the host says is pending. Two things differ, both additions. I
 begins with "*name* asks:" and a blank line, so the card shows whose it is without knowing
 about delegates. The name is added before the length check above, so it can never be what
 makes an answerable question one the card would have to cut. And the decision attributes
-gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) say the
-same and keep the session's tag.
+gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
+"*name* asks · *their usual title*" and keep the session's tag.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
@@ -600,8 +600,9 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   starts it again, and a later turn ending in the same words is a finished turn of its own. What sessions already show when the connector starts is not pushed again. A push that
   fails is logged and holds nothing up. The reply is the main agent's own: while a delegate
   wrote last, its words neither finish a turn nor appear in the push (design/subagents.md
-  §7). A delegate's question is pushed as the session's are, its text led by "*name*
-  asks:".
+  §7). A delegate's question is pushed as the session's are, titled "*name* asks · " before
+  the usual title, its text led by "*name* asks:". Its answer buttons are titled the same
+  way, under the session's tag.
 
 Where stage 5b knowingly differs from the daemon:
 

@@ -175,7 +175,8 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   The card draws neither yet.
 - A sub-agent's question is armed and answered through the session's own question path.
   Its name leads the question text ("*name* asks:"), and the decision entity gains `agent`
-  and `agent_name` beside it. Its pushes keep the session's tag.
+  and `agent_name` beside it. Its pushes are titled "*name* asks · …" and keep the session's
+  tag.
 - **agent-ha-bridge keeps its behaviour** (the owner's decision, 2026-11-01): its card shows
   whichever agent wrote last, a delegate's text included. This is a known, intentional
   difference between the two cards, not something either side will converge on.

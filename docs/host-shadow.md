@@ -413,7 +413,10 @@ host does not must be one whose `subagent.completed` the daemon has read past (#
 the transcript does not map, or a list of a different length from the host's own count,
 explains nothing. The counts must still add up as above, so this only ever narrows what is
 put down to the daemon. The same number of different agents on each side is now a
-`background.agents` difference ("not the same agents"), judged by the same rule. A wrong
+`background.agents` difference ("not the same agents"), judged by the same rule. Agents
+that started, stopped, completed or were woken at or past the daemon's `Offset` are left
+out of that check: the daemon a poll behind a handoff is not a disagreement, and
+successive handoffs caught a sample each would otherwise join into one long episode. A wrong
 agent on one side is no longer hidden by another on the other. The daemon still counts every
 agent's `subagent.started` at any depth and drops none for being nested, so nesting adds no
 difference. A delegate's shells are its own on the host and the session's on the daemon,

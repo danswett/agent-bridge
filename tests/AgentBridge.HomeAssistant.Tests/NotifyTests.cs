@@ -479,6 +479,7 @@ public sealed class NotifyTests : IDisposable
         sessions.Set(delegated);
         await Pass(c);
         var asked = Assert.Single(Pushes());
+        Assert.Equal("Run full test suite asks · Copilot permission needed", asked["title"]!.GetValue<string>());
         Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", asked["message"]!.GetValue<string>());
 
         sessions.Set(delegated with
@@ -498,6 +499,28 @@ public sealed class NotifyTests : IDisposable
         var done = Pushes()[^1];
         Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
         Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
+    }
+
+    // A delegate's question on the phones' answer buttons: titled with its name, and under the
+    // session's tag, so the newer of its and the session's questions replaces the older.
+    [Fact]
+    public async Task A_delegates_question_on_the_answer_buttons_is_titled_with_its_name_under_the_sessions_tag()
+    {
+        Ask(null);
+        await using var c = Connector();
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+            Question = Form("q1", Release) with { Agent = "agent-3a91" },
+        });
+        await Pass(c);
+        var shown = Assert.Single(Buttons());
+        Assert.Equal("Run full test suite asks · Copilot: Fix the relay", shown["title"]!.GetValue<string>());
+        Assert.Equal(Tag, shown["data"]!["tag"]!.GetValue<string>());
+        Assert.StartsWith("Run full test suite asks: Cut the release?", shown["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Fact]
