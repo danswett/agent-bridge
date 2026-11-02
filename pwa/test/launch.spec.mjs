@@ -625,6 +625,21 @@ test.describe('a folder-trust question', () => {
     await expect(card(page).getByRole('button', { name: 'Trust' })).toBeVisible();
   });
 
+  test('a question answered here leaves the Launch dot once the machine no longer lists it, though its outcome stays shown', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, QUESTION);
+    await page.evaluate(() => { const d = window.agentBridgeDemo; d.launchPanel.setTarget({ ...d.target(), inspectOnly: true, readOnly: 'a read-only host' }); });
+    const way = page.locator('#nav [data-nav="launch"]');
+    await expect(way).toHaveClass(/attention/);
+    await openTitled(page, 'Waiting on Demo machine');
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await page.evaluate(() => window.agentBridgeDemo.launchPanel.refresh());
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    await expect(way).not.toHaveClass(/attention/);
+    await expect(way).not.toHaveAttribute('aria-label', /waiting/);
+  });
+
   test('a busy launch that names a question asks again, which may offer Trust now', async ({ page }) => {
     await openDemo(page);
     await ask(page, { ...QUESTION, answerable: false, atMachine: 'Answer at the machine. No device is approved yet.' });

@@ -156,7 +156,8 @@ body:not(.searching) .appbar .search { display: none; }
   padding: max(var(--ab-space-4), env(safe-area-inset-top)) max(var(--ab-space-4), env(safe-area-inset-right)) calc(var(--tabbar) + env(safe-area-inset-bottom) + var(--ab-space-6)) max(var(--ab-space-4), env(safe-area-inset-left));
 }
 body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), env(safe-area-inset-bottom)); }
-body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); }
+/* A phone's strip takes the top: the page starts closer under it. A desktop's bar never moves the page. */
+@media (max-width: 759px) { body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); } }
 .page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; }
 .page > .page-title, .page > section > .page-title { margin-bottom: var(--ab-space-4); }
 /* What a page shows when its panel has nothing: shown only while the panel is hidden. */

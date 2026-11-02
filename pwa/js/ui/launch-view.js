@@ -269,7 +269,8 @@ export class LaunchPanel {
     this.root.querySelector('.launch-title').textContent = this.#target?.inspectOnly ? (waiting ? `Waiting on ${name}` : `Nothing waiting on ${name}`) : name ? `Start a session on ${name}` : 'Start a session';
     // Known only once its list has been read: a machine picked again whose list is still coming,
     // or could not be read, keeps what was last seen.
-    if (this.#target && (this.#options || !this.#target.inspectOnly)) { this.#asks.set(this.#target.hostId, !!this.#target.inspectOnly && waiting); }
+    // What waits is what the machine lists now (#live), not an answer kept here for its outcome.
+    if (this.#target && (this.#options || !this.#target.inspectOnly)) { this.#asks.set(this.#target.hostId, !!this.#target.inspectOnly && this.#live.size > 0); }
     this.waiting([...this.#asks.values()].some(Boolean));
   }
 

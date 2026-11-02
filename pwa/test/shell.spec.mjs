@@ -340,6 +340,17 @@ test('the name and machines online in the app bar are at least 32 px tall to a m
   for (const c of [page.locator('.appbar .brand'), page.locator('#online')]) { expect((await c.boundingBox()).height).toBeGreaterThanOrEqual(32); }
 });
 
+test('on a desktop, searching or a connection with news never moves the page under the bar', async ({ page }) => {
+  await openDemo(page);
+  const top = () => page.locator('#main > :not([hidden])').first().evaluate((e) => e.getBoundingClientRect().top);
+  const before = await top();
+  await page.keyboard.press('Control+k');
+  await expect(page.locator('#search')).toBeFocused();
+  expect(await top()).toBe(before);
+  await page.evaluate(() => { document.body.dataset.conn = 'warn'; });
+  expect(await top()).toBe(before);
+});
+
 test('signed out, there is only the sign-in page: no navigation, no search', async ({ page }) => {
   await page.goto('./');
   await expect(page.locator('#signin')).toBeVisible();
