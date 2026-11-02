@@ -106,8 +106,9 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   readings into one row per allowance, the freshest reading of each, as the PWA's does, asks
   each host for the readings it keeps from the account's other machines (`usage.shared`), and
   keeps the last reading of each allowance between runs in `<profile>-usage.json`, so a reading
-  outlives its machine going offline; a row says `read on <machine>` unless this machine read it
-  (#172). A toast for another machine's question says which machine, and its answer goes there.
+  outlives its machine going offline; a row's age says `read on <machine>` in its tooltip and
+  accessible description unless this machine read it (#172), not on the line, where the account
+  is shown whole instead, and the summary names each allowance's account (#225). A toast for another machine's question says which machine, and its answer goes there.
 * **Needs you** (#165, [ui.md](design/ui.md) §6.1). Above the cards, every pending question on
   every machine, whatever the picker shows, oldest first: the session's title, the question's
   first line (an approval's whole prompt, when it fits), the machine and agent, how long it has

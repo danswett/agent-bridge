@@ -13,7 +13,7 @@
         <Grid>
             <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="12">
                 <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Usage" />
-                <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.Summary, Mode=OneWay}" />
+                <TextBlock Style="{StaticResource AbSecondaryText}" TextWrapping="Wrap" AutomationProperties.AutomationId="UsageSummary" Text="{x:Bind ViewModel.Summary, Mode=OneWay}" />
                 <TextBlock
                     Style="{StaticResource AbSecondaryText}"
                     Text="No usage reported yet. The host reads it from the agents' own accounts on this machine."
@@ -28,13 +28,20 @@
                         <DataTemplate x:DataType="core:UsageRowViewModel">
                             <Border Background="{ThemeResource AbCard}" BorderBrush="{ThemeResource AbStroke2}" BorderThickness="1" CornerRadius="{StaticResource AbRadiusCard}" Padding="16,12">
                                 <StackPanel Spacing="8">
-                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                        <TextBlock FontSize="16" FontWeight="SemiBold" Text="{x:Bind Label}" />
-                                        <TextBlock VerticalAlignment="Center" Style="{StaticResource AbSecondaryText}" Text="{x:Bind Detail}" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Spacing="8" Opacity="{x:Bind local:UsageView.AgeOpacity(Stale)}">
-                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Age}" />
-                                        <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind ReadOn}" Visibility="{x:Bind local:Ui.Some(ReadOn)}" />
+                                    <!-- The agent, then whose account it is, whole, wrapping rather than cut: the
+                                         account tells two Copilot rows apart (#225). Which machine read it is for
+                                         diagnosis, in the age's tooltip and accessible description, not on the line. -->
+                                    <StackPanel Spacing="2">
+                                        <TextBlock FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" Text="{x:Bind Label}" />
+                                        <TextBlock TextWrapping="Wrap" AutomationProperties.AutomationId="UsageAccount" Text="{x:Bind Detail}" />
+                                        <TextBlock
+                                            Style="{StaticResource AbSecondaryText}"
+                                            FontSize="12"
+                                            AutomationProperties.AutomationId="UsageAge"
+                                            AutomationProperties.FullDescription="{x:Bind ReadOn}"
+                                            ToolTipService.ToolTip="{x:Bind ReadOn}"
+                                            Opacity="{x:Bind local:UsageView.AgeOpacity(Stale)}"
+                                            Text="{x:Bind Age}" />
                                     </StackPanel>
                                     <TextBlock TextWrapping="Wrap" Foreground="{ThemeResource AbDangerText}" Text="{x:Bind Error}" Visibility="{x:Bind local:Ui.Some(Error)}" />
                                     <ItemsControl ItemsSource="{x:Bind Windows}" IsTabStop="False">

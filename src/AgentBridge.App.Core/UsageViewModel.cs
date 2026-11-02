@@ -66,7 +66,9 @@ public sealed class UsageViewModel : Observable
         var oldest = now - UsageCache.Kept;
         var shown = cache is null ? report : new UsageReport([.. report.Agents.Where(a => a.MeasuredAt >= oldest)]);
         foreach (var a in UsageMerge.Merge([shown]).Agents.OrderByDescending(a => Headline(a) ?? 0)) { Rows.Add(new UsageRowViewModel(a, now, here)); }
-        var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label} {Math.Round(r.Headline!.Value)}%").ToList();
+        // Each figure names its account: two Copilot accounts read "GitHub Copilot · one 12%" and
+        // "GitHub Copilot · other 0%", not the same words twice (#225).
+        var figures = Rows.Where(r => r.Headline is not null).Select(r => $"{r.Label}{(r.Account.Length > 0 ? $" · {r.Account}" : "")} {Math.Round(r.Headline!.Value)}%").ToList();
         Summary = figures.Count > 0 ? string.Join(" · ", figures) : "No usage reported yet";
         Raise(nameof(IsEmpty));
     }
@@ -82,11 +84,15 @@ public sealed class UsageRowViewModel
     {
         Agent = a.Agent;
         Label = a.Label;
-        Detail = string.Join(" · ", new[] { a.Account ?? (a.AccountKey is { Length: >= 4 } k ? $"#{k[..4]}" : null), a.Plan }.Where(s => !string.IsNullOrEmpty(s)));
+        // The account is the row's identity (#225): shown whole, never cut before anything else.
+        Account = a.Account ?? (a.AccountKey is { Length: >= 4 } k ? $"#{k[..4]}" : "");
+        Detail = string.Join(" · ", new[] { Account, a.Plan }.Where(s => !string.IsNullOrEmpty(s)));
         Age = Words.ReadingAgo(a.MeasuredAt, now);
         Stale = now - a.MeasuredAt > TimeSpan.FromHours(1);
         // Which machine took it, unless this one did: a reading kept, or passed on by another host,
         // may be from a machine that is offline now (#172).
+        // For diagnosis only, in the age's tooltip and accessible description: which machine read it
+        // matters less than whose account it is, and on a phone it pushed the account out (#225).
         ReadOn = a.ReadBy is { } by && by.Id != here ? $"read on {by.Name}" : null;
         Headline = UsageViewModel.Headline(a);
         Windows = [.. a.Windows.Select(w => new UsageWindowViewModel(w, now))];
@@ -97,6 +103,7 @@ public sealed class UsageRowViewModel
 
     public AgentKind Agent { get; }
     public string Label { get; }
+    public string Account { get; }
     public string Detail { get; }
     public string Age { get; }
     public string? ReadOn { get; }
