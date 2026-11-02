@@ -136,7 +136,8 @@ public partial class App : Application
         }
 
         var localMachine = Build(Machine.LocalKey, connection, new FoldStore(Path.Combine(appData, $"{options.Profile}-folds.json")), () => self?.ReadOnlyWhy);
-        main = self = new MainViewModel(localMachine, new UsageViewModel(), settings);
+        // The list's order, pins and sort, kept beside the folds (#164): every machine's, not only this one's.
+        main = self = new MainViewModel(localMachine, new UsageViewModel(), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
         responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
         main.MachineRemoved += responder.MachineGone;
@@ -332,6 +333,8 @@ public partial class App : Application
         quitting = true;
         timer?.Stop();
         updateTimer?.Stop();
+        // What was seen since the last tick's flush (SessionOrder.MarkSeen).
+        main?.Order.Flush();
         // Quit while an update stops the host, or before it is applied: the host comes back now, not
         // at the next sign-in, and no update stops it from here on. (Killed instead, the app's next
         // start does it.)

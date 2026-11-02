@@ -89,6 +89,15 @@
                                     </DataTemplate>
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
+                            <!-- Your order, Most recent or Machine (#164). -->
+                            <ComboBox
+                                x:Name="SortPicker"
+                                AutomationProperties.AutomationId="SortPicker"
+                                AutomationProperties.Name="Sort sessions"
+                                Header="Sort"
+                                MinWidth="160"
+                                ItemsSource="{x:Bind core:MainViewModel.SortChoices}"
+                                SelectedIndex="{x:Bind ViewModel.SortIndex, Mode=TwoWay}" />
                             <InfoBar
                                 AutomationProperties.AutomationId="FleetNote"
                                 IsClosable="False"
@@ -113,6 +122,24 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
+                            <!-- Ended · N, folded: sessions a host removed while the app was running (#164). -->
+                            <Expander
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch"
+                                AutomationProperties.AutomationId="Ended"
+                                Header="{x:Bind ViewModel.EndedHeader, Mode=OneWay}"
+                                Visibility="{x:Bind local:Ui.Show(ViewModel.HasEnded), Mode=OneWay}">
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.Ended}" IsTabStop="False">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="core:EndedRow">
+                                            <StackPanel Padding="0,4">
+                                                <TextBlock TextWrapping="Wrap" Text="{x:Bind Title}" />
+                                                <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Expander>
                             <!-- The account's other machines' updates, each with Check and Install, and Check
                                  all, which checks this machine too (#51). -->
                             <StackPanel

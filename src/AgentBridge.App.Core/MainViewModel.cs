@@ -22,10 +22,10 @@ public sealed class MachineChoice : Observable
     public override string ToString() => label;
 }
 
-// The window's state: the session cards of every machine, most recently updated first as on
-// the PWA; usage across machines; settings; and what the connection to this machine's host
-// says. One timer moves relative times on and raises toasts when they come due.
-public sealed class MainViewModel : Observable
+// The window's state: the session cards of every machine, in the person's order as on the PWA
+// (SessionOrder, #164); usage across machines; settings; and what the connection to this
+// machine's host says. One timer moves relative times on and raises toasts when they come due.
+public sealed partial class MainViewModel : Observable
 {
     readonly Machine local;
     readonly List<Machine> machines = [];
@@ -38,14 +38,16 @@ public sealed class MainViewModel : Observable
     MachineChoice? selected;
     int ticks;
 
-    public MainViewModel(HostConnection host, CardContext cards, UsageViewModel usage, SettingsViewModel? settings = null, ToastPlanner? toasts = null)
-        : this(new Machine(Machine.LocalKey, host, cards, toasts), usage, settings) { }
+    public MainViewModel(HostConnection host, CardContext cards, UsageViewModel usage, SettingsViewModel? settings = null, ToastPlanner? toasts = null, SessionOrder? order = null)
+        : this(new Machine(Machine.LocalKey, host, cards, toasts), usage, settings, order) { }
 
-    public MainViewModel(Machine local, UsageViewModel usage, SettingsViewModel? settings = null)
+    public MainViewModel(Machine local, UsageViewModel usage, SettingsViewModel? settings = null, SessionOrder? order = null)
     {
         this.local = local;
         Usage = usage;
         Settings = settings;
+        Order = order ?? new SessionOrder(null);
+        toldSort = Order.Sort;
         Machines.Add(new MachineChoice(null, "All machines"));
         selected = Machines[0];
         Add(local);
@@ -252,6 +254,7 @@ public sealed class MainViewModel : Observable
             card.Detach();
             Sessions.Remove(card);
         }
+        Rearrange();
         m.Toasts?.MachineGone();
         MachineRemoved?.Invoke(key);
         // A launch's open stays: the machine may be back in a moment, with the session it started.
@@ -362,10 +365,10 @@ public sealed class MainViewModel : Observable
             card = new SessionCardViewModel(s, m.Cards);
             byId[key] = card;
             owner[card] = m;
-            if (Visible(card)) { Sessions.Insert(IndexFor(s), card); }
+            Hook(card);
             RefreshLabels();
         }
-        Reorder(card);
+        Rearrange();
         if (m.Toasts is { } toasts)
         {
             // The first list after connecting is a baseline, not news.
@@ -383,6 +386,8 @@ public sealed class MainViewModel : Observable
         owner.Remove(card);
         card.Detach();
         Sessions.Remove(card);
+        Order.Ended(m.Key, card.Session);
+        Rearrange();
         m.Toasts?.Remove(id);
         RefreshLabels();
         Raise(nameof(Waiting));
@@ -398,6 +403,8 @@ public sealed class MainViewModel : Observable
         m.Cards.Folds.Keep(owner.Where(p => p.Value == m).Select(p => p.Key.Id));
         // The session a toast asked for has ended since.
         pendingOpens.RemoveWhere(p => p.Machine == m.Key && !byId.ContainsKey(CardKey(p.Machine, p.Session)));
+        Order.Synced(m.Key, owner.Where(p => p.Value == m).Select(p => p.Key.Id).ToHashSet(StringComparer.Ordinal));
+        Rearrange();
         RefreshLabels();
     }
 
@@ -408,37 +415,8 @@ public sealed class MainViewModel : Observable
     // The picker changed: the cards it shows, in order.
     void Refilter()
     {
-        Sessions.Clear();
-        foreach (var c in byId.Values.Where(Visible).OrderBy(c => c, Comparer<SessionCardViewModel>.Create((a, b) => Before(a.Session, b.Session) ? -1 : Before(b.Session, a.Session) ? 1 : 0)))
-        {
-            Sessions.Add(c);
-        }
+        Rearrange();
         OnHeldChanged();
-    }
-
-    int IndexFor(Session s)
-    {
-        var i = 0;
-        while (i < Sessions.Count && Before(Sessions[i].Session, s)) { i++; }
-        return i;
-    }
-
-    // Most recently updated first; ties by id, so the order is stable.
-    static bool Before(Session a, Session b) => a.UpdatedAt > b.UpdatedAt || (a.UpdatedAt == b.UpdatedAt && string.CompareOrdinal(a.Id, b.Id) < 0);
-
-    // A card moves to its place, unless someone is typing in any card: moving it then would
-    // take the words from under their fingers.
-    void Reorder(SessionCardViewModel card)
-    {
-        if (Sessions.Any(c => c.Editing)) { return; }
-        var from = Sessions.IndexOf(card);
-        if (from < 0) { return; }
-        var to = 0;
-        foreach (var c in Sessions)
-        {
-            if (c != card && Before(c.Session, card.Session)) { to++; }
-        }
-        if (from != to) { Sessions.Move(from, to); }
     }
 
     // Every second, on the UI thread.
@@ -446,7 +424,14 @@ public sealed class MainViewModel : Observable
     {
         foreach (var m in machines) { m.Toasts?.Tick(); }
         foreach (var o in OfflineMachines) { o.Tick(); }
-        if (++ticks % 5 == 0) { foreach (var c in byId.Values) { c.RefreshTimes(); } }
+        if (++ticks % 5 == 0)
+        {
+            foreach (var c in byId.Values) { c.RefreshTimes(); }
+            RefreshEnded();
+            Order.Flush();
+            // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
+            if (Order.Sort != toldSort) { Rearrange(); }
+        }
         if (ticks % 30 == 0)
         {
             Usage.Refresh();

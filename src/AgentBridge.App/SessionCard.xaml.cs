@@ -48,6 +48,7 @@ public sealed partial class SessionCard : UserControl
 
     public static string Chevron(bool folded) => folded ? "\uE76C" : "\uE70D";
     public static string FoldName(string title, bool folded) => $"{title}: {(folded ? "folded, press to open" : "open, press to fold")}";
+    public static string FoldLabel(string title, bool folded, bool unread) => unread ? $"{FoldName(title, folded)}, new activity" : FoldName(title, folded);
     public static string RemoveName(string name) => $"Remove {name}";
 
     void OnCard(SessionCardViewModel? old, SessionCardViewModel? card)
@@ -73,6 +74,7 @@ public sealed partial class SessionCard : UserControl
         SyncQuestion();
         SyncGlow();
         Bindings.Update();
+        TakeFocus();
     }
 
     void Detach()
@@ -92,6 +94,97 @@ public sealed partial class SessionCard : UserControl
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
         if (all) { SyncGlow(); }
+        if (e.PropertyName == nameof(SessionCardViewModel.WantsFocus)) { TakeFocus(); }
+    }
+
+    // After a keyboard move the card is drawn in its new place, perhaps by a new control: the
+    // title takes focus back there, so the next Alt+Up/Down moves the same card.
+    void TakeFocus()
+    {
+        if (Card is not { WantsFocus: true } c) { return; }
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!c.WantsFocus || Card != c || !IsLoaded) { return; }
+            c.WantsFocus = false;
+            FoldButton.Focus(FocusState.Keyboard);
+            FoldButton.StartBringIntoView();
+        });
+    }
+
+    // Alt+Up and Alt+Down on the title move the card within its group (#164).
+    void OnFoldKey(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key is not (VirtualKey.Up or VirtualKey.Down) || Card?.Row is null) { return; }
+        var alt = e.KeyStatus.IsMenuKeyDown || Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        if (!alt) { return; }
+        e.Handled = true;
+        MoveBy(e.Key == VirtualKey.Up ? -1 : 1);
+    }
+
+    void OnRowMenuOpening(object sender, object e)
+    {
+        var row = Card?.Row;
+        MoveUpItem.IsEnabled = row?.CanMoveUp == true;
+        MoveDownItem.IsEnabled = row?.CanMoveDown == true;
+        PinItem.Text = Card?.Pinned == true ? "Unpin" : "Pin";
+        PinItem.IsEnabled = row is not null;
+    }
+
+    void OnMoveUp(object sender, RoutedEventArgs e) => MoveBy(-1);
+    void OnMoveDown(object sender, RoutedEventArgs e) => MoveBy(1);
+
+    void MoveBy(int delta)
+    {
+        if (Card is not { Row: { } row } c) { return; }
+        c.WantsFocus = true;
+        if (!(delta < 0 ? row.MoveUp() : row.MoveDown())) { c.WantsFocus = false; return; }
+        Say(delta < 0 ? "Moved up" : "Moved down");
+    }
+
+    void OnPin(object sender, RoutedEventArgs e)
+    {
+        if (Card is not { Row: { } row } c) { return; }
+        c.WantsFocus = true;
+        var pinning = !c.Pinned;
+        row.TogglePin();
+        Say(pinning ? "Pinned" : "Unpinned");
+    }
+
+    // What a move did, said to a screen reader, as the PWA's live region does.
+    void Say(string text) =>
+        // Created if need be: FromElement finds only a peer something already asked for.
+        Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(FoldButton)?.RaiseNotificationEvent(
+            Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationKind.ActionCompleted,
+            Microsoft.UI.Xaml.Automation.Peers.AutomationNotificationProcessing.MostRecent, text, "AgentBridgeRowMoved");
+
+    // A drag by the grip: the card being dragged, by key, while it is. Only this app's own cards
+    // are dropped here, so nothing else needs to travel in the data package.
+    static string? dragging;
+
+    void OnPointerEntered(object sender, PointerRoutedEventArgs e) => Grip.Opacity = Card?.Row?.CanDrag == true ? 1 : 0;
+    void OnPointerExited(object sender, PointerRoutedEventArgs e) => Grip.Opacity = 0;
+
+    void OnGripDragStarting(UIElement sender, DragStartingEventArgs args)
+    {
+        if (Card?.Row is not { CanDrag: true } row) { args.Cancel = true; return; }
+        dragging = row.Key;
+        args.Data.RequestedOperation = DataPackageOperation.Move;
+    }
+
+    void OnGripDropCompleted(UIElement sender, DropCompletedEventArgs args) => dragging = null;
+
+    void OnDragOver(object sender, DragEventArgs e)
+    {
+        if (dragging is null || Card?.Row is not { } row || row.Key == dragging) { return; }
+        e.AcceptedOperation = DataPackageOperation.Move;
+        e.DragUIOverride.Caption = e.GetPosition(this).Y > ActualHeight / 2 ? "Move below" : "Move above";
+    }
+
+    void OnDrop(object sender, DragEventArgs e)
+    {
+        if (dragging is not { } key || Card?.Row is not { } row || row.Key == key) { return; }
+        dragging = null;
+        if (row.Drop(key, after: e.GetPosition(this).Y > ActualHeight / 2)) { Say("Moved"); }
     }
 
     void SyncQuestion()

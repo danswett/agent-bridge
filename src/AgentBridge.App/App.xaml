@@ -21,6 +21,8 @@
                     <SolidColorBrush x:Key="AbBorder" Color="#d1d9e0" />
                     <SolidColorBrush x:Key="AbSurface" Color="#ffffff" />
                     <SolidColorBrush x:Key="AbCodeBg" Color="#eff2f5" />
+                    <!-- TODO(#177): the Bridge colour role, by hand from design/tokens.json (color.role.bridge) until the generator writes it. -->
+                    <SolidColorBrush x:Key="AbBridge" Color="#0B7A6E" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <SolidColorBrush x:Key="AbPrimary" Color="#4493f8" />
@@ -33,6 +35,8 @@
                     <SolidColorBrush x:Key="AbBorder" Color="#3d444d" />
                     <SolidColorBrush x:Key="AbSurface" Color="#151b23" />
                     <SolidColorBrush x:Key="AbCodeBg" Color="#0d1117" />
+                    <!-- TODO(#177): design/tokens.json color.role.bridge, dark. -->
+                    <SolidColorBrush x:Key="AbBridge" Color="#2DD4BF" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="HighContrast">
                     <SolidColorBrush x:Key="AbPrimary" Color="{ThemeResource SystemColorHighlightColor}" />
@@ -45,6 +49,7 @@
                     <SolidColorBrush x:Key="AbBorder" Color="{ThemeResource SystemColorWindowTextColor}" />
                     <SolidColorBrush x:Key="AbSurface" Color="{ThemeResource SystemColorWindowColor}" />
                     <SolidColorBrush x:Key="AbCodeBg" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="AbBridge" Color="{ThemeResource SystemColorHighlightColor}" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
 
