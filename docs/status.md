@@ -127,7 +127,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
   image, for reference only (ui.md stays the spec). The source is in `/design/canvas` and
   the renderer in `tools/design-mockups`.
 
-| Slice | Issue | What | State (2026-11-02, 13:00 PT) |
+| Slice | Issue | What | State (2026-11-02, 15:00 PT) |
 |---|---|---|---|
 | S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off | Merged (#187) |
 | S2 | #174 | Sub-agents: Claude and Codex sources | Track A |
@@ -138,10 +138,10 @@ took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 | U4 | #178 | Status glyphs and icons replace card edges and glows | **Done**: #204 (PWA), #205 (app); #211 fixed the clash that turned main red |
 | U5 | #179 | PWA layout (half of #166) | **Done**: #217, #218, #221. Follow-ups #249 in review (#252) |
 | U6 | #180 | Windows app layout (half of #166) | **Done**: #216, #219, #245 |
-| U7 | #168 | PWA platform layer | In review: #259 (PWA CI red on Chromium back-navigation tests; the fix is pushed) |
-| U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. App in review: #250 (closes #229, draft), whose two MEDIUM security fixes have landed; it needs 3 Copilot threads fixed and a security re-review. PWA part 2 (strip, tab, inspector) pushed to `ui/u8-pwa-delegates`, stacked on #252, with no PR yet |
-| U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. PWA in review: #261 (draft, 10 review threads open); app not started |
-| | #167 | Windows app icon (the last deliverable of #167) | Not started |
+| U7 | #168 | PWA platform layer | **Done**: #259 |
+| U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. **App done**: #250 (closed #229), after a clean security re-review. PWA part 2 (strip, tab, inspector) is pushed to `ui/u8-pwa-delegates`, stacked on #252 (in review, security review next). It becomes a PR once #252 merges |
+| U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. In review: #261 (PWA, draft; security review before merge) and #275 (app, draft) |
+| | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
 | | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
 | | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3) |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
@@ -155,9 +155,11 @@ Track B ran as delegates, in this order:
 Every PR that touches the Needs you lane, attribution or reply pre-fill gets an
 independent security review before it merges. Delegate names come from the agent, and a
 prompt-injected agent can choose them. So both clients clean each name, cap its length
-and never show it as "Main agent". The stop pre-fill names the delegate by id, not by
-name (#250, #252). The same cleaning at the host and in HA's `subagents` attribute is
-#263 (track A). #220 is separate: bidi and invisible characters in an approval's command.
+and never show it as "Main agent". Every line where a delegate asks or works carries the
+fixed word, `Delegate "…" asks`, because folding look-alikes misses some (a Cyrillic
+`Маіn agent` got past it in #250's review). The stop pre-fill names the delegate by id,
+not by name (#250, #252). The same cleaning at the host, in push notifications and in HA (the
+`subagents` attribute and the asker in HA's questions and notifications) is #263 (track A). #220 is separate: bidi and invisible characters in an approval's command.
 
 UI PRs merge as soon as each meets the merge rule. A backend PR that overlaps them, such as #186, rebases onto them (decided 2026-11-01, 16:05).
 
