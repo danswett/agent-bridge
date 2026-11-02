@@ -28,7 +28,8 @@ namespace AgentBridge.Host.Core.Usage;
 // background and at a pace of their own (ProbePace). The monitor tells them each pass whether a
 // session is open and whether it is asking at the busy pace, and asks them early (WakeAt) when a
 // probe has finished, so a probe's reading is shown within a tick or two rather than at the next
-// turn. Disposing the monitor never ends a probe: one ended mid-refresh can sign the agent out.
+// turn. Disposing the monitor never ends a probe, one ended mid-refresh can sign the agent out,
+// and it waits for a standalone Codex probe's answers, whose input goes with this process.
 public sealed class UsageMonitor : IAsyncDisposable
 {
     readonly IReadOnlyList<IUsageCollector> collectors;
@@ -248,6 +249,16 @@ public sealed class UsageMonitor : IAsyncDisposable
         {
             try { await loop; }
             catch (OperationCanceledException) { }
+        }
+        // A probe still waiting for its answers is let finish them: its input, which goes with this
+        // process, is the only thing that would end it, and that mid-refresh can sign the agent out.
+        var probes = Task.WhenAll(collectors.Select(c => c.StoppingAsync()));
+        if (!probes.IsCompleted)
+        {
+            log($"usage: waiting up to {options.CodexReportTimeout.TotalSeconds:0} s for Codex's app-server to answer before stopping, so a refresh it may be making is not cut off");
+            using var limit = new CancellationTokenSource();
+            await Task.WhenAny(probes, Task.Delay(options.CodexReportTimeout, time, limit.Token));
+            await limit.CancelAsync();
         }
         stop.Dispose();
     }

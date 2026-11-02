@@ -21,6 +21,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     DateTimeOffset? signedOutAt;
     bool sessionOpen, busy, wasOpen;
     Task? running;
+    Task? answering;
     bool finished;
     DateTimeOffset? nextDue;
     string? said;
@@ -54,6 +55,12 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
 
     // The probe's run, while one is under way, for tests to wait on.
     internal Task Running { get { lock (gate) { return running ?? Task.CompletedTask; } } }
+
+    // A probe still waiting for its answers: its standard input goes with the host.
+    public Task StoppingAsync()
+    {
+        lock (gate) { return answering ?? Task.CompletedTask; }
+    }
 
     public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
     {
@@ -97,11 +104,14 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions"))) { return; }
             pace.Started(now);
             var run = new CodexUsageProbe(options, probes!, clock, say).Start();
+            answering = run.Reported;
             running = Task.Run(async () =>
             {
                 try
                 {
-                    Apply(await run.Reported);
+                    var outcome = await run.Reported;
+                    lock (gate) { answering = null; }
+                    Apply(outcome);
                     await run.Finished;
                 }
                 catch (Exception e)
@@ -114,6 +124,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     lock (gate)
                     {
                         running = null;
+                        answering = null;
                         finished = true;
                     }
                 }

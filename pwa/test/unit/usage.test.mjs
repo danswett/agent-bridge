@@ -52,6 +52,12 @@ test('two keyless Codex readings from different machines stay two rows, and a ke
   const keyed = { accountKey: 'c0dec0dec0de', source: 'api' };
   const together = mergeUsage([{ agents: [codex('vm', 10, keyed)] }, { agents: [codex('laptop', 20, keyed)] }].map(readUsage));
   assert.deepEqual(together.map((r) => r.readBy.name), ['vm']);
+  // One machine going from a probe's keyed reading to its transcripts' keyless one shows one row,
+  // whichever it took last.
+  const probe = codex('vm', 30, keyed);
+  const transcript = codex('vm', 5);
+  assert.deepEqual(mergeUsage([{ agents: [probe] }, { agents: [transcript] }].map(readUsage)).map((r) => r.source), ['transcript']);
+  assert.deepEqual(mergeUsage([{ agents: [codex('vm', 40)] }, { agents: [codex('vm', 5, keyed)] }].map(readUsage)).map((r) => r.source), ['api']);
 });
 
 test('a further Copilot account is a row of its own under its login, and one machine reading it as its own account is the same row', () => {

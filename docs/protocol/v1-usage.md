@@ -121,7 +121,10 @@ Agent-ha-bridge's usage card, kept exactly:
   `account` (Codex's transcripts, or a Codex probe that could not be sure whose login it read),
   nothing says two such readings are one allowance: grouped by agent alone, the newest would stand
   in for another user's. So it is grouped by `agent` and the machine that read it (`readBy`, or the
-  machine that sent it), and two machines give two rows until a keyed reading arrives.
+  machine that sent it), and two machines give two rows until a keyed reading arrives. One machine's
+  keyed and keyless readings of an agent are never shown side by side: whichever it took last stands
+  for that machine, the other is left out, so Codex alternating between a probe's keyed reading and
+  its transcripts' keyless ones is still one row.
 * **Rows in order of the fullest window**, highest first. The folded summary is
   `GitHub Copilot 79% · Claude Code 12%`, each figure in its own colour.
 * **Colour by percent:** 90 and up critical (red), 75 and up warning (amber), else normal.
@@ -276,7 +279,10 @@ E4). So the host never kills a probe:
   down whatever it is still doing (E13). With no answer in 60 s the host reports nothing but leaves
   the process running with its input open; a late answer is still followed by the grace period.
   Only at 10 minutes is it given up on as hung, with its input closed. A Codex process left running
-  counts as another Codex process, so no standalone probe starts beside it.
+  counts as another Codex process, so no standalone probe starts beside it. Its input goes with the
+  host, so a host stopping first waits for the probe's answers (at most 60 s), though not for the
+  grace period: no refresh was seen running after the last answer (E13). A host that is killed
+  cannot wait.
 
 **Leaving the agents' credentials alone.** A host never reads, refreshes, copies or logs Claude's
 or Codex's credentials: Anthropic retires a refresh token once used and Codex's are single-use too,

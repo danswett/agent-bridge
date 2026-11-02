@@ -454,6 +454,46 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Codex_that_refreshes_for_40_s_before_initialize_answers_still_gives_a_reading()
+    {
+        // Two 20 s cloud-config attempts at start-up, each refreshing, before initialize answers (E13).
+        var startup = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["initialize"] = startup.Task);
+        var run = CodexProbe().Start();
+        await Until(() => server.Received.Any(r => r.Method == "initialize"));
+
+        await AdvanceUntil(time, () => false, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(40));
+        Assert.False(run.Reported.IsCompleted);
+        Assert.Null(launcher.Started.Single().InputClosedAt);
+        startup.SetResult();
+
+        Assert.Equal(CodexProbeKind.Reading, (await RunToEnd(run)).Kind);
+    }
+
+    [Fact]
+    public async Task Stopping_the_host_waits_for_a_Codex_probes_answers_before_its_input_goes_with_it()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        var stopping = monitor.DisposeAsync().AsTask();
+        await Task.Delay(100);
+        Assert.False(stopping.IsCompleted);
+        Assert.Contains(log, l => l.Contains("waiting up to 60 s for Codex's app-server", StringComparison.Ordinal));
+
+        release.SetResult();
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        await Until(() => server.Answered == 4);
+        // Not the grace period too: nothing Codex does then is cut off by end of input (E13).
+        Assert.Null(launcher.Started.Single().InputClosedAt);
+    }
+
+    [Fact]
     public async Task The_route_follows_what_Codex_runs()
     {
         // Nothing running: the standalone app-server.

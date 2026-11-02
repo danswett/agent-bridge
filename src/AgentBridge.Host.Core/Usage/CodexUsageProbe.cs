@@ -448,6 +448,8 @@ public sealed class CodexDaemonSocket : ICodexDaemon
     {
         var handler = new SocketsHttpHandler
         {
+            // The connection is the socket below, never a proxy's.
+            UseProxy = false,
             ConnectCallback = async (_, ct) =>
             {
                 var s = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);

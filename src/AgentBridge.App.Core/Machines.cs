@@ -787,7 +787,7 @@ public static class UsageMerge
     {
         var slots = new Dictionary<string, (AgentUsage? Reading, AgentUsage? Failure)>(StringComparer.Ordinal);
         var order = new List<string>();
-        foreach (var a in reports.SelectMany(r => r.Agents))
+        foreach (var a in Current([.. reports.SelectMany(r => r.Agents)]))
         {
             var key = UsageShare.Key(a);
             if (!slots.TryGetValue(key, out var slot)) { order.Add(key); }
@@ -799,6 +799,20 @@ public static class UsageMerge
             slots[key] = slot;
         }
         return order.Select(k => slots[k]);
+    }
+
+    // One machine's readings of an agent that name an account and that name none are never shown
+    // side by side: whichever kind it took last stands for it (#200). Codex alternates between them,
+    // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
+    // kept apart they were one allowance shown twice, the older of the two going stale beside it.
+    static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
+    {
+        static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
+        var readings = all.Where(a => a.Windows.Count > 0).ToList();
+        var keyless = readings.Where(UsageShare.Keyless).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
+        var keyed = readings.Where(a => !UsageShare.Keyless(a)).GroupBy(Of).ToDictionary(g => g.Key, g => g.Max(a => a.MeasuredAt));
+        return all.Where(a => a.Windows.Count == 0 || !keyless.TryGetValue(Of(a), out var bare) || !keyed.TryGetValue(Of(a), out var named)
+            || a.MeasuredAt >= (UsageShare.Keyless(a) ? named : bare));
     }
 
     // A machine's own readings, marked as taken by it, so a client can say where each one came from

@@ -33,6 +33,11 @@ public interface IUsageCollector
     // finished, or a reading has become old enough to probe for. Never sooner than the monitor's
     // MinimumGap after the last ask.
     DateTimeOffset? WakeAt => null;
+
+    // Completes once the host may stop without cutting a probe short. A standalone Codex
+    // app-server's standard input goes with the host, and end of input tears down a refresh it is
+    // making, so its answers are waited for (never a kill). Nothing else needs waiting for.
+    Task StoppingAsync() => Task.CompletedTask;
 }
 
 // Copilot's monthly allowance of AI credits, asked of GitHub (api.github.com/copilot_internal/

@@ -1164,7 +1164,7 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Two_keyless_Codex_readings_from_different_machines_stay_two_rows_while_a_keyed_one_still_merges()
+    public void Two_keyless_Codex_readings_from_different_machines_stay_two_rows_a_keyed_one_still_merges_and_one_machine_shows_the_kind_it_took_last()
     {
         var vm = new UsageReader(new string('a', 32), "VM");
         var laptop = new UsageReader(new string('b', 32), "Laptop");
@@ -1177,6 +1177,14 @@ public sealed class FleetTests : IAsyncLifetime
         var keyed = keyless with { AccountKey = "c0dec0dec0de", Source = UsageSource.Api };
         var together = UsageMerge.Merge([new UsageReport([keyed with { ReadBy = vm }]), new UsageReport([keyed with { ReadBy = laptop, MeasuredAt = Make.T0.AddMinutes(5) }])]).Agents;
         Assert.Equal("Laptop", Assert.Single(together).ReadBy!.Name);
+
+        // One machine going from a probe's keyed reading to its transcripts' keyless one and back
+        // shows one row, whichever it took last; another machine's keyed reading still has its own.
+        var probe = keyed with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(10) };
+        var transcript = keyless with { ReadBy = vm, MeasuredAt = Make.T0.AddMinutes(20), Windows = [new UsageWindow { Key = "primary", Label = "5h limit", Percent = 30 }] };
+        Assert.Equal(30, Assert.Single(UsageMerge.Merge([new UsageReport([probe]), new UsageReport([transcript])]).Agents).Windows[0].Percent);
+        Assert.Equal(UsageSource.Api, Assert.Single(UsageMerge.Merge([new UsageReport([transcript]), new UsageReport([probe with { MeasuredAt = Make.T0.AddMinutes(30) }])]).Agents).Source);
+        Assert.Equal(2, UsageMerge.Latest([new UsageReport([probe, transcript, keyed with { ReadBy = laptop }])]).Count);
     }
 
     OfflineMachineViewModel[] Offline()
