@@ -91,8 +91,6 @@ export class SessionListView {
     const sort = this.order.sort;
     const arranged = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
     const keep = (e) => this.#matches(e.hostId, e.session);
-    const pinned = arranged.pinned.filter(keep);
-    const sessions = arranged.sessions.filter(keep);
     const ended = arranged.ended.filter(keep);
     this.container.dataset.sort = this.order.sort;
     this.container.dataset.filtered = this.filter ? 'true' : 'false';
@@ -103,8 +101,12 @@ export class SessionListView {
     const focused = this.container.contains(document.activeElement) ? document.activeElement : null;
     const caret = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
     const want = [];
+    // Search only hides a card: one it leaves out keeps its card, with an unsent reply, files
+    // attached or a question half answered, kept current for when search lets it back in.
+    let shown = 0;
     const cards = (list, isPinned) => {
-      for (const { hostId, session: s } of list) {
+      for (const entry of list) {
+        const { hostId, session: s } = entry;
         const key = SessionListView.key(hostId, s.id);
         live.add(key);
         let card = this.#cards.get(key);
@@ -123,16 +125,20 @@ export class SessionListView {
           card.update(s);
         }
         card.setPinned(isPinned);
+        if (!keep(entry)) { continue; }
         // Open on screen, its news is seen as it comes; folded, it gets the dot.
         if (!card.folded) { this.order.markSeen(key, s.updatedAt); }
         card.setUnread(this.order.unread(key, s.updatedAt));
         want.push(card.element);
+        shown += 1;
       }
     };
-    if (pinned.length) { want.push(this.#head('pinned', 'Pinned')); }
-    cards(pinned, true);
-    if (pinned.length && sessions.length) { want.push(this.#head('sessions', 'Sessions')); }
-    cards(sessions, false);
+    const pinnedShown = arranged.pinned.some(keep);
+    const sessionsShown = arranged.sessions.some(keep);
+    if (pinnedShown) { want.push(this.#head('pinned', 'Pinned')); }
+    cards(arranged.pinned, true);
+    if (pinnedShown && sessionsShown) { want.push(this.#head('sessions', 'Sessions')); }
+    cards(arranged.sessions, false);
     if (ended.length) { want.push(this.#endedGroup(ended)); }
     // Move only what is out of place, so a card being read is not torn out and put back.
     let prev = null;
@@ -149,7 +155,7 @@ export class SessionListView {
       focused.focus({ preventScroll: true });
       if (caret) { try { focused.setSelectionRange(...caret); } catch { /* not a text control */ } }
     }
-    this.shownCount = pinned.length + sessions.length;
+    this.shownCount = shown;
     this.onRender?.(entries.length);
     // A save that failed while drawing (storage full) turned the list to Most recent: draw it so.
     if (this.order.sort !== sort) { this.schedule(); }
@@ -352,6 +358,9 @@ export class SessionListView {
   }
 
   // A machine's session's card; without a machine, the first card for that session.
+  // Whether search is hiding a card: it exists, and is not in the list.
+  hidden(card) { return !!card && !card.element.isConnected; }
+
   card(hostId, id) {
     if (hostId) { return this.#cards.get(SessionListView.key(hostId, id)) ?? null; }
     for (const c of this.#cards.values()) { if (c.id === id) { return c; } }

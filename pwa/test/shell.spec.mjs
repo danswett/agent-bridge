@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 import { go } from './nav.mjs';
 
 const CODEX = '019a1b2c-codex-example';
+const IDLE = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
 
 async function openDemo(page, query = '') {
   await page.addInitScript(() => {
@@ -96,6 +97,42 @@ test('Ctrl+K focuses search, which narrows the list to the sessions that match, 
   await expect(page.locator('#sessions-empty')).toBeHidden();
 });
 
+test('a reply being written outlives a search that hides its session, with its text when search lets it back', async ({ page }) => {
+  await openDemo(page);
+  const input = page.locator(`.session[data-id="${IDLE}"] form.reply`).getByRole('textbox', { name: 'Reply' });
+  await input.fill('Half a thought');
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('flaky');
+  await expect(page.locator(`.session[data-id="${IDLE}"]`)).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(input).toHaveValue('Half a thought');
+});
+
+test('a launch whose new session the search would hide clears the search and opens it', async ({ page }) => {
+  await openDemo(page);
+  await page.keyboard.press('Control+k');
+  await page.keyboard.type('zzz');
+  await expect(page.locator('.session')).toHaveCount(0);
+  await go(page, 'launch');
+  await page.locator('#launch [name="prompt"]').fill('Look at the relay');
+  await page.locator('#launch').getByRole('button', { name: 'Launch' }).click();
+  await expect(page.locator('#launch')).toHaveAttribute('data-launch', 'started');
+  const id = await page.evaluate(() => window.agentBridgeDemo.launches.get('demo').detail.session);
+  await expect(page.locator(`.session[data-id="${id}"]`)).toBeInViewport();
+  await expect(page.locator('#search')).toHaveValue('');
+  await expect(page.locator('.session')).toHaveCount(5);
+});
+
+test('Skip to content skips to the page it is on, and leaves the address alone', async ({ page }) => {
+  await openDemo(page);
+  await go(page, 'machines');
+  await page.locator('a.skip').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#main')).toBeFocused();
+  expect(await route(page)).toBe('machines');
+  expect(await page.evaluate(() => location.hash)).toBe('#/machines');
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
@@ -145,6 +182,17 @@ test.describe('on a phone', () => {
     await page.locator('#search-close').tap();
     await expect(page.locator('#appbar')).toBeHidden();
     await expect(page.locator('.session')).toHaveCount(4);
+  });
+
+  test('the search glyph sits in the box past Close search, not over it', async ({ page }) => {
+    await openDemo(page);
+    await page.locator('.search-open').tap();
+    const glyph = await page.locator('.search-icon').boundingBox();
+    const close = await page.locator('#search-close').boundingBox();
+    const box = await page.locator('#search').boundingBox();
+    expect(glyph.x).toBeGreaterThanOrEqual(close.x + close.width);
+    expect(glyph.x).toBeGreaterThanOrEqual(box.x);
+    expect(glyph.x + glyph.width).toBeLessThanOrEqual(box.x + box.width);
   });
 
   test('the app bar comes back as a strip while the connection has news', async ({ page }) => {

@@ -131,6 +131,8 @@ export class SessionsPage {
   showSession(id, hostId = null) {
     const card = this.view.card(hostId, id);
     if (!card) { return false; }
+    // A launch whose session search would hide: the search goes, and the session shows.
+    if (this.view.hidden(card)) { this.shell?.closeSearch(); }
     if (this.shell && this.shell.route !== 'sessions') { this.shell.go('sessions'); }
     if (card.folded) { card.setFolded(false); }
     const el = card.element;

@@ -358,11 +358,16 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-1').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     expect(new URL(page.url()).search).toBe('');
 
+    // A search that hides the session a notification is about gives way to it.
+    await page.keyboard.press('Control+k');
+    await page.keyboard.type('linked-1');
+    await expect(card(page, 'linked-2')).toHaveCount(0);
     // What the worker tells an open app when one of its notifications is tapped.
     await page.evaluate((url) => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url } })),
       `${appUrl}?host=${host.deviceId}&session=linked-2&question=q-linked-2`);
     await expect(card(page, 'linked-2')).toHaveClass(/linked/);
     await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
+    await expect(page.locator('#search')).toHaveValue('');
   });
 });
 
