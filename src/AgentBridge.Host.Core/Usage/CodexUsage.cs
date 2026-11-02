@@ -19,6 +19,8 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     readonly object gate = new();
     AgentUsage? probed;
     DateTimeOffset? signedOutAt;
+    // The reading taken by the probe that found the sign-out (its second account/read), if any.
+    AgentUsage? signedOutReading;
     bool sessionOpen, busy, wasOpen;
     Task? running;
     Task? answering;
@@ -89,8 +91,15 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             newest = Newer(transcript, probed);
             if (signedOutAt is { } at)
             {
-                // A failure of its own, timed when the sign-out was found, in the newest reading's
-                // place (its key, or none): a client keeps that reading and shows this beside it.
+                // The probe that found the sign-out read the allowance first: that reading is
+                // newer than anything a client holds, so it goes out, carrying the error.
+                if (newest is not null && ReferenceEquals(newest, signedOutReading))
+                {
+                    return Task.FromResult<AgentUsage?>(newest with { Error = CodexUsageProbe.SignedOutError });
+                }
+                // Otherwise a failure of its own, timed when the sign-out was found, in the newest
+                // reading's place (its key, or none): a client keeps that reading and shows this
+                // beside it.
                 return Task.FromResult<AgentUsage?>(UsageRead.Failure(AgentKind.Codex, CodexUsageProbe.SignedOutError, at, accountKey: newest?.AccountKey, plan: newest?.Plan));
             }
         }
@@ -165,7 +174,11 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     break;
                 case CodexProbeKind.SignedOut:
                     // No more probes until the longest back-off ends or a Codex session runs here.
-                    signedOutAt ??= now;
+                    if (signedOutAt is null)
+                    {
+                        signedOutAt = now;
+                        signedOutReading = outcome.Reading is { } fresh && ReferenceEquals(fresh, probed) ? fresh : null;
+                    }
                     pace.Hold(now);
                     line = $"usage: {CodexUsageProbe.SignedOutError} ({outcome.Why}); not asking it again for {options.ProbeBackoffMax.TotalHours:0} hours or until a Codex session runs here";
                     break;

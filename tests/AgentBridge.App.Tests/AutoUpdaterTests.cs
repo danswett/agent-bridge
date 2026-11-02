@@ -312,6 +312,77 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_profiles_host_started_while_the_last_hold_waits_is_held_before_the_update_goes_ahead()
+    {
+        await StartAsync();
+        await using var busy = new FakeHost();
+        await using var late = new FakeHost();
+        busy.Start();
+        busy.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        late.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        var started = false;
+        var afterStop = 0;
+        busy.On(HostOps.ProbeHold, _ =>
+        {
+            if (host.Sent(HostOps.Stop).Count == 0) { return new ProbeHoldResult(false); }
+            // Busy a few rounds after this host stopped; another profile's host starts meanwhile.
+            var n = Interlocked.Increment(ref afterStop);
+            if (n == 2) { late.Start(); Volatile.Write(ref started, true); }
+            return new ProbeHoldResult(n < 4, "finishing");
+        });
+        late.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        var updating = Manager(others: [busy.Folder, late.Folder], packageNow: () => Volatile.Read(ref started) ? [4242, 6161, 7171] : [4242, 6161]);
+        var applied = false;
+
+        await updating.StopAndApplyAsync(() => { }, () => applied = true);
+
+        Assert.True(applied);
+        Assert.NotEmpty(late.Sent(HostOps.ProbeHold));
+    }
+
+    [Fact]
+    public async Task Quitting_while_an_update_waits_for_another_profiles_probe_after_stopping_this_host_starts_it_again_at_once()
+    {
+        await StartAsync();
+        processes.OnStart = () => host.Start();
+        await using var other = new FakeHost();
+        other.Start();
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.On(HostOps.ProbeHold, _ =>
+        {
+            if (host.Sent(HostOps.Stop).Count == 0) { return new ProbeHoldResult(false); }
+            waiting.TrySetResult();
+            return new ProbeHoldResult(true, "finishing");
+        });
+        host.On(HostOps.Stop, data =>
+        {
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+        // Waits as long as a real update would for that probe.
+        var updating = Manager(others: [other.Folder], package: [4242, 6161], probeWait: TimeSpan.FromMinutes(11));
+        var applied = false;
+        var update = Task.Run(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var quitLog = new List<string>();
+        await Task.Run(() => updating.Quit(TimeSpan.FromSeconds(10), quitLog.Add));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.False(applied);
+        Assert.Empty(quitLog);
+        Assert.Single(processes.Started);
+        // The other profile's probe is left to finish.
+        Assert.Empty(other.Sent(HostOps.Stop));
+    }
+
+    [Fact]
     public async Task An_update_stops_nothing_when_a_host_of_the_package_cannot_be_reached()
     {
         await StartAsync();
@@ -370,19 +441,19 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null) =>
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null) =>
         new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
-            ProbeWait = TimeSpan.FromSeconds(3),
+            ProbeWait = probeWait ?? TimeSpan.FromSeconds(3),
             ProbePoll = TimeSpan.FromMilliseconds(50),
             ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
             OtherProfiles = () => others ?? [],
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
-            PackageHosts = () => package ?? [],
+            PackageHosts = packageNow ?? (() => package ?? []),
             Elevated = () => false,
         };
 

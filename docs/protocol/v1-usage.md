@@ -251,8 +251,9 @@ refresh and locking, and runs no model turn.
   a reused refresh token, an authentication failure from the usage read after Codex's own recovery,
   or no account where OpenAI sign-in is required) is the failure
   `Codex needs signing in again on this machine`, timed when it was found and under the newest
-  reading's key (none for a transcript reading), and no probe follows for 2 hours or until a Codex
-  session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
+  reading's key (none for a transcript reading); found only by the second `account/read`, the
+  usage the probe read just before goes out as the reading, carrying that error. No probe follows for 2 hours or
+  until a Codex session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application
   network policy is unavailable") is a failure that backs off, not a sign-out, even when only the
@@ -306,8 +307,10 @@ E4). So the host never kills a probe:
   host stopped by anything else holds its probes and waits for the answers and the grace, at most
   90 s from the stop. Before an update the app also holds and waits for every other profile's host
   running from the package, which Velopack ends too: each is held again every round, so no hold
-  lapses while another is waited for, and again just before the hand-over; one of the package's
-  hosts that no pipe reaches stops the update. Home Assistant's Install, run by the host itself,
+  lapses while another is waited for, and again just before the hand-over, the package looked at
+  again once they are done so that a host started meanwhile is held too; one of the package's
+  hosts that no pipe reaches stops the update. Quitting the app gives up those waits (never a
+  probe) and starts a host already stopped for the update again. Home Assistant's Install, run by the host itself,
   holds and waits for this host's probes and refuses while another profile's host runs from the
   package, whose probes it cannot hold, asked both before and after the wait. Giving up that wait
   (the host stopping) leaves the probe running. Velopack's own update and uninstall hooks wait

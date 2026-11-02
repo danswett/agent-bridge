@@ -866,6 +866,25 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_sign_out_found_by_the_second_account_read_still_publishes_the_fresh_reading_with_the_error()
+    {
+        CodexUsed();
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
+        AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account())
+            : FakeAppServer.Error("Your access token could not be refreshed. Please log out and sign in again."));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+
+        await monitor.PassAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await monitor.PassAsync();
+        var usage = (await codex.CollectAsync())!;
+
+        // The probe's own reading, taken before the sign-out showed, not the older transcript's.
+        Assert.Equal((UsageSource.Api, 23.0, CodexUsageProbe.SignedOutError), (usage.Source, usage.Windows[0].Percent, usage.Error));
+    }
+
+    [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
     {
         CodexUsed();

@@ -327,6 +327,9 @@ public sealed class HostManager
     Task? updateRestart;
     bool installing;
     bool quitting;
+    // Quitting gives up an update's waits for usage probes (never the probes), so Quit can start
+    // a host already stopped for the update within its own short wait.
+    readonly CancellationTokenSource quit = new();
 
     public bool UpdateUnderWay { get { lock (updating) { return updateStop is not null; } } }
 
@@ -346,14 +349,15 @@ public sealed class HostManager
             installing = true;
             // On the thread pool, so Quit can wait for it from the UI thread.
             // The other profiles' hosts first, which the update ends without a stop of their own.
+            var giveUp = quit.Token;
             stop = updateStop = Task.Run(async () =>
             {
                 var own = await OwnPidAsync();
-                await OthersDoneAsync(own, CancellationToken.None);
-                await StopAsync();
+                await OthersDoneAsync(own, giveUp);
+                await StopAsync(ProbeWait, CancellationToken.None, giveUp);
                 // Again just before the hand-over: every other host's hold is fresh, and one that
                 // let a probe start while this host was waited for is waited for too.
-                await OthersDoneAsync(own, CancellationToken.None);
+                await OthersDoneAsync(own, giveUp);
             });
         }
         try
@@ -400,6 +404,8 @@ public sealed class HostManager
             (stop, restart) = (updateStop, updateRestart);
             updateStop = null;
         }
+        // Outside the lock: what it ends may take the lock on its way out.
+        quit.Cancel();
         if (stop is null && restart is null) { return; }
         try
         {
@@ -422,7 +428,8 @@ public sealed class HostManager
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public Task StopAsync(CancellationToken ct = default) => StopAsync(ProbeWait, ct);
 
-    async Task StopAsync(TimeSpan probeWait, CancellationToken ct)
+    // hold: gives up the wait for the probes only, before anything is stopped.
+    async Task StopAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
         // A stop on purpose: the launcher must not start the host again after it (#106). Before
         // the stop itself, so a host that crashes while stopping is not started again either.
@@ -449,7 +456,10 @@ public sealed class HostManager
             await using var ch = await connect(ct);
             await ch.HelloAsync(ct);
             pid = (await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct)).ProcessId;
-            await ProbesDoneAsync(ch, probeWait, "the host", ct);
+            using (var holding = CancellationTokenSource.CreateLinkedTokenSource(ct, hold))
+            {
+                await ProbesDoneAsync(ch, probeWait, "the host", holding.Token);
+            }
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
@@ -578,14 +588,27 @@ public sealed class HostManager
     // hosts too, so their usage probes are held and waited for as this profile's are. One that
     // cannot confirm stops the update. They are left running: the update ends them once this host
     // has stopped. Every one is held again each round, so no hold lapses while another is waited
-    // for. own: this profile's host, which its own stop holds.
+    // for, and the package is looked at again once they are done: a host started during the wait
+    // was never held. own: this profile's host, which its own stop holds.
     async Task OthersDoneAsync(int? own, CancellationToken ct)
     {
+        var deadline = DateTime.UtcNow + ProbeWait;
+        while (true)
+        {
+            var seen = await OthersHeldAsync(own, deadline, ct);
+            if (PackageHosts().All(p => p == own || seen.Contains(p))) { return; }
+            if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: hosts kept starting from this installation for {FormatWait(ProbeWait)}; try again later"); }
+        }
+    }
+
+    // One look at the package: every other host of it held until none is busy. The hosts held.
+    async Task<HashSet<int>> OthersHeldAsync(int? own, DateTime deadline, CancellationToken ct)
+    {
         var package = PackageHosts();
+        var seen = new HashSet<int>();
         var reached = new List<(string Who, LocalChannel Channel)>();
         try
         {
-            var seen = new HashSet<int>();
             foreach (var folder in OtherProfiles())
             {
                 var who = $"profile {Path.GetFileName(folder)}'s host";
@@ -614,7 +637,6 @@ public sealed class HostManager
             {
                 throw new HostBusyException($"a host running from this installation (pid {missed}) could not be reached to hold its usage probes, so nothing was stopped");
             }
-            var deadline = DateTime.UtcNow + ProbeWait;
             while (true)
             {
                 string? busy = null;
@@ -622,7 +644,7 @@ public sealed class HostManager
                 {
                     if (await HoldAsync(ch, who, ct) is { } why) { busy ??= $"{who}: {why}"; }
                 }
-                if (busy is null) { return; }
+                if (busy is null) { return seen; }
                 if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: {busy}, after {FormatWait(ProbeWait)}; try again later"); }
                 await Task.Delay(ProbePoll, ct);
             }
