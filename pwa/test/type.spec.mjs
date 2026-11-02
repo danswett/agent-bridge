@@ -2,6 +2,7 @@
 // meta line and a tool's name and arguments sit as if they were the text face, at a phone's
 // width, in both engines. Measured on the page, not read back from the stylesheet.
 import { test, expect } from '@playwright/test';
+import { go } from './nav.mjs';
 
 const CLAUDE = '6f1c2b7e-claude-example';
 
@@ -66,6 +67,29 @@ test('where a browser has no font-size-adjust, a branch and a tool\'s name and a
       parseFloat(getComputedStyle(el).fontSize), parseFloat(getComputedStyle(el.parentElement).fontSize)]);
     // It is the fallback being measured: the run's size is scaled.
     if (scale !== 1) { expect(Math.abs(size - aroundSize * scale)).toBeLessThan(0.05); }
+    expect(Math.abs(own - around), `${selector}: line height ${own} beside ${around}`).toBeLessThan(0.05);
+  }
+});
+
+test('where a browser has no font-size-adjust, a folder-trust question\'s paths keep the line height of the text around them', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => window.agentBridgeDemo.askTrust({
+    id: '5d0c9f3e-2b1a-4c8d-9e7f-6a5b4c3d2e1f', agent: 'codex', kind: 'codex', label: 'Codex', workspace: 'web',
+    folder: 'C:\\Users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line\\web',
+    root: 'c:\\users\\demo\\repos\\a-rather-long-folder-name-that-will-not-fit-on-one-phone-line',
+    rootNote: 'Trusting applies to the repository root:', warning: 'Do you trust the files in this folder?', answerable: true,
+  }));
+  await go(page, 'launch');
+  await expect(page.locator('.trust-question .trust-folder')).toBeVisible();
+  await page.evaluate(() => {
+    for (const el of document.querySelectorAll('.trust-path')) {
+      el.style.setProperty('font-size-adjust', 'none', 'important');
+      el.style.setProperty('font-size', 'calc(1em * var(--ab-inline-mono-scale))', 'important');
+    }
+  });
+  for (const selector of ['.trust-folder', '.trust-root']) {
+    const [own, around] = await page.locator(`.trust-question ${selector}`).evaluate((el) => [
+      parseFloat(getComputedStyle(el).lineHeight), parseFloat(getComputedStyle(el.previousElementSibling).lineHeight)]);
     expect(Math.abs(own - around), `${selector}: line height ${own} beside ${around}`).toBeLessThan(0.05);
   }
 });

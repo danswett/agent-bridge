@@ -657,7 +657,7 @@ summary {
 }
 /* Where a mono run is its own flex or grid item, its line box is its own: the line height it
    inherits must be a length, or the fallback's smaller size would shrink it with the font. */
-.meta, .tool-line, .tool { line-height: calc(1em * 1.45); }
+.meta, .tool-line, .tool, .trust-line { line-height: calc(1em * 1.45); }
 @supports (font-size-adjust: ex-height 0.5) {
   .mono, .branch, .tool-name, .tool-summary, .trust-path, .md :not(pre) > code {
     font-size: 1em; font-size-adjust: ex-height var(--ab-inline-mono-x);
