@@ -73,9 +73,10 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
     // The host is read before the daemon, and has no read offset of its own to leave its unread
     // handoffs out by, so a handoff between the two reads gives the same count of different agents
     // for one sample. Successive ones would join into one episode longer than the grace (found in
-    // review). So the agents apart must be the same ones on two samples in a row: a host or daemon
-    // stuck on the wrong agents is still reported, one sample later, and only agents that change
-    // every sample are not.
+    // review). So an agent must be apart on the same side on two samples in a row: one side stuck
+    // on a wrong agent is reported a sample later, whatever the other side hands off meanwhile,
+    // and only agents that change every sample are not. The side counts: a handoff back and forth
+    // between two agents puts each on the other side each time, which is no stuck agent.
     IEnumerable<ShadowDifference> OtherAgents(ShadowView daemon, ShadowView host, IReadOnlyList<ShadowDifference> differences)
     {
         foreach (var gone in apartBefore.Keys.Where(k => !daemon.Sessions.ContainsKey(k)).ToList()) { apartBefore.Remove(gone); }
@@ -86,15 +87,14 @@ public sealed class ShadowWitness(AgentHaBridgePaths paths)
             var s = ShadowHash.Session(id);
             if (differences.Any(d => d.Kind == ShadowKinds.BackgroundAgents && d.Session == s)) { apartBefore.Remove(id); continue; }
             if (Evidence(id)?.AgentsApart(ds.AgentIds, running, through) is not { Count: > 0 } apart) { apartBefore.Remove(id); continue; }
-            var key = string.Join('\n', apart.Order(StringComparer.Ordinal));
-            var again = apartBefore.TryGetValue(id, out var before) && before == key;
-            apartBefore[id] = key;
+            var again = apartBefore.TryGetValue(id, out var before) && before.Overlaps(apart);
+            apartBefore[id] = apart;
             if (again) { yield return new(ShadowKinds.BackgroundAgents, s, $"daemon={ds.Agents} host={hs.Agents}, not the same agents"); }
         }
     }
 
-    // Per session, the agents found apart on the last sample (OtherAgents).
-    readonly Dictionary<string, string> apartBefore = new(StringComparer.Ordinal);
+    // Per session, the agents found apart on the last sample, each with its side (OtherAgents).
+    readonly Dictionary<string, IReadOnlySet<string>> apartBefore = new(StringComparer.Ordinal);
 
     TranscriptEvidence? Evidence(string id)
     {
@@ -592,8 +592,9 @@ public sealed partial class TranscriptEvidence(string path)
     // agent that started, stopped, completed or was woken where the daemon has not yet read
     // (through, its Offset): that is the daemon a poll behind a handoff, not a disagreement, and
     // successive handoffs would otherwise join into one long episode (found in review). The
-    // agents on one side only, empty when they agree; null when a call or a listed agent is one
-    // this transcript does not know, which says nothing.
+    // agents on one side only, each named with its side ("daemon a1", "host a2"), empty when they
+    // agree; null when a call or a listed agent is one this transcript does not know, which says
+    // nothing.
     public IReadOnlySet<string>? AgentsApart(IReadOnlyList<string> calls, IReadOnlyList<string> running, long through)
     {
         bool Settled(string id) => agents.TryGetValue(id, out var a) && a.ChangedAt < through;
@@ -604,9 +605,11 @@ public sealed partial class TranscriptEvidence(string path)
             daemonIds.Add(key);
         }
         if (running.Any(id => !agents.ContainsKey(id))) { return null; }
-        var apart = daemonIds.Where(Settled).ToHashSet(StringComparer.Ordinal);
-        apart.SymmetricExceptWith(running.Where(Settled));
-        return apart;
+        var daemonSettled = daemonIds.Where(Settled).ToHashSet(StringComparer.Ordinal);
+        var hostSettled = running.Where(Settled).ToHashSet(StringComparer.Ordinal);
+        // Which side lists each: the same agents on opposite sides are not the same difference.
+        return daemonSettled.Except(hostSettled).Select(id => "daemon " + id)
+            .Concat(hostSettled.Except(daemonSettled).Select(id => "host " + id)).ToHashSet(StringComparer.Ordinal);
     }
 
     // The daemon's model is the one a subagent's message named, the last message it has read

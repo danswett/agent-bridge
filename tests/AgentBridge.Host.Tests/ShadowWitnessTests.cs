@@ -350,6 +350,36 @@ public sealed class ShadowWitnessTests : IDisposable
         Assert.Empty(Explain(read, ["c5"], ["a5"]));
     }
 
+    // Found in review: an agent stuck on one side is reported however the other side's agents
+    // change meanwhile, and the same two agents trading sides each sample are a handoff each time.
+    [Fact]
+    public void A_side_stuck_on_a_wrong_agent_is_reported_while_the_other_hands_off_and_agents_trading_sides_are_not()
+    {
+        IReadOnlyList<ShadowDifference> Explain(ShadowWitness witness, long offset, string[] daemonCalls, string[] hostAgents)
+        {
+            var (d, h) = (new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Daemon(offset, agents: daemonCalls) } },
+                new ShadowView { Sessions = new Dictionary<string, ShadowSession> { [Id] = Host(agents: hostAgents.Length) with { RunningSubagents = hostAgents } }, SeesAgentHaBridge = true });
+            return witness.Explain(d, h, ShadowCompare.Compare(d, h).Differences);
+        }
+        var stuck = new ShadowWitness(Paths);
+        Write(Event("subagent.started", new { toolCallId = "c1", executionMode = "background" }, agentId: "a1"),
+            Event("assistant.turn_end", new { }, agentId: "a1"),
+            Event("subagent.completed", new { toolCallId = "c1" }));
+        var read = Write(Event("subagent.started", new { toolCallId = "c2", executionMode = "background" }, agentId: "a2"));
+        Assert.Empty(Explain(stuck, read, ["c2"], ["a1"]));
+        read = Write(
+            Event("assistant.turn_end", new { }, agentId: "a2"),
+            Event("subagent.completed", new { toolCallId = "c2" }),
+            Event("subagent.started", new { toolCallId = "c3", executionMode = "background" }, agentId: "a3"));
+        // The host still on a1, the daemon handed on to a3.
+        Assert.Null(Assert.Single(Explain(stuck, read, ["c3"], ["a1"])).Known);
+
+        var trading = new ShadowWitness(Paths);
+        Assert.Empty(Explain(trading, read, ["c2"], ["a1"]));
+        Assert.Empty(Explain(trading, read, ["c1"], ["a2"]));
+        Assert.Empty(Explain(trading, read, ["c2"], ["a1"]));
+    }
+
     // Found in review (#77): a shell polled more often than the witness kept starts lost the start
     // that ruled the signature out.
     [Fact]

@@ -421,10 +421,11 @@ that started, stopped (a run's end or `subagent.failed`), completed or were woke
 out of that check: the daemon a poll behind a handoff is not a disagreement, and
 successive handoffs caught a sample each would otherwise join into one long episode. The
 host is read first and has no read offset of its own, so a handoff between the two reads
-gives the host's side the same lag; the agents apart must therefore be the same ones on two
-samples in a row before the difference is recorded. A side stuck on the wrong agent is still
-reported, a sample later; only agents that change on every sample are not, and a single
-`shadow once` sample never reports this one. A wrong
+gives the host's side the same lag; an agent must therefore be apart on the same side on
+two samples in a row before the difference is recorded. A side stuck on a wrong agent is
+still reported a sample later, whatever the other side hands off meanwhile; agents that
+change on every sample, or trade sides, are not, and a single `shadow once` sample never
+reports this one. A wrong
 agent on one side is no longer hidden by another on the other. The daemon still counts every
 agent's `subagent.started` at any depth and drops none for being nested, so nesting adds no
 difference. A delegate's shells are its own on the host and the session's on the daemon,
