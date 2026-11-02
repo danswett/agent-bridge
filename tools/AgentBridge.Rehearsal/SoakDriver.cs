@@ -196,11 +196,12 @@ internal sealed class SoakDriver(ISoakHa ha, SoakOptions options, string stateDi
         IReadOnlyList<string?> candidates = [null];
         if (s.Resume)
         {
-            // Newest first. agent-ha-bridge offers a session only while its folder is there, and
+            // Newest first, a turn that ran long or not: the session itself was ended either way.
+            // agent-ha-bridge offers a session only while its folder is there, and
             // reclaims a finished worktree after newSession.worktreeIdleHours, so the newest one
             // can already be off its list; an older one still on it is taken instead.
             candidates = [.. state.Episodes
-                .Where(e => e.Agent == s.Agent && e.Index < record.Index && e.Session is not null && e.Ended is not null && e.Problems.Count == 0)
+                .Where(e => e.Agent == s.Agent && e.Index < record.Index && e.Session is not null && e.Ended is not null)
                 .OrderByDescending(e => e.Index).Select(e => e.Session).Distinct(StringComparer.Ordinal).Take(4)];
             if (candidates.Count == 0) { record.Problems.Add("nothing of this agent to resume yet"); return; }
         }

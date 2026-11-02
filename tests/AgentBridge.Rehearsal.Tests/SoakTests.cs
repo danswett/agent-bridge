@@ -264,7 +264,7 @@ public class SoakTests
                 Began = DateTimeOffset.UnixEpoch,
                 Episodes =
                 [
-                    new SoakRecord { Index = 3, Scenario = "copilot-questions", Agent = "Copilot", Session = "0894c91f-f3f5-4546-8684-a8f9e6ad58e7", Ended = DateTimeOffset.UnixEpoch },
+                    new SoakRecord { Index = 3, Scenario = "copilot-questions", Agent = "Copilot", Session = "0894c91f-f3f5-4546-8684-a8f9e6ad58e7", Ended = DateTimeOffset.UnixEpoch, Problems = ["turn 2 did not end in time"] },
                     new SoakRecord { Index = 6, Scenario = "copilot-background", Agent = "Copilot", Session = "6acbee71-954a-4938-a7e9-4c6d3c611dc8", Ended = DateTimeOffset.UnixEpoch },
                 ],
             };
