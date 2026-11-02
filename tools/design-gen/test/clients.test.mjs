@@ -36,11 +36,13 @@ test('the PWA loads the generated tokens before its own stylesheet, and keeps th
   assert.match(read('pwa/sw.js'), /'\.\/design\/tokens\.css', '\.\/design\/sprite\.svg'/);
 });
 
-test('no colour copied by hand while the generator was missing is left in the PWA', () => {
+test('no colour copied by hand while the generator was missing is left in the PWA or the Windows app', () => {
   // U1 (#164) marked its stand-ins TODO(#177); the generated tokens replace them.
   const files = ['pwa/app.css', 'pwa/index.html', ...readdirSync(path.join(repoRoot, 'pwa/js'), { recursive: true })
     .map((f) => `pwa/js/${String(f).split(path.sep).join('/')}`).filter((f) => f.endsWith('.js'))];
-  assert.deepEqual(files.filter((f) => read(f).includes('TODO(#177)')), []);
+  const app = readdirSync(path.join(repoRoot, 'src/AgentBridge.App'), { recursive: true })
+    .map((f) => `src/AgentBridge.App/${String(f).split(path.sep).join('/')}`).filter((f) => /\.(xaml|cs)$/.test(f) && !/\/(bin|obj)\//.test(f));
+  assert.deepEqual([...files, ...app].filter((f) => read(f).includes('TODO(#177)')), []);
 });
 
 // --- the Windows app ---
