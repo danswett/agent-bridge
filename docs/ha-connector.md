@@ -776,7 +776,8 @@ device.
   ends is mid-refresh (#238): this host's own usage probes are held and a standalone Codex
   app-server it started is waited for, at most 11 minutes; another profile's host running from the
   package refuses the install, since its probes cannot be held from this host (its pipe takes
-  management only from the app; install from the app there, which holds them all). When it cannot confirm, the
+  management only from the app; install from the app there, which holds them all), asked again
+  once this host's wait is over. When it cannot confirm, the
   install fails to start and `stage_detail` and the notification say why. The release goes to
   Velopack,
   which applies it once the host has exited; the host then stops as on Ctrl+C. Velopack

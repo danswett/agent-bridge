@@ -107,6 +107,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
+            // No machine's real processes: the package is what a test says it is.
+            PackageHosts = () => [],
             ProbeWait = TimeSpan.FromSeconds(3),
             ProbePoll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
@@ -271,7 +273,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
             return new { stopping = true };
         });
-        var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], inPackage: pid => pid != 5151);
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var updating = Manager(others: [other.Folder, elsewhere.Folder, Path.Combine(app, "no-host-here")], package: [4242, 6161]);
         var applied = false;
 
         // Settings' Update and restart, and the automatic update, both come this way.
@@ -279,9 +282,48 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         Assert.True(applied);
         Assert.Equal(3, otherHoldsAtStop);
+        // Held again after this host stopped, just before the hand-over.
+        Assert.True(Volatile.Read(ref otherHolds) > otherHoldsAtStop);
         // Left running for the update to end, not stopped; and one not from the package is not asked.
         Assert.Empty(other.Sent(HostOps.Stop));
         Assert.Empty(elsewhere.Sent(HostOps.ProbeHold));
+    }
+
+    [Fact]
+    public async Task Every_other_profiles_hold_is_renewed_while_another_is_waited_for()
+    {
+        await StartAsync();
+        await using var slow = new FakeHost();
+        await using var idle = new FakeHost();
+        slow.Start();
+        idle.Start();
+        slow.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        idle.Status = FakeHost.StatusOf() with { ProcessId = 7171 };
+        var slowHolds = 0;
+        slow.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref slowHolds) < 6, "finishing"));
+        idle.On(HostOps.ProbeHold, _ => new ProbeHoldResult(false));
+        var updating = Manager(others: [slow.Folder, idle.Folder], package: [4242, 6161, 7171]);
+
+        await updating.StopAndApplyAsync(() => { }, () => { });
+
+        // Asked as often as the slow one in the first wait: a hold of 15 minutes never lapses
+        // while another host's probe takes its 11.
+        Assert.True(idle.Sent(HostOps.ProbeHold).Count >= 6, $"held {idle.Sent(HostOps.ProbeHold).Count} times");
+    }
+
+    [Fact]
+    public async Task An_update_stops_nothing_when_a_host_of_the_package_cannot_be_reached()
+    {
+        await StartAsync();
+        var updating = Manager(others: [Path.Combine(app, "refuses-this-app")], package: [4242, 8181]);
+        var applied = false;
+
+        var busy = await Assert.ThrowsAsync<HostBusyException>(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
+
+        Assert.Contains("pid 8181", busy.Message, StringComparison.Ordinal);
+        Assert.False(applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Empty(processes.Killed);
     }
 
     [Fact]
@@ -291,7 +333,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         await using var other = new FakeHost();
         other.Start();
         other.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
-        var updating = Manager(others: [other.Folder], inPackage: _ => true);
+        other.Status = FakeHost.StatusOf() with { ProcessId = 6161 };
+        var updating = Manager(others: [other.Folder], package: [4242, 6161]);
         var applied = false;
 
         var busy = await Assert.ThrowsAsync<HostBusyException>(() => updating.StopAndApplyAsync(() => { }, () => applied = true));
@@ -327,7 +370,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, Func<int, bool>? inPackage = null, TimeSpan? callTimeout = null) =>
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null) =>
         new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
@@ -339,7 +382,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             ProbeCallTimeout = callTimeout ?? TimeSpan.FromSeconds(5),
             OtherProfiles = () => others ?? [],
             ConnectTo = (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromMilliseconds(300), ct),
-            InPackage = inPackage ?? (_ => true),
+            PackageHosts = () => package ?? [],
             Elevated = () => false,
         };
 

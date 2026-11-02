@@ -41,6 +41,8 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
     readonly object gate = new();
     Auth auth = Auth.Unknown;
     DateTimeOffset authCheckedAt = DateTimeOffset.MinValue;
+    // When auth status first said signed out: the failure's own time (below).
+    DateTimeOffset? signedOutAt;
     string? plan;
     bool sessionOpen, busy;
     // A pass of auth status and the probe, while it runs; and processes it stopped waiting for
@@ -86,14 +88,16 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
         if (probes is not null) { Consider(saved.Reading?.MeasuredAt, now); }
         Auth known;
         string? named;
-        lock (gate) { (known, named) = (auth, plan); }
+        DateTimeOffset? outAt;
+        lock (gate) { (known, named, outAt) = (auth, plan, signedOutAt); }
         var reading = saved.Reading is { } r ? r with { Plan = named ?? r.Plan } : null;
         if (known == Auth.SignedOut)
         {
-            // The last reading still says what was used when it was taken, and the error why
-            // nothing newer will come: a client shows it once the reading is stale.
-            return Task.FromResult<AgentUsage?>(reading is not null ? reading with { Error = SignedOutError }
-                : UsageRead.Failure(AgentKind.Claude, SignedOutError, now, accountKey: saved.Key, plan: named));
+            // A failure of its own, timed when the sign-out was seen and under the account's key:
+            // a client keeps the last reading (from this machine or another) and shows this beside
+            // it once that is stale. The error laid on the reading itself kept the reading's time,
+            // which a peer already has, and a newer reading from another machine hid it.
+            return Task.FromResult<AgentUsage?>(UsageRead.Failure(AgentKind.Claude, SignedOutError, outAt ?? now, accountKey: saved.Key, plan: named ?? reading?.Plan));
         }
         return Task.FromResult(reading);
     }
@@ -181,6 +185,7 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             // except that it is no claude.ai login to probe.
             auth = state == Auth.Unknown && before != Auth.ClaudeAi ? before : state;
             if (subscription is not null) { plan = subscription; }
+            signedOutAt = auth == Auth.SignedOut ? signedOutAt ?? now : null;
         }
         if (state == before) { return; }
         var said = state switch

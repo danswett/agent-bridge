@@ -358,7 +358,8 @@ into one folder with one version. An app update is a host update, so they never 
   six-hour one too, and the host
   starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
   host running from the package is held and waited for the same way, since Velopack ends them
-  too; one that cannot confirm stops the update before anything is stopped.
+  too, each held again every round and once more just before the hand-over; one that cannot
+  confirm, or a host of the package no pipe reaches, stops the update before anything is stopped.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the

@@ -89,8 +89,9 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             newest = Newer(transcript, probed);
             if (signedOutAt is { } at)
             {
-                return Task.FromResult<AgentUsage?>(newest is not null ? newest with { Error = CodexUsageProbe.SignedOutError }
-                    : UsageRead.Failure(AgentKind.Codex, CodexUsageProbe.SignedOutError, at));
+                // A failure of its own, timed when the sign-out was found, in the newest reading's
+                // place (its key, or none): a client keeps that reading and shows this beside it.
+                return Task.FromResult<AgentUsage?>(UsageRead.Failure(AgentKind.Codex, CodexUsageProbe.SignedOutError, at, accountKey: newest?.AccountKey, plan: newest?.Plan));
             }
         }
         return Task.FromResult(newest);
@@ -170,8 +171,10 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     break;
                 case CodexProbeKind.NotApplicable:
                     // Signed in some other way now (an API key, another provider): no longer a
-                    // sign-out to report, and the transcripts stand alone.
+                    // sign-out to report, and an earlier probe's reading is not this login's, so
+                    // the transcripts stand alone.
                     signedOutAt = null;
+                    probed = null;
                     pace.Hold(now);
                     line = $"usage: Codex is not asked for its allowance ({outcome.Why}); its transcripts are read";
                     break;

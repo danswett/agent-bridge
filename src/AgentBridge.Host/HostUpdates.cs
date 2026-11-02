@@ -195,18 +195,21 @@ static class HostUpdateGate
 {
     public static readonly TimeSpan Wait = TimeSpan.FromMinutes(11);
 
-    public static async Task<string?> ReadyAsync(Func<string?> otherHosts, Func<TimeSpan, Task<bool>>? settle)
+    // Cancelling (the host stopping) gives up the wait, never the probe.
+    public static async Task<string?> ReadyAsync(Func<string?> otherHosts, Func<TimeSpan, CancellationToken, Task<bool>>? settle, CancellationToken cancellationToken)
     {
-        if (otherHosts() is { } others)
-        {
-            return $"{others}, whose usage probes cannot be held from here; install from the Agent Bridge app on this machine, which waits for them";
-        }
-        if (settle is not null && !await settle(Wait))
+        if (Others(otherHosts) is { } before) { return before; }
+        if (settle is not null && !await settle(Wait, cancellationToken))
         {
             return $"Codex's app-server, started to read its allowance, was still finishing after {Wait.TotalMinutes:0} minutes; try again later";
         }
-        return null;
+        // Again just before the hand-over: one may have started while this host's probe finished.
+        return Others(otherHosts);
     }
+
+    static string? Others(Func<string?> otherHosts) => otherHosts() is { } others
+        ? $"{others}, whose usage probes cannot be held from here; install from the Agent Bridge app on this machine, which waits for them"
+        : null;
 
     // Another profile's host running from this installation, or one that cannot be looked at
     // (not knowing is not permission), as the app's PackageProcesses sees them.

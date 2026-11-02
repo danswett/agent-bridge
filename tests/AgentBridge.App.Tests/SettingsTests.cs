@@ -69,6 +69,8 @@ public sealed class SettingsTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
+            // No machine's real processes: the package is what a test says it is.
+            PackageHosts = () => [],
             Elevated = () => false,
             Time = new FakeTimeProvider(Make.T0),
         };

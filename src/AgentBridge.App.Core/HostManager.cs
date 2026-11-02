@@ -181,7 +181,7 @@ public sealed class HostManager
         this.userId = userId ?? CurrentUserId();
         this.userSid = userSid ?? CurrentUserSid();
         OtherProfiles = ProfilesBeside;
-        InPackage = RunsFromApp;
+        PackageHosts = HostsFromApp;
     }
 
     public TimeSpan StartTimeout { get; init; } = TimeSpan.FromSeconds(20);
@@ -348,8 +348,12 @@ public sealed class HostManager
             // The other profiles' hosts first, which the update ends without a stop of their own.
             stop = updateStop = Task.Run(async () =>
             {
-                await OthersDoneAsync(CancellationToken.None);
+                var own = await OwnPidAsync();
+                await OthersDoneAsync(own, CancellationToken.None);
                 await StopAsync();
+                // Again just before the hand-over: every other host's hold is fresh, and one that
+                // let a probe start while this host was waited for is waited for too.
+                await OthersDoneAsync(own, CancellationToken.None);
             });
         }
         try
@@ -524,13 +528,14 @@ public sealed class HostManager
     // One host.probes.hold call: a host that does not answer within it cannot say, and is not stopped.
     public TimeSpan ProbeCallTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
-    // The other profiles' folders beside this one, whose hosts an update ends too; the pipe of one,
-    // and whether a process runs from this installation (by default, its executable under the app's
-    // folder; one that cannot be looked at counts, as for PackageProcesses).
+    // The other profiles' folders beside this one, whose hosts an update ends too; the pipe of one;
+    // and the hosts running from this installation, by process id (by default, agent-bridge-host
+    // processes whose executable is under the app's folder; one that cannot be looked at counts, as
+    // for PackageProcesses: not knowing is not permission).
     public Func<IEnumerable<string>> OtherProfiles { get; init; }
     public Func<string, CancellationToken, Task<LocalChannel>> ConnectTo { get; init; } =
         (folder, ct) => LocalClient.ConnectAsync(LocalEndpoint.For(folder), TimeSpan.FromSeconds(1), ct);
-    public Func<int, bool> InPackage { get; init; }
+    public Func<IReadOnlyCollection<int>> PackageHosts { get; init; }
 
     IEnumerable<string> ProfilesBeside()
     {
@@ -540,31 +545,54 @@ public sealed class HostManager
                 && !string.Equals(Path.GetFullPath(d), Path.GetFullPath(layout.AppDataFolder), StringComparison.OrdinalIgnoreCase));
     }
 
-    bool RunsFromApp(int pid)
+    HashSet<int> HostsFromApp()
+    {
+        var root = Path.GetFullPath(layout.AppFolder);
+        var hosts = new HashSet<int>();
+        foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(layout.HostExe)))
+        {
+            using (p)
+            {
+                string? path;
+                try { path = p.MainModule?.FileName; }
+                catch (InvalidOperationException) { continue; }
+                catch (System.ComponentModel.Win32Exception) { path = null; }
+                if (path is null || path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { hosts.Add(p.Id); }
+            }
+        }
+        return hosts;
+    }
+
+    async Task<int?> OwnPidAsync()
     {
         try
         {
-            using var p = Process.GetProcessById(pid);
-            return p.MainModule?.FileName is not { } path || path.StartsWith(Path.GetFullPath(layout.AppFolder), StringComparison.OrdinalIgnoreCase);
+            await using var ch = await connect(CancellationToken.None);
+            await ch.HelloAsync();
+            return (await ch.CallAsync<HostStatus>(HostOps.Status, timeout: ProbeCallTimeout)).ProcessId;
         }
-        catch (ArgumentException) { return false; }
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { return null; }
     }
 
     // Before an update (#238): Velopack ends every process in the package, the other profiles'
     // hosts too, so their usage probes are held and waited for as this profile's are. One that
-    // cannot confirm stops the update before anything is stopped. They are left running: the
-    // update ends them once this host has stopped.
-    async Task OthersDoneAsync(CancellationToken ct)
+    // cannot confirm stops the update. They are left running: the update ends them once this host
+    // has stopped. Every one is held again each round, so no hold lapses while another is waited
+    // for. own: this profile's host, which its own stop holds.
+    async Task OthersDoneAsync(int? own, CancellationToken ct)
     {
-        foreach (var folder in OtherProfiles())
+        var package = PackageHosts();
+        var reached = new List<(string Who, LocalChannel Channel)>();
+        try
         {
-            var name = Path.GetFileName(folder);
-            LocalChannel ch;
-            try { ch = await ConnectTo(folder, ct); }
-            catch (Exception e) when (e is IOException or TimeoutException or HostErrorException or OperationCanceledException && !ct.IsCancellationRequested) { continue; }
-            await using (ch)
+            var seen = new HashSet<int>();
+            foreach (var folder in OtherProfiles())
             {
+                var who = $"profile {Path.GetFileName(folder)}'s host";
+                LocalChannel ch;
+                // Nothing answering there; whether a host of the package went unreached is asked below.
+                try { ch = await ConnectTo(folder, ct); }
+                catch (Exception e) when (e is IOException or TimeoutException or HostErrorException or OperationCanceledException && !ct.IsCancellationRequested) { continue; }
                 int pid;
                 try
                 {
@@ -573,12 +601,51 @@ public sealed class HostManager
                 }
                 catch (Exception e) when (e is IOException or TimeoutException or HostErrorException)
                 {
-                    throw new HostBusyException($"profile {name}'s host could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
+                    await ch.DisposeAsync();
+                    throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
                 }
-                if (!InPackage(pid)) { continue; }
-                await ProbesDoneAsync(ch, ProbeWait, $"profile {name}'s host", ct);
+                if (!package.Contains(pid)) { await ch.DisposeAsync(); continue; }
+                seen.Add(pid);
+                reached.Add((who, ch));
+            }
+            // A host of the package no pipe reached (one at another elevation refuses this app's
+            // connection, say) cannot be held, and the update would end it all the same.
+            if (package.Where(p => p != own && !seen.Contains(p)).Select(p => (int?)p).FirstOrDefault() is { } missed)
+            {
+                throw new HostBusyException($"a host running from this installation (pid {missed}) could not be reached to hold its usage probes, so nothing was stopped");
+            }
+            var deadline = DateTime.UtcNow + ProbeWait;
+            while (true)
+            {
+                string? busy = null;
+                foreach (var (who, ch) in reached)
+                {
+                    if (await HoldAsync(ch, who, ct) is { } why) { busy ??= $"{who}: {why}"; }
+                }
+                if (busy is null) { return; }
+                if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: {busy}, after {FormatWait(ProbeWait)}; try again later"); }
+                await Task.Delay(ProbePoll, ct);
             }
         }
+        finally
+        {
+            foreach (var (_, ch) in reached) { await ch.DisposeAsync(); }
+        }
+    }
+
+    // One host.probes.hold: null when nothing of the host's is finishing (or it is an older host,
+    // whose "unknown op" means it runs no such probe), else what is. A host that cannot say throws.
+    async Task<string?> HoldAsync(LocalChannel ch, string who, CancellationToken ct)
+    {
+        ProbeHoldResult held;
+        try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: ProbeCallTimeout, ct: ct); }
+        catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return null; }
+        catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
+        catch (Exception e) when (e is IOException or TimeoutException)
+        {
+            throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
+        }
+        return held.Busy ? held.Why ?? "a usage probe it started is still finishing" : null;
     }
 
     // Before the host is stopped, by a person, an update or anything else here: it starts no probe
@@ -590,21 +657,9 @@ public sealed class HostManager
     async Task ProbesDoneAsync(LocalChannel ch, TimeSpan wait, string who, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + wait;
-        while (true)
+        while (await HoldAsync(ch, who, ct) is { } why)
         {
-            ProbeHoldResult held;
-            try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: ProbeCallTimeout, ct: ct); }
-            catch (HostErrorException e) when (e.Message.StartsWith($"unknown op {HostOps.ProbeHold}", StringComparison.Ordinal)) { return; }
-            catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
-            catch (Exception e) when (e is IOException or TimeoutException)
-            {
-                throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
-            }
-            if (!held.Busy) { return; }
-            if (DateTime.UtcNow >= deadline)
-            {
-                throw new HostBusyException($"nothing was stopped: {who}: {held.Why ?? "a usage probe it started is still finishing"}, after {FormatWait(wait)}; try again later");
-            }
+            if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: {who}: {why}, after {FormatWait(wait)}; try again later"); }
             await Task.Delay(ProbePoll, ct);
         }
     }

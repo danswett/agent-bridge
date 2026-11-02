@@ -43,6 +43,8 @@ public sealed class HostManagerTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(1),
             Poll = TimeSpan.FromMilliseconds(50),
+            // No machine's real processes: the package is what a test says it is.
+            PackageHosts = () => [],
             Elevated = () => elevated,
         };
         return Task.CompletedTask;

@@ -207,20 +207,27 @@ public sealed class UsageProbeTests : IDisposable
         ClaudeScript(auth: SignedOutClaude, authExit: 1);
         var claude = Claude();
 
+        var seen = time.GetUtcNow();
         await claude.CollectAsync();
         await Settled(claude);
         var usage = await claude.CollectAsync();
 
+        // A failure of its own, timed when the sign-out was seen (not the reading's two hours
+        // ago, which a peer holding that reading would never take as newer), under its login.
         Assert.Equal("Claude Code is signed out on this machine", usage!.Error);
-        Assert.Equal(12, usage.Windows[0].Percent);
+        Assert.Empty(usage.Windows);
+        Assert.Equal(seen, usage.MeasuredAt);
+        Assert.NotNull(usage.AccountKey);
+        var outKey = usage.AccountKey;
         Assert.Empty(UsageProbesStarted);
         Assert.Contains(log, l => l.Contains("signed out", StringComparison.Ordinal));
 
-        // Not asked again within the hour, and never probed while it says so.
+        // Not asked again within the hour, and never probed while it says so; still the same failure.
         time.Advance(TimeSpan.FromMinutes(30));
         await claude.CollectAsync();
         await Settled(claude);
         Assert.Single(launcher.Started);
+        Assert.Equal(seen, (await claude.CollectAsync())!.MeasuredAt);
 
         // Signed in again an hour later: the next look finds it, and the probe runs.
         ClaudeScript(refresh: true);
@@ -230,6 +237,7 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Single(UsageProbesStarted);
         usage = await claude.CollectAsync();
         Assert.Equal((20, null), (usage!.Windows[0].Percent, usage.Error));
+        Assert.Equal(outKey, usage.AccountKey);
     }
 
     [Fact]
@@ -695,6 +703,32 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task Cancelling_a_wait_for_the_probes_gives_up_the_wait_and_never_the_probe()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        using var stopping = new CancellationTokenSource();
+        var wait = monitor.SettleProbesAsync(TimeSpan.FromMinutes(11), stopping.Token);
+        await stopping.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(10)));
+        var probe = launcher.Started.Single();
+        Assert.Null(probe.InputClosedAt);
+
+        // Left to answer and finish as it would have.
+        release.SetResult();
+        await Until(() => server.Answered == 4);
+        await AdvanceUntil(time, () => probe.InputClosedAt is not null, TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1));
+        Assert.NotNull(probe.InputClosedAt);
+    }
+
+    [Fact]
     public async Task Holding_the_probes_says_a_Codex_probe_is_busy_until_its_answers_and_its_grace_are_done()
     {
         CodexUsed();
@@ -806,6 +840,54 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Codex_sign_out_after_a_keyed_reading_is_a_failure_under_that_login_timed_when_it_was_found()
+    {
+        CodexUsed();
+        AppServer();
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        var reading = (await codex.CollectAsync())!;
+        Assert.NotNull(reading.AccountKey);
+
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        time.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1));
+        var asked = time.GetUtcNow();
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        var failure = (await codex.CollectAsync())!;
+
+        Assert.Equal(CodexUsageProbe.SignedOutError, failure.Error);
+        Assert.Empty(failure.Windows);
+        Assert.Equal((reading.AccountKey, reading.Plan), (failure.AccountKey, failure.Plan));
+        // Newer than the reading a peer already holds, so it is passed on beside it.
+        Assert.InRange(failure.MeasuredAt, asked, time.GetUtcNow());
+    }
+
+    [Fact]
+    public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
+    {
+        CodexUsed();
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
+        AppServer();
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(UsageSource.Api, (await codex.CollectAsync())!.Source);
+
+        AppServer(s => s.Answers["account/read"] = _ => FakeAppServer.Result(new { account = new { type = "apiKey" }, requiresOpenaiAuth = true }));
+        time.Advance(TimeSpan.FromHours(2) + TimeSpan.FromMinutes(1));
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        // The probe's reading was the ChatGPT login's, not this one's, however much newer.
+        var usage = (await codex.CollectAsync())!;
+        Assert.Equal((UsageSource.Transcript, 33.0), (usage.Source, usage.Windows[0].Percent));
+    }
+
+    [Fact]
     public async Task The_route_follows_what_Codex_runs()
     {
         // Nothing running: the standalone app-server.
@@ -862,13 +944,18 @@ public sealed class UsageProbeTests : IDisposable
         AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error(
             "failed to fetch codex rate limits: GET https://chatgpt.com/backend-api/wham/usage failed: 401 Unauthorized; body omitted"));
         var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var asked = time.GetUtcNow();
 
         await codex.CollectAsync();
         await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         var usage = await codex.CollectAsync();
 
+        // A failure of its own, timed when the probe found it, not at the transcripts' reading
+        // (which names no login, so neither does this).
         Assert.Equal("Codex needs signing in again on this machine", usage!.Error);
-        Assert.Equal(33.0, usage.Windows[0].Percent);
+        Assert.Empty(usage.Windows);
+        Assert.InRange(usage.MeasuredAt, asked, time.GetUtcNow());
+        Assert.Null(usage.AccountKey);
         // codex login status, which still says signed in after such a failure (E14), is never asked.
         Assert.DoesNotContain(launcher.Started, p => p.Command.Arguments.Contains("login"));
         var probes = launcher.Started.Count;
