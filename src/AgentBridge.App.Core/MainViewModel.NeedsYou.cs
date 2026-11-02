@@ -33,8 +33,11 @@ public sealed partial class MainViewModel
         {
             var existing = NeedsYou.FirstOrDefault(e => e.Key == key);
             var q = card.Session.Question!;
+            var prompt = q.Kind == AgentBridge.Protocol.QuestionKind.Approval && NeedsYouEntry.WholePrompt(q) ? q.Message : null;
+            // A same-id update can change what the entry says (a budget-trimmed message restored,
+            // say), not only what it offers: either rebuilds it.
             if (existing is not null && (existing.QuestionId != q.Id || existing.QuestionModel != card.Question || existing.Mode != NeedsYouEntry.ModeOf(q, card.Agent, card.Question)
-                || existing.HasPrompt != (q.Kind == AgentBridge.Protocol.QuestionKind.Approval && NeedsYouEntry.WholePrompt(q))))
+                || existing.Prompt != prompt || existing.Line != NeedsYouEntry.LineOf(q)))
             {
                 existing.Detach();
                 NeedsYou.Remove(existing);

@@ -241,6 +241,22 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Equal("After the tildes", NeedsYouEntry.LineOf(Make.Form() with { Message = "~~~\na\n```\nb\n~~~\nAfter the tildes" }));
         Assert.Equal("only code", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nonly code\n```" }));
         Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\rport: 8080\r```\r\rWhich option?" }));
+        // A fence in a quote or a list item is skipped too.
+        Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "> ```\n> port: 8080\n> ```\n\nWhich option?" }));
+        Assert.Equal("Which option?", NeedsYouEntry.LineOf(Make.Form() with { Message = "- ```\n  port: 8080\n  ```\n\nWhich option?" }));
+    }
+
+    [Fact]
+    public async Task A_question_updated_under_the_same_id_shows_what_it_says_now()
+    {
+        await SnapshotAsync();
+        var q = Make.Form() with { Id = "f9", Message = "```\nport: 8080\n```", AskedAt = Make.T0.AddMinutes(4) };
+        await AskAsync("idle", q);
+        await Wait.UntilAsync(() => main.NeedsYou.Any(e => e.Card.Id == "idle"), "the entry");
+        Assert.Equal("port: 8080", Entry("idle").Line);
+        // The message a budget had cut, restored under the same id.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("idle") with { Status = SessionStatus.Waiting, Question = q with { Message = "```\nport: 8080\n```\n\nWhich option?" }, UpdatedAt = Make.T0.AddMinutes(5) });
+        await Wait.UntilAsync(() => Entry("idle").Line == "Which option?", "the entry's new line");
     }
 
     [Theory]

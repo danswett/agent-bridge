@@ -243,8 +243,10 @@ public sealed partial class NeedsYouEntry : Observable
         string? open = null;
         string? code = null;
         // Any line ending the renderer breaks on: a bare CR too.
-        foreach (var l in q.Message.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
+        foreach (var raw in q.Message.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
         {
+            // A fence in a quote or a list item is a fence too: read past their markers.
+            var l = Container().Replace(raw, "");
             if (open is not null)
             {
                 if (Closes(open, l)) { open = null; } else if (l.Trim().Length > 0) { code ??= l; }
@@ -252,10 +254,13 @@ public sealed partial class NeedsYouEntry : Observable
             }
             var m = Fence().Match(l);
             if (m.Success) { open = m.Groups[1].Value; continue; }
-            if (l.Trim().Length > 0) { return PlainLine(l); }
+            if (PlainLine(raw) is { Length: > 0 } line) { return line; }
         }
         return PlainLine(code ?? "");
     }
+
+    [GeneratedRegex(@"^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+")]
+    private static partial Regex Container();
 
     // Markdown down to one line of plain text: no emphasis, code or heading marks, whitespace
     // collapsed, cut with an ellipsis (pwa/js/needs-you.js plainLine). For prose only: code is shown
