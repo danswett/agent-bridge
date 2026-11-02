@@ -10,19 +10,23 @@ private actor BlobStagingPeer {
     private var connected = true
     private let disconnectAfterResponse: Bool
     private let failure: Bool
+    private let holdResponse: Bool
+    private var responseWaiter: CheckedContinuation<Void, Never>?
+    private(set) var requestWasCancelled = false
     private var firstRequest: CheckedContinuation<Void, Never>?
 
-    init(_ states: [(Int, Bool)], disconnectAfterResponse: Bool = false, failure: Bool = false) {
+    init(_ states: [(Int, Bool)], disconnectAfterResponse: Bool = false, failure: Bool = false, holdResponse: Bool = false) {
         self.states = states.map { .object(["received": .number(Double($0.0)), "complete": .bool($0.1)]) }
         self.disconnectAfterResponse = disconnectAfterResponse
         self.failure = failure
+        self.holdResponse = holdResponse
     }
 
     func validate() throws {
         guard connected else { throw RelayError.disconnected }
     }
 
-    func send(_ operation: BridgeOperation, timeout: Duration) throws -> JSONValue {
+    func send(_ operation: BridgeOperation, timeout: Duration) async throws -> JSONValue {
         try Task.checkCancellation()
         try validate()
         requests.append(operation)
@@ -31,6 +35,11 @@ private actor BlobStagingPeer {
         firstRequest = nil
         if operation.op == "attachment.discard" {
             return .object([:])
+        }
+        if holdResponse {
+            await withCheckedContinuation { responseWaiter = $0 }
+            requestWasCancelled = Task.isCancelled
+            try Task.checkCancellation()
         }
         if failure {
             throw RelayError.refused("The blob digest did not match.")
@@ -49,6 +58,11 @@ private actor BlobStagingPeer {
     func waitForStart() async {
         guard requests.isEmpty else { return }
         await withCheckedContinuation { firstRequest = $0 }
+    }
+
+    func releaseResponse() {
+        responseWaiter?.resume()
+        responseWaiter = nil
     }
 
     func confirm(_ attachment: BridgeBlobAttachment, timeout: Duration = .seconds(5), pollInterval: Duration = .milliseconds(1)) async throws -> UUID {
@@ -94,6 +108,19 @@ private func stagingAttachment() throws -> BridgeBlobAttachment {
     await peer.waitForStart()
     task.cancel()
     await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await peer.requests.map(\.op) == ["attachment.start", "attachment.discard"])
+    #expect(await peer.deleted)
+}
+
+@Test func cancellingBlobStagingDoesNotCancelItsInFlightSharedChannelRequest() async throws {
+    let attachment = try stagingAttachment()
+    let peer = BlobStagingPeer([(attachment.size, true)], holdResponse: true)
+    let task = Task { try await peer.confirm(attachment) }
+    await peer.waitForStart()
+    task.cancel()
+    await peer.releaseResponse()
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await !peer.requestWasCancelled)
     #expect(await peer.requests.map(\.op) == ["attachment.start", "attachment.discard"])
     #expect(await peer.deleted)
 }
