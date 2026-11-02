@@ -97,8 +97,11 @@ export class LaunchPanel {
   // Which machines shown only for their questions have a folder-trust question waiting, as last
   // seen: the Launch way keeps its dot while any does, whichever machine is picked (#217).
   #asks = new Map();
-  // When each such machine not picked was last asked for its list (probe()).
-  #probed = new Map();
+  // Each such machine not picked whose list was asked for (probe()): when, and a token that a
+  // later probe, its being picked or its leaving the picker replaces, so an older answer
+  // arriving late never overwrites what was seen since.
+  #probes = new Map();
+  #probeSeq = 0;
   #target = null;
   #options = null;
   // Sessions the account's other machines offer: [{ hostId, machineName, key, resumable }].
@@ -201,7 +204,7 @@ export class LaunchPanel {
     if (choices.length) { e.machine.value = picked; }
     // A machine no longer offered has nothing waiting here.
     const offered = new Set((list ?? []).map((m) => m.hostId));
-    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probed.delete(id); } }
+    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probes.delete(id); } }
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,
@@ -246,7 +249,9 @@ export class LaunchPanel {
     // Another machine's choices: nothing picked on the last one carries over but the prompt.
     for (const s of this.els.form.querySelectorAll('select')) { delete s.dataset.scope; }
     this.root.hidden = !target;
-    if (!target) { this.#asks.clear(); this.#probed.clear(); this.waiting(false); return; }
+    if (!target) { this.#asks.clear(); this.#probes.clear(); this.waiting(false); return; }
+    // Picked: its own list says from now on, and a probe of it still on its way is stale.
+    this.#probes.delete(target.hostId);
     this.#unwatch = this.service.watch(target.hostId, (entry) => this.#settled(entry));
     // One that finished while another machine was picked was not watched then: the list asked
     // for next supersedes the question it named, as it would have.
@@ -263,15 +268,15 @@ export class LaunchPanel {
   // question waits there too, without its being picked. load() is its launch.options.
   probe(hostId, load) {
     if (!this.#target || hostId === this.#target.hostId) { return; }
-    const at = this.#probed.get(hostId);
-    if (at !== undefined && Date.now() - at < LaunchPanel.recheckMs) { return; }
-    this.#probed.set(hostId, Date.now());
+    const last = this.#probes.get(hostId);
+    if (last && Date.now() - last.at < LaunchPanel.recheckMs) { return; }
+    const token = ++this.#probeSeq;
+    this.#probes.set(hostId, { at: Date.now(), token });
     load().then((o) => {
-      // Picked meanwhile: its own list, read for the panel, says.
-      if (!this.#target || this.#target.hostId === hostId) { return; }
+      if (this.#probes.get(hostId)?.token !== token) { return; }
       this.#asks.set(hostId, (o?.trust ?? []).length > 0);
       this.waiting([...this.#asks.values()].some(Boolean));
-    }, () => { this.#probed.delete(hostId); });
+    }, () => { if (this.#probes.get(hostId)?.token === token) { this.#probes.delete(hostId); } });
   }
 
   // A channel to that machine opened again: one shown only for its questions, with none shown,

@@ -576,6 +576,41 @@ test.describe('a folder-trust question', () => {
     await expect(way).toHaveAttribute('aria-label', 'Launch, a question is waiting');
     expect(await page.evaluate(() => window.agentBridgeDemo.launchPanel.hostId)).toBe('demo-laptop');
   });
+  test('an older reading of a machine not picked, arriving after it was picked and left, does not take its dot away', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    // The first reading of DEV-VM1 (shadow) as a machine not picked is held, with what it said then.
+    await page.evaluate(() => {
+      const p = window.agentBridgeDemo.page;
+      const was = p.launchTarget.bind(p);
+      window.__held = [];
+      let first = true;
+      p.launchTarget = (id) => {
+        const t = was(id);
+        if (id !== 'demo-shadow' || !first) { return t; }
+        first = false;
+        return { ...t, load: () => t.load().then((o) => new Promise((go) => { window.__held.push(() => go(o)); })) };
+      };
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__held.length)).toBe(1);
+    // Then a question there, seen once it is picked; and another machine picked again.
+    await page.evaluate(() => window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' }));
+    await go(page, 'launch');
+    await field(page, 'machine').selectOption('demo-shadow');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Waiting on DEV-VM1 (shadow)');
+    await field(page, 'machine').selectOption('demo-laptop');
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    const way = page.locator('#nav [data-nav="launch"]');
+    await expect(way).toHaveClass(/attention/);
+    // The held reading, from before the question, arrives last.
+    await page.evaluate(() => { for (const go of window.__held.splice(0)) { go(); } });
+    await page.waitForTimeout(500);
+    await expect(way).toHaveClass(/attention/);
+  });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');
