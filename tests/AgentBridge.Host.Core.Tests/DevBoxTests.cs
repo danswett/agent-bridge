@@ -123,6 +123,12 @@ public sealed class DevBoxTests : IDisposable
         Assert.Null(identity);
         Assert.Contains("the Dev Box agent is installed", problem);
         Assert.Contains($"no {DevBoxIdentity.SettingsFile} was found", problem);
+
+        // A folder it may not look at is not a folder that is not there.
+        var (denied, why) = DevBoxIdentity.Find(installed, _ => throw new UnauthorizedAccessException("Access to the path is denied."));
+        Assert.Null(denied);
+        Assert.Contains("could not be checked", why);
+        Assert.Contains("Access to the path is denied", why);
     }
 
     [Fact]

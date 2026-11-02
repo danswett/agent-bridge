@@ -30,18 +30,23 @@ public sealed record DevBoxIdentity(Uri Endpoint, string Project, string DevBox)
     // This machine's identity, found and read. Only a machine without the Dev Box agent at all is
     // not a Dev Box: one whose agent is installed but whose settings cannot be searched, found or
     // kept hold of is a Dev Box that cannot be kept awake, which is said (a problem), never taken
-    // for "not a Dev Box", whose silence would let it hibernate.
-    public static (DevBoxIdentity? Identity, string? Problem) Find(string root = AgentRoot)
+    // for "not a Dev Box", whose silence would let it hibernate. Directory.Exists is not used to
+    // tell: it answers false for a folder it was not allowed to look at, too. attributesOf is
+    // File.GetAttributes, given by a test.
+    public static (DevBoxIdentity? Identity, string? Problem) Find(string root = AgentRoot, Func<string, FileAttributes>? attributesOf = null)
     {
         string? path;
         try
         {
-            if (!Directory.Exists(root)) { return (null, null); }
+            FileAttributes attributes;
+            try { attributes = (attributesOf ?? File.GetAttributes)(root); }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return (null, null); }
+            if (!attributes.HasFlag(FileAttributes.Directory)) { return (null, $"{root}, where the Dev Box agent is installed, is not a folder"); }
             path = Newest(root);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return (null, $"the Dev Box agent is installed ({root}), but its settings could not be searched for ({e.Message})");
+            return (null, $"whether the Dev Box agent is installed, and where its settings are, could not be checked ({root}: {e.Message})");
         }
         if (path is null) { return (null, $"the Dev Box agent is installed ({root}), but no {SettingsFile} was found under it"); }
         var (identity, problem) = Read(path);
