@@ -246,6 +246,18 @@ test.describe('on a phone', () => {
     await expect(page.locator('#search')).toBeFocused();
   });
 
+  test('Back from a session gives focus back to the row it was opened from', async ({ page }) => {
+    await openDemo(page);
+    const r = row(page, CLAUDE).locator('.row-main');
+    await r.focus();
+    await page.keyboard.press('Enter');
+    const v = view(page, CLAUDE);
+    await expect(v).toBeVisible();
+    await v.locator('.back').click();
+    await expect(v).toBeHidden();
+    await expect(r).toBeFocused();
+  });
+
   test('the header\'s overflow menu holds Pin, Details and End session', async ({ page }) => {
     await openDemo(page);
     const v = await open(page, CODEX);
@@ -301,6 +313,18 @@ test('a Needs you entry opens its session on Conversation, where its question is
   await expect(v).toBeVisible();
   await expect(v.locator('.view-tab', { hasText: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
   await expect(v.locator('.question')).toBeVisible();
+});
+
+test('a Needs you entry scrolls its question into sight, however far its conversation was scrolled', async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 600 });
+  await openDemo(page);
+  // A long response above the question, and the conversation scrolled to its top.
+  await upsert(page, COPILOT, { updatedAt: later(), activity: { response: Array.from({ length: 60 }, (_, i) => `Paragraph ${i} of a long answer.`).join('\n\n') } });
+  const v = await open(page, COPILOT);
+  await v.locator('.stream-scroll').evaluate((e) => { e.scrollTop = 0; });
+  await open(page, CLAUDE);
+  await page.locator(`#needs-you .needs-entry[data-id="${COPILOT}"] .needs-title`).click();
+  await expect(v.locator('.question-slot .question')).toBeInViewport();
 });
 
 test('Tools left while the session changed are fetched again when they show', async ({ page }) => {
@@ -524,6 +548,11 @@ test('a folder\'s path in Details is mono, on one line, and gives up its middle 
   expect(shape.cut).toBe(true);
   expect(shape.tail).toBe('\\Copilot');
   expect(shape.whole).toBe(true);
+  // A trailing separator still leaves the last name whole, and the middle the part given up.
+  await upsert(page, CODEX, { updatedAt: new Date(Date.now() + 5000).toISOString(), cwd: `${cwd}\\` });
+  await expect(path).toHaveAttribute('title', `${cwd}\\`);
+  expect(await v.locator('.fact-folder .path-tail').textContent()).toBe('\\Copilot\\');
+  expect(await v.locator('.fact-folder .path-head').evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
 });
 
 // Secondary text is text2 over whatever it sits on: 4.5:1 or better, on a row selected or not,

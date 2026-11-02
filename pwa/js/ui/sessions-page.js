@@ -66,6 +66,8 @@ export class SessionsPage {
   // Whether the address names a session: on a phone, its view is pushed over the list.
   #open = false;
   #inspectorHidden = false;
+  // What had focus in the list when a session was opened on a phone.
+  #returnTo = null;
   // The machine last launched on or picked to launch on: kept here, and on the device as far as
   // its storage allows, so a picker never depends on a write that may fail.
   #launchHost = null;
@@ -198,6 +200,8 @@ export class SessionsPage {
     card.element.scrollIntoView({ block: 'nearest' });
     card.els.titleText.tabIndex = -1;
     card.els.titleText.focus({ preventScroll: true });
+    // A question it was opened for is in sight, however far its conversation was scrolled.
+    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest' });
     return true;
   }
 
@@ -205,6 +209,9 @@ export class SessionsPage {
   // On a phone that is a new entry (Back returns to the list); on a desktop it replaces the last.
   #choose(card) {
     const rest = [card.hostId ?? '', card.id];
+    // What had focus in the list (a row, a Needs you entry) gets it back when a phone returns there.
+    const had = globalThis.document?.activeElement;
+    this.#returnTo = had && this.$('list-pane')?.contains(had) ? had : card.els.open;
     if (!this.shell) { this.view.select(SessionListView.key(card.hostId, card.id)); this.#open = true; this.#drawPanes(); return; }
     const phone = this.phone.matches;
     const onSessions = this.shell.route === 'sessions';
@@ -254,8 +261,20 @@ export class SessionsPage {
       // machines are known, startup does the same with what the address names.
       if (this.hosts.selection !== null && rest[0] && !this.hosts.shows(rest[0])) { this.hosts.visit(rest[0]); }
     } else {
+      const was = this.#open;
       this.#want = null;
       this.#open = false;
+      this.#settleSelection();
+      this.#drawPanes();
+      // On a phone the view that had focus went: focus goes back where it came from in the list,
+      // or to the list's heading.
+      if (was && this.phone.matches) {
+        const back = this.#returnTo?.isConnected && this.#returnTo.getClientRects().length ? this.#returnTo : this.$('sessions-h');
+        if (back && !back.matches('button, a, [tabindex]')) { back.tabIndex = -1; }
+        back?.focus({ preventScroll: false });
+      }
+      this.#returnTo = null;
+      return;
     }
     this.#settleSelection();
     this.#drawPanes();

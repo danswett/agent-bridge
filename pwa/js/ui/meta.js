@@ -31,7 +31,9 @@ export function factsOf(text) {
 // the start shortens to an ellipsis and the last part stays whole. The whole path is its tooltip.
 export function pathView(path, cls = '') {
   const p = String(path ?? '');
-  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  // Split before the last name, not before a trailing separator: "…\\Copilot\\" keeps "Copilot".
+  const bare = p.replace(/[\\/]+$/, '');
+  const cut = Math.max(bare.lastIndexOf('/'), bare.lastIndexOf('\\'));
   const head = cut > 0 && cut < p.length - 1 ? p.slice(0, cut) : '';
   const tail = head ? p.slice(cut) : p;
   return h('span', { class: `path mono${cls ? ` ${cls}` : ''}`, title: p },
