@@ -561,6 +561,14 @@ public static partial class CommandLine
         return false;
     }
 
+    static bool IsRuntime(string path)
+    {
+        var name = path.Replace('\\', '/');
+        name = name[(name.LastIndexOf('/') + 1)..];
+        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) { name = name[..^4]; }
+        return name.Equals("node", StringComparison.OrdinalIgnoreCase) || name.Equals("bun", StringComparison.OrdinalIgnoreCase);
+    }
+
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
     // Codex's program and its own arguments after it. The program itself when it is Codex's
@@ -659,6 +667,9 @@ public static partial class CommandLine
             if (arguments[i].StartsWith('-')) { first = i; }
         }
         if (first is < 1 or > 2 || arguments.Count - first != 6) { return false; }
+        // Two words before the options only for a runtime and its script: `claude summarise -p
+        // /usage ...` is a one-word prompt, flattened, ahead of options it quoted.
+        if (first == 2 && !IsRuntime(arguments[0])) { return false; }
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = first; i < arguments.Count; i++)
         {

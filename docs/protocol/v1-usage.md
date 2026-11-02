@@ -243,9 +243,10 @@ refresh and locking, and runs no model turn.
   when the login held steady across it: the same email in both `account/read` answers, a workspace
   `accountId` and a non-null `ordinaryUsageAllowed` on the snapshot, the standalone route, and no
   other Codex process, or unreadable runtime, seen from just before the first `account/read` to
-  just after the second.
+  just after the second (a look still under way then counts).
   A daemon-route reading never has one: another client can switch the daemon's login unseen.
-  An API-key login, another provider or no `codex` falls back to the transcripts with no error,
+  An API-key login, another provider or no `codex` falls back to the transcripts with no error
+  (one the second `account/read` finds drops that probe's usage read, which may be the old login's),
   and clears an earlier sign-out failure and the last probe reading, which was another login's.
   Codex reported as needing sign-in (its `-32603` "...Please log out and sign in again", including
   a reused refresh token, an authentication failure from the usage read after Codex's own recovery,
@@ -281,7 +282,8 @@ host stopped waiting for it. None starts beside a Claude probe already running o
 left by a host that has since stopped), nor while the machine's Claude processes, any one's
 command line, or a node or bun runtime's, cannot be read to tell. A Claude probe is recognised only by exactly its own
 options, `-p /usage --safe-mode --no-session-persistence --output-format json` after the
-executable, so a real prompt that only quotes them still holds discovery. After a
+executable (or after a node or bun runtime and its script), so a real prompt that only quotes
+them, even one word long, still holds discovery. After a
 failure or a rate-limited answer the next waits 15 minutes, then 30, 60 and at most 2 hours, until
 one works; the last reading stands meanwhile. A finished probe's reading is read at once, not at
 the next turn.

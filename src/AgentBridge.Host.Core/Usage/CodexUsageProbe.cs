@@ -278,7 +278,13 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             return SignedOut(secondError) && !Slow(secondError) ? new(CodexProbeKind.SignedOut, reading, secondError)
                 : Failure(secondError) with { Reading = reading };
         }
-        if (Login(second.Result) is { Kind: CodexProbeKind.SignedOut } gone) { return gone with { Reading = reading }; }
+        if (Login(second.Result) is { } changed)
+        {
+            // Signed in some other way by the second read (an API key, another provider): the
+            // usage read may have been the old login's, and is not this one's, so it is dropped.
+            // A sign-out or an empty answer keeps it, unkeyed.
+            return changed.Kind == CodexProbeKind.NotApplicable ? changed : changed with { Reading = reading };
+        }
         var key = !others ? Key(Email(first.Result), Email(second.Result), limits.Result) : null;
         return new(CodexProbeKind.Reading, reading with { AccountKey = key });
     }
@@ -417,8 +423,11 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
 {
     static readonly TimeSpan Every = TimeSpan.FromMilliseconds(250);
     readonly CancellationTokenSource stop = new();
+    // A look holds this from asking to recording, so End's answer includes every look already
+    // under way: cancelling the polling does not stop one that has begun.
+    readonly object gate = new();
     Task? polling;
-    volatile bool seen;
+    bool seen, ended;
 
     public void Begin()
     {
@@ -440,13 +449,26 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
     // Whether another Codex process was seen at any point.
     public bool End()
     {
-        if (stop.IsCancellationRequested) { return seen; }
-        stop.Cancel();
-        Look();
-        return seen;
+        lock (gate)
+        {
+            if (ended) { return seen; }
+            stop.Cancel();
+            Observe();
+            ended = true;
+            return seen;
+        }
     }
 
     void Look()
+    {
+        // One begun after End is outside the window it answers for.
+        lock (gate)
+        {
+            if (!ended) { Observe(); }
+        }
+    }
+
+    void Observe()
     {
         try
         {

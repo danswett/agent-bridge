@@ -830,6 +830,8 @@ public class DiscoveryHoldTests
     [InlineData("claude --safe-mode --no-session-persistence --output-format json /usage", false)]
     // macOS's ps flattens quoting: a real prompt quoting the probe's options is not the probe.
     [InlineData("claude -p summarise -p /usage --safe-mode --no-session-persistence --output-format json", false)]
+    [InlineData("claude summarise -p /usage --safe-mode --no-session-persistence --output-format json", false)]
+    [InlineData("/usr/local/bin/bun /opt/claude/cli.js -p /usage --safe-mode --no-session-persistence --output-format json", true)]
     [InlineData("claude -p /usage --safe-mode --no-session-persistence --output-format json -- fix the build", false)]
     [InlineData("claude --model opus -p /usage --safe-mode --no-session-persistence --output-format json", false)]
     [InlineData("claude fix the build -p /usage --safe-mode --no-session-persistence --output-format json", false)]

@@ -885,6 +885,59 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_switch_to_an_api_key_seen_by_the_second_account_read_drops_the_probes_reading_for_the_transcripts()
+    {
+        CodexUsed();
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
+        AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account())
+            : FakeAppServer.Result(new { account = new { type = "apiKey" }, requiresOpenaiAuth = true }));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        var usage = (await codex.CollectAsync())!;
+
+        Assert.Equal((UsageSource.Transcript, 33.0, null), (usage.Source, usage.Windows[0].Percent, usage.Error));
+    }
+
+    [Fact]
+    public async Task A_look_for_other_Codex_processes_still_under_way_when_the_probe_ends_still_withholds_the_key()
+    {
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var armed = 0;
+        f.Processes.Queried = agent =>
+        {
+            if (agent != AgentKind.Codex || Volatile.Read(ref armed) == 0) { return; }
+            switch (Interlocked.Increment(ref armed))
+            {
+                case 2:
+                    // A polling look, slow to come back, sees another Codex process.
+                    entered.TrySetResult();
+                    Thread.Sleep(1500);
+                    f.Processes.Run(AgentKind.Codex, 9100, "codex.exe login");
+                    break;
+                case 3:
+                    // Gone by the probe's last look.
+                    f.Processes.Exit(AgentKind.Codex, 9100);
+                    break;
+            }
+        };
+        var run = CodexProbe().Start();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        Volatile.Write(ref armed, 1);
+        _ = Task.Run(() => time.Advance(TimeSpan.FromMilliseconds(300)));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        release.SetResult();
+        var outcome = await RunToEnd(run);
+
+        Assert.Equal(CodexProbeKind.Reading, outcome.Kind);
+        Assert.Null(outcome.Reading!.AccountKey);
+    }
+
+    [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
     {
         CodexUsed();
