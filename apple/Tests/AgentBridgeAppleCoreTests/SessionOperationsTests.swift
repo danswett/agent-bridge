@@ -15,6 +15,39 @@ import Testing
     #expect(operation.data["request"]?.string == operation.requestID?.uuidString.lowercased())
 }
 
+@Test func replyRejectsEscapingExpansionBeforeAMutationCanBePrepared() throws {
+    let text = "Continue" + String(repeating: "\u{0000}", count: 12000)
+    #expect(text.utf8.count < 16 * 1024)
+    #expect(throws: BridgeOperationError.self) {
+        try BridgeSessionOperations.reply(sessionID: "s", text: text, hasQuestion: false, capabilities: ["sessions.reply"])
+    }
+    // A rejected draft does not prevent the next ordinary press being prepared.
+    let next = try BridgeSessionOperations.reply(sessionID: "s", text: "Continue", hasQuestion: false, capabilities: ["sessions.reply"])
+    #expect(next.data["text"]?.string == "Continue")
+}
+
+@Test func replyBudgetIncludesTheEnvelopeLongestChannelIDAndAllAttachments() throws {
+    let requestID = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000001"))
+    let attachments = (1 ... 10).map { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", $0))! }
+    let capabilities: Set = ["sessions.reply", "sessions.attach"]
+    let base = try BridgeSessionOperations.reply(sessionID: "s", text: "Continue", attachments: attachments,
+                                                 hasQuestion: false, capabilities: capabilities, requestID: requestID)
+    let overhead = try JSONEncoder().encode(base.request(id: Int.max)).count
+    let available = 48 * 1024 - overhead
+    let text = "Continue" + String(repeating: "\u{0000}", count: available / 6) + String(repeating: "x", count: available % 6)
+    let boundary = try BridgeSessionOperations.reply(sessionID: "s", text: text, attachments: attachments,
+                                                     hasQuestion: false, capabilities: capabilities, requestID: requestID)
+    #expect(try JSONEncoder().encode(boundary.request(id: Int.max)).count == 48 * 1024)
+    // Data alone still fits: only the complete request crosses the budget.
+    var tooLarge = boundary.data
+    tooLarge["text"] = .string(text + "x")
+    #expect(try JSONEncoder().encode(JSONValue.object(tooLarge)).count < 48 * 1024)
+    #expect(throws: BridgeOperationError.self) {
+        try BridgeSessionOperations.reply(sessionID: "s", text: text + "x", attachments: attachments,
+                                          hasQuestion: false, capabilities: capabilities, requestID: requestID)
+    }
+}
+
 @Test func unknownDeliveryAndStopOutcomesNeverClaimSuccess() throws {
     let unknown = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"outcome":"new-host-outcome","reason":"uncertain"}"#.utf8))
     let delivery = BridgeDeliveryResult(json: unknown)
