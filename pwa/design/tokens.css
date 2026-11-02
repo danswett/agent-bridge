@@ -202,8 +202,9 @@
   }
 }
 
-/* Inline mono beside each platform's system face (tokens.json type.inlineMono). */
-:root[data-platform="apple"] { --ab-inline-mono-x: 0.5078; --ab-inline-mono-scale: 0.9766; }
+/* Inline mono beside each platform's system face (tokens.json type.inlineMono), on the platforms
+   whose face it is (pwa/js/platform.js names them on <html data-platform>). */
+:root[data-platform="macos"], :root[data-platform="ios"], :root[data-platform="ipados"] { --ab-inline-mono-x: 0.5078; --ab-inline-mono-scale: 0.9766; }
 :root[data-platform="android"] { --ab-inline-mono-x: 0.5137; --ab-inline-mono-scale: 0.9878; }
 
 /* High contrast: every role and surface is a system colour (tokens.json hc). */

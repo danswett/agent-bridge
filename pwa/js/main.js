@@ -18,7 +18,8 @@
 //   usage.js, fleet.js  agent usage merged across machines, and each machine's status line
 //   sessions-store.js, ui/*  what is shown; ui/sessions-page.js wires cards and launches to
 //                    the machine each is for
-//   platform.js      which system face the page is in, for inline mono's x-height
+//   platform.js      the platform layer (#168): shortcut hints, safe areas, the edge swipe back,
+//                    and which system face the page is in, for inline mono's x-height
 //   demo.js          ?demo=1: simulated machines (?machines=2 or 3), no relay
 import { RELAY } from '../config.js';
 import { loadIdentity, deviceName, kvGet, kvPut, kvDelete } from './identity.js';
@@ -40,9 +41,10 @@ import { UpdateControl } from './update.js';
 import { UsageView } from './ui/usage-view.js';
 import { DemoBlobStore, DemoConnection, DemoHost, demoDelegating, demoMachines, demoTransfers, demoTrust, runScript } from './demo.js';
 import { RelayBlobs } from './blobs.js';
-import { markPlatform } from './platform.js';
+import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
-markPlatform();
+// Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
+if (installedOnApple(markPlatform())) { edgeSwipeBack(document, () => history.back()); }
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;

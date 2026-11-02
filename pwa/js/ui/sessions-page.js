@@ -59,6 +59,15 @@ export function hostNote(link, name, { online, named = false }) {
 
 const OVER_LIST = Object.freeze({ overList: true });
 
+// A delegate opened in a session pushed over the list (a phone's, ui.md §5.2): one more entry, so
+// the system's Back (Android's button or gesture, iOS's edge swipe, platform.js) closes it before
+// it leaves the session, and the session before it leaves the list (#168).
+const overDelegate = (id) => Object.freeze({ overList: true, delegate: id });
+const DELEGATE = 'details.delegate-detail';
+const FOLD = 'details.delegates-finished';
+// Open where it can be seen: not behind another tab or in the finished fold shut.
+const shown = (d) => (d.checkVisibility ? d.checkVisibility() : d.getClientRects().length > 0);
+
 export class SessionsPage {
   #shownCaps = new Map();
   // The session the address names (#/sessions/<machine>/<session>), until it has arrived.
@@ -72,6 +81,10 @@ export class SessionsPage {
   // its storage allows, so a picker never depends on a write that may fail.
   #launchHost = null;
   #unroute = null;
+  // The delegate a phone's back stack has an entry for (#168), and the listeners that keep it.
+  #delegateShown = null;
+  #listening = null;
+  #stepping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -123,7 +136,7 @@ export class SessionsPage {
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
     });
-    this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); };
+    this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
     this.view.onBack = () => this.#back();
     this.view.onInspector = () => this.#toggleInspector();
@@ -165,7 +178,105 @@ export class SessionsPage {
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
+      this.#delegateBack($('session-views'));
     }
+  }
+
+  // The delegate level of a phone's back stack: opening a delegate in a pushed session adds an
+  // entry (one, however many are opened), closing the last one by hand takes the entry back, and
+  // going back from it closes the delegate. The entry is the session's own address, so a reload or
+  // a link never lands on a delegate: a reload on one goes back to its session.
+  #delegateBack(views) {
+    const win = globalThis.window;
+    if (!views || !win) { return; }
+    this.#listening = new AbortController();
+    const { signal } = this.#listening;
+    if (this.#delegateLevel()) { this.#stepBack(); }
+    // toggle doesn't bubble: it is heard on its way down.
+    views.addEventListener('toggle', (e) => {
+      const d = e.target;
+      // The finished fold shut hides the delegates in it; opened, it may show one again.
+      if (d?.matches?.(FOLD)) { this.#delegateStep(); return; }
+      if (!d?.matches?.(DELEGATE)) { return; }
+      const id = d.closest('.delegate')?.dataset.id ?? '';
+      const state = win.history.state;
+      if (d.open) {
+        if (state?.delegate === id || !this.#pushed()) { return; }
+        const url = win.location.href;
+        if (this.#delegateLevel()) { win.history.replaceState(overDelegate(id), '', url); } else { win.history.pushState(overDelegate(id), '', url); }
+        this.#delegateShown = id;
+      } else {
+        this.#delegateStep();
+      }
+    }, { capture: true, signal });
+    win.addEventListener('popstate', () => {
+      this.#stepping = false;
+      const want = this.#delegateLevel() ? win.history.state.delegate : null;
+      const had = this.#delegateShown;
+      this.#delegateShown = want;
+      if ((had === null && want === null) || !this.phone.matches) { return; }
+      // Every view's, not only the selected one's: going back from a delegate to the list (the
+      // header's Back) has deselected its session by now, and a delegate left open there would be
+      // open without its step when the session is opened again or gone forward to.
+      for (const d of views.querySelectorAll(`${DELEGATE}[open]`)) {
+        if (d.closest('.delegate')?.dataset.id !== want || !this.view.selected?.view?.contains(d)) { d.open = false; }
+      }
+      // Forward again: the delegate it was on, where it still is.
+      const v = this.view.selected?.view;
+      const row = want && v ? [...v.querySelectorAll('.delegate')].find((el) => el.dataset.id === want)?.querySelector(DELEGATE) : null;
+      if (row && !row.open) {
+        this.view.selected.setTab('delegates');
+        // One that finished since Back moved, closed, into the finished fold, which stays shut.
+        const fold = row.closest(FOLD);
+        if (fold) { fold.open = true; }
+        row.open = true;
+      }
+      // Forward to a delegate its machine has stopped listing shows nothing: no step.
+      this.#delegateStep();
+    }, { signal });
+    // Another tab hides an open delegate as surely as closing it does.
+    const tabs = new MutationObserver(() => this.#delegateStep());
+    tabs.observe(views, { subtree: true, attributes: true, attributeFilter: ['data-tab'] });
+    signal.addEventListener('abort', () => tabs.disconnect());
+  }
+
+  // The delegate step matches what the selected session shows: one entry while a delegate is open
+  // and in view in it, pushed over the list, and none otherwise. A row can close, hide or go
+  // without anyone pressing Back: closed by hand with another still open, behind another tab or
+  // the finished fold shut, removed by its machine's update (no toggle), or left open across a
+  // phone → wider → phone resize, and each would leave Back an invisible step or skip a visible one.
+  #delegateStep() {
+    const win = globalThis.window;
+    if (!this.#listening || this.#stepping || !win) { return; }
+    const level = this.#delegateLevel();
+    if (!this.phone.matches) {
+      if (level) { this.#stepBack(); }
+      return;
+    }
+    if (!this.#pushed()) { return; }
+    const open = [...(this.view.selected?.view?.querySelectorAll(`${DELEGATE}[open]`) ?? [])].filter(shown).map((d) => d.closest('.delegate')?.dataset.id ?? '');
+    if (open.length === 0) {
+      if (level) { this.#stepBack(); }
+      return;
+    }
+    const was = win.history.state?.delegate;
+    const id = open.includes(was) ? was : open[0];
+    if (level && was === id) { return; }
+    if (level) { win.history.replaceState(overDelegate(id), '', win.location.href); } else { win.history.pushState(overDelegate(id), '', win.location.href); }
+    this.#delegateShown = id;
+  }
+
+  // On a phone, a session pushed over the list: where a delegate is a step of its own.
+  #pushed() { return this.phone.matches && this.#open && this.shell?.route === 'sessions' && this.#overList(); }
+
+  #delegateLevel() { return typeof globalThis.history?.state?.delegate === 'string'; }
+
+  // Back one step from a delegate's entry, once: both width queries report one resize, and a
+  // second back before the first lands would go past the session to the list.
+  #stepBack() {
+    if (this.#stepping) { return; }
+    this.#stepping = true;
+    globalThis.history.back();
   }
 
   // Every machine shown, more than one of them: the cards say which machine each is on.
@@ -226,6 +337,12 @@ export class SessionsPage {
     // A phone's back from a session is always the list: one session replaces another, and from
     // another page (Launch, a notification's) the list goes in first.
     const onSession = onSessions && this.shell.rest.length >= 2;
+    if (onSession && this.#delegateLevel()) {
+      // Over a delegate's entry: back to its session's first, so the one chosen replaces that.
+      globalThis.addEventListener('popstate', () => this.#choose(card), { once: true });
+      this.#stepBack();
+      return;
+    }
     if (onSession) {
       this.shell.go('sessions', { rest, replace: true, state: globalThis.history?.state ?? null });
     } else {
@@ -327,22 +444,28 @@ export class SessionsPage {
   }
 
   // Back to the list: the entry beneath, when it is the list, so the browser's own back and this
-  // agree; otherwise the list replaces the session's entry.
+  // agree; otherwise the list replaces the session's entry. From a delegate's entry, the list is
+  // two beneath.
   #back() {
     if (this.#overList() && globalThis.history?.length > 1) {
-      globalThis.history.back();
+      // Its popstate is on its way: nothing else steps back from the delegate's entry meanwhile.
+      if (this.#delegateLevel()) { this.#stepping = true; }
+      globalThis.history.go(this.#delegateLevel() ? -2 : -1);
       return;
     }
     this.shell?.go('sessions', { replace: true });
   }
 
   // The window crossed a width of §5.2. The session named stays selected; a phone that now shows
-  // one gets an entry under it, so its back goes to the list rather than out of the app.
+  // one gets an entry under it, so its back goes to the list rather than out of the app. A
+  // delegate's entry goes with the phone's width and comes back with it: wider, a delegate is not a
+  // step of its own.
   #resized() {
     this.#listBeneath();
     this.#settleSelection();
     this.view.layoutChanged();
     this.#drawPanes();
+    this.#delegateStep();
   }
 
   #toggleInspector() {
@@ -367,6 +490,8 @@ export class SessionsPage {
   clear() {
     this.#unroute?.();
     this.#unroute = null;
+    this.#listening?.abort();
+    this.#listening = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();

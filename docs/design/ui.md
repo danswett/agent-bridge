@@ -590,7 +590,25 @@ machine, online ones first, then the account's offline machines (#213):
   line wraps; the account never gives way to the agent's name or the age. Which machine took a
   reading is for diagnosis, in a tooltip or said to a screen reader, never on the line.
 - **Platform layer (#168):** detection only for shortcut hints, safe areas and back
-  navigation.
+  navigation (`pwa/js/platform.js`). Never a reskin: no control, colour, icon or layout differs.
+  - **Detection,** once at start-up, on `<html data-platform data-standalone>`: Chromium's client
+    hints, otherwise the user agent; a Mac with a touch screen is iPadOS. Values: `windows`,
+    `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux`, `unknown`. `unknown` is Windows.
+  - **Nothing depends on it being right.** Ctrl and ⌘ both work everywhere; only the hint
+    follows the platform (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere).
+  - **Safe areas:** only an app installed on iOS or iPadOS draws under the notch and the home
+    indicator (`viewport-fit=cover`), and there the app bar, the bottom navigation (or the rail)
+    and the reply box keep clear of them. Everywhere else the browser keeps the page out of them,
+    so a platform taken for another still has its safe areas kept clear. Installed on iOS or
+    iPadOS, a tap doesn't wait for a double tap.
+  - **Back:** on a phone, a delegate opened in a pushed session is a step of its own. The
+    system's Back (Android's button and gesture, iOS's edge swipe in an installed app, the
+    browser's) goes delegate → session → list, then leaves the app; the header's Back is
+    always the list. The step follows what shows: one however many delegates are open, gone
+    once the last is closed or hidden (by hand, behind another tab or the finished fold shut, or
+    because its machine no longer lists it, even on Forward to it), and there again when the
+    window narrows to a phone's with one open. Forward to it shows the delegate again, opening
+    the finished fold if it has finished meanwhile.
 
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
