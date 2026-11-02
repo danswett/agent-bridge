@@ -57,6 +57,25 @@ static class SelfTest
             CheckDesign(window, Check);
             await CheckStatusLines(window, cards, Check);
 
+            // Needs you (#165): every question on both machines, its count the one the tray shows,
+            // and Approve once and Deny right there for the permission prompt.
+            var lane = ById<FrameworkElement>(window.RootElement, "NeedsYou");
+            // Waited for: the lane's entries are drawn a layout pass after its list changes, which
+            // can come after the cards are.
+            List<Grid> Entries() => lane is null ? [] : Find<Grid>(lane).Where(g => AutomationProperties.GetAutomationId(g) == "NeedsYouEntry").ToList();
+            await Until(() => Entries().Count == 4, TimeSpan.FromSeconds(10));
+            var entries = Entries();
+            result["needsYou"] = main.NeedsYou.Select(e => $"{e.Card.Id}: {e.Mode}").ToList();
+            Check(lane is { Visibility: Visibility.Visible } && entries.Count == 4 && main.NeedsYou.Count == main.Waiting, "lists all four questions in Needs you, as many as the tray counts");
+            Check(entries.Count == 4 && entries.All(g => ById<StatusGlyphView>(g, "NeedsYouGlyph") is { } v && Find<ContentControl>(v).Any()), "marks every Needs you entry with the Needs you glyph");
+            // Every entry's template has the buttons, collapsed and disabled where it offers none:
+            // exactly one of each is live, the permission prompt's.
+            int Live(string id) => lane is null ? 0 : Find<Button>(lane).Count(b => AutomationProperties.GetAutomationId(b) == id && b.IsEnabled);
+            var offered = await Until(() => Live("NeedsYouApprove") == 1 && Live("NeedsYouDeny") == 1, TimeSpan.FromSeconds(10));
+            result["needsYouButtons"] = lane is null ? null : Find<Button>(lane).Select(b => $"{AutomationProperties.GetAutomationId(b)}: {(b.IsEnabled ? "enabled" : "disabled")}, {b.Visibility}").ToList();
+            Check(offered && main.NeedsYou.SingleOrDefault(e => e.Card.Id == "demo-approval") is { Approvable: true }, "offers Approve once and Deny in Needs you for the permission prompt");
+            if (lane is not null) { await Picture(lane, Path.ChangeExtension(outFile, ".needs-you.png")); }
+
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.CardList, Path.ChangeExtension(outFile, ".sessions.png"));
 
@@ -159,6 +178,23 @@ static class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+
+            // Approve once from Needs you, as a person would: the card's own answer goes, and the
+            // entry leaves with its question.
+            window.ShowPage("sessions");
+            await Task.Delay(500);
+            var waiting = main.Waiting;
+            var approveButton = ById<FrameworkElement>(window.RootElement, "NeedsYou") is { } laneNow
+                ? Find<Button>(laneNow).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "NeedsYouApprove" && b.IsEnabled) : null;
+            if (approveButton is not null)
+            {
+                ((IInvokeProvider)new ButtonAutomationPeer(approveButton).GetPattern(PatternInterface.Invoke)).Invoke();
+                var approvalCard = main.AllCards.First(c => c.Id == "demo-approval");
+                var gone = await Until(() => approvalCard.ReceiptText.StartsWith("Your answer: Delivered", StringComparison.Ordinal) && main.NeedsYou.All(e => e.Card.Id != "demo-approval") && main.Waiting == waiting - 1, TimeSpan.FromSeconds(20));
+                result["laneReceipt"] = approvalCard.ReceiptText;
+                Check(gone, "approves a permission prompt from Needs you: the card shows it delivered, and the entry and the tray count go down");
+            }
+            else { Check(false, "finds Approve once in Needs you"); }
         }
         catch (Exception e)
         {

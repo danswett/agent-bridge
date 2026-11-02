@@ -85,7 +85,6 @@ public sealed partial class MainViewModel : Observable
         : machines.Count > 1 && SelectedMachine?.Key is null
             ? "No agent sessions on any of your machines right now. Start Copilot CLI, Claude Code or Codex and it appears here."
             : "No agent sessions on this machine right now. Start Copilot CLI, Claude Code or Codex and it appears here.";
-    public int Waiting => byId.Values.Count(c => c.Session.Question is not null);
     public string MachineName => host.Hello?.Machine.Name ?? Environment.MachineName;
     // This machine's host's relay device id, once it has said hello: never listed as another machine.
     // Kept while the pipe is down: the relay's list of machines goes on changing meanwhile.
@@ -271,7 +270,7 @@ public sealed partial class MainViewModel : Observable
             Machines.Remove(choice);
         }
         MachinesChanged();
-        Raise(nameof(Waiting));
+        SyncNeedsYou();
         Raise(nameof(Empty));
         OnHeldChanged();
         UpdateUsage();
@@ -283,8 +282,9 @@ public sealed partial class MainViewModel : Observable
         Raise(nameof(ShowMachines));
         Raise(nameof(EmptyText));
         RefreshLabels();
-        // Cards say which machine they are on once there is more than one.
+        // Cards say which machine they are on once there is more than one, and so does the lane.
         foreach (var c in byId.Values) { c.CapabilitiesChanged(); }
+        SyncNeedsYou();
     }
 
     void RefreshLabels()
@@ -337,6 +337,7 @@ public sealed partial class MainViewModel : Observable
         {
             capabilities[m] = caps;
             foreach (var (c, _) in owner.Where(p => p.Value == m)) { c.CapabilitiesChanged(); }
+            SyncNeedsYou();
         }
         if (m.Host.State != LinkState.Connected) { baselined.Remove(m); }
         SyncUpdate(m);
@@ -442,7 +443,7 @@ public sealed partial class MainViewModel : Observable
             if (!baselined.Contains(m)) { toasts.Baseline([s]); }
             else { toasts.Upsert(s); }
         }
-        Raise(nameof(Waiting));
+        SyncNeedsYou();
         Raise(nameof(Empty));
         if (pendingOpens.Contains((m.Key, s.Id)) || launchOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
     }
@@ -457,7 +458,7 @@ public sealed partial class MainViewModel : Observable
         Rearrange();
         m.Toasts?.Remove(id);
         RefreshLabels();
-        Raise(nameof(Waiting));
+        SyncNeedsYou();
         Raise(nameof(Empty));
     }
 
@@ -495,6 +496,7 @@ public sealed partial class MainViewModel : Observable
         {
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
+            RefreshNeedsYou();
             Order.Flush();
             // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
             if (Order.Sort != toldSort) { Rearrange(); }

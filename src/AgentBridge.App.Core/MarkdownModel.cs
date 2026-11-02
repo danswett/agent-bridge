@@ -42,6 +42,26 @@ public static class MarkdownModel
         return Blocks(doc);
     }
 
+    // Where a message's prose starts, as this parser reads it: the source line (0-based) of its first
+    // paragraph or heading at any depth, inside quotes and lists but never code or a table; and,
+    // for a message with none, its first line of code. For a one-line summary (Needs you).
+    public static (int? ProseLine, string? FirstCode) Outline(string? markdown)
+    {
+        if (string.IsNullOrEmpty(markdown)) { return (null, null); }
+        var doc = Markdown.Parse(markdown, Pipeline);
+        var blocks = doc.Descendants<Block>().ToList();
+        var prose = blocks.FirstOrDefault(b => b is ParagraphBlock or HeadingBlock && !InTable(b));
+        var code = blocks.OfType<CodeBlock>().FirstOrDefault();
+        var first = code is null ? null : Lines(code).Split('\n').FirstOrDefault(l => l.Trim().Length > 0);
+        return (prose?.Line, first);
+    }
+
+    static bool InTable(Block b)
+    {
+        for (var p = b.Parent; p is not null; p = p.Parent) { if (p is Table) { return true; } }
+        return false;
+    }
+
     static List<MdBlock> Blocks(ContainerBlock container)
     {
         var list = new List<MdBlock>();

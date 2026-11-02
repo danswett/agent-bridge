@@ -73,6 +73,8 @@ public sealed partial class MainViewModel
                 Order.MarkSeen(KeyOf(card), card.Session.UpdatedAt);
                 card.Unread = false;
             }
+            // Its question asked, answered or rebuilt for new capabilities (Settings too): the lane follows.
+            if (e.PropertyName == nameof(SessionCardViewModel.Question) && owner.ContainsKey(card)) { SyncNeedsYou(); }
         };
     }
 
