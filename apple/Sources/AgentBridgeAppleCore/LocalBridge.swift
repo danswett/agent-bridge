@@ -115,13 +115,26 @@
             guard token == generation else { return }
             switch state {
             case .ready:
+                guard opening != nil else { return }
                 openTimeout?.cancel()
                 openTimeout = nil
                 opening?.resume()
                 opening = nil
                 receive(generation: token)
-            case let .failed(error), let .waiting(error):
-                finish(Failure.connection(error.localizedDescription), generation: token)
+            case let .waiting(error):
+                // Network.framework can transiently wait for its path even for a
+                // Unix socket. The opening deadline bounds recovery without
+                // rejecting a connection that is about to become ready.
+                if opening == nil {
+                    finish(Failure.connection(error.localizedDescription), generation: token)
+                }
+            case let .failed(error):
+                // A peer can close immediately after its final response. Network
+                // may report failure before the queued receive callback delivers
+                // those bytes; that reader owns teardown once opening completes.
+                if opening != nil {
+                    finish(Failure.connection(error.localizedDescription), generation: token)
+                }
             case .cancelled:
                 finish(Failure.disconnected, generation: token)
             default: break
