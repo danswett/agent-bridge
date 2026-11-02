@@ -20,6 +20,8 @@ Set-StrictMode -Version Latest
 
 $Result = [IO.Path]::GetFullPath($Result)
 if (-not $Logs) { $Logs = Split-Path $Result }
+# Absolute: WER, which writes the dumps, runs outside this process and its working folder.
+$Logs = [IO.Path]::GetFullPath($Logs)
 New-Item -ItemType Directory -Force (Split-Path $Result), $Logs | Out-Null
 $appLog = [IO.Path]::Combine($env:LOCALAPPDATA, 'AgentBridge', 'app', 'app.log')
 # A crash's minidump, kept by Windows Error Reporting beside the logs: the event alone names no
@@ -47,19 +49,19 @@ if (-not $finished) { Stop-Process -Id $p.Id -Force }
 $wrote = Test-Path $Result
 if ($wrote) { Get-Content $Result } else { Write-Output '::error::the self-test wrote no result' }
 $code = if ($finished) { $p.ExitCode } else { $null }
-# Ended with 0 having written nothing: no check ran, so it did not pass.
-if ($code -eq 0) { exit $(if ($wrote) { 0 } else { 1 }) }
+# Written part-way through before a check that can end the process (SelfTest.Write): still set,
+# the app ended inside that check, whatever the exit code says. Every check before it passed.
+$unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
+# Ended with 0 having written nothing, or with a check never finished: it did not pass.
+if ($code -eq 0 -and -not $unfinished) { exit $(if ($wrote) { 0 } else { 1 }) }
 
 if ($null -eq $code) { Write-Output "::error::the self-test did not finish in $TimeoutSeconds s" }
-else {
+elseif ($code -ne 0) {
     $hex = '0x{0:X8}' -f $code
     $known = @{ '0xC0000005' = 'access violation'; '0xC0000409' = 'fail fast (stack buffer overrun or CFG check)'; '0xC000027B' = 'stowed exception (a XAML or WinRT failure)'; '0xE0434352' = 'unhandled .NET exception' }
     $what = if ($known.ContainsKey($hex)) { " ($($known[$hex]))" } else { '' }
     Write-Output "::error::the app ended with exit code $code, $hex$what"
 }
-# Written part-way through before a check that can end the process (SelfTest.Write): still set,
-# the app ended inside that check, whatever the exit code says. Every check before it passed.
-$unfinished = if ($wrote) { try { (Get-Content $Result -Raw | ConvertFrom-Json).unfinished } catch { $null } } else { $null }
 if ($unfinished) { Write-Output "::error::the self-test ended during its '$unfinished' check, which never reported: the app did not get as far as saying whether it passed" }
 Write-Output '--- the end of the app''s log'
 Get-Content $appLog -Tail 30 -ErrorAction SilentlyContinue
@@ -91,4 +93,4 @@ if ($dump -and (Test-Path $cdb)) {
     Remove-Item $symbols -Recurse -Force -ErrorAction SilentlyContinue
 }
 elseif ($dump) { Write-Output "--- the crash's dump is in the artifact: $($dump.Name)" }
-exit $(if ($null -eq $code) { 1 } else { $code })
+exit $(if ($null -eq $code -or $code -eq 0) { 1 } else { $code })
