@@ -27,6 +27,11 @@ public sealed class QuestionView : StackPanel
 
     // heading: who asks (ui.md §6.4, "Main agent asks" or "<delegate> asks"), in place of the
     // question's own Waiting on you or Permission requested.
+    readonly TextBlock head;
+
+    // Who asks, again: a delegate's name can arrive after its question (S1's subagents list).
+    public string Heading { set => head.Text = value; }
+
     public QuestionView(QuestionViewModel vm, Action<bool> editing, string? heading = null)
     {
         this.vm = vm;
@@ -38,7 +43,8 @@ public sealed class QuestionView : StackPanel
         BorderBrush = Ui.Brush("AbNeeds");
         AutomationId(this, "Question");
 
-        Children.Add(new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") });
+        head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, Foreground = Ui.Brush("AbNeedsHead") };
+        Children.Add(head);
         Children.Add(new MarkdownView { Markdown = vm.Message });
 
         if (!vm.Answerable)

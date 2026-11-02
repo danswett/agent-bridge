@@ -116,6 +116,7 @@ public sealed partial class SessionView : UserControl
     {
         var all = string.IsNullOrEmpty(e.PropertyName);
         if (all || e.PropertyName == nameof(SessionCardViewModel.Question)) { SyncQuestion(); }
+        if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c) { questionView.Heading = c.AsksText; }
         if (all || e.PropertyName == nameof(SessionCardViewModel.StatusTone)) { ShowWords(); }
     }
 
