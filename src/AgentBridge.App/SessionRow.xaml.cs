@@ -32,8 +32,8 @@ public sealed partial class SessionRow : UserControl
     public SessionRow()
     {
         InitializeComponent();
-        Loaded += (_, _) => Attach();
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
+        Loaded += (_, _) => Attach("loaded");
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach("unloaded"); } };
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
     }
 
@@ -61,8 +61,12 @@ public sealed partial class SessionRow : UserControl
         ShowWords();
     }
 
-    internal void Attach()
+    // What attached and detached rows, for the self-test to say when a row listens where it should not.
+    internal static Action<string>? Trace;
+
+    internal void Attach(string why)
     {
+        Trace?.Invoke($"attach {Card?.Id} ({why}, attached {attached})");
         if (attached) { return; }
         attached = true;
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; }
@@ -73,8 +77,9 @@ public sealed partial class SessionRow : UserControl
         TakeFocus();
     }
 
-    internal void Detach()
+    internal void Detach(string why)
     {
+        Trace?.Invoke($"detach {Card?.Id} ({why}, attached {attached})");
         if (!attached) { return; }
         attached = false;
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; }
