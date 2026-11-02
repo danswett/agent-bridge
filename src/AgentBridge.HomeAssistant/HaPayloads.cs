@@ -165,15 +165,24 @@ public static class HaPayloads
     // layout can pass that: the reply goes in both response (to 6000 characters) and, its first
     // line whole, in the trail, and JSON escaping can double either (found in review, #175, once
     // the connector read sessions before the protocol budget). Only a card over the budget is
-    // touched, so any other is exactly the daemon's. First the trail's long lines, cut as the
-    // activity state is, since response already shows them; then the reasoning expander; then
-    // the shown text itself, its start kept with the truncation note, as the daemon cuts it.
+    // touched, so any other is exactly the daemon's. First the trail: its long lines cut as the
+    // activity state is, since response already shows them, then its oldest lines; then the
+    // reasoning expander; then the shown text itself, its start kept with the truncation note,
+    // as the daemon cuts it.
     internal static void FitCard(JsonObject detail)
     {
         if (Bytes(detail) <= ActivityAttributesBudget) { return; }
         if (detail["history"] is JsonArray history)
         {
-            detail["history"] = new JsonArray([.. history.Select(h => (JsonNode)CapState(h!.GetValue<string>()))]);
+            var lines = history.Select(h => CapState(h!.GetValue<string>())).ToList();
+            detail["history"] = new JsonArray([.. lines.Select(l => (JsonNode)l)]);
+            // Then its oldest lines, the newest kept longest (found in review: 24 long multibyte
+            // tool names fill the budget on their own).
+            while (Bytes(detail) > ActivityAttributesBudget && lines.Count > 0)
+            {
+                lines.RemoveAt(0);
+                detail["history"] = new JsonArray([.. lines.Select(l => (JsonNode)l)]);
+            }
             if (Bytes(detail) <= ActivityAttributesBudget) { return; }
         }
         foreach (var (key, note) in new[] { ("reasoning", "\u2026"), ("response", TruncatedNote) })

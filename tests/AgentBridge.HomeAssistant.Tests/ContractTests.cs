@@ -323,6 +323,23 @@ public class ContractTests
         Assert.InRange(shown.Length - HaPayloads.TruncatedNote.Length, 1000, 2600);
 
         Assert.Equal("Done.\nMore", Detail("Done.\nMore")["response"]!.GetValue<string>());
+
+        // Long multibyte tool names fill the trail on their own: its oldest lines go, never the
+        // reply (found in review).
+        var tools = HaPayloads.ActivityAttributes(
+            FakeSessions.Copilot(SessionId, response: "Done.") with
+            {
+                Activity = new Activity
+                {
+                    Response = "Done.",
+                    History = [.. Enumerable.Range(0, 30).Select(i => new ToolCall { Id = $"t{i}", Name = new string('\u5de5', 300), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+                },
+            },
+            Contract.Text("session.sessionName"), Machine, verbose: true, DateTimeOffset.Now);
+        Assert.True(Bytes(tools) <= HaPayloads.ActivityAttributesBudget, $"{Bytes(tools)} bytes");
+        Assert.Equal("Done.", tools["response"]!.GetValue<string>());
+        Assert.Equal("Done.", tools["history"]!.AsArray()[^1]!.GetValue<string>());
+        Assert.InRange(tools["history"]!.AsArray().Count, 2, HaPayloads.HistoryDepthDetailed - 1);
     }
 
     // Found in review: a 6000-character reply is in both response and history, and five delegates at
