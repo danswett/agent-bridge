@@ -19,7 +19,7 @@ async function openDemo(page, { width = 1440, height = 900 } = {}) {
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes, options) {
       const a = animate.call(this, keyframes, options);
-      window.__motions.push({ a, keyframes, duration: options?.duration ?? 0 });
+      window.__motions.push({ a, el: this, keyframes, duration: options?.duration ?? 0 });
       return a;
     };
   });
@@ -33,6 +33,7 @@ const motions = (page) => page.evaluate(() => window.__motions.map((m) => ({
   duration: m.duration,
   travels: m.keyframes.some((k) => k.transform && k.transform !== 'none'),
   from: m.keyframes[0]?.transform ?? null,
+  inLane: !!m.el.closest?.('#needs-you') || !!m.el.querySelector?.('#needs-you'),
 })));
 
 // What the tokens say an entry takes, going in and going out, in ms.
@@ -113,12 +114,26 @@ test('the tab bar\'s indicator slides to the tab chosen, and what the tab shows 
 test('on a phone a session\'s content slides in from the trailing side, and the list\'s from the leading side on Back', async ({ page }) => {
   await openDemo(page, { width: 390, height: 844 });
   const t = await tokens(page);
+  await open(page, CLAUDE);
+  await view(page, CLAUDE).locator('.session-header .back').click();
+  await expect(row(page, CLAUDE)).toBeVisible();
+  const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
+  expect(push[0].from).toBe('translate(24px, 0px)');
+  expect(push.length).toBeGreaterThan(1);
+  expect(push.slice(1).every((m) => m.from === 'translate(-24px, 0px)')).toBe(true);
+  expect(push.every((m) => m.duration === t.push[0])).toBe(true);
+});
+
+test('an approval\'s command never moves: a session asking a question fades in where it is, and Needs you is back at once', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  await expect(page.locator('#needs-you')).toBeVisible();
   await open(page, COPILOT);
   await view(page, COPILOT).locator('.session-header .back').click();
   await expect(row(page, COPILOT)).toBeVisible();
   const push = (await motions(page)).filter((m) => m.id === 'ab-motion-push');
-  expect(push.map((m) => m.from)).toEqual(['translate(24px, 0px)', 'translate(-24px, 0px)']);
-  expect(push.every((m) => m.duration === t.push[0])).toBe(true);
+  expect(push[0]).toMatchObject({ travels: false });
+  expect(push.length).toBeGreaterThan(1);
+  expect((await motions(page)).filter((m) => m.inLane)).toEqual([]);
 });
 
 test('with reduced motion nothing travels: the only motions are fades no longer than the cross-fade, and presses change at once', async ({ page }) => {
@@ -145,14 +160,14 @@ test('a tap during a push lands: Back works while the session is still sliding i
   await openDemo(page, { width: 390, height: 844 });
   // Long enough to be sure the tap comes mid-motion.
   await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-push-duration', '5000ms'));
-  await row(page, COPILOT).locator('.row-main').click();
-  const back = view(page, COPILOT).locator('.session-header .back');
+  await row(page, CLAUDE).locator('.row-main').click();
+  const back = view(page, CLAUDE).locator('.session-header .back');
   await expect(back).toBeAttached();
   expect(await page.evaluate(() => document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'))).toBe(true);
   const b = await back.boundingBox();
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
-  await expect(row(page, COPILOT)).toBeVisible();
-  await expect(view(page, COPILOT)).toBeHidden();
+  await expect(row(page, CLAUDE)).toBeVisible();
+  await expect(view(page, CLAUDE)).toBeHidden();
 });
 
 test('a tap during a menu\'s entrance lands on the item under it', async ({ page }) => {

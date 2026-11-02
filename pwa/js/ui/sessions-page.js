@@ -509,8 +509,18 @@ export class SessionsPage {
     // back. Not the first drawing, which is the app starting.
     if (was !== undefined && was !== body.dataset.sessionOpen && this.phone.matches) {
       const opened = body.dataset.sessionOpen === 'true';
-      const content = opened ? this.view.selected?.view : this.$('list-pane');
-      enter(content, 'push', { dx: opened ? 1 : -1 });
+      if (opened) {
+        const content = this.view.selected?.view;
+        // A session asking a question fades in where it is: an approval's command never slides
+        // or starts partly off the screen.
+        enter(content, 'push', { dx: content?.querySelector('.question-slot > *') ? 0 : 1 });
+      } else {
+        // The list's content comes back from the leading side, all but Needs you, which is there
+        // at once: its commands never move.
+        for (const part of this.$('list-pane')?.children ?? []) {
+          if (!part.matches('.needs-you') && part.getClientRects().length) { enter(part, 'push', { dx: -1 }); }
+        }
+      }
     }
   }
 
