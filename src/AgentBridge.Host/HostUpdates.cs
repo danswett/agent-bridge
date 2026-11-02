@@ -17,7 +17,7 @@ namespace AgentBridge.Host;
 // the package (the app, whose update hook stops the host it manages), replaces the version, and
 // starts the app again in the background for this host's profile, which starts this host. So
 // handing the release over is followed by this host stopping, as serve does on Ctrl+C.
-sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log) : IHostUpdates
+sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
     readonly object gate = new();
@@ -39,7 +39,12 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 
     string AppFolder => Path.Combine(dataRoot, "app");
 
-    // The app's feed.txt: a folder or URL holding releases.win.json, for a test VM or a private
+    // The installed package decides the channel, and so the feed (releases.<channel>.json) a check
+    // reads: x64's `win` or Arm64's `win-arm64` (build/app-channels.ps1). Nothing here names one,
+    // so a copy is only ever offered its own architecture. A test hands in the package's place.
+    IVelopackLocator Locator() => locator ?? VelopackLocator.CreateDefaultForPlatform();
+
+    // The app's feed.txt: a folder or URL holding releases.<channel>.json, for a test VM or a private
     // channel. Absent is GitHub; one that is there but cannot be read is an error, as in the app,
     // never GitHub: a press must not install from another channel than the one configured.
     string Feed()
@@ -84,7 +89,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
             source = key;
             // The platform's own locator rather than VelopackLocator.Current, which only
             // VelopackApp.Build().Run() sets: that is the app's entry point, and the host has none.
-            return manager = new UpdateManager(from, null, VelopackLocator.CreateDefaultForPlatform());
+            return manager = new UpdateManager(from, null, Locator());
         }
     }
 
@@ -96,7 +101,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         {
             try
             {
-                var m = new UpdateManager(new SimpleFileSource(new DirectoryInfo(AppFolder)), null, VelopackLocator.CreateDefaultForPlatform());
+                var m = new UpdateManager(new SimpleFileSource(new DirectoryInfo(AppFolder)), null, Locator());
                 return m.IsInstalled ? m.CurrentVersion?.ToString() : null;
             }
             catch (Exception e) when (e is not OutOfMemoryException) { return null; }
