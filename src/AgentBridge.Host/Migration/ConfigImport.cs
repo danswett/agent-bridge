@@ -269,6 +269,12 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
                 {
                     var section = Section(host, "devBox");
                     foreach (var (key, value) in target3.ToList()) { Put(section, key, value!.DeepClone(), key == "intervalMinutes" ? from! : $"devBox.{key}", $"devBox.{key}"); }
+                    // Said plainly: the person chose it here, but it is the difference between this
+                    // Dev Box staying up and hibernating once migrate disables the task.
+                    if (Bool(devBox["keepAwake"]) == true && section["keepAwake"]?.GetValueKind() != JsonValueKind.True)
+                    {
+                        kept.Add("devBox.keepAwake: agent-ha-bridge keeps this Dev Box awake, but this profile does not, so once migrate disables agent-ha-bridge's keep-awake task nothing will (turn it on in the app's Settings, or with agent-bridge-host config set devBox.keepAwake true)");
+                    }
                 }
                 foreach (var (key, _) in devBox.Where(p => !Named(p.Key, "keepAwake", "intervalMinutes", "intervalHours")))
                 {
@@ -430,7 +436,10 @@ public sealed record ConfigImport(string? Text, IReadOnlyList<string> Imported, 
             File.WriteAllText(System.IO.Path.Combine(check, HostSettings.FileName), text);
             var (settings, problem) = HostSettings.Load(check);
             return (problem is null ? [] : new[] { problem.Replace(check, "config.json", StringComparison.OrdinalIgnoreCase) })
-                .Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems).ToList();
+                .Concat(settings.LaunchProblems).Concat(settings.HomeAssistantProblems)
+                // A devBox the host cannot read would leave keep-awake off while migrate disables
+                // agent-ha-bridge's task, and the Dev Box to hibernate.
+                .Concat(settings.DevBoxProblems).ToList();
         }
         finally { Directory.Delete(check, true); }
     }

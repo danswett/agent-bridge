@@ -86,7 +86,9 @@ second snapshot the first's changes as the state to restore; the second is refus
      condition is the token's to evaluate, is one way), the migration goes ahead, and a refusal part-way is
      undone (below);
    * the settings to carry over would leave the profile's `config.json` with problems, in
-     launching or in the Home Assistant connector (a `baseUrl` it could not use, say).
+     launching, in the Home Assistant connector (a `baseUrl` it could not use, say) or in the Dev
+     Box keep-awake (a `devBox.keepAwake` that is not `true` or `false` would leave it off while
+     the task is disabled).
 2. **Snapshot.** Writes `migration.json` in the profile's folder (state `migrating`) and a copy
    of every file it will rewrite in `migration-snapshot\` beside it. The profile's folder is
    private to the user. It records each file's SHA-256 before and after, each hook entry it

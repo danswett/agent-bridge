@@ -292,13 +292,44 @@ public sealed class SettingsViewModel : Observable
         }
     }
 
-    // The host's status now says what it acknowledged: from here the switch follows the host.
+    // The host's status now says what it acknowledged: from here the switch follows the host. A
+    // status that disagrees, with nothing on its way, is either an older one arriving late or a
+    // change made elsewhere (another app, a person's terminal), which only the host can say: it is
+    // read again, once per status, as TrustEditor does. Waiting for a status that agrees could
+    // wait for ever after a missed event, the switch showing on while the host is off, and turning
+    // it on then discarded as no change.
+    HostStatus? keepAwakeChecked;
+
     void CaughtUp()
     {
-        if (Volatile.Read(ref keepAwakePending) == 0 && Status?.Settings.DevBoxKeepAwake is { } now && Volatile.Read(ref keepAwakeWanted) == (now ? 1 : 0))
+        var s = Status;
+        if (s is null || Volatile.Read(ref keepAwakePending) > 0 || Volatile.Read(ref keepAwakeWanted) is not (var w and >= 0)) { return; }
+        if ((w == 1) == s.Settings.DevBoxKeepAwake)
         {
             Volatile.Write(ref keepAwakeWanted, -1);
+            return;
         }
+        if (ReferenceEquals(s, keepAwakeChecked)) { return; }
+        keepAwakeChecked = s;
+        _ = RereadKeepAwakeAsync();
+    }
+
+    async Task RereadKeepAwakeAsync()
+    {
+        await keepAwakeGate.WaitAsync();
+        try
+        {
+            if (Volatile.Read(ref keepAwakePending) > 0) { return; }
+            var now = (await host.CallAsync<HostStatus>(HostOps.Status)).Settings.DevBoxKeepAwake;
+            // A change asked for meanwhile is what the switch shows; its own reply settles it.
+            if (Volatile.Read(ref keepAwakePending) == 0) { Volatile.Write(ref keepAwakeWanted, Status?.Settings.DevBoxKeepAwake == now ? -1 : now ? 1 : 0); }
+        }
+        // Not read: what was acknowledged stands until a status agrees or the next is checked.
+        catch (Exception e) when (e is not OutOfMemoryException) { }
+        finally { keepAwakeGate.Release(); }
+        Raise(nameof(DevBoxKeepAwake));
+        // A status that came during the read was let pass, and the read may be older than it.
+        CaughtUp();
     }
 
     public string DevBoxText => Status?.DevBox is not { } d ? ""

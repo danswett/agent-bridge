@@ -180,6 +180,28 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_keep_awake_change_made_elsewhere_after_this_apps_is_shown_even_when_its_own_status_event_was_missed()
+    {
+        Saves(d => new HostSettingsView(true, DevBoxKeepAwake: d.GetProperty("devBoxKeepAwake").GetBoolean()));
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await Connected();
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.ShowDevBox, "the Dev Box's setting");
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1 && !settings.Busy, "host.settings");
+
+        // Its status event never came; another app turned it off since, and this status says so.
+        host.Status = FakeHost.StatusOf() with { DevBox = new DevBoxStatus(false, 15) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+
+        await Wait.UntilAsync(() => !settings.DevBoxKeepAwake, "the host's word, read again");
+        // And turning it on again is a change, not discarded as none.
+        settings.DevBoxKeepAwake = true;
+        await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 2, "host.settings again");
+        Assert.True(host.Sent(HostOps.Settings)[1].GetProperty("devBoxKeepAwake").GetBoolean());
+    }
+
+    [Fact]
     public async Task Answering_folder_trust_from_devices_is_turned_on_here_with_this_app_approved_and_each_device_is_approved_here()
     {
         const string phone = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", gone = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";

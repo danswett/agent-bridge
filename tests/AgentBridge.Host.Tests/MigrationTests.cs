@@ -1795,6 +1795,11 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Empty(settings.DevBoxProblems);
         Assert.True(settings.DevBox.KeepAwake);
         Assert.Equal(20, settings.DevBox.IntervalMinutes);
+
+        // A profile whose devBox the host could not read is refused before the task is disabled,
+        // and one that keeps the Dev Box asleep on purpose is said plainly.
+        Assert.Contains(ConfigImport.Build(ahb, """{"version":1,"devBox":{"keepAwake":"true"}}""").Problems, p => p.Contains("devBox.keepAwake", StringComparison.Ordinal));
+        Assert.Contains(ConfigImport.Build(ahb, """{"version":1,"devBox":{"keepAwake":false}}""").Kept, k => k.Contains("once migrate disables agent-ha-bridge's keep-awake task nothing will", StringComparison.Ordinal));
     }
 
     [Theory]
