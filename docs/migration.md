@@ -91,7 +91,8 @@ second snapshot the first's changes as the state to restore; the second is refus
      the task is disabled);
    * agent-ha-bridge's keep-awake task is enabled but the profile's own `devBox.keepAwake` is
      `false`: migrate would disable the only thing keeping the Dev Box awake. Turn it on first, or
-     disable that task in agent-ha-bridge if the Dev Box should sleep.
+     disable that task in agent-ha-bridge if the Dev Box should sleep. The snapshot reads the task
+     again, and refuses, changing nothing, if it was enabled or disabled meanwhile.
 2. **Snapshot.** Writes `migration.json` in the profile's folder (state `migrating`) and a copy
    of every file it will rewrite in `migration-snapshot\` beside it. The profile's folder is
    private to the user. It records each file's SHA-256 before and after, each hook entry it

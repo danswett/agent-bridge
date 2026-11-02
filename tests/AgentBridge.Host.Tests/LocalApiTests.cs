@@ -238,6 +238,25 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.False(status.RestartRequired);
     }
 
+    // A file the host rejects for another setting reads as all defaults, keep-awake off: saved and
+    // applied anyway, the reply would say off while the service ran, and the next start would turn
+    // it off with nothing said.
+    [Fact]
+    public async Task Keep_awake_is_not_turned_on_in_a_config_the_host_would_read_back_as_off()
+    {
+        const string config = """{ "permissions": { "remoteApproval": "yes" } }""";
+        File.WriteAllText(Path.Combine(profile, "config.json"), config);
+        devBox = new DevBoxStatus(false, 15);
+        var ch = await ConnectAsync();
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.Settings, new { devBoxKeepAwake = true }));
+
+        Assert.Contains("Dev Box keep-awake was not changed", refused.Message);
+        Assert.Empty(keptAwake);
+        Assert.Equal(config, File.ReadAllText(Path.Combine(profile, "config.json")));
+        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.DevBoxKeepAwake);
+    }
+
     [Fact]
     public async Task Answering_folder_trust_from_a_persons_devices_is_turned_on_from_the_app_beside_the_launch_settings_there()
     {

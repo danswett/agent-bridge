@@ -1849,6 +1849,26 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_keep_awake_task_enabled_while_the_migration_is_prepared_refuses_it_and_changes_nothing()
+    {
+        var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
+        _f.Runtime_.Tasks[keepAwake] = (false, false);
+        // Enabled after preflight read it disabled, before the snapshot reads it again.
+        _f.Runtime_.AfterRead = name => { if (name == keepAwake) { _f.Runtime_.Tasks[keepAwake] = (true, false); _f.Runtime_.AfterRead = null; } };
+        var listing = _f.Listing();
+
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+
+        Assert.False(report.Ok);
+        Assert.Contains($"{keepAwake} was enabled while the migration was being prepared", report.ToString());
+        Assert.True(_f.Runtime_.Tasks[keepAwake].Enabled);
+        Assert.DoesNotContain(_f.Runtime_.Calls, c => c.StartsWith("disable", StringComparison.Ordinal));
+        Assert.Null(MigrationRecord.Load(_f.Profile).Record);
+        Assert.False(Directory.Exists(MigrationRecord.SnapshotIn(_f.Profile)));
+        Assert.Equal(listing, _f.Listing());
+    }
+
+    [Fact]
     public async Task A_disabled_keep_awake_task_leaves_keep_awake_as_agent_ha_bridges_file_and_the_profile_say()
     {
         var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";

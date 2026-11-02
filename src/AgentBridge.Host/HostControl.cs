@@ -218,7 +218,17 @@ public sealed class HostControl
             log("settings not changed by the app: the devices approved for folder trust changed meanwhile");
             return new SettingsResult(before, before != Volatile.Read(ref running), Conflict: true);
         }
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake);
+        // The keep-awake is applied to the running service as well as saved, so what is saved must
+        // read back as asked: a file the host rejects for another setting reads as all defaults,
+        // keep-awake off, so the reply would say off while the service ran, and the next start
+        // would turn it off with nothing said. Refused instead, the file as it was.
+        Action<string, string>? check = request.DevBoxKeepAwake is { } want ? (path, text) =>
+        {
+            var (saved, problem) = HostSettings.Parse(text, path);
+            if (problem is not null) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {problem}; fix config.json first"); }
+            if (saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
+        } : null;
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)

@@ -38,9 +38,10 @@ public static class HostConfigFile
 
     // Sets permissions.remoteApproval, launch.remoteFolderTrust(Devices), devBox.keepAwake and name (an
     // empty name removes it). A file that is not valid JSON is left alone and the change refused, rather than
-    // replaced by one that has lost whatever the person meant it to say.
+    // replaced by one that has lost whatever the person meant it to say. check, if given, sees the
+    // text about to be written and throws to refuse it, leaving the file as it was.
     public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null,
-        bool? devBoxKeepAwake = null)
+        bool? devBoxKeepAwake = null, Action<string, string>? check = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -93,8 +94,10 @@ public static class HostConfigFile
             else { root.Remove("name"); }
         }
         // Written beside and moved over, so a crash mid-write never leaves half a file.
+        var text = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        check?.Invoke(path, text);
         var temp = path + ".tmp";
-        File.WriteAllText(temp, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(temp, text);
         File.Move(temp, path, overwrite: true);
     }
 }

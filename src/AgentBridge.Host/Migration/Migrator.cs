@@ -220,6 +220,11 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         // Snapshot, recorded before anything changes.
         var record = new MigrationRecord { InstallationId = install.Id, BridgeHome = install.BridgeHome, StartedAt = _time.GetUtcNow() };
         var snapshot = MigrationRecord.SnapshotIn(options.ProfileFolder);
+        void Unsnapshot()
+        {
+            try { File.Delete(MigrationRecord.PathIn(options.ProfileFolder)); Directory.Delete(snapshot, recursive: true); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+        }
         try
         {
             Directory.CreateDirectory(snapshot);
@@ -239,6 +244,16 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
             {
                 if (runtime.Task(name) is { } task) { record.Tasks.Add(new(name, task.Enabled) { Disabled = false }); }
             }
+            // The import carried keep-awake from the task as preflight saw it. Enabled since (an
+            // agent-ha-bridge install or a person, meanwhile), it would be disabled here with the
+            // host's keep-awake left off, and the Dev Box would hibernate; so whatever changed, the
+            // import is no longer what is about to be handed over.
+            if (record.Tasks.Any(t => t.Name == install.DevBoxTaskName && t.Enabled) != keepAwakeTaskEnabled)
+            {
+                Unsnapshot();
+                Say($"Refused: {install.DevBoxTaskName} was {(keepAwakeTaskEnabled ? "disabled" : "enabled")} while the migration was being prepared, so the Dev Box keep-awake carried over no longer matches it; nothing was changed. Migrate again.");
+                return new(false, lines);
+            }
             // Known stopped only when nothing of agent-ha-bridge's is seen for this user; a probe
             // that cannot tell, or another daemon, leaves it unknown, and a rollback waits.
             record.DaemonRunning = runtime.Seen(install.Id) ? true : runtime.Active() is null ? false : null;
@@ -247,8 +262,7 @@ public sealed class Migrator(MigrationOptions options, IAgentHaBridgeRuntime run
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // Nothing has changed yet, so nothing is left behind to roll back.
-            try { File.Delete(MigrationRecord.PathIn(options.ProfileFolder)); Directory.Delete(snapshot, recursive: true); }
-            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
+            Unsnapshot();
             Say($"Refused: the snapshot a rollback needs could not be written ({e.Message}); nothing was changed.");
             return new(false, lines);
         }
