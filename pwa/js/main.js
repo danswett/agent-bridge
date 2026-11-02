@@ -574,6 +574,9 @@ function begin(account) {
     updates.clear();
     lastKnown = null;
     page.clear();
+    // A session's address names this account's machine: the next sign-in, perhaps another
+    // account, would otherwise start on it. A link that arrives after this is kept.
+    if (shell.route === 'sessions' && shell.rest.length) { shell.go('sessions', { replace: true }); }
     accountStore.clear();
     dropKeptUsage();
     connection.stop();

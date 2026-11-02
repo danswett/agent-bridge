@@ -149,6 +149,9 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await opened.goto(`${appUrl}?host=${host.deviceId}`);
   await expect(opened.locator('#sessions-h')).toHaveText('Sessions on fixture-host', { timeout: 30000 });
   await expect(opened.locator('.session').first()).toBeVisible();
+  // A session chosen, so the address names it and its machine.
+  await opened.locator('.session').first().locator('.row-main').click();
+  await expect.poll(() => new URL(opened.url()).hash).toContain(`/sessions/${host.deviceId}/`);
 
   // The relay stops accepting this sign-in. Nothing from it may stay on screen or carry
   // over to the next account: not the sessions, nor the remembered machine.
@@ -157,6 +160,8 @@ test('a machine from before the sessions protocol is reported, ?host= opens a ma
   await expect(opened.locator('#sessions')).toBeHidden();
   expect(await opened.evaluate(() => window.agentBridge.store.size)).toBe(0);
   expect(await opened.evaluate(() => localStorage.getItem('agent-bridge.app.lastHost'))).toBeNull();
+  // Nor the session's address, which names the old account's machine.
+  expect(new URL(opened.url()).hash).toBe('#/sessions');
   await opened.click('#signin-button');
   await expect(opened.locator('#conn')).toHaveText('Connected', { timeout: 30000 });
   await expect(opened.locator('#machine-tabs [data-device-name="fixture-host"]')).toBeVisible();

@@ -309,6 +309,9 @@ export class SessionsPage {
         this.#want = null;
         if (this.shell?.route === 'sessions' && this.shell.rest.length) { this.#back(); return; }
       } else {
+        // Still on its way: nothing shown meanwhile, so another session's Reply and End session
+        // never stand under an address that names this one.
+        if (view.selected) { view.select(null); }
         return;
       }
     }

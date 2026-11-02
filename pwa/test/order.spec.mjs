@@ -279,7 +279,7 @@ test.describe('on a phone', () => {
 
   test('a row menu by the bottom navigation opens above its row, clear of the bar, and Pin is pressed there', async ({ page }) => {
     await openDemo(page);
-    const fold = card(page, DELEGATING).locator('.fold');
+    const fold = card(page, DELEGATING).locator('.row-main');
     // The last row's title just above the bar, where a menu below it would be under the bar.
     await fold.evaluate((el) => { window.scrollBy(0, el.getBoundingClientRect().bottom - document.getElementById('nav').getBoundingClientRect().top + 4); });
     const barTop = await page.locator('#nav').evaluate((el) => el.getBoundingClientRect().top);

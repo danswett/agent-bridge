@@ -395,6 +395,29 @@ test('a session address on a machine not shown shows that machine', async ({ pag
   await expect(row(page, id, 'demo-laptop')).toHaveClass(/selected/);
 });
 
+test('an address naming a session that has not arrived yet shows no other session meanwhile', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openDemo(page);
+  await open(page, CLAUDE);
+  // Its machine resyncing (its list not all in yet), and the session not here.
+  await page.evaluate(() => {
+    const { client } = window.agentBridgeDemo.hosts.link('demo');
+    Object.defineProperty(client, 'synced', { get: () => false, configurable: true });
+  });
+  await page.evaluate(() => { location.hash = '#/sessions/demo/demo-arriving'; });
+  await expect.poll(() => page.evaluate(() => location.hash)).toBe('#/sessions/demo/demo-arriving');
+  await expect(view(page, CLAUDE)).toBeHidden();
+  await expect(page.locator('.session-view:not([hidden])')).toHaveCount(0);
+  // Once it's there, it is the one shown.
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    delete d.hosts.link('demo').client.synced;
+    const t = new Date().toISOString();
+    d.upsert({ id: 'demo-arriving', agent: 'copilot', title: 'Arriving', status: 'idle', startedAt: t, updatedAt: t, activity: {} });
+  });
+  await expect(view(page, 'demo-arriving')).toBeVisible();
+});
+
 test('a session chosen stays chosen across 1440, 900 and 390 px, pushed on the phone', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openDemo(page);
