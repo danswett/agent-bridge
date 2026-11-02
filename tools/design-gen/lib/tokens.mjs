@@ -128,3 +128,55 @@ export function spaces(tokens) {
     return { value: v, css: `--ab-space-${v / unit}`, xaml: `AbSpace${v / unit}` };
   });
 }
+
+// A face's x-height as a fraction of its em, from a TrueType or OpenType file's OS/2 table
+// (sxHeight, version 2 and later) and its head table (unitsPerEm).
+export function fontXHeight(bytes) {
+  const b = Buffer.from(bytes);
+  const at = b.toString('latin1', 0, 4) === 'ttcf' ? b.readUInt32BE(12) : 0;
+  const tables = {};
+  for (let i = 0, n = b.readUInt16BE(at + 4); i < n; i++) {
+    const r = at + 12 + i * 16;
+    tables[b.toString('latin1', r, r + 4)] = b.readUInt32BE(r + 8);
+  }
+  if (tables.head === undefined || tables['OS/2'] === undefined) { throw new Error('no head or OS/2 table'); }
+  const os2 = tables['OS/2'];
+  if (b.readUInt16BE(os2) < 2) { throw new Error('OS/2 table older than version 2: no sxHeight'); }
+  return { xHeight: b.readInt16BE(os2 + 86), unitsPerEm: b.readUInt16BE(tables.head + 18) };
+}
+
+const round = (v, places = 4) => Math.round(v * 10 ** places) / 10 ** places;
+const ratio = (face, where) => {
+  if (!(face?.xHeight > 0) || !(face?.unitsPerEm > 0)) { throw new Error(`${where} needs xHeight and unitsPerEm`); }
+  return face.xHeight / face.unitsPerEm;
+};
+
+// Inline mono (docs/design/ui.md §4.2, type.inlineMono): per platform, the text face's x-height
+// ratio (x, what CSS font-size-adjust is given) and the scale mono takes beside it (text / mono),
+// so the two faces' x-heights match at any size: { mono, min, platforms: [{ name, face, x, scale }] }.
+export function inlineMono(tokens) {
+  const im = tokens.type.inlineMono;
+  if (!im) { throw new Error('type.inlineMono is missing'); }
+  const mono = ratio(im.mono, 'type.inlineMono.mono');
+  if (!im.text?.windows) { throw new Error('type.inlineMono.text needs windows, the default'); }
+  const platforms = Object.entries(im.text).map(([name, t]) => {
+    const x = ratio(t, `type.inlineMono.text.${name}`);
+    return { name, face: t.face, x: round(x), scale: round(x / mono) };
+  });
+  return { mono: round(mono), min: im.minSize ?? 11, platforms };
+}
+
+// The inline mono size for each role of a platform's ramp (type.roles.<platform>, "14/20" and
+// the like): the role's size times the platform's scale, two places, never under the minimum.
+// Code has its own size, and a title holds no mono.
+export function inlineMonoSizes(tokens, platform = 'windows') {
+  const { min, platforms } = inlineMono(tokens);
+  const p = platforms.find((x) => x.name === platform);
+  if (!p) { throw new Error(`type.inlineMono.text has no ${platform}`); }
+  const ramp = tokens.type.roles[platform];
+  return ['row', 'reading', 'meta', 'sectionHeader'].map((role) => {
+    const size = Number(/^(\d+(?:\.\d+)?)\//.exec(ramp?.[role] ?? '')?.[1]);
+    if (!Number.isFinite(size)) { throw new Error(`type.roles.${platform}.${role} has no size`); }
+    return { role, size, value: Math.max(min, round(size * p.scale, 2)), xaml: `AbInlineMono${pascal(role)}` };
+  });
+}

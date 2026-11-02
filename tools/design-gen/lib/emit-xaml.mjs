@@ -4,7 +4,7 @@
 // the app can check at run time that every one of them resolves in every theme.
 
 import { toXamlColor } from './color.mjs';
-import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces } from './tokens.mjs';
+import { SYSTEM_COLORS, roleTokens, surfaceTokens, monoFamilies, monoFont, radii, spaces, inlineMono, inlineMonoSizes } from './tokens.mjs';
 import { MOVING_CLASSES, formatCommands, fmt } from './svg.mjs';
 
 const pascal = (s) => s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -119,6 +119,10 @@ ${theme('HighContrast', (t) => `{ThemeResource ${SYSTEM_COLORS[t.hc].xaml}}`)}
 
     <!-- The monospace (docs/design/ui.md §4.1): the bundled font, then the fallback stack. -->
     <FontFamily x:Key="MonoFontFamily">${monoFamilies(tokens, 'xaml')}</FontFamily>
+    <!-- Inline mono beside Segoe UI Variable (docs/design/ui.md §4.2): WinUI has no
+         font-size-adjust, so the scale, and the size for each ramp role, that match its x-height. -->
+    <x:Double x:Key="AbInlineMonoScale">${inlineMono(tokens).platforms.find((p) => p.name === 'windows').scale}</x:Double>
+${inlineMonoSizes(tokens).map((r) => `    <x:Double x:Key="${r.xaml}">${r.value}</x:Double>`).join('\n')}
 ${radii(tokens).map((r) => `    <CornerRadius x:Key="${r.xaml}">${r.value}</CornerRadius>`).join('\n')}
 ${spaces(tokens).map((s) => `    <x:Double x:Key="${s.xaml}">${s.value}</x:Double>`).join('\n')}
 
@@ -163,6 +167,12 @@ ${list(icons.map(styleKey))}
     ];
 
     public const string MonoFontFamily = "MonoFontFamily";
+
+    // Inline mono's scale and its size for each ramp role (docs/design/ui.md §4.2).
+    public static readonly string[] InlineMono =
+    [
+${list(['AbInlineMonoScale', ...inlineMonoSizes(tokens).map((r) => r.xaml)])}
+    ];
 
     // The bundled monospace and its licence, as the app's folder holds them
     // (AgentBridge.App.csproj copies them from design/fonts).
