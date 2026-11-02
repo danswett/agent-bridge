@@ -29,7 +29,8 @@ import { TRUST } from './launch.js';
 import { TRANSFER, collectRemote, signTransfer, signTrust } from './transfer.js';
 import { PushRegistrar, closeMachineNotices, closeNotices, closeStaleNotices, fetchVapidKey } from './push.js';
 import { Capabilities } from './protocol.js';
-import { MachinesFold, offlineMachines } from './ui/views.js';
+import { offlineMachines } from './ui/views.js';
+import { Shell } from './ui/shell.js';
 import { SessionsPage } from './ui/sessions-page.js';
 import { UsageBook } from './usage.js';
 import { FleetStatus } from './fleet.js';
@@ -43,9 +44,13 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const BASE = RELAY || location.origin;
 
-// Every machine's latest usage report, drawn as one row per allowance.
+// The pages, the app bar and the navigation between them.
+const shell = new Shell();
+
+// Every machine's latest usage report, drawn as one row per allowance on the usage page, and as
+// one line under the sessions.
 const book = new UsageBook();
-new UsageView($('usage'), book);
+new UsageView($('usage'), book, { line: $('usage-line') });
 
 // The account's usage readings this device keeps between visits (#172): in IndexedDB beside its
 // key, for one account. Another account's are never shown, and signing out deletes them.
@@ -67,7 +72,6 @@ function dropKeptUsage() {
   usageEpoch++;
   return kvDelete(USAGE_KEPT).catch(() => {});
 }
-const machinesFold = new MachinesFold($('machines'));
 // The sessions on screen and what their cards and the launch panel send, once begun.
 let page = null;
 
@@ -98,6 +102,7 @@ function focusLinked() {
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
   linked = null;
+  if (shell.route !== 'sessions') { shell.go('sessions'); }
   if (card.folded) { card.setFolded(false); }
   const el = card.element;
   el.classList.add('linked');
@@ -121,9 +126,7 @@ navigator.serviceWorker?.addEventListener('message', (e) => {
 navigator.serviceWorker?.startMessages?.();
 
 function setPill(text, cls = '') {
-  const p = $('conn');
-  p.textContent = text;
-  p.className = `pill ${cls}`.trim();
+  shell.setConnection(text, cls);
 }
 
 function setHostState(text) {
@@ -159,7 +162,10 @@ const demoStorage = {
 
 async function startDemo() {
   $('demo-banner').hidden = false;
-  setPill('Demo', 'warn');
+  $('demo-settings').hidden = false;
+  shell.setSignedIn(true);
+  // The demo banner says so already: on a phone the app bar stays out of the way.
+  setPill('Demo', 'demo');
   const fixture = await (await fetch('fixtures/sessions-list.json', { cache: 'no-store' })).json();
   // ?delegates=1: a session with delegates at work, the main agent's words apart from theirs (#176).
   if (params.get('delegates') === '1') { fixture.sessions.push(demoDelegating()); }
@@ -242,12 +248,13 @@ async function startDemo() {
     if (m.capabilities.includes(TRUST.capability)) { trusts.set(m.machine.id, await demoTrust(m, () => hosts.route(m.machine.id)?.client ?? null)); }
   }
   page = new SessionsPage({
-    $, hosts, connection, machinesFold,
+    $, hosts, connection, shell,
     blobs: () => blobStore, relayMax: () => blobStore.max,
     retryMs: Number(params.get('retry')) || 3000,
     transfers: (id) => transfers.get(id) ?? null,
     trust: (id) => trusts.get(id) ?? null,
     status: (id) => fleet.status(id),
+    facts: (id) => fleet.facts(id),
     forget: demoForget,
     updates: demoUpdates,
     storage: demoStorage,
@@ -327,8 +334,8 @@ async function startDemo() {
 let identity;
 
 function showSignIn(error) {
+  shell.setSignedIn(false);
   $('signin').hidden = false;
-  $('machines').hidden = true;
   $('sessions').hidden = true;
   $('account').hidden = true;
   $('notify').hidden = true;
@@ -362,6 +369,8 @@ $('signin-button').onclick = async () => {
 };
 
 function begin(account) {
+  shell.setSignedIn(true);
+  shell.setAccount(account.login ?? '');
   $('account').hidden = false;
   $('login').textContent = account.login ?? '';
   $('me').textContent = identity.deviceId.slice(0, 8);
@@ -396,7 +405,7 @@ function begin(account) {
   // with the same request. Large files go through the blob store of the relay this page is
   // connected to, when it has one and the machine fetches from it (sessions.attach.blob).
   page = new SessionsPage({
-    $, hosts, connection, me: identity.deviceId, machinesFold,
+    $, hosts, connection, me: identity.deviceId, shell,
     blobs: () => (connection.relay ? new RelayBlobs(connection.relay) : null),
     relayMax: () => connection.relay?.blobs?.max ?? 0,
     // The account's other machines' sessions, each signed for when picked.
@@ -420,6 +429,7 @@ function begin(account) {
       };
     },
     status: (id) => fleet.status(id),
+    facts: (id) => fleet.facts(id),
     forget: forgets,
     updates,
     onRendered: () => focusLinked(),
@@ -601,6 +611,7 @@ registerServiceWorker();
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');
+  shell.setSignedIn(true);
   setHostState(e.message);
   $('sessions').hidden = false;
 });

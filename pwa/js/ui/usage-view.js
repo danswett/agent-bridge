@@ -1,26 +1,19 @@
-// The agent usage panel: agent-ha-bridge's usage card, row for row. A folded line with each
-// agent's fullest window in its own colour, and per allowance its windows as bars, with an
-// even-pace mark, the amounts, when it resets, how old the reading is, and the error when
-// there is nothing fresher to show.
+// The agent usage page: agent-ha-bridge's usage card, row for row, on a page of its own
+// (#/usage, ui.md §7): per allowance its windows as bars, with an even-pace mark, the amounts,
+// when it resets, how old the reading is, and the error when there is nothing fresher to show.
+// Under the sessions, one line of each agent's fullest window, in its own colour, leads to it.
 import { h } from './dom.js';
 import { ago, amount, elapsed, hasReading, headline, isStale, pace, readOn, severity, showsError, until } from '../usage.js';
-
-const OPEN = 'agent-bridge.app.usage.open';
 
 export class UsageView {
   #timer = null;
 
-  constructor(section, book, { storage = globalThis.localStorage, now = () => Date.now(), doc = globalThis.document } = {}) {
-    Object.assign(this, { section, book, storage, now, doc });
-    this.toggle = section.querySelector('.usage-toggle');
-    this.summary = section.querySelector('.usage-summary');
+  // section: the usage page's section, with a .usage-body. line: the link under the sessions
+  // whose .usage-summary carries the one-line figures, or null.
+  constructor(section, book, { line = null, now = () => Date.now(), doc = globalThis.document } = {}) {
+    Object.assign(this, { section, book, line, now, doc });
+    this.summary = line?.querySelector('.usage-summary') ?? null;
     this.body = section.querySelector('.usage-body');
-    this.open = this.#read() !== '0';
-    this.toggle.addEventListener('click', () => {
-      this.open = !this.open;
-      try { this.storage?.setItem(OPEN, this.open ? '1' : '0'); } catch { /* a nicety */ }
-      this.render();
-    });
     book.onChange(() => this.render());
     // Ages and resets move on without any update from a host. Half a minute is the longest
     // interval that cannot leave a stale minute on screen; none at all while hidden.
@@ -37,24 +30,21 @@ export class UsageView {
     this.render();
   }
 
-  #read() { try { return this.storage?.getItem(OPEN) ?? null; } catch { return null; } }
-
   render() {
     const now = this.now();
     const entries = this.book.entries();
     // Shown once any machine offers usage at all, or a reading is kept from before.
     this.section.hidden = this.book.empty;
-    this.toggle.setAttribute('aria-expanded', String(this.open));
-    this.body.hidden = !this.open;
+    if (this.line) { this.line.hidden = this.book.empty; }
 
     // Each figure in the colour of its own fullest bar, so one agent running short does not
     // turn every agent beside it amber.
     const figures = entries.filter((e) => headline(e) !== null);
-    this.summary.replaceChildren(...(figures.length
+    this.summary?.replaceChildren(...(figures.length
       ? figures.flatMap((e, i) => [i > 0 ? ' \u00b7 ' : null, h('span', { class: `usage-figure ${severity(headline(e))}`.trim() }, `${e.label} ${Math.round(headline(e))}%`)]).filter(Boolean)
       : ['No usage reported yet']));
+    this.line?.setAttribute('aria-label', `Agent usage: ${this.summary?.textContent ?? ''}`);
 
-    if (!this.open) { return; }
     this.body.replaceChildren(...entries.map((e) => this.#group(e, now)));
   }
 

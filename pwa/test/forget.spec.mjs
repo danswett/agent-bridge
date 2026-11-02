@@ -1,5 +1,5 @@
 // The account's offline machines in the machines list, in demo mode (#50): the relay's roster
-// lists one, with when it was last seen, and Forget takes two presses.
+// lists one, with when it was last seen, and Forget takes two presses. On the Machines page.
 import { test, expect } from '@playwright/test';
 
 async function openDemo(page, query = '') {
@@ -7,7 +7,7 @@ async function openDemo(page, query = '') {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
-  await page.goto(`?demo=1&static=1${query}`);
+  await page.goto(`?demo=1&static=1${query}#/machines`);
   await page.waitForSelector('html[data-demo-ready]');
 }
 
@@ -21,13 +21,11 @@ test('an offline machine is listed after the online ones with when it was last s
   const row = offline(page);
   await expect(row).toHaveAttribute('data-device-name', 'Travel laptop');
   await expect(row.locator('.machine-name')).toHaveText('Travel laptop');
-  await expect(row.locator('.machine-seen')).toHaveText(' \u00b7 last seen 3d ago');
+  await expect(row.locator('.machine-seen')).toHaveText('Last seen 3d ago');
   // Nothing to open there: not a button, as an online machine is.
   await expect(row.locator('.machine-button')).toHaveCount(0);
-  // The summary counts what is online.
-  await page.locator('#machines').getByRole('button', { name: 'Machines' }).click();
-  await expect(page.locator('.machines-summary')).toHaveText('Viewing Demo machine \u00b7 1 online');
-  await page.locator('#machines').getByRole('button', { name: 'Machines' }).click();
+  // The app bar counts what is online.
+  await expect(page.locator('#online')).toHaveAccessibleName('1 machine online');
 
   await row.getByRole('button', { name: 'Forget Travel laptop' }).click();
   const armed = row.getByRole('button', { name: 'Forget Travel laptop: press again to confirm' });
@@ -96,7 +94,7 @@ test('a machine back and gone again between two lists is armed again, not forgot
   await page.evaluate(() => window.agentBridgeDemo.bounceOffline());
 
   await expect(offline(page).locator('.machine-forget')).toHaveText('Forget');
-  await expect(offline(page).locator('.machine-seen')).toHaveText(' \u00b7 last seen just now');
+  await expect(offline(page).locator('.machine-seen')).toHaveText('Last seen just now');
 });
 
 test('a relay without a roster lists only what is online', async ({ page }) => {
