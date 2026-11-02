@@ -13,9 +13,11 @@ private actor UploadFixture {
     var corruptAcknowledgment = false
     var disconnectAfterChunk = false
     var blobCalls = 0
+    var honorCancellation = false
 
-    func configure(corrupt: Bool = false, disconnect: Bool = false) {
+    func configure(corrupt: Bool = false, disconnect: Bool = false, honorCancellation: Bool = false) {
         corruptAcknowledgment = corrupt; disconnectAfterChunk = disconnect
+        self.honorCancellation = honorCancellation
     }
 
     func validate() throws {
@@ -25,6 +27,9 @@ private actor UploadFixture {
     }
 
     func send(_ operation: BridgeOperation) throws -> JSONValue {
+        if honorCancellation {
+            try Task.checkCancellation()
+        }
         operations.append(operation.op)
         if operation.op == "attachment.start" {
             size = Int(operation.data["size"]?.number ?? 0)
@@ -51,6 +56,68 @@ private actor UploadFixture {
         BridgeAttachmentUploadEndpoint(capabilities: ["sessions.reply", "sessions.attach", local ? "sessions.attach.direct" : "sessions.attach.blob"], isLocal: local,
                                        validateConnection: { try await self.validate() }, send: { try await self.send($0) }, uploadBlob: { url, _ in try await self.blob(url) })
     }
+}
+
+private actor UploadProgressFixture {
+    var updates: [BridgeAttachmentUploadProgress] = []
+    func append(_ progress: BridgeAttachmentUploadProgress) {
+        updates.append(progress)
+    }
+}
+
+@Test func fastAttachmentAcknowledgmentsDoNotFloodTheUIWithProgressUpdates() async throws {
+    let file = try uploadFile(Data(repeating: 42, count: 300_000))
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let fixture = UploadFixture()
+    let progress = UploadProgressFixture()
+    let instant = ContinuousClock.now
+    let uploader = BridgeAttachmentUploader(progressClock: { instant })
+    _ = try await uploader.upload(file: file, existingCount: 0, endpoint: fixture.endpoint()) { await progress.append($0) }
+    #expect(await fixture.operations.filter { $0 == "attachment.chunk" }.count > 20)
+    let updates = await progress.updates
+    #expect(updates.count == 3) // Preparation, first progress, and final acknowledgment.
+    #expect(updates.first?.fraction == nil)
+    #expect(updates.last?.fraction == 1)
+}
+
+@Test func cancellingAtTheFinalChunkDiscardsTheUploadedFileInsteadOfReportingSuccess() async throws {
+    let file = try uploadFile(Data(repeating: 42, count: 100))
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let fixture = UploadFixture()
+    await fixture.configure(honorCancellation: true)
+    let task = Task {
+        try await BridgeAttachmentUploader().upload(file: file, existingCount: 0, endpoint: fixture.endpoint()) { progress in
+            if progress.fraction == 1 {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+    }
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await fixture.operations == ["attachment.start", "attachment.chunk", "attachment.discard"])
+}
+
+@Test(arguments: [false, true]) func cancelledBlobHandoffsStillDiscardOnTheOriginalConnection(cancelOnProgress: Bool) async throws {
+    let file = try uploadFile(Data(repeating: 42, count: 300_000))
+    defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let fixture = UploadFixture()
+    await fixture.configure(honorCancellation: true)
+    let endpoint = BridgeAttachmentUploadEndpoint(capabilities: ["sessions.reply", "sessions.attach", "sessions.attach.blob"], isLocal: false,
+                                                  validateConnection: { try await fixture.validate() }, send: { try await fixture.send($0) }, uploadBlob: { url, _ in
+                                                      let id = try await fixture.blob(url)
+                                                      if !cancelOnProgress {
+                                                          withUnsafeCurrentTask { $0?.cancel() }
+                                                      }
+                                                      return id
+                                                  })
+    let task = Task {
+        try await BridgeAttachmentUploader().upload(file: file, existingCount: 0, endpoint: endpoint) { progress in
+            if cancelOnProgress, progress.fraction == 1 {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+    }
+    await #expect(throws: CancellationError.self) { try await task.value }
+    #expect(await fixture.operations == ["attachment.discard"])
 }
 
 private func uploadFile(_ bytes: Data, extension ext: String = "bin") throws -> URL {

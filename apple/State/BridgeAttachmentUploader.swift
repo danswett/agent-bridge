@@ -42,7 +42,14 @@ public struct BridgeAttachmentUploadProgress: Sendable, Equatable {
 
 public actor BridgeAttachmentUploader {
     private var uploading = false
-    public init() {}
+    private let progressClock: @Sendable () -> ContinuousClock.Instant
+    public init() {
+        progressClock = { .now }
+    }
+
+    init(progressClock: @escaping @Sendable () -> ContinuousClock.Instant) {
+        self.progressClock = progressClock
+    }
 
     public func upload(file url: URL, existingCount: Int, endpoint: BridgeAttachmentUploadEndpoint,
                        progress: @escaping @Sendable (BridgeAttachmentUploadProgress) async -> Void = { _ in }) async throws -> BridgeUploadedAttachment
@@ -65,17 +72,18 @@ public actor BridgeAttachmentUploader {
         try Task.checkCancellation()
         try await endpoint.validateConnection()
         if !endpoint.isLocal, prepared.size > BridgeAttachment.maximumBytes {
-            await progress(.init(message: "Encrypting and uploading \(prepared.name)…", fraction: nil))
+            await progress(.init(message: "Uploading and confirming \(prepared.name)…", fraction: nil))
             let id = try await endpoint.uploadBlob(prepared.url, prepared.type)
             do {
                 try Task.checkCancellation()
                 try await endpoint.validateConnection()
+                await progress(.init(message: "Attached \(prepared.name)", fraction: 1))
+                try Task.checkCancellation()
+                return BridgeUploadedAttachment(id: id, name: prepared.name, resized: prepared.resized)
             } catch {
-                try? await discard(id: id, endpoint: endpoint)
+                await cleanUp(id: id, endpoint: endpoint)
                 throw error
             }
-            await progress(.init(message: "Attached \(prepared.name)", fraction: 1))
-            return BridgeUploadedAttachment(id: id, name: prepared.name, resized: prepared.resized)
         }
 
         let input = try FileHandle(forReadingFrom: prepared.url)
@@ -100,6 +108,7 @@ public actor BridgeAttachmentUploader {
             try await endpoint.validateConnection()
             var state = try await BridgeAttachmentState(json: endpoint.send(.init(op: "attachment.start", data: metadata)))
             guard state.received <= prepared.size, !state.complete || state.received == prepared.size else { throw BridgeOperationError("The machine returned an invalid file offset.") }
+            var lastProgress: ContinuousClock.Instant?
             while !state.complete {
                 try Task.checkCancellation()
                 try await endpoint.validateConnection()
@@ -115,14 +124,28 @@ public actor BridgeAttachmentUploader {
                 let expectedOffset = state.received + bytes.count
                 state = try await BridgeAttachmentState(json: endpoint.send(operation))
                 guard state.received == expectedOffset, !state.complete || state.received == prepared.size else { throw BridgeOperationError("The attachment acknowledgment did not match the bytes sent.") }
-                await progress(.init(message: "Uploading \(prepared.name)", fraction: Double(state.received) / Double(prepared.size)))
+                // A fast direct upload can acknowledge thousands of chunks per second.
+                // Keep those acknowledgments off the UI actor except for useful progress.
+                let now = progressClock()
+                if state.complete || lastProgress.map({ $0.duration(to: now) >= .milliseconds(100) }) ?? true {
+                    lastProgress = now
+                    await progress(.init(message: "Uploading \(prepared.name)", fraction: Double(state.received) / Double(prepared.size)))
+                }
             }
+            try Task.checkCancellation()
             try await endpoint.validateConnection()
+            try Task.checkCancellation()
             return BridgeUploadedAttachment(id: id, name: prepared.name, resized: prepared.resized)
         } catch {
-            try? await discard(id: id, endpoint: endpoint)
+            await cleanUp(id: id, endpoint: endpoint)
             throw error
         }
+    }
+
+    private func cleanUp(id: UUID, endpoint: BridgeAttachmentUploadEndpoint) async {
+        // Transports reject calls from a cancelled task. Cleanup still validates the
+        // captured connection, but must not inherit the cancelled upload's task state.
+        try? await Task { try await self.discard(id: id, endpoint: endpoint) }.value
     }
 
     public func discard(id: UUID, endpoint: BridgeAttachmentUploadEndpoint) async throws {
