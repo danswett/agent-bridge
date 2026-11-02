@@ -40,9 +40,13 @@ public enum RelayBlobUpload {
             try await CiphertextUpload.upload(file: encrypted, destination: destination)
             return (attachment, ticket, key)
         } catch {
-            try? await relay.blobDelete(ticket: ticket)
+            await cleanup(ticket: ticket, relay: relay)
             throw error
         }
+    }
+
+    static func cleanup(ticket: String, relay: RelayBridge) async {
+        await Task { try? await relay.blobDelete(ticket: ticket, timeout: .seconds(5)) }.value
     }
 }
 
@@ -72,7 +76,9 @@ private final class CiphertextUpload: NSObject, URLSessionDataDelegate, @uncheck
         self.continuation = continuation
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 120
-        configuration.timeoutIntervalForResource = 12 * 60
+        // Match the host/Windows blob budget: 100 MiB needs over 12 minutes on a
+        // 1 Mbit/s uplink even when it makes steady progress.
+        configuration.timeoutIntervalForResource = 20 * 60
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         self.session = session
         var request = URLRequest(url: destination)

@@ -28,6 +28,13 @@ only within the host's deduplication window and against the same host process.
 Signed folder-trust questions display the full warning/path and are fetched again
 before signing. Account changes revoke old state and cache work.
 
+Large attachments use a 20-minute encrypted upload budget, followed by up to
+20 minutes for the host to fetch and verify the blob. The client polls the same
+`attachment.start` identity every 400 ms until verification completes, as the
+[attachment protocol](protocol/v1-sessions.md#large-files-through-the-blob-store)
+requires. Cancellation and failure attempt bounded cleanup on the original
+connection; they never discard an attachment on a replacement connection.
+
 Run `bash apple/scripts/verify.sh` for protocol/state tests, formatting and both
 native builds. Cryptographic vectors are byte-identical to the .NET/WebCrypto
 fixtures. Transport tests use in-memory encrypted peers and disposable local
