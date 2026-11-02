@@ -473,6 +473,9 @@ public sealed class AutoUpdater
                 return;
             }
             lastProbe = null;
+            // Asking took time too (up to its call timeout): the same checks again, as of now.
+            asked = Asked(UpdateAskKind.Install) is not null;
+            if (Refused(WhyNot(asked)) || !Due(time.GetUtcNow()) || Stale()) { return; }
             await InstallAsync(asked ? "another device asked for it and no session is busy"
                 : idleSince is not null ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }

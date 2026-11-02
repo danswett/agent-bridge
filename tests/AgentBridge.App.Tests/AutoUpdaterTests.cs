@@ -227,7 +227,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     public async Task A_hold_that_times_out_or_is_refused_never_reaches_the_stop_or_the_kill()
     {
         await StartAsync();
-        var quick = Manager(callTimeout: TimeSpan.FromMilliseconds(300));
+        // Only the hold is quick to give up: reaching a running host may take a loaded runner longer,
+        // and a host not reached is taken for one already stopped.
+        var quick = Manager(callTimeout: TimeSpan.FromMilliseconds(300), connectTimeout: TimeSpan.FromSeconds(5));
 
         // No answer in time.
         host.On(HostOps.ProbeHold, _ => { Thread.Sleep(2000); return new ProbeHoldResult(false); });
@@ -441,9 +443,9 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
-    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null) =>
+    HostManager Manager(IReadOnlyList<string>? others = null, IReadOnlyCollection<int>? package = null, TimeSpan? callTimeout = null, Func<IReadOnlyCollection<int>>? packageNow = null, TimeSpan? probeWait = null, TimeSpan? connectTimeout = null) =>
         new(new InstallLayout(app, host.Folder, "test"), tasks, processes,
-            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+            ct => LocalClient.ConnectAsync(host.Endpoint, connectTimeout ?? TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
@@ -1237,6 +1239,21 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
 
         await TwoIdleTicksAsync();
 
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Turning_it_off_while_the_host_is_asked_about_its_usage_probes_stops_the_install()
+    {
+        await StartAsync();
+        // The switch goes off while the host answers whether a probe is finishing: none is.
+        host.On(HostOps.ProbeHold, _ => { prefs = prefs with { AutoUpdate = false }; return new ProbeHoldResult(false); });
+
+        await TwoIdleTicksAsync();
+
+        Assert.NotEmpty(host.Sent(HostOps.ProbeHold));
         Assert.False(updater.Applied);
         Assert.Empty(host.Sent(HostOps.Stop));
     }

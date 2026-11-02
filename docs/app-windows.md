@@ -355,7 +355,8 @@ into one folder with one version. An app update is a host update, so they never 
   (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
   out. A host that cannot say, or is still busy after 11 minutes, is neither stopped nor ended;
   the stop fails and says why. An install that is due waits a tick at a time for that, the
-  six-hour one too, and the host
+  six-hour one too (and is checked again once the host has answered: the switch, the sessions and
+  the release as of then), and the host
   starts no new probe meanwhile. Before an update (Settings' or automatic), every other profile's
   host running from the package is held and waited for the same way, since Velopack ends them
   too, each held again every round and once more just before the hand-over, with the package
