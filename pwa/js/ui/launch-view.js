@@ -204,7 +204,8 @@ export class LaunchPanel {
     if (choices.length) { e.machine.value = picked; }
     // A machine no longer offered has nothing waiting here.
     const offered = new Set((list ?? []).map((m) => m.hostId));
-    for (const id of [...this.#asks.keys()]) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probes.delete(id); } }
+    // Nor a reading of it still on its way, which may have nothing in #asks yet.
+    for (const id of new Set([...this.#asks.keys(), ...this.#probes.keys()])) { if (!offered.has(id) && id !== picked) { this.#asks.delete(id); this.#probes.delete(id); } }
   }
 
   // The machine shown, or null when it can't launch: { hostId, machineName, load, transfers,

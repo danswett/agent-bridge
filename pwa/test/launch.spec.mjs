@@ -611,6 +611,35 @@ test.describe('a folder-trust question', () => {
     await page.waitForTimeout(500);
     await expect(way).toHaveClass(/attention/);
   });
+  test('a reading of a machine not picked, arriving after the machines shown leave it out, lights nothing', async ({ page }) => {
+    await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
+    await page.waitForSelector('html[data-demo-ready]');
+    // DEV-VM1 (shadow) has a question; its first reading as a machine not picked is held.
+    await page.evaluate(() => {
+      const p = window.agentBridgeDemo.page;
+      const was = p.launchTarget.bind(p);
+      window.__held = [];
+      let first = true;
+      p.launchTarget = (id) => {
+        const t = was(id);
+        if (id !== 'demo-shadow' || !first) { return t; }
+        first = false;
+        return { ...t, load: () => t.load().then((o) => new Promise((go) => { window.__held.push(() => go(o)); })) };
+      };
+      window.agentBridgeDemo.machines['demo-shadow'].askTrust({ id: '6e1d0a4f-3c2b-4d9e-8f7a-5b4c3d2e1f0a', agent: 'claude', kind: 'claude', label: 'Claude Code', workspace: 'web', folder: 'C:\\Users\\demo\\untrusted\\web', warning: 'Do you trust the files in this folder?', answerable: false, atMachine: 'Answer at the machine.' });
+      const laptop = window.agentBridgeDemo.machines['demo-laptop'];
+      laptop.machine = { ...laptop.machine, readOnly: 'this is a read-only comparison host (delivery.readOnly in its config); answer at the machine' };
+      laptop.capabilities = laptop.capabilities.filter((c) => c !== 'sessions.launch');
+      laptop.disconnect();
+    });
+    await expect.poll(() => page.evaluate(() => window.__held.length)).toBe(1);
+    // Only Laptop shown now: DEV-VM1's question can't be reached from this Launch page.
+    await page.locator('#machine-tabs [data-device-id="demo-laptop"]').click();
+    await expect(panel(page).locator('.launch-title')).toHaveText('Nothing waiting on Laptop');
+    await page.evaluate(() => { for (const go of window.__held.splice(0)) { go(); } });
+    await page.waitForTimeout(500);
+    await expect(page.locator('#nav [data-nav="launch"]')).not.toHaveClass(/attention/);
+  });
   test('with every machine shown, picking a machine with no question keeps the Launch dot for another machine\'s', async ({ page }) => {
     await page.goto('?demo=1&static=1&ahb=1&machines=3&answerDelay=200');
     await page.waitForSelector('html[data-demo-ready]');
