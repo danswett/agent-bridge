@@ -13,6 +13,9 @@ export default defineConfig({
   fullyParallel: false,
   workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? [['list'], ['github']] : [['list']],
+  // One picture per engine for every platform (test/glyphs.spec.mjs): CI draws on Linux, and a
+  // glyph's snapshot is about its shape and colours, which a tolerance holds across platforms.
+  snapshotPathTemplate: '{testDir}/{testFileDir}/{testFileName}-snapshots/{arg}-{projectName}{ext}',
   use: {
     baseURL: `http://127.0.0.1:${PORT}/agent-bridge/app/`,
     // So page.route sees every request; the worker gets its own test with workers allowed.

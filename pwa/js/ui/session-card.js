@@ -1,34 +1,21 @@
-// One session's card: the old dashboard's session card, rebuilt for the phone. A surface
-// whose edge and glow say what the session is doing (blue and breathing while it works,
-// amber while it waits on you, calm when idle, a still, dashed blue edge while it is
-// idle but delegating: its own turn is over and work it started in the background is not,
-// and a dotted grey one while the machine ends it), purple in place of the colour while an
-// agent drives it rather than you, with a header that stays visible when
-// the card is folded, and the response, reasoning, history and question below it, a box to
-// reply to the session, and End session at the foot.
+// One session's card: the old dashboard's session card, rebuilt for the phone. Its status is a
+// glyph and words from docs/design/ui.md §2.2 (js/status.js): no coloured edge or glow, which
+// the glyphs replaced (#178). An agent driving it adds the violet diamond to the glyph and says
+// so in words. A header stays visible when the card is folded, and the response, reasoning,
+// history and question are below it, a box to reply to the session, and End session at the foot.
 import { h, icon } from './dom.js';
+import { glyph, setGlyph } from './glyph.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
+import { sessionStatus, statusLabel } from '../status.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
-const STATUS_TEXT = { working: 'Working', waiting: 'Waiting on you', idle: 'Idle', ending: 'Ending session…' };
-const TOOL_MARK = { running: '⟳', done: '✓', failed: '✗' };
-
-// What the card shows: the status, except that an idle session still waiting on work it
-// started in the background is not finished, and reads as delegating, as on the old
-// dashboard. Agents are named first: a session waiting on both is delegating more than it
-// is running a command. A session waiting on a prompt only the machine can answer says so,
-// so nobody expects to answer it from here.
-export function cardState(s) {
-  const b = s.activity.background;
-  if (s.status === 'waiting' && s.question?.answerAtMachine) { return { view: 'waiting', text: 'Waiting at the machine' }; }
-  if (s.status !== 'idle' || !b) { return { view: s.status, text: STATUS_TEXT[s.status] }; }
-  return { view: 'delegating', text: b.agents > 0 ? 'Waiting for background agents' : 'Waiting for background commands' };
-}
+// A tool call's glyph: running turns, as working does; a finished one is done or failed.
+const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -81,14 +68,18 @@ export class SessionCard {
     e.statusText = h('span', { class: 'status-text' });
     e.since = h('span', { class: 'since' });
     e.updated = h('time', { class: 'updated' });
-    // Said in words, not only by the edge's colour.
+    // Said in words, not only by the diamond.
     e.driver = h('span', { class: 'driver', hidden: true }, 'Driven by an agent');
+    e.glyph = glyph('idle', { size: 16 });
+    // The glyph and its words stay together however narrow the card: the words wrap beside
+    // the glyph rather than leaving it alone on a line.
     e.statusLine = h('p', { class: 'status-line' },
-      h('span', { class: 'dot', 'aria-hidden': 'true' }), e.statusText, e.since, e.updated, e.driver);
+      h('span', { class: 'status-lead' }, e.glyph, e.statusText), e.since, e.updated, e.driver);
     e.toolName = h('span', { class: 'tool-name' });
     e.toolSummary = h('span', { class: 'tool-summary' });
+    e.toolGlyph = glyph('working', { size: 12 });
     e.tool = h('p', { class: 'tool-line', hidden: true },
-      h('span', { class: 'spinner', 'aria-hidden': 'true' }), e.toolName, e.toolSummary);
+      e.toolGlyph, e.toolName, e.toolSummary);
 
     e.question = h('div', { class: 'question-slot' });
     e.truncated = h('p', { class: 'note truncated', hidden: true }, 'Earlier text not shown: the response was longer than the machine sends.');
@@ -110,8 +101,7 @@ export class SessionCard {
     e.frame = h('div', { class: 'frame' },
       h('header', { class: 'head' }, h('h3', { class: 'title' }, e.fold), e.meta, e.statusLine, e.tool),
       e.body);
-    this.element = h('article', { class: 'session', 'aria-labelledby': this.ids.title },
-      e.frame, h('div', { class: 'glow', 'aria-hidden': 'true' }));
+    this.element = h('article', { class: 'session', 'aria-labelledby': this.ids.title }, e.frame);
   }
 
   #changed(key, value) {
@@ -130,14 +120,12 @@ export class SessionCard {
     if (this.hostId) { root.dataset.hostId = this.hostId; }
     root.dataset.status = s.status;
     root.dataset.agent = s.agent;
-    const state = cardState(s);
+    const state = sessionStatus(s);
     root.dataset.view = state.view;
-    // Toggled, not assigned: the frame also carries 'collapsed', which only folding changes.
-    for (const st of ['working', 'waiting', 'idle', 'delegating', 'ending']) { e.frame.classList.toggle(st, st === state.view); }
+    root.dataset.rule = String(state.rule);
     // An agent launched it, or answered or replied to it, and nobody has taken it back since.
-    const agent = s.driver === 'agent';
+    const agent = state.driven;
     root.dataset.driver = agent ? 'agent' : 'person';
-    e.frame.classList.toggle('agent', agent);
     e.driver.hidden = !agent;
     if (agent && s.driverPrincipal) { e.driver.title = s.driverPrincipal; } else { e.driver.removeAttribute('title'); }
 
@@ -159,6 +147,8 @@ export class SessionCard {
     }
 
     e.statusText.textContent = state.text;
+    e.statusText.dataset.tone = state.tone;
+    setGlyph(e.glyph, state.glyph, { size: 16, driven: state.driven, label: statusLabel(state, { title: s.title, machine: this.machineName }) });
     e.updated.dateTime = s.updatedAt;
     e.updated.title = localTime(s.updatedAt);
     this.refreshTimes();
@@ -167,6 +157,7 @@ export class SessionCard {
     e.tool.hidden = !t;
     if (t) {
       e.tool.dataset.status = t.status;
+      setGlyph(e.toolGlyph, TOOL_GLYPH[t.status], { size: 12 });
       e.toolName.textContent = t.name;
       e.toolSummary.textContent = t.summary ?? '';
     }
@@ -364,7 +355,7 @@ export class SessionCard {
   refreshTimes(now = Date.now()) {
     const s = this.#s;
     // Idle needs no clock; delegating does, since it is waiting on something.
-    const since = cardState(s).view === 'idle' ? '' : duration(s.statusSince, now);
+    const since = sessionStatus(s).view === 'idle' ? '' : duration(s.statusSince, now);
     this.els.since.textContent = since ? `for ${since}` : '';
     const u = ago(s.updatedAt, now);
     this.els.updated.textContent = u ? `updated ${u}` : '';
@@ -415,7 +406,7 @@ export class SessionCard {
 
 function toolRow(t) {
   return h('li', { class: `tool ${t.status}`, dataset: { status: t.status } },
-    h('span', { class: 'tool-mark', 'aria-hidden': 'true' }, TOOL_MARK[t.status]),
+    h('span', { class: 'tool-mark' }, glyph(TOOL_GLYPH[t.status], { size: 12 })),
     h('span', { class: 'sr-only' }, `${t.status}: `),
     h('span', { class: 'tool-name' }, t.name),
     t.summary ? h('span', { class: 'tool-summary' }, t.summary) : null,

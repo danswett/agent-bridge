@@ -700,12 +700,12 @@ was.
 
 ### Driver
 
-Whether a person or an agent is driving the session: agent-ha-bridge's purple edge. A client
-draws an agent-driven session with purple in place of its state's colour: a steady purple edge
-while it is idle, so a session left under an agent's control still says so, and the same
-breathing glow as working or waiting, in purple, while it works or waits (held still for a viewer
-who asked for reduced motion). It says so in words too ("Driven by an agent"), never by colour
-alone.
+Whether a person or an agent is driving the session: agent-ha-bridge's purple edge, drawn in
+this project's clients as the violet diamond (ui.md §2.2 rule 7). A client keeps the session's
+status glyph and words, adds the `driven-badge` diamond to the glyph, turns the glyph's active
+colour (working, delegating) to the agent role, and puts the status words in agent colour, so a
+session left under an agent's control still says so while it is idle. It says so in words too
+("Driven by an agent"), never by colour or shape alone.
 
 * **A turn is a prompt started.** An agent's turn finishing is not a new turn, so a session left
   with an agent stays the agent's while it is idle. A prompt that starts with nobody's input waiting
@@ -761,9 +761,9 @@ both are sent.
 
 **`status` is unchanged by it.** A session whose own turn has ended is `idle`, truthfully;
 `background` says why it is not finished. A client shows a session that is `idle` with
-`background` as **delegating**: its own style, and the status text "Waiting for
-background agents" when `agents` is above zero, otherwise "Waiting for background
-commands". An older client ignores the field and shows `idle`, as before. A change in
+`background` as **delegating**: the `delegating` glyph, and the status text of
+[ui.md](../design/ui.md) §2.2 rules 4, 5 and 8 ("Delegating to 2 agents", "1 background
+command"). An older client ignores the field and shows `idle`, as before. A change in
 either count is something a client shows, so it moves `updatedAt` and sends an upsert.
 Counts are never trimmed by the session budget.
 
@@ -818,7 +818,7 @@ What an agent is waiting for. The forms from all three agents map onto this one 
 | `fields` | Field[] | In order. Empty for a plain message |
 | `askedAt` | time | |
 | `truncated` | bool? | The host had to cut `message` or drop `fields` to fit the budget. A client shows what it has and says to answer at the machine |
-| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, gives the session's status as "Waiting at the machine", and a `session.answer` for it is `refused` |
+| `answerAtMachine` | bool? | No host can answer this prompt from another device: a Copilot permission request of a kind no host drives (or any, on a host without `sessions.approve`), a Claude permission prompt, a Codex approval seen only in its rollout or already typed into once. It still has its fields, so a client can say what it asks, but a client shows no controls for it, says to answer it at the machine ("Waiting on you · answer at the machine", ui.md §2.2), and a `session.answer` for it is `refused` |
 | `agent` | string? | The sub-agent that asked, by its `subagents` id, when it is not the session's own question (`waitingOn` names it too). A Copilot permission prompt is the CLI's one dialog whoever asked, and is answered the same way. A sub-agent's `ask_user` is always `answerAtMachine`: delivery types only into the main agent's, so nothing proves where the keys would land. And while a permission prompt or a sub-agent's question waits beside it, the session's own Copilot `ask_user` is `answerAtMachine` too, since the CLI may be showing the other one; a host also checks the transcript for a pending permission prompt just before typing an answer |
 
 ### Field

@@ -39,6 +39,7 @@ Larger files come next.
 | `js/host-session.js` | Which machines are shown, one or all (`ALL`), each with a channel and store of its own kept across reconnects; remembers the choice; honours `?host=`; `route(hostId)`, the only way to a machine's channel for what a card sends |
 | `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
+| `js/status.js` | What a session says about itself: [ui.md](../docs/design/ui.md) §2.2's rules, as its glyph, its words, the colour role of the words, and the glyph's accessible name (§9). Rules 1-6 first match wins, 8 refining 4, and 7 (an agent driving) as an overlay. Pure, and tested rule by rule in `test/unit/status.test.mjs` |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
@@ -56,6 +57,7 @@ Larger files come next.
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each card's answers, replies, files, End session and the launch panel to the machine it is for; the heading, count, empty state and a line per machine that can't be reached |
+| `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) its own group, which `app.css` turns and reduced motion stops |
 | `js/ui/*` | Session cards, the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget), the usage panel, fold state, relative times |
 | `js/demo.js` | `?demo=1`: a simulated host speaking the real protocol to the real client, answering, replying, ending and launching sessions and usage included; `?machines=2` adds a second machine, Laptop, and `?machines=3` a read-only shadow, DEV-VM1 (shadow), behind a simulated relay (`DemoConnection`); `?updates=1` a machine whose app found a release, and installs it when asked (`?updateStep=<ms>` per step) |
 | `tools/build-site.mjs` | Assembles the site for Pages: `config.js` with the relay, CSP in the page, and `sw.js` stamped with a hash of everything served, so any change reaches an open app as an update (the app then offers Reload) |
@@ -147,7 +149,7 @@ A question can be answered from the phone when the machine's `hello` lists
 `sessions.answer` and the question is neither `truncated` nor `answerAtMachine`. Otherwise
 it is shown read-only with "Answer at the machine", and why. A prompt marked
 `answerAtMachine` (a Claude permission prompt, say) shows only what it asks,
-the card reads "Waiting at the machine", and the reply box is held until it is answered
+the card reads "Waiting on you · answer at the machine", and the reply box is held until it is answered
 there. A Copilot permission prompt held that way on a machine whose `hello` lists
 `sessions.answer` but not `sessions.approve` says approving from the phone is turned off
 there. Otherwise a Copilot permission prompt shows what it would allow in full, with
@@ -403,7 +405,8 @@ running another checkout's tests at the same time.
   growing wait, a machine leaving, a relay drop, and every kind of action routed to its own
   machine (`route`) and resent there after it was away.
 * `test/ui.spec.mjs`, in demo mode: every field type and status from the worked example,
-  glow per status, the delegating state (idle with `background` work), reduced motion,
+  a glyph and no status edge or glow per status, the delegating state (idle with `background`
+  work), delegates named in the words, the violet diamond while an agent drives, reduced motion,
   Markdown, an XSS payload in every text field, unknown
   status/agent/fields/events, a `seq` gap, an upsert leaving every row in place (and moving
   one in Most recent), removal into Ended, fold persistence and
@@ -414,6 +417,12 @@ running another checkout's tests at the same time.
   touch) moving and pinning rows, each surviving a reload; the new activity dot on a
   folded row; Ended · N; the sort menu; blocked storage falling back to Most recent.
   `test/unit/session-order.test.mjs` covers the same below the page.
+* `test/glyphs.spec.mjs`, in demo mode: every status glyph at every size and with the driven
+  diamond against its snapshot (Chromium, `glyphs.spec.mjs-snapshots/`) in light, dark and forced
+  colours, in its role colour from the sprite alone, every pair told apart in greyscale, its
+  motion (1.2 s and 8 s turns, stopped under reduced motion), and leading every card's status
+  line at 390, 900 and 1440 px. After a deliberate change to a glyph, refresh the pictures with
+  `npx playwright test glyphs.spec.mjs --project=chromium --update-snapshots`.
 * `test/theme.spec.mjs`, in demo mode: the page, cards, controls and status in the generated
   roles and surfaces in light and dark, every role a system colour in forced colours
   (Chromium) with filled controls still legible, the generated sprite drawing a glyph
