@@ -115,7 +115,7 @@ current gate reading. The record of that shadow follows.
   - Codex is capped: its weekly allowance read 95% used.
   - Check VM-M's gate with `./build/shadow-soak-vm.ps1 -Subscription <id> -Status`, which runs `shadow summary --gate` on VM-M. Run `-Finish` only after that reads PASS.
 - DEV-VM1's shadow ended with its migration (uninstalled 11-02 14:50 PT); VM-M is the comparator.
-- To move VM-M's shadow host to a newer build after relevant merges, use `-Stop`, then `-Prepare -HostRef <ref>` (which runs `build/shadow-week.ps1 -Update` on VM-M), then `-Start`. DEV-VM1 has no shadow tasks left, so `-Update` there fails. Agent sessions can't use `shadow-week.ps1 -Install` on a real machine; the #67 guard refuses it.
+- To move VM-M's shadow host to a newer build after relevant merges, use `-Stop`, then `-Prepare -HostRef <ref>` (which runs `build/shadow-week.ps1 -Update` on VM-M), then `-Start -Caps @{ Codex = 6 }`. Always repeat the cap: a bare `-Start` recreates the driver task with no caps and would resume Codex episodes against its nearly spent allowance. DEV-VM1 has no shadow tasks left, so `-Update` there fails. Agent sessions can't use `shadow-week.ps1 -Install` on a real machine; the #67 guard refuses it.
 - #163: a skipped sample splits one disagreement into many episodes. Not fixed.
 
 ## 4. Next steps, in order
