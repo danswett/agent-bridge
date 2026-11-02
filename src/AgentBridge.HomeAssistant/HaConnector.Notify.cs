@@ -458,7 +458,7 @@ public sealed partial class HaConnector
         foreach (var (id, p, key) in due)
         {
             p.Notify.FinishedDue = null;
-            if (source.Get(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
+            if (CardSession(id) is not { Status: SessionStatus.Idle, Question: null } s) { continue; }
             // A reply newer than the one the wait began with, still at rest: wait again for it,
             // rather than drop the turn because the session moved on between the two reads.
             if (FinishedKey(s) is var current && current != key)

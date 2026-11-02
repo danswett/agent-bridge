@@ -182,6 +182,29 @@ public class LimitsTests
         Assert.Null(listed.Activity.History);
     }
 
+    // #175: the HA connector keeps Home Assistant's limits itself and reads a session before the
+    // protocol budget, whose order could otherwise drop the main agent's own reply from its card.
+    [Fact]
+    public async Task A_session_over_the_budget_is_also_kept_whole_within_its_field_limits_for_the_home_assistant_connector()
+    {
+        using var f = new Fixture();
+        var events = f.CopilotSession(Id, 100);
+        // Quotes, which JSON escapes, put the reply alone near the budget.
+        Fixture.Append(events, Copilot.User("ask", 1), Copilot.Assistant(new string('"', 20_000), 2, reasoning: new string('k', 5000)));
+        Fixture.Append(events, [.. Enumerable.Range(0, 60).Select(i => Copilot.ToolStart("t" + i, "view", new { path = new string('p', 2000) }, 3 + i))]);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var budgeted = source.Get(Id)!;
+        var whole = source.GetUnbudgeted(Id)!;
+        Assert.InRange(ProtocolJson.ByteCount(budgeted), 1, SessionBudget.MaxSessionBytes);
+        Assert.True(ProtocolJson.ByteCount(whole) > SessionBudget.MaxSessionBytes);
+        Assert.Equal(16 * 1024, whole.Activity.Response!.Length);
+        Assert.Equal(JsonSerializer.Serialize(SessionBudget.Fit(whole), ProtocolJson.Options), JsonSerializer.Serialize(budgeted, ProtocolJson.Options));
+    }
+
     [Fact]
     public void A_tool_summary_prefers_the_description_then_the_main_argument_on_one_line()
     {

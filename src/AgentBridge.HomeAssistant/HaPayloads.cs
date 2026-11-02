@@ -113,7 +113,16 @@ public static class HaPayloads
     // field source attributes to a sub-agent, else the top-level text, else own's when the host
     // has the main agent's only from its skim. The card is the main agent's, so a delegate's line
     // never stands in for its answer; agent-ha-bridge's card shows whichever wrote last.
-    public static string? MainResponse(Activity a) => a.Source?.Response is null ? a.Response ?? a.Own?.Response : a.Own?.Response;
+    public static string? MainResponse(Activity a)
+    {
+        // The budget dropped the main agent's reply, keeping only that it had one: said, never
+        // left blank and never filled with the delegate's (#175). The connector reads sessions
+        // before that budget, so this is a guard.
+        var own = a.Own?.Response ?? (a.Own?.ResponseTruncated == true ? OwnResponseDropped : null);
+        return a.Source?.Response is null ? a.Response ?? own : own;
+    }
+
+    public const string OwnResponseDropped = "_(the main agent's reply is too long to show here - see terminal)_";
 
     public static string? MainReasoning(Activity a) => a.Source?.Reasoning is null ? a.Reasoning ?? a.Own?.Reasoning : a.Own?.Reasoning;
 

@@ -55,6 +55,9 @@ public sealed class SessionSource : ISessionSource
         public SessionTracker Tracker { get; } = tracker;
         public Session ListForm = null!;
         public Session GetForm = null!;
+        // GetForm before SessionBudget.Fit (GetUnbudgeted), and its JSON when Fit changed it.
+        public Session Unbudgeted = null!;
+        public string? UnbudgetedJson;
         // What the transcript says, before the ending override; what SetEndingAsync shows
         // again when a stop fails.
         public Session Full = null!;
@@ -123,6 +126,11 @@ public sealed class SessionSource : ISessionSource
     public Session? Get(string id)
     {
         lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.GetForm : null; }
+    }
+
+    public Session? GetUnbudgeted(string id)
+    {
+        lock (_gate) { return _entries.TryGetValue(id, out var e) ? e.Unbudgeted : null; }
     }
 
     // Read between passes, as a pass is what changes a tracker's state.
@@ -557,11 +565,16 @@ public sealed class SessionSource : ISessionSource
         var getForm = SessionBudget.Fit(shown);
         var listForm = SessionBudget.Fit(shown.WithoutHistory());
         var json = JsonSerializer.Serialize(getForm, ProtocolJson.Options);
+        // Only a session Fit trimmed has another form to tell apart: a change there alone (the main
+        // agent's reply growing while the budget drops it) is still a change for GetUnbudgeted.
+        var unbudgetedJson = ReferenceEquals(getForm, shown) ? null : JsonSerializer.Serialize(shown, ProtocolJson.Options);
         lock (_gate)
         {
-            if (json == entry.Json && _entries.ContainsKey(full.Id)) { return; }
+            if (json == entry.Json && unbudgetedJson == entry.UnbudgetedJson && _entries.ContainsKey(full.Id)) { return; }
             entry.GetForm = getForm;
             entry.ListForm = listForm;
+            entry.Unbudgeted = shown;
+            entry.UnbudgetedJson = unbudgetedJson;
             entry.Json = json;
             _entries[full.Id] = entry;
             _revision++;

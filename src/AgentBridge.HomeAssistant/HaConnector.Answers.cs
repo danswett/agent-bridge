@@ -549,7 +549,7 @@ public sealed partial class HaConnector
                     // answer waiting there from none, and the re-arm would take that answer for its
                     // new baseline: the card is read again on the next pass instead.
                     else if (Interlocked.Read(ref indeterminate) != unread) { }
-                    else if (source.Get(e.Id) is { } full)
+                    else if (CardSession(e.Id) is { } full)
                     {
                         await RearmAsync(full, e.P, e.P.Name, ct, held);
                         if (!first.Rearm) { first.ReadFirst = false; }

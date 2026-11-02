@@ -523,6 +523,43 @@ public sealed class NotifyTests : IDisposable
         Assert.StartsWith("Run full test suite asks: Cut the release?", shown["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
+    // Found in review (#175): the protocol budget trims what older clients ignore first, activity.own
+    // among them, so a session over it lost the main agent's reply from its budgeted form while a
+    // delegate's 16 KiB stayed. The card and the finished push read the session before that budget.
+    [Fact]
+    public async Task A_session_over_the_protocol_budget_keeps_the_main_agents_reply_on_the_card_and_in_its_finished_push()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        var reply = "Done: the release is cut.\n" + new string('m', 5970);
+        var big = sessions.Get(A)! with
+        {
+            Status = SessionStatus.Idle,
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Idle }],
+            Activity = new Activity
+            {
+                Response = new string('"', 16 * 1024), Reasoning = new string('k', 4 * 1024), TurnCount = 1, UserMessage = "go",
+                Source = new ActivitySource { Response = "agent-3a91" },
+                Own = new OwnActivity { Response = reply },
+                History = [.. Enumerable.Range(0, 50).Select(i => new ToolCall { Id = $"t{i}", Name = "view", Summary = new string('s', 200), Status = ToolStatus.Done, StartedAt = FakeSessions.T0 })],
+            },
+        };
+        // The budgeted form has lost it: what the card would have shown without this.
+        Assert.Null(SessionBudget.Fit(big).Activity.Own?.Response);
+        sessions.Set(big);
+        await Pass(c);
+        await Pass(c, 5);
+
+        var t = HaContract.Topics(Node);
+        Assert.Equal("Done: the release is cut.", ha.Retained[t.ActivityState]);
+        Assert.Equal(reply, JsonDocument.Parse(ha.Retained[t.ActivityAttributes]).RootElement.GetProperty("response").GetString());
+        var done = Pushes()[^1];
+        Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
+        Assert.StartsWith("Done: the release is cut.", done["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_question_and_a_finished_turn_are_pushed_once_each_as_the_hooks_push_them()
     {

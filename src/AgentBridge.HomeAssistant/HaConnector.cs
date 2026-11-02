@@ -683,9 +683,20 @@ public sealed partial class HaConnector : IAsyncDisposable
         baselinePass = false;
     }
 
+    // A session as its card shows it: the source's before the protocol budget, whose order trims
+    // what older clients ignore first and so can drop the main agent's own reply while a
+    // delegate's 16 KiB stays (found in review, #175). The connector keeps within Home
+    // Assistant's limits itself (HaPayloads). The question is the budgeted form's, the one the
+    // host answers: one cut to fit is answered at the machine there, and so here.
+    Session? CardSession(string id)
+    {
+        if (source.Get(id) is not { } budgeted) { return null; }
+        return source.GetUnbudgeted(id) is { } whole && whole.Id == budgeted.Id ? whole with { Question = budgeted.Question } : budgeted;
+    }
+
     async Task SessionAsync(Session s, DateTimeOffset now, CancellationToken ct)
     {
-        var full = source.Get(s.Id) ?? s;
+        var full = CardSession(s.Id) ?? s;
         var name = HaPayloads.SessionName(s);
         var node = HaContract.NodeId(s.Id);
         var t = HaContract.Topics(node);

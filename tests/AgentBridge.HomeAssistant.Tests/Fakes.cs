@@ -522,13 +522,15 @@ internal sealed class FakeSessions : ISessionSource
     public IReadOnlyList<Session> Snapshot()
     {
         IReadOnlyList<Session> snapshot;
-        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => s.WithoutHistory())]; }
+        lock (sessions) { snapshot = [.. sessions.Values.OrderByDescending(s => s.UpdatedAt).Select(s => SessionBudget.Fit(s.WithoutHistory()))]; }
         var after = AfterSnapshot;
         AfterSnapshot = null;
         after?.Invoke();
         return snapshot;
     }
-    public Session? Get(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? s : null; } }
+    // As the host's SessionSource hands them out: within the protocol budget, and before it.
+    public Session? Get(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? SessionBudget.Fit(s) : null; } }
+    public Session? GetUnbudgeted(string id) { lock (sessions) { return sessions.TryGetValue(id, out var s) ? s : null; } }
     public SessionList List(string? cursor = null) => new(Snapshot(), revision);
     public SessionSubscription Subscribe() => throw new NotSupportedException();
     public Task RefreshAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

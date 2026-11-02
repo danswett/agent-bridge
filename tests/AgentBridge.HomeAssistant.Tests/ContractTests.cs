@@ -256,6 +256,11 @@ public class ContractTests
         var silent = s with { Activity = s.Activity with { Own = null } };
         Assert.Equal("Thinking", HaPayloads.ActivitySummary(silent));
         Assert.False(HaPayloads.ActivityAttributes(silent, name, Machine, verbose: true, DateTimeOffset.Now).ContainsKey("response"));
+        // One whose reply a budget dropped, keeping only that it had one, says so: neither blank
+        // nor the delegate's.
+        var dropped = s with { Activity = s.Activity with { Own = new OwnActivity { ResponseTruncated = true } } };
+        Assert.Equal(HaPayloads.OwnResponseDropped, HaPayloads.ActivitySummary(dropped));
+        Assert.Equal(HaPayloads.OwnResponseDropped, HaPayloads.ActivityAttributes(dropped, name, Machine, verbose: false, DateTimeOffset.Now)["response"]!.GetValue<string>());
     }
 
     // Home Assistant keeps at most 16 KiB of a state's attributes. The subagents attribute lists
