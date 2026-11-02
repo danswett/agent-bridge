@@ -178,15 +178,27 @@ test('reduced motion stops every glyph\'s animation', async ({ page }) => {
 });
 
 for (const width of [390, 900, 1440]) {
-  test(`at ${width} px every card's status line leads with its glyph, at 16 px, beside its words`, async ({ page }) => {
+  test(`at ${width} px every card's status line leads with its glyph, at 16 px, beside its words however long they are`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openDemo(page);
+    // Words long enough to wrap on a phone: they wrap beside the glyph, never leaving it alone.
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get('019a1b2c-codex-example');
+      const t = new Date(Date.now() + 1000).toISOString();
+      d.upsert({
+        ...s, status: 'waiting', statusSince: t, updatedAt: t, driver: 'agent', waitingOn: 'b1',
+        subagents: [{ id: 'b1', kind: 'background', name: 'Check the ubuntu CI failure on the relay and the witness', status: 'waiting' }],
+        question: { id: 'q-b1', kind: 'form', message: 'Which run?', fields: [], askedAt: t, answerAtMachine: true, agent: 'b1' },
+      });
+    });
+    await expect(page.locator('.session[data-rule="2"]')).toHaveCount(1);
     const lines = await page.locator('.session .status-line').evaluateAll((els) => els.map((line) => {
       const g = line.querySelector('.glyph');
       const text = line.querySelector('.status-text');
       const gr = g.getBoundingClientRect();
       const tr = text.getBoundingClientRect();
-      return { first: line.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
+      return { first: line.firstElementChild.firstElementChild === g, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
     }));
     expect(lines).toHaveLength(4);
     for (const l of lines) { expect(l).toEqual({ first: true, w: 16, h: 16, before: true, centred: true }); }

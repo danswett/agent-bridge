@@ -71,8 +71,10 @@ export class SessionCard {
     // Said in words, not only by the diamond.
     e.driver = h('span', { class: 'driver', hidden: true }, 'Driven by an agent');
     e.glyph = glyph('idle', { size: 16 });
+    // The glyph and its words stay together however narrow the card: the words wrap beside
+    // the glyph rather than leaving it alone on a line.
     e.statusLine = h('p', { class: 'status-line' },
-      e.glyph, e.statusText, e.since, e.updated, e.driver);
+      h('span', { class: 'status-lead' }, e.glyph, e.statusText), e.since, e.updated, e.driver);
     e.toolName = h('span', { class: 'tool-name' });
     e.toolSummary = h('span', { class: 'tool-summary' });
     e.toolGlyph = glyph('working', { size: 12 });
