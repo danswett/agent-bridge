@@ -187,6 +187,9 @@ test.describe('the system\'s Back on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
   const delegateRow = (page) => view(page, DELEGATING).locator('.delegate[data-id="demo-agent-suite"]');
+  // The delegate's step is in the history (its toggle event comes a task after the click), as it is
+  // long before a person could press Back.
+  const stepTaken = (page) => expect.poll(() => page.evaluate(() => history.state?.delegate ?? null), { message: 'the delegate has a history entry' }).toBe('demo-agent-suite');
 
   // From a page before the app, so leaving it has somewhere to go; then the delegate opened in its
   // session, pushed over the list, from the session's Delegates tab.
@@ -197,6 +200,7 @@ test.describe('the system\'s Back on a phone', () => {
     await v.getByRole('tab', { name: 'Delegates' }).click();
     await delegateRow(page).locator('.delegate-summary').click();
     await expect(delegateRow(page).locator('.delegate-detail')).toHaveAttribute('open', '');
+    await stepTaken(page);
     return v;
   }
 
@@ -222,12 +226,14 @@ test.describe('the system\'s Back on a phone', () => {
     await expect.poll(() => page.evaluate(() => history.state?.delegate ?? null)).toBeNull();
     await summary.click();
     await expect(detail).toHaveAttribute('open', '');
+    await stepTaken(page);
     await page.goBack();
     await expect(detail).not.toHaveAttribute('open', '');
     await expect(v).toBeVisible();
     // The header's Back is to the list, delegate or not, and Back from the list leaves.
     await summary.click();
     await expect(detail).toHaveAttribute('open', '');
+    await stepTaken(page);
     await v.locator('.session-header .back').click();
     await expect(v).toBeHidden();
     await expect(page.locator('#list-pane')).toBeVisible();
