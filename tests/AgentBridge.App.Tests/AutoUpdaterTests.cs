@@ -107,6 +107,8 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
             StartTimeout = TimeSpan.FromSeconds(5),
             StopTimeout = TimeSpan.FromSeconds(2),
             Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromSeconds(3),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
             Elevated = () => false,
             Time = held,
         };
@@ -156,6 +158,51 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.True(marked);
         Assert.Equal("0.1.0", prefs.UpdatedFrom);
         Assert.Equal("What 0.2.0 changes", prefs.UpdateNotes);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task An_update_due_while_a_Codex_probe_finishes_on_the_host_waits_until_the_host_says_it_is_done()
+    {
+        await StartAsync();
+        var finishing = true;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(finishing, finishing ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null));
+
+        await TwoIdleTicksAsync();
+        // Six hours on, it still waits: never cut short.
+        time.Advance(AutoUpdater.WaitAtMost);
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.True(host.Sent(HostOps.ProbeHold).Count >= 2);
+        Assert.Single(log, l => l.Contains("waiting to install 0.2.0: Codex's app-server", StringComparison.Ordinal));
+
+        finishing = false;
+        await auto.TickAsync();
+
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_the_host_waits_until_it_says_no_usage_probe_is_finishing_before_asking_it_to_stop()
+    {
+        await StartAsync();
+        var holds = 0;
+        var holdsAtStop = -1;
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(Interlocked.Increment(ref holds) < 3, "finishing"));
+        host.On(HostOps.Stop, data =>
+        {
+            holdsAtStop = Volatile.Read(ref holds);
+            _ = Task.Run(async () => { await Task.Delay(50); await host.StopAsync(); });
+            return new { stopping = true };
+        });
+
+        await manager.StopAsync();
+
+        Assert.Equal(3, holdsAtStop);
     }
 
     [Fact]

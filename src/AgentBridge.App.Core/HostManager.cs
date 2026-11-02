@@ -436,6 +436,7 @@ public sealed class HostManager
             await using var ch = await connect(ct);
             await ch.HelloAsync(ct);
             pid = (await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct)).ProcessId;
+            await ProbesDoneAsync(ch, ct);
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
@@ -492,6 +493,30 @@ public sealed class HostManager
     {
         await StopAsync(ct);
         await StartAsync(ct);
+    }
+
+    // How long a stop waits for a usage probe tied to the host to be done (#238): Codex's
+    // standalone app-server, whose input goes with the host, given up on as hung only at 10
+    // minutes, then its grace.
+    public TimeSpan ProbeWait { get; init; } = TimeSpan.FromMinutes(11);
+    public TimeSpan ProbePoll { get; init; } = TimeSpan.FromSeconds(1);
+
+    // Before the host is stopped, by a person, an update or anything else here: it starts no probe
+    // whose process goes with it, and one running is let finish its answers and the grace after
+    // them. Velopack ends whatever still runs from the package once the 10 s after Stop are up, so
+    // waiting is done here, while the host runs, never after. An older host does not know the op
+    // and runs no such probe; a refusal is the stop's to report.
+    async Task ProbesDoneAsync(LocalChannel ch, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow + ProbeWait;
+        while (true)
+        {
+            ProbeHoldResult held;
+            try { held = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, ct: ct); }
+            catch (HostErrorException) { return; }
+            if (!held.Busy || DateTime.UtcNow >= deadline) { return; }
+            await Task.Delay(ProbePoll, ct);
+        }
     }
 
     async Task WaitAsync(bool running, TimeSpan timeout, CancellationToken ct)

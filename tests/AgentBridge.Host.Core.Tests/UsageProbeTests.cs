@@ -598,7 +598,7 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
-    public async Task Stopping_the_host_waits_for_a_Codex_probes_answers_before_its_input_goes_with_it()
+    public async Task Stopping_the_host_waits_for_a_Codex_probes_answers_and_its_grace_before_its_input_goes_with_it()
     {
         CodexUsed();
         var release = new TaskCompletionSource();
@@ -611,13 +611,20 @@ public sealed class UsageProbeTests : IDisposable
         var stopping = monitor.DisposeAsync().AsTask();
         await Task.Delay(100);
         Assert.False(stopping.IsCompleted);
-        Assert.Contains(log, l => l.Contains("waiting up to 60 s for Codex's app-server", StringComparison.Ordinal));
+        Assert.Contains(log, l => l.Contains("waiting up to 90 s for Codex's app-server", StringComparison.Ordinal));
 
         release.SetResult();
-        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
         await Until(() => server.Answered == 4);
-        // Not the grace period too: nothing Codex does then is cut off by end of input (E13).
+        var answeredAt = server.LastAnsweredAt;
+        await AdvanceUntil(time, () => false, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(25));
+        // Answered, but still within the grace: the host has not gone, and the input is open.
+        Assert.False(stopping.IsCompleted);
         Assert.Null(launcher.Started.Single().InputClosedAt);
+        await AdvanceUntil(time, () => stopping.IsCompleted, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10));
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        var probe = launcher.Started.Single();
+        Assert.True(probe.InputClosedAt - answeredAt >= TimeSpan.FromSeconds(30), $"input closed {probe.InputClosedAt - answeredAt} after the last answer");
+        Assert.False(probe.Killed);
     }
 
     [Fact]
@@ -638,9 +645,53 @@ public sealed class UsageProbeTests : IDisposable
         Assert.False(stopping.IsCompleted);
 
         release.SetResult();
-        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
         await Until(() => server.Answered == 4);
-        Assert.Null(launcher.Started.Single().InputClosedAt);
+        var answeredAt = server.LastAnsweredAt;
+        Assert.False(stopping.IsCompleted);
+        await AdvanceUntil(time, () => stopping.IsCompleted, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(40));
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(launcher.Started.Single().InputClosedAt - answeredAt >= TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task No_standalone_Codex_probe_starts_while_the_host_is_held_for_a_stop_or_an_update()
+    {
+        CodexUsed();
+        AppServer();
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+
+        Assert.False(monitor.HoldProbes(TimeSpan.FromMinutes(15)));
+        await monitor.PassAsync();
+        await Task.Delay(100);
+        Assert.Empty(launcher.Started);
+
+        // An update that never came holds nothing for good.
+        time.Advance(TimeSpan.FromMinutes(16));
+        await monitor.PassAsync();
+        await Until(() => launcher.Started.Count == 1);
+    }
+
+    [Fact]
+    public async Task Holding_the_probes_says_a_Codex_probe_is_busy_until_its_answers_and_its_grace_are_done()
+    {
+        CodexUsed();
+        var release = new TaskCompletionSource();
+        var server = AppServer(s => s.Before["account/rateLimits/read"] = release.Task);
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var monitor = new UsageMonitor([codex], new FakeSessions(), Options(), time, log: Log);
+        await monitor.PassAsync();
+        await Until(() => server.Received.Any(r => r.Method == "account/rateLimits/read"));
+
+        Assert.True(monitor.HoldProbes(TimeSpan.FromMinutes(15)));
+        release.SetResult();
+        await Until(() => server.Answered == 4);
+        await AdvanceUntil(time, () => false, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(25));
+        Assert.True(monitor.HoldProbes(TimeSpan.FromMinutes(15)));
+
+        await AdvanceUntil(time, () => !monitor.HoldProbes(TimeSpan.FromMinutes(15)), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(10));
+        Assert.False(monitor.HoldProbes(TimeSpan.FromMinutes(15)));
+        Assert.NotNull(launcher.Started.Single().InputClosedAt);
     }
 
     [Fact]

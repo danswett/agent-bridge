@@ -294,10 +294,15 @@ E4). So the host never kills a probe:
   the process running with its input open; a late answer is still followed by the grace period.
   Only at 10 minutes is it given up on as hung, with its input closed. A Codex process left running
   counts as another Codex process, so no standalone probe starts beside it. Its input goes with the
-  host, so a host stopping first waits for the probe's answers (at most 60 s, even when they are
-  already later than the 60 s it reports within), though not for the
-  grace period: no refresh was seen running after the last answer (E13). A host that is killed
-  cannot wait.
+  host, so the host is never stopped under it (#238). The app asks the host to hold its probes
+  (`host.probes.hold`, [local-pipe.md](local-pipe.md)) before every stop, restart and update: no
+  standalone probe starts for the next 15 minutes, and the app waits until any running one has
+  had its answers and its grace, at most 11 minutes, before it stops the host. An update waits
+  for it however long it has waited already, a forced one at six hours too. A host restarting
+  itself (`host.restart`) waits the same way, at most 90 s, before it starts its replacement. A
+  host stopped by anything else holds its probes and waits for the answers and the grace, at most
+  90 s from the stop. Only a host that is killed outright, or Velopack ending the package's
+  processes for an update not started by the app, cannot wait.
 
 **Leaving the agents' credentials alone.** A host never reads, refreshes, copies or logs Claude's
 or Codex's credentials: Anthropic retires a refresh token once used and Codex's are single-use too,

@@ -250,17 +250,42 @@ public sealed class UsageMonitor : IAsyncDisposable
             try { await loop; }
             catch (OperationCanceledException) { }
         }
-        // A probe still waiting for its answers is let finish them: its input, which goes with this
-        // process, is the only thing that would end it, and that mid-refresh can sign the agent out.
+        // A probe whose input goes with this process is let finish its answers and the grace after
+        // them: its input is the only thing that would end it, and that mid-refresh can sign the
+        // agent out (E13). Bounded: one that has not answered by then is taken for hung.
+        HoldProbes(TimeSpan.FromHours(1));
         var probes = Task.WhenAll(collectors.Select(c => c.StoppingAsync()));
         if (!probes.IsCompleted)
         {
-            log($"usage: waiting up to {options.CodexReportTimeout.TotalSeconds:0} s for Codex's app-server to answer before stopping, so a refresh it may be making is not cut off");
+            var most = options.CodexReportTimeout + options.CodexGrace;
+            log($"usage: waiting up to {most.TotalSeconds:0} s for Codex's app-server to answer and finish before stopping, so a refresh it may be making is not cut off");
             using var limit = new CancellationTokenSource();
-            await Task.WhenAny(probes, Task.Delay(options.CodexReportTimeout, time, limit.Token));
+            await Task.WhenAny(probes, Task.Delay(most, time, limit.Token));
             await limit.CancelAsync();
         }
         stop.Dispose();
+    }
+
+    // The host is about to stop or be updated (#238): no probe whose process goes with the host
+    // starts for the next while, and the answer says whether one is still running or within its
+    // grace. Asked again, the hold is extended; once it lapses, probing goes on as before, so an
+    // update that never comes holds nothing for good.
+    public bool HoldProbes(TimeSpan @for)
+    {
+        var until = time.GetUtcNow() + @for;
+        var holding = false;
+        foreach (var c in collectors) { holding |= c.Hold(until); }
+        return holding;
+    }
+
+    // Holds the probes and waits, at most max, for any still running to be done with this process.
+    public async Task SettleProbesAsync(TimeSpan max)
+    {
+        if (!HoldProbes(max + options.CodexGrace)) { return; }
+        log($"usage: waiting up to {max.TotalSeconds:0} s for Codex's app-server to answer and finish first");
+        using var limit = new CancellationTokenSource();
+        await Task.WhenAny(Task.WhenAll(collectors.Select(c => c.StoppingAsync())), Task.Delay(max, time, limit.Token));
+        await limit.CancelAsync();
     }
 
     sealed class State

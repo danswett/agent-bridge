@@ -566,11 +566,16 @@ async Task<int> ServeAsync(HostHandover handover)
             wake.Release();
         },
         Stop = () => stop.Cancel(),
-        Restart = () =>
+        // Done with any usage probe tied to this host before it stops, so a standalone Codex probe
+        // is not cut mid-refresh (#238); the replacement starts once it has (HostHandover).
+        Restart = () => _ = Task.Run(async () =>
         {
+            if (usageMonitor is not null) { await usageMonitor.SettleProbesAsync(TimeSpan.FromSeconds(90)); }
             handover.Request();
             stop.Cancel();
-        },
+        }),
+        HoldProbes = () => usageMonitor?.HoldProbes(TimeSpan.FromMinutes(15)) == true
+            ? "Codex's app-server, started to read its allowance, is still answering or finishing" : null,
     }, Log);
     agentReadiness.Start();
     // A pass, or keep-awake turned on or off, changes what the app's Settings shows.

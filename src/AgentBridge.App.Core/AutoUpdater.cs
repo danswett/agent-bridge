@@ -110,6 +110,7 @@ public sealed class AutoUpdater
     DateTimeOffset? checksHeldUntil;
     string? checksHeld;
     int rateLimited;
+    string? lastProbe;
     int busy;
     int again;
     // Presses from other devices being carried out, and whether the install one has been checked
@@ -461,6 +462,17 @@ public sealed class AutoUpdater
             // feed): still the release downloaded, or nothing is stopped. Should it change even
             // while the host stops, ApplyAndRestart refuses it and the host is started again.
             if (Stale()) { return; }
+            // And not while a usage probe tied to the host is running or in its grace (#238): the
+            // host would be stopped under it. The host starts no new one while this is asked
+            // every tick; the install goes ahead at the first tick after it is done, still due.
+            if (await ProbeBusyAsync() is { } probe)
+            {
+                if (probe != lastProbe) { log($"auto-update: waiting to install {Pending}: {probe}"); }
+                lastProbe = probe;
+                Changed();
+                return;
+            }
+            lastProbe = null;
             await InstallAsync(asked ? "another device asked for it and no session is busy"
                 : idleSince is not null ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
@@ -546,6 +558,22 @@ public sealed class AutoUpdater
             Keep();
         }
         Changed();
+    }
+
+    // Why the host may not be stopped for the install yet, or null. An older host does not know the
+    // op and runs no such probe; a host that does not answer is waited for, not stopped under it.
+    async Task<string?> ProbeBusyAsync()
+    {
+        try
+        {
+            var held = await host.CallAsync<ProbeHoldResult>(HostOps.ProbeHold, timeout: TimeSpan.FromSeconds(10));
+            return held.Busy ? held.Why ?? "a usage probe on the host is finishing" : null;
+        }
+        catch (HostErrorException) { return null; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            return $"the host's usage probes could not be asked about: {e.Message}";
+        }
     }
 
     async Task<string?> WhyNotNowAsync(bool asked = false)

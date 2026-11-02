@@ -23,7 +23,10 @@ internal sealed record CodexProbeOutcome(CodexProbeKind Kind, AgentUsage? Readin
 // closed, or the process given up on as hung at the ceiling. Answered: when a standalone
 // app-server has no question left unanswered (or was given up on as hung), which can be after
 // Reported gave up waiting: until then, the host's exit would close its input mid-answer.
-internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished, Task Answered);
+// Released: when the host may go without cutting the probe short: a standalone app-server's input
+// closed after its answers and the grace period (or given up on as hung); at once on any other
+// route, which leaves nothing of the probe's tied to this process (#238).
+internal sealed record CodexProbeRun(Task<CodexProbeOutcome> Reported, Task Finished, Task Answered, Task Released);
 
 // Codex's own reading of its allowance, asked of its app-server (#200, spike #197 X-1 to X-5).
 // Codex answers account/rateLimits/read with its own credentials and refresh, and the request
@@ -51,20 +54,22 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
     {
         var reported = new TaskCompletionSource<CodexProbeOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         var answered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = Task.Run(async () =>
         {
-            try { await RunAsync(reported, answered); }
+            try { await RunAsync(reported, answered, released); }
             catch (Exception e) { reported.TrySetResult(new(CodexProbeKind.Failed, Why: $"the probe failed: {e.GetType().Name}")); }
             finally
             {
                 reported.TrySetResult(new(CodexProbeKind.Failed, Why: "the probe ended without an answer"));
                 answered.TrySetResult();
+                released.TrySetResult();
             }
         });
-        return new(reported.Task, finished, answered.Task);
+        return new(reported.Task, finished, answered.Task, released.Task);
     }
 
-    async Task RunAsync(TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered)
+    async Task RunAsync(TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, TaskCompletionSource released)
     {
         if (probes.Find(AgentKind.Codex) is not { } exe)
         {
@@ -92,11 +97,12 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             if (observed.Processes.Count == 0 && observed.Unidentified.Count == 0)
             {
                 handed = true;
-                await StandaloneAsync(exe, reported, answered, lease);
+                await StandaloneAsync(exe, reported, answered, released, lease);
                 return;
             }
             // The daemon's sign-in and refresh go on whether or not this connection does.
             answered.TrySetResult();
+            released.TrySetResult();
             IRpcLink? daemon;
             using (var connect = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
             {
@@ -115,12 +121,12 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         }
     }
 
-    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, IDisposable lease)
+    async Task StandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, TaskCompletionSource released, IDisposable lease)
     {
         IProbeProcess? process = null;
         try
         {
-            await ConverseStandaloneAsync(exe, reported, answered, p => process = p);
+            await ConverseStandaloneAsync(exe, reported, answered, released, p => process = p);
         }
         finally
         {
@@ -143,7 +149,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
         }
     }
 
-    async Task ConverseStandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, Action<IProbeProcess> onStart)
+    async Task ConverseStandaloneAsync(string exe, TaskCompletionSource<CodexProbeOutcome> reported, TaskCompletionSource answered, TaskCompletionSource released, Action<IProbeProcess> onStart)
     {
         var started = clock.GetUtcNow();
         var environment = ProbeEnvironment.Home("CODEX_HOME", options.CodexHome, ".codex");
@@ -184,6 +190,7 @@ internal sealed class CodexUsageProbe(UsageOptions options, UsageProbes probes, 
             log($"usage: Codex's app-server has not answered in {options.CodexCeiling.TotalMinutes:0} minutes; given up on as hung, with its input closed");
         }
         process.CloseInput();
+        released.TrySetResult();
         var left = ceiling - clock.GetUtcNow();
         if (left > TimeSpan.Zero) { await WithinAsync(process.Exited, left); }
     }

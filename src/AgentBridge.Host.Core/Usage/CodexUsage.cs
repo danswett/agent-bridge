@@ -22,6 +22,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     bool sessionOpen, busy, wasOpen;
     Task? running;
     Task? answering;
+    DateTimeOffset heldUntil = DateTimeOffset.MinValue;
     bool finished;
     DateTimeOffset? nextDue;
     string? said;
@@ -56,10 +57,20 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     // The probe's run, while one is under way, for tests to wait on.
     internal Task Running { get { lock (gate) { return running ?? Task.CompletedTask; } } }
 
-    // A probe still waiting for its answers: its standard input goes with the host.
+    // A probe whose standard input goes with the host: until its answers are in and its grace has
+    // passed, stopping the host would cut it short.
     public Task StoppingAsync()
     {
         lock (gate) { return answering ?? Task.CompletedTask; }
+    }
+
+    public bool Hold(DateTimeOffset until)
+    {
+        lock (gate)
+        {
+            if (until > heldUntil) { heldUntil = until; }
+            return answering is { IsCompleted: false };
+        }
     }
 
     public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
@@ -95,6 +106,12 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         {
             nextDue = null;
             if (running is not null) { return; }
+            // The host is about to stop or be updated: a probe started now could be cut short.
+            if (now < heldUntil)
+            {
+                nextDue = heldUntil;
+                return;
+            }
             if (!pace.Due(readingAt, busy, now))
             {
                 nextDue = pace.DueAt(readingAt, busy);
@@ -104,7 +121,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions"))) { return; }
             pace.Started(now);
             var run = new CodexUsageProbe(options, probes!, clock, say).Start();
-            answering = run.Answered;
+            answering = run.Released;
             running = Task.Run(async () =>
             {
                 try

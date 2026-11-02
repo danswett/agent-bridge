@@ -47,6 +47,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     Func<Uri, Action<string, string>, CancellationToken, Task<SignInResult>> signIn = (_, _, _) => Task.FromException<SignInResult>(new InvalidOperationException("no relay in these tests"));
     (SignInResult Account, Uri Relay)? saved;
     RelayAccount? credential;
+    string? probesFinishing;
+    int probeHolds;
 
     public LocalApiTests()
     {
@@ -97,6 +99,7 @@ public sealed class LocalApiTests : IAsyncLifetime
             SignedIn = (account, relay) => saved = (account, relay),
             Stop = () => Interlocked.Increment(ref stops),
             Restart = () => Interlocked.Increment(ref restarts),
+            HoldProbes = () => { Interlocked.Increment(ref probeHolds); return probesFinishing; },
         });
         authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
         server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
@@ -627,7 +630,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var hello = await ch.HelloAsync();
         Assert.DoesNotContain(HostOps.Capability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.SessionsAnswer, hello.Capabilities);
-        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount })
+        foreach (var op in new[] { HostOps.Restart, HostOps.Stop, HostOps.Settings, HostOps.SignIn, HostOps.SignInCancel, HostOps.RelayAccount, HostOps.ProbeHold })
         {
             var refused = await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(op, new { }));
             Assert.Equal($"refused: this connection is from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id}); stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}", refused.Message);
@@ -638,7 +641,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(2, (await ch.CallAsync<SessionList>(Ops.SessionsList)).Sessions.Count);
         Assert.Equal(Environment.ProcessId, (await ch.CallAsync<HostStatus>(HostOps.Status)).ProcessId);
         await Task.Delay(200);
-        Assert.Equal((0, 0), (Volatile.Read(ref stops), Volatile.Read(ref restarts)));
+        Assert.Equal((0, 0, 0), (Volatile.Read(ref stops), Volatile.Read(ref restarts), Volatile.Read(ref probeHolds)));
         lock (logged) { Assert.Contains($"local pipe: refused host.restart from pid {Environment.ProcessId}, inside the copilot session 77777777 (pid {parent.Id})", logged); }
 
         // Once that session has gone, the same process is the app again, and restarts the host.
@@ -648,6 +651,21 @@ public sealed class LocalApiTests : IAsyncLifetime
         await Wait.UntilAsync(() => Volatile.Read(ref restarts) == 1, "the app's restart", Patience);
     }
 
+    [Fact]
+    public async Task The_app_about_to_stop_the_host_holds_its_usage_probes_and_hears_whether_one_is_still_finishing()
+    {
+        var ch = await ConnectAsync();
+        await ch.HelloAsync();
+
+        probesFinishing = "Codex's app-server, started to read its allowance, is still answering or finishing";
+        var busy = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold);
+        probesFinishing = null;
+        var done = await ch.CallAsync<ProbeHoldResult>(HostOps.ProbeHold);
+
+        Assert.Equal((true, "Codex's app-server, started to read its allowance, is still answering or finishing"), (busy.Busy, busy.Why));
+        Assert.Equal(new ProbeHoldResult(false), done);
+        Assert.Equal(2, Volatile.Read(ref probeHolds));
+    }
     [Fact]
     public async Task A_process_that_is_itself_an_agent_CLI_is_refused_even_before_any_session_of_it_is_found()
     {

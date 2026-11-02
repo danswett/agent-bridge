@@ -344,6 +344,12 @@ into one folder with one version. An app update is a host update, so they never 
   and every session change, and since its sessions were last read in full (a reconnect starts
   the wait again), or six hours after it first found one, whatever the sessions are
   doing (though still only once they are read in full, so not in the middle of a reconnect).
+  Before the host is stopped, for this or anything else (Settings' Stop, Restart and Update and
+  restart), the app asks it to hold its usage probes (`host.probes.hold`) and waits until no
+  Codex app-server it started to read Codex's allowance is still answering or in its grace
+  (#238): the app-server's input goes with the host, and cutting it mid-refresh can sign Codex
+  out. An install that is due waits a tick at a time for that, the six-hour one too, and the host
+  starts no new probe meanwhile.
   The path is that of "Update and restart": the host stopped over the pipe, then
   `ApplyUpdatesAndRestart` with `--background --profile <profile>`, whose new version starts the
   host again. The new version's first start shows a toast: the version it came from, and the

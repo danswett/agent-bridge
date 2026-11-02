@@ -36,8 +36,13 @@ public interface IUsageCollector
 
     // Completes once the host may stop without cutting a probe short. A standalone Codex
     // app-server's standard input goes with the host, and end of input tears down a refresh it is
-    // making, so its answers are waited for (never a kill). Nothing else needs waiting for.
+    // making, so its answers and the grace period after them are waited for (never a kill).
+    // Nothing else needs waiting for.
     Task StoppingAsync() => Task.CompletedTask;
+
+    // The host is about to stop or be updated (#238): no probe whose process goes with it starts
+    // before until. Returns whether one is still running, or within its grace, so the caller waits.
+    bool Hold(DateTimeOffset until) => false;
 }
 
 // Copilot's monthly allowance of AI credits, asked of GitHub (api.github.com/copilot_internal/
