@@ -42,16 +42,19 @@ test('a file checked out with Windows line endings is not stale', () => {
   assert.deepEqual(staleFiles(root), []);
 });
 
-test('a changed token reaches the PWA\'s CSS, the app\'s XAML and the PWA\'s browser chrome', () => {
+test('a changed token reaches the PWA\'s CSS, the app\'s XAML and accent palette, and the PWA\'s browser chrome', () => {
   const root = copy('token');
   const tokens = JSON.parse(read(root, 'design/tokens.json'));
   tokens.color.role.bridge.light = '#0A6B60';
   tokens.surface.windows.dark.shell = '#1C1F22';
   writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
-  assert.deepEqual(staleFiles(root).sort(), ['pwa/design/tokens.css', 'pwa/index.html', 'pwa/manifest.webmanifest', XAML].sort());
+  // DesignKeys.cs too: light bridge is WinUI's SystemAccentColorDark1, which the self-test checks.
+  assert.deepEqual(staleFiles(root).sort(), ['pwa/design/tokens.css', 'pwa/index.html', 'pwa/manifest.webmanifest', XAML, 'src/AgentBridge.App/Design/DesignKeys.cs'].sort());
   const out = generate(root);
   assert.match(out['pwa/design/tokens.css'], /^ {2}--ab-bridge: #0A6B60;$/m);
   assert.match(out[XAML], /<ResourceDictionary x:Key="Light">[\s\S]*?<SolidColorBrush x:Key="AbBridge" Color="#0A6B60" \/>/);
+  assert.match(out[XAML], /<Color x:Key="SystemAccentColorDark1">#0A6B60<\/Color>/);
+  assert.match(out['src/AgentBridge.App/Design/DesignKeys.cs'], /\("SystemAccentColorDark1", "#0A6B60"\)/);
   assert.match(out['pwa/index.html'], /content="#1C1F22" media="\(prefers-color-scheme: dark\)"/);
   assert.match(out['pwa/manifest.webmanifest'], /"theme_color": "#1C1F22"/);
 });
@@ -82,7 +85,7 @@ test('the app\'s Light, Dark and HighContrast dictionaries each define every bru
 });
 
 test('every glyph and icon is a style whose template draws only with brushes the dictionaries define', () => {
-  const styles = xaml.children.filter((c) => c.tag === 'Style');
+  const styles = xaml.children.filter((c) => c.tag === 'Style' && c.attrs.TargetType === 'ContentControl');
   assert.deepEqual(styles.map((s) => s.attrs['x:Key']), [...listed('Glyphs'), ...listed('Icons')]);
   const brushes = new Set(listed('Brushes'));
   const source = read(repoRoot, XAML).replace(/<!--[\s\S]*?-->/g, '');
@@ -146,4 +149,82 @@ test('a mitred corner bevels in XAML where SVG bevels it, rather than at WinUI\'
   assert.match(spike, /Data="F1 M4,14 L8,2 L9,14"[^>]*StrokeMiterLimit="4"/);
   assert.match(spike, /Data="F1 M2,2 L14,2"[^>]*StrokeLineJoin="Round"/);
   assert.doesNotMatch(spike.split('M2,2')[1], /StrokeMiterLimit/);
+});
+
+// --- WinUI's accent, the type ramp and the layout sizes (#180) ---
+
+test('WinUI\'s accent palette is Bridge: light2 is the role\'s dark colour, dark1 its light one, every shade a Color the app defines', () => {
+  const tokens = JSON.parse(read(repoRoot, 'design/tokens.json'));
+  const colours = Object.fromEntries(xaml.children.filter((c) => c.tag === 'Color').map((c) => [c.attrs['x:Key'], c.text?.trim()]));
+  assert.equal(colours.SystemAccentColorLight2, tokens.color.role.bridge.dark);
+  assert.equal(colours.SystemAccentColorDark1, tokens.color.role.bridge.light);
+  for (const k of ['SystemAccentColor', 'SystemAccentColorLight1', 'SystemAccentColorLight3', 'SystemAccentColorDark2', 'SystemAccentColorDark3']) { assert.match(colours[k] ?? '', /^#[0-9A-F]{6}$/, k); }
+  assert.deepEqual(Object.keys(colours).sort(), [...keysCs.matchAll(/\("(SystemAccentColor\w*)", "(#[0-9A-F]{6})"\)/g)].map((m) => m[1]).sort());
+  // Out of the theme dictionaries: the palette is the same in every theme, as Windows' own is, and
+  // high contrast's controls read system colours instead.
+  assert.ok(!Object.values(themes).flat().some((b) => /^SystemAccentColor/.test(b.attrs['x:Key'])));
+});
+
+test('hyperlinks are words in Bridge, in every theme, and the system\'s link colour in high contrast', () => {
+  const brush = (theme, key) => themes[theme].find((b) => b.attrs['x:Key'] === key)?.attrs.Color;
+  const tokens = JSON.parse(read(repoRoot, 'design/tokens.json'));
+  for (const key of ['SystemControlHyperlinkTextBrush', 'HyperlinkButtonForeground', 'AbLink']) {
+    assert.equal(brush('Dark', key), tokens.color.role.bridge.dark, key);
+    assert.equal(brush('Light', key), tokens.color.role.bridge.light, key);
+    assert.equal(brush('HighContrast', key), '{ThemeResource SystemColorHotlightColor}', key);
+  }
+  assert.ok(listed('Brushes').includes('HyperlinkButtonForegroundPressed'));
+});
+
+test('a shade other than the palette\'s, or light2 and dark1 set apart from the bridge role, is refused', () => {
+  for (const [shade, why] of [['light2', /light2 and dark1 are the bridge role's/], ['dark4', /expected light3/]]) {
+    const root = copy(`accent-${shade}`);
+    const tokens = JSON.parse(read(root, 'design/tokens.json'));
+    tokens.color.accent.windows[shade] = '#123456';
+    writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+    assert.throws(() => generate(root), why);
+  }
+});
+
+test('the Windows type ramp is a TextBlock style per role: its size, line height and tabular figures, the title in Display and code in the mono', () => {
+  const styles = Object.fromEntries(xaml.children.filter((c) => c.tag === 'Style' && c.attrs.TargetType === 'TextBlock')
+    .map((s) => [s.attrs['x:Key'], Object.fromEntries(s.children.map((x) => [x.attrs.Property, x.attrs.Value]))]));
+  assert.deepEqual(Object.keys(styles), listed('TypeStyles'));
+  assert.deepEqual(Object.keys(styles), ['AbTypeTitle', 'AbTypeRow', 'AbTypeReading', 'AbTypeMeta', 'AbTypeSectionHeader', 'AbTypeCode']);
+  assert.equal(styles.AbTypeTitle.FontSize, '20');
+  assert.equal(styles.AbTypeTitle.LineHeight, '28');
+  assert.equal(styles.AbTypeTitle.FontWeight, 'SemiBold');
+  assert.match(styles.AbTypeTitle.FontFamily, /^Segoe UI Variable Display, /);
+  assert.equal(styles.AbTypeReading.FontSize, '15');
+  assert.equal(styles.AbTypeReading.LineHeight, '24');
+  assert.equal(styles.AbTypeSectionHeader.FontWeight, 'SemiBold');
+  assert.equal(styles.AbTypeRow.FontWeight, undefined, 'regular: semibold means unread activity');
+  assert.match(styles.AbTypeCode.FontFamily, /#Agent Bridge Mono, /);
+  for (const s of Object.values(styles)) {
+    assert.equal(s['Typography.NumeralAlignment'], 'Tabular');
+    assert.equal(s.LineStackingStrategy, 'BlockLineHeight');
+    assert.equal(s.CharacterSpacing, undefined, 'no tracking added to Segoe UI');
+  }
+});
+
+test('a type role the generator cannot read is refused rather than guessed', () => {
+  const root = copy('type');
+  const tokens = JSON.parse(read(root, 'design/tokens.json'));
+  tokens.type.roles.windows.meta = 'twelve on sixteen';
+  writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+  assert.throws(() => generate(root), /type\.roles\.windows\.meta/);
+});
+
+test('the layout sizes reach the app\'s XAML as doubles and its view models as constants, from the same tokens', () => {
+  const tokens = JSON.parse(read(repoRoot, 'design/tokens.json'));
+  const cs = read(repoRoot, 'src/AgentBridge.App.Core/DesignLayout.cs');
+  const doubles = Object.fromEntries(xaml.children.filter((c) => c.tag === 'x:Double').map((c) => [c.attrs['x:Key'], Number(c.text)]));
+  assert.match(cs, new RegExp(`public const double ThreePane = ${tokens.layout.breakpoints.threePane};`));
+  assert.match(cs, new RegExp(`public const double TwoPane = ${tokens.layout.breakpoints.twoPane};`));
+  for (const [name, v] of Object.entries(tokens.layout.windows).filter(([k]) => !k.startsWith('$'))) {
+    const pascal = name.charAt(0).toUpperCase() + name.slice(1);
+    assert.equal(doubles[`AbLayout${pascal}`], v, name);
+    assert.match(cs, new RegExp(`public const double ${pascal} = ${v};`), name);
+  }
+  assert.deepEqual(listed('LayoutSizes'), Object.keys(doubles).filter((k) => k.startsWith('AbLayout')));
 });

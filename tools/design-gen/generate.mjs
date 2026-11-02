@@ -5,7 +5,9 @@
 //
 // Outputs: pwa/design/tokens.css and pwa/design/sprite.svg; the PWA's theme colours in
 // pwa/index.html and pwa/manifest.webmanifest; src/AgentBridge.App/Design/DesignResources.xaml
-// and DesignKeys.cs. design/preview.png is drawn by preview.mjs, which needs a browser.
+// and DesignKeys.cs; and the layout sizes for the app's view models in
+// src/AgentBridge.App.Core/DesignLayout.cs. design/preview.png is drawn by preview.mjs, which
+// needs a browser.
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -13,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadTokens, surfaceTokens, monoFont } from './lib/tokens.mjs';
 import { readDesignDir } from './lib/svg.mjs';
 import { tokensCss, spriteSvg } from './lib/emit-pwa.mjs';
-import { designXaml, designKeysCs } from './lib/emit-xaml.mjs';
+import { designXaml, designKeysCs, designLayoutCs } from './lib/emit-xaml.mjs';
 import { toCssColor } from './lib/color.mjs';
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -63,6 +65,7 @@ export function generate(root = repoRoot) {
     ...themeColours(root, tokens),
     'src/AgentBridge.App/Design/DesignResources.xaml': designXaml(tokens, glyphs, icons),
     'src/AgentBridge.App/Design/DesignKeys.cs': designKeysCs(tokens, glyphs, icons),
+    'src/AgentBridge.App.Core/DesignLayout.cs': designLayoutCs(tokens),
   };
 }
 

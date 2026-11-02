@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using AgentBridge.App.Core;
@@ -17,7 +18,7 @@ namespace AgentBridge.App;
 // answers through them. It finds the controls the way UI Automation does (by automation id),
 // clicks through their automation peers, waits for the demo host's answer to come back to the
 // card, saves a picture of each page beside the result file, writes what it saw and exits.
-static class SelfTest
+static partial class SelfTest
 {
     public static async Task RunAsync(MainWindow window, MainViewModel main, LaunchViewModel launch, string outFile, DemoHost demo, DemoHost remote, Action<int> exit)
     {
@@ -55,6 +56,7 @@ static class SelfTest
             Check(navIcons.Count >= 3 && navIcons.All(i => Find<Microsoft.UI.Xaml.Shapes.Path>(i).FirstOrDefault()?.Stroke is SolidColorBrush { Color.A: > 0 }),
                 $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
+            await CheckShell(window, main, Check);
             await CheckStatusLines(window, cards, Check);
 
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
@@ -159,6 +161,19 @@ static class SelfTest
             await Task.Delay(500);
             Check(Fits(window, "SettingsPane"), "fits the Settings page's column in a wide window");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".settings.png"));
+
+            // The search box finds a session on any machine and opens it, from any page.
+            var sought = main.AllCards.First(c => c.Id == "demo-remote-claude");
+            window.SearchFor(sought.Title);
+            var hits = window.Search.ItemsSource as IReadOnlyList<SearchHit> ?? [];
+            Check(hits.Any(h => h.SessionId == sought.Id && h.Machine == DemoHost.RemoteId), $"finds another machine's session by its title in the search box ({hits.Count} found)");
+            sought.Folded = true;
+            if (hits.FirstOrDefault(h => h.SessionId == sought.Id) is { } hit) { window.OpenHit(hit); }
+            await Task.Delay(500);
+            Check(window.CurrentPage == "sessions" && !sought.Folded && window.Search.Text.Length == 0, "opens a session chosen in the search box on the Sessions page");
+
+            await CheckMachinesPage(window, main, Check, outFile);
+            await CheckPagesInEveryTheme(window, Check, outFile, result);
         }
         catch (Exception e)
         {
@@ -217,6 +232,191 @@ static class SelfTest
         }
     }
 
+    // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
+    // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
+    // layer with an 8 px top-left radius; WinUI's accent controls in Bridge in both themes; and the
+    // window no smaller than 360×600.
+    static async Task CheckShell(MainWindow window, MainViewModel main, Action<bool, string> check)
+    {
+        static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : b?.GetType().Name ?? "none";
+        static string Hex(string h) => $"#FF{h.TrimStart('#')}";
+        var accent = Design.DesignKeys.AccentColors.ToDictionary(a => a.Key, a => a.Color);
+        var bar = window.Bar;
+        check(bar.Title == "Agent Bridge" && Math.Abs(bar.ActualHeight - (double)Application.Current.Resources["AbLayoutTitleBar"]) < 0.5,
+            $"draws the 48 px title bar with the app's name ({bar.ActualHeight:0.#} px)");
+        var mark = ById<ContentControl>(window.RootElement, "Mark");
+        check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
+        check(window.Search.XamlRoot is not null && window.Search.ActualWidth > 100 && FindAncestor<TitleBar>(window.Search) == bar, $"puts the search box in the title bar ({window.Search.ActualWidth:0} px wide)");
+        check(window.RootElement is Grid { KeyboardAccelerators: var keys } && keys.Any(k => k.Key == Windows.System.VirtualKey.K && k.Modifiers == Windows.System.VirtualKeyModifiers.Control), "focuses search with Ctrl+K");
+
+        var rail = window.Rail;
+        var tags = rail.MenuItems.Concat(rail.FooterMenuItems).OfType<NavigationViewItem>().Select(i => i.Tag as string).ToList();
+        check(rail.PaneDisplayMode == NavigationViewPaneDisplayMode.LeftCompact && tags.SequenceEqual(["sessions", "machines", "launch", "usage", "settings"])
+            && rail.FooterMenuItems.OfType<NavigationViewItem>().Single().Tag as string == "settings",
+            $"has a compact rail of Sessions, Machines, Launch and Usage, with Settings at its foot ({string.Join(", ", tags)})");
+        // NavigationView draws the pages' layer with the radius in its left modes, not in its top mode.
+        var layer = Find<Grid>(rail).FirstOrDefault(g => g.Name == "ContentGrid");
+        var radius = ((CornerRadius)Application.Current.Resources["AbRadiusCard"]).TopLeft;
+        check(layer is { CornerRadius: var r } && Math.Abs(r.TopLeft - radius) < 0.1 && r.TopRight == 0 && r.BottomLeft == 0, $"draws the pages on a layer with an {radius} px top-left radius");
+
+        foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+        {
+            if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { break; }
+            window.RootElement.RequestedTheme = theme;
+            await Task.Delay(300);
+            var want = Hex(theme == ElementTheme.Dark ? accent["SystemAccentColorLight2"] : accent["SystemAccentColorDark1"]);
+            var pill = Find<Microsoft.UI.Xaml.Shapes.Rectangle>(rail).FirstOrDefault(x => x.Name == "SelectionIndicator" && x.Opacity > 0);
+            check(pill is { ActualWidth: 3, ActualHeight: 16 } && Colour(pill.Fill) == want, $"marks the page shown with a 3×16 Bridge pill in {theme} ({(pill is null ? "none" : $"{pill.ActualWidth}×{pill.ActualHeight} {Colour(pill.Fill)}")}, wanted {want})");
+            // A control that follows WinUI's accent: an accent button.
+            var button = new Button { Content = "Bridge", Style = (Style)Application.Current.Resources["AccentButtonStyle"], Opacity = 0, IsHitTestVisible = false };
+            var root = (Panel)window.RootElement;
+            root.Children.Add(button);
+            try
+            {
+                button.UpdateLayout();
+                check(Colour(button.Background) == want, $"draws WinUI's accent button in Bridge in {theme}, not the Windows accent ({Colour(button.Background)}, wanted {want})");
+            }
+            finally { root.Children.Remove(button); }
+        }
+        window.RootElement.RequestedTheme = ElementTheme.Default;
+
+        var scale = window.RootElement.XamlRoot.RasterizationScale;
+        var (w, h) = WindowPlacement.Smallest(scale);
+        check(window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { PreferredMinimumWidth: var mw, PreferredMinimumHeight: var mh } && mw == w && mh == h,
+            $"lets the window be resized down to 360×600 and no smaller ({w}×{h} px at {scale:0.##}×)");
+        check(main.Machines.Count > 0, "keeps the machine picker's choices");
+    }
+
+    // The Machines page (#180, #213): a row per machine, its icon and status on line 1 with its
+    // name, never centred on a taller row; no sentence or id on a row; one button style.
+    static async Task CheckMachinesPage(MainWindow window, MainViewModel main, Action<bool, string> check, string outFile)
+    {
+        window.ShowPage("machines");
+        await Task.Delay(500);
+        var rows = Find<Grid>(window.RootElement).Where(g => AutomationProperties.GetAutomationId(g) == "MachineRow" && g.ActualHeight > 0).ToList();
+        check(rows.Count == main.MachineRows.Count && rows.Count >= 2, $"lists every machine on the Machines page ({rows.Count} of {main.MachineRows.Count})");
+        var crooked = new List<string>();
+        foreach (var row in rows)
+        {
+            var name = ById<TextBlock>(row, "MachineName");
+            var top = name?.TransformToVisual(row).TransformPoint(default).Y ?? -1;
+            double Top(string id) => ById<FrameworkElement>(row, id) is { } e ? e.TransformToVisual(row).TransformPoint(default).Y : -100;
+            var status = ById<TextBlock>(row, "MachineStatus");
+            var right = status is null ? double.MaxValue : status.TransformToVisual(row).TransformPoint(new Windows.Foundation.Point(status.ActualWidth, 0)).X;
+            if (Math.Abs(Top("MachineIcon") - top) > 1 || Math.Abs(Top("MachineStatus") - top) > 1 || right > row.ActualWidth + 0.5) { crooked.Add(name?.Text ?? "?"); }
+        }
+        check(crooked.Count == 0, $"aligns each machine's icon and status with its name's line, inside the row{(crooked.Count > 0 ? $": not {string.Join(", ", crooked)}" : "")}");
+        var facts = rows.Select(r => ById<TextBlock>(r, "MachineFacts")?.Text ?? "").ToList();
+        check(facts.All(f => f.Split(" · ").Length <= 2 && !f.Contains("read-only", StringComparison.OrdinalIgnoreCase) && !f.EndsWith('.')), $"keeps every machine row to two facts, with no sentence ({string.Join(" | ", facts)})");
+        var buttons = rows.SelectMany(r => Find<Button>(r)).Where(b => b.Visibility == Visibility.Visible && b.ActualHeight > 0).ToList();
+        var heights = buttons.Select(b => Math.Round(b.ActualHeight)).Distinct().ToList();
+        check(buttons.Count > 0 && buttons.All(b => b.Style == buttons[0].Style) && heights.Count == 1, $"gives every button on the Machines page one style ({buttons.Count} buttons, heights {string.Join(", ", heights)})");
+        await Picture(window.RootElement, Path.ChangeExtension(outFile, ".machines.png"));
+    }
+
+    // Every page loads and draws in Light and Dark, and in high contrast with system colours for
+    // every role. A resource missing from one theme fails only where that theme is used, and a XAML
+    // failure shows only as 0xC000027B, so each page is drawn in each. High contrast is a Windows
+    // setting, not a window's: on CI the self-test turns it on for the pass and back off after.
+    static readonly (string Tag, string Pane)[] Pages = [("sessions", "SessionsPage"), ("machines", "MachinesPane"), ("launch", "LaunchPane"), ("usage", "UsagePane"), ("settings", "SettingsPane")];
+
+    static async Task CheckPagesInEveryTheme(MainWindow window, Action<bool, string> check, string outFile, Dictionary<string, object?> result)
+    {
+        var root = window.RootElement;
+        async Task<List<string>> Draw(string theme)
+        {
+            var broken = new List<string>();
+            foreach (var (tag, pane) in Pages)
+            {
+                window.ShowPage(tag);
+                await Task.Delay(400);
+                var page = ById<FrameworkElement>(root, pane);
+                var title = page is null ? null : Find<TextBlock>(page).FirstOrDefault(t => AutomationProperties.GetHeadingLevel(t) == AutomationHeadingLevel.Level1);
+                if (page is not { IsLoaded: true, Visibility: Visibility.Visible } || page.ActualHeight <= 0 || title is not { FontSize: 20, ActualHeight: > 0 }) { broken.Add(tag); }
+                await Picture(root, Path.ChangeExtension(outFile, $".{tag}.{theme.ToLowerInvariant()}.png"));
+            }
+            return broken;
+        }
+
+        if (!new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast)
+        {
+            foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+            {
+                root.RequestedTheme = theme;
+                await Task.Delay(300);
+                var broken = await Draw(theme.ToString());
+                check(broken.Count == 0 && root.ActualTheme == theme, $"draws every page with its title in {theme}{(broken.Count > 0 ? $": not {string.Join(", ", broken)}" : "")}");
+            }
+            root.RequestedTheme = ElementTheme.Default;
+        }
+
+        using var contrast = HighContrastPass.Begin();
+        result["highContrast"] = contrast.How;
+        if (!contrast.On) { return; }
+        await Until(() => new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast, TimeSpan.FromSeconds(15));
+        await Task.Delay(1500);
+        var hcBroken = await Draw("HighContrast");
+        check(hcBroken.Count == 0, $"draws every page with its title in high contrast{(hcBroken.Count > 0 ? $": not {string.Join(", ", hcBroken)}" : "")}");
+        var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
+            .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
+        var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
+        check(system.Count > 0 && own.Count == 0, $"uses a system colour for every role and surface in high contrast{(own.Count > 0 ? $": not {string.Join(", ", own)}" : "")}");
+        window.ShowPage("sessions");
+    }
+
+    // Windows' high contrast for the self-test's pass, on CI only: a developer's own setting is
+    // never changed. Turned back as it was when the pass ends, however it ends.
+    sealed partial class HighContrastPass : IDisposable
+    {
+        const uint GetHighContrast = 0x42, SetHighContrast = 0x43, On_ = 0x1, SendChange = 0x2;
+        uint before;
+        bool changed;
+
+        public bool On { get; private set; }
+        public string How { get; private set; } = "";
+
+        public static HighContrastPass Begin()
+        {
+            var pass = new HighContrastPass();
+            if (new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast) { pass.On = true; pass.How = "on already"; return pass; }
+            if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true") { pass.How = "not checked: high contrast is changed only on CI"; return pass; }
+            var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>() };
+            if (!SystemParametersInfo(GetHighContrast, hc.cbSize, ref hc, 0)) { pass.How = $"not checked: reading the setting failed ({Marshal.GetLastPInvokeError()})"; return pass; }
+            pass.before = hc.dwFlags;
+            hc.dwFlags |= On_;
+            pass.changed = SystemParametersInfo(SetHighContrast, hc.cbSize, ref hc, SendChange);
+            pass.On = pass.changed;
+            pass.How = pass.changed ? "turned on for the pass" : $"not checked: turning it on failed ({Marshal.GetLastPInvokeError()})";
+            return pass;
+        }
+
+        public void Dispose()
+        {
+            if (!changed) { return; }
+            changed = false;
+            var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>(), dwFlags = before };
+            SystemParametersInfo(SetHighContrast, hc.cbSize, ref hc, SendChange);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct HIGHCONTRAST
+        {
+            public uint cbSize;
+            public uint dwFlags;
+            public nint lpszDefaultScheme;
+        }
+
+        [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static partial bool SystemParametersInfo(uint action, uint param, ref HIGHCONTRAST value, uint winIni);
+    }
+
+    static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node is not null and not T) { node = VisualTreeHelper.GetParent(node); }
+        return node as T;
+    }
+
     static void CheckDesign(MainWindow window, Action<bool, string> check)
     {
         var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
@@ -230,6 +430,11 @@ static class SelfTest
             check(missing.Count == 0, $"defines every design brush in {theme}{(missing.Count > 0 ? $": missing {string.Join(", ", missing)}" : "")}");
         }
         check(Application.Current.Resources.TryGetValue("MonoFontFamily", out var mono) && mono is FontFamily, "has the design's monospace stack");
+        List<string> wrongAccent = [.. Design.DesignKeys.AccentColors.Where(a => !(Application.Current.Resources.TryGetValue(a.Key, out var c) && c is Windows.UI.Color colour && colour.ToString() == $"#FF{a.Color.TrimStart('#')}")).Select(a => a.Key)];
+        check(wrongAccent.Count == 0, $"sets WinUI's accent palette to Bridge{(wrongAccent.Count > 0 ? $": not {string.Join(", ", wrongAccent)}" : "")}");
+        List<string> missingType = [.. Design.DesignKeys.TypeStyles.Where(k => !(Application.Current.Resources.TryGetValue(k, out var s) && s is Style { TargetType.Name: "TextBlock" }))];
+        List<string> missingSizes = [.. Design.DesignKeys.LayoutSizes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var d) && d is double))];
+        check(missingType.Count + missingSizes.Count == 0, $"has the design's type ramp and layout sizes{(missingType.Count + missingSizes.Count > 0 ? $": missing {string.Join(", ", missingType.Concat(missingSizes))}" : "")}");
         List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
         check(missingFonts.Count == 0, $"bundles Agent Bridge Mono and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
 

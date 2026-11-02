@@ -9,7 +9,8 @@
         <!-- In a Grid: a ScrollViewer centres a narrower child by its desired width, which pushed
              the column off the right edge (see LaunchView). -->
         <Grid>
-            <StackPanel MaxWidth="920" Padding="16,12,16,24" Spacing="8">
+            <StackPanel MaxWidth="920" Padding="24,20,24,24" Spacing="8">
+                <TextBlock Style="{StaticResource AbTypeTitle}" AutomationProperties.HeadingLevel="Level1" Text="Settings" />
                 <InfoBar Severity="Error" Title="That didn't work" IsClosable="False" IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" Message="{x:Bind ViewModel.Error, Mode=OneWay}" />
                 <ProgressBar IsIndeterminate="True" Visibility="{x:Bind local:Ui.Show(ViewModel.Busy), Mode=OneWay}" />
     
@@ -69,7 +70,7 @@
                 </StackPanel>
                 <Border
                     Background="{ThemeResource AbSubtle}"
-                    CornerRadius="10"
+                    CornerRadius="{StaticResource AbRadiusCard}"
                     Padding="16"
                     Visibility="{x:Bind local:Ui.Show(ViewModel.SignInPending), Mode=OneWay}">
                     <StackPanel Spacing="8">
