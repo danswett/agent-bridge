@@ -61,14 +61,21 @@ jobs:
           az bicep build-params -f infra/regions/westus2.bicepparam --stdout > /dev/null
 
   build:
-    # RELAY_DEPLOY (a repository variable) is set once Azure and OIDC are configured; a fork
-    # or a fresh clone without them only compiles the templates.
+    # RELAY_DEPLOY (a repository variable) is set once Azure and OIDC are configured; a fresh
+    # clone without it only compiles the templates. A fork's pull request is kept from Azure by
+    # GitHub, not by this condition: it runs with a read-only token, no OIDC token and no
+    # secrets. The head-repository check only skips the job there instead of failing it.
+    # Never for Dependabot: its grouped action bumps edit this file, its branches are in this
+    # repository, and its runs get this job's id-token grant, so an unreviewed new action release
+    # would run with the staging principal (AcrPush, the staging app, staging's token key). Both
+    # the actor and the pull request's author are checked: a person pushing to a Dependabot
+    # pull request's branch becomes the run's actor, but the author is still Dependabot.
     if: >-
       vars.RELAY_DEPLOY == 'true' && inputs.rollback_to == '' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]'
     needs: infra
     runs-on: ubuntu-latest
-    # Fork pull requests get no OIDC token, so they skip Azure and only compile the templates.
     environment: staging
     permissions:
       contents: read

@@ -9,7 +9,11 @@ updates:
     schedule:
       interval: weekly
     # A new release waits a week before it is proposed, so a compromised one is likelier to be
-    # caught and pulled before CI ever runs it.
+    # caught and pulled first. Once proposed, it runs unreviewed in that PR's CI, with whatever
+    # each job's `permissions:` grant, as for any branch in this repository. On a pull request
+    # that is read-only apart from CodeQL's security-events: write (its results upload) and
+    # relay.yml's id-token: write. relay.yml's Azure jobs therefore skip Dependabot, and a bumped
+    # action reaches the staging OIDC sign-in only once a person has reviewed and merged it.
     cooldown:
       default-days: 7
     # One PR a week rather than one per action: each runs the whole CI.
