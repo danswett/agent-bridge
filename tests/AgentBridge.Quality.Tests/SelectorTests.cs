@@ -232,4 +232,19 @@ public class SelectorTests
         var linux = json.RootElement.GetProperty("matrix").GetProperty("linux-x64").EnumerateArray().Select(e => e.GetString());
         Assert.Equal(["protocol", "transport", "codeql"], linux);
     }
+
+    [Fact]
+    public void The_json_names_the_workflow_jobs_the_selected_suites_run_in_and_no_others()
+    {
+        // HomeAssistant reaches protocol (the sentinel, ci.yml product) and ha-integration; host and
+        // homeassistant are selected too, but planned, so they name no job. transport isn't selected.
+        var selection = Fixture.Selector().Select(["src/HomeAssistant/Mqtt.cs"], ring: 1);
+
+        using var json = JsonDocument.Parse(Program.ToJson(selection, "test"));
+
+        var ci = json.RootElement.GetProperty("jobs").GetProperty("ci.yml");
+        Assert.Equal(["ha-integration", "product"], ci.EnumerateObject().Select(j => j.Name));
+        Assert.Equal(["protocol"], ci.GetProperty("product").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal(["ha-integration"], ci.GetProperty("ha-integration").EnumerateArray().Select(e => e.GetString()));
+    }
 }
