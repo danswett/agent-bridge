@@ -185,7 +185,9 @@ public sealed class LaunchPieceTests : IDisposable
         var release = Out("release.txt");
         File.WriteAllText(intermediate, $"@start \"\" /b \"{Echo}\" --probe-child \"{pidFile}\" {(closeOutput ? "close" : "keep")}\r\n");
         File.WriteAllText(shim, $"@echo off\r\nstart \"\" /b cmd.exe /d /c \"\"{intermediate}\"\"\r\n:wait\r\nif not exist \"{release}\" goto wait\r\necho fixture 1.2.3\r\n");
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        // The safety deadline must leave room for process startup and the ten-second probe
+        // timeout; loaded ARM runners can spend more than two seconds creating the fixture.
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var runner = new VersionCommandRunner();
         var pending = runner.RunAsync(shim, ["--version"], TimeSpan.FromSeconds(10), stop.Token);
         Process? child = null;
