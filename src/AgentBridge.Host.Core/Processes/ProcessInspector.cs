@@ -479,15 +479,26 @@ public static partial class CommandLine
 
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
-    // Where Codex's own command line starts: the first argument whose file name starts with codex
-    // (the executable, or the codex.js an npm install runs in node), else the first. A runtime's
-    // options and their values (`node --require preload.cjs .../codex.js`) are never Codex's.
+    // Where Codex's own command line starts. The program itself when it is Codex's executable
+    // (named codex, or a vendored codex-<target> binary); under a runtime, the script named codex
+    // (codex.js) it runs, so neither a runtime's options nor their values (`node --require
+    // /work/codex-preload.cjs .../codex.js`) are read as Codex's; failing that, the first argument
+    // whose name starts with codex, else the first.
     internal static int CodexProgram(IReadOnlyList<string> arguments)
     {
-        for (var i = 0; i < arguments.Count; i++)
+        static string File(string path)
         {
-            var name = arguments[i].Replace('\\', '/');
-            if (name[(name.LastIndexOf('/') + 1)..].StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            var name = path.Replace('\\', '/');
+            return name[(name.LastIndexOf('/') + 1)..];
+        }
+        if (arguments.Count == 0 || File(arguments[0]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return 0; }
+        for (var i = 1; i < arguments.Count; i++)
+        {
+            if (string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+        }
+        for (var i = 1; i < arguments.Count; i++)
+        {
+            if (File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
         }
         return 0;
     }
