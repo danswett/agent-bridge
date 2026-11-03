@@ -33,13 +33,18 @@ public sealed class UiThreadTests
     [Fact]
     public async Task Nothing_posted_runs_while_a_test_step_is_part_way_through()
     {
-        var log = new List<string>();
-        var posting = Task.Run(() => ui.Post(() => log.Add("posted")));
-        log.Add("step begins");
-        Thread.Sleep(50);
-        log.Add("step ends");
-        await posting;
-        Assert.Equal(["step begins", "step ends", "posted"], log);
+        using var posting = new ManualResetEventSlim();
+        using var ran = new ManualResetEventSlim();
+        var post = Task.Run(() =>
+        {
+            posting.Set();
+            ui.Post(ran.Set);
+        });
+        // The post has been made from the other thread; until this step awaits, it cannot run.
+        posting.Wait();
+        Assert.False(ran.Wait(TimeSpan.FromMilliseconds(100)));
+        await post;
+        Assert.True(ran.IsSet);
     }
 
     [Fact]

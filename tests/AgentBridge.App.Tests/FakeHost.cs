@@ -180,6 +180,13 @@ sealed class LockedDispatcher : IUiDispatcher
 // coming in (#101). The app never does that: its continuations come back to its UI thread.
 // One per test, not one for all: the tests are separate apps, and one test's step would
 // otherwise wait for every other's.
+// "The UI thread" is a turn, not an OS thread: what is queued here (the test's steps, every
+// continuation) runs on this context's own thread, while a dispatcher's Post from a pipe's thread
+// takes its turn on that thread, under the gate, and returns once done. The view models never ask
+// which thread they are on, only that nothing else runs meanwhile, and the tests rely on Post
+// being done when it returns (a Post then a read of what it set), as LockedDispatcher always was.
+// Two posts from different threads run in whichever order they take the gate: in the app too,
+// they reach the dispatcher's queue in whichever order their threads get there.
 sealed class TestUi : SynchronizationContext
 {
     static readonly AsyncLocal<TestUi?> ambient = new();
@@ -197,7 +204,7 @@ sealed class TestUi : SynchronizationContext
     // The UI thread of the test this runs for.
     public static TestUi ForTest => ambient.Value ?? shared;
 
-    // Whether this thread is the UI thread now.
+    // Whether this thread has the UI's turn now: it is the UI thread for as long as it holds it.
     public bool OnIt => Monitor.IsEntered(gate);
 
     // What the view models say once no posted action is part-way through.
