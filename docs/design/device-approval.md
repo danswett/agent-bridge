@@ -42,7 +42,7 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | **The account's GitHub sign-in** (a stolen token, a phished device flow, a leaked relay session token) | Can admit new keys to the relay, with any `kind` and `name` | Read or drive a session, pass a person-only check, appear as an approved machine, approve itself, or replace the roster |
 | **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host the remover has never had an attestation from until the roster is imported there (§3.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
-| **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs |
+| **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs. Hosts in `enforce` hold to this from the start; the relay does once the account's relay mode is `enforce` (§4.5), which the owner switches on after the cutover (§8.2) |
 | **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4). Its removals of devices junior to it are not held, and apply at once |
 | **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host the remover has never had an attestation from, where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
@@ -244,7 +244,9 @@ history state. It is valid only if:
   hostile approver H can sign, on a parent from before a device's add, a copy of that device's key,
   and so conflict a device added in the last 8 entries (one junior to H it could remove outright
   anyway). A device added earlier than that cannot be conflicted without a dishonest relay or a
-  partition. The effect is bounded by the 8 entries and H's budget of 64 adds, announced, and
+  partition: a copy signed further back is quarantined, extending an old open head counts as
+  forking from it, and neither H's own merge nor one by a device junior to H adopts the copy
+  (§3.5, rule 3). The effect is bounded by the 8 entries and H's budget of 64 adds, announced, and
   reversed by removing H with the cascade. Decision 9 states it. Otherwise the person enrolls a
   conflicted device again with a new key. An honest enrollment makes one add, so without a hostile
   approver a conflict needs a dishonest relay or a device enrolled twice while partitioned. A void
@@ -520,13 +522,24 @@ lacks entries the verifier has is simply no news. A verifier accepts an offered 
      once it applies nothing un-applies it;
    * a `merge` signed with presence is always accepted. That is how a person adopts a branch. A
      merge whose signer was itself added by a quarantined entry adopts nothing until a merge by a
-     signer outside the quarantine adopts its branch, so quarantine cannot adopt itself;
+     signer outside the quarantine adopts its branch, so quarantine cannot adopt itself. Nor does a
+     merge adopt a quarantined **copy**, an `add` of an id that already has another add among the
+     merge's ancestors, when the merge's signer signed that copy or is junior to its signer: an
+     approver cannot adopt its own copy, directly or through a device it added. The copy stays
+     quarantined until a merge by a device that is neither adopts it, and an honest client offers
+     that only with a warning naming the device it would conflict;
    * anything else is accepted only if the parent is at most **8 entries** behind one of the
      verifier's heads and `S` would then have at most 4 heads. An entry beyond that is
      **quarantined**: it is kept as evidence and reported as relay misbehavior, and its effect is
      not applied, but it is gossiped. It is how a removed device would bring back an add it signed
      on an old head. Quarantined entries count toward the caps and budgets of §3.3 like any
      others, which bounds them, and nothing is dropped.
+
+   The limit applies to an entry that extends a head **without** forking, too, when that head's
+   `seq` is more than 8 below another of the verifier's heads: such an entry is treated as a fork
+   from that old head. A branch left open therefore does not stay open for appends, and a hostile
+   approver cannot reach an arbitrarily old point by extending a sibling head that no one merged.
+   An honest client merges every head it knows before it appends, so this never touches it.
 4. **Quarantine is inherited.** An entry with a quarantined ancestor is quarantined too, whether
    or not it starts a fork, until a merge adopts that branch. Otherwise the first child of a
    quarantined entry would bypass rule 3: an established signer's quarantined rename followed by
@@ -815,7 +828,20 @@ exchanged as above, so N too knows its approver is the device that scanned it.
 ### 4.5 What the relay does for a pending device
 
 The relay verifies the roster too (signatures are public) and uses it as defense in depth,
-never as the gate:
+never as the gate.
+
+**Relay mode.** Appending a genesis does not by itself change what any device gets from the
+relay. Each account with a roster has a relay mode, which starts as **`observe`**: the relay stores,
+verifies and serves the roster, reports bound kinds for active devices and lists unrostered ones
+to person's devices as pending, but otherwise serves every device as it does today. That keeps the
+owner's existing apps and hosts working while they enroll one at a time and their hosts are still
+in `off` or `observe` (§8.2). The mode moves to **`enforce`** when an active person's device asks
+for it on its own relay connection (the Devices page's "Restrict unapproved devices"), or at
+genesis when the relay has never admitted another device for the account, as on a new install. It
+never moves back, except by a reset (§5.5) or the administration path (§5.6). The request needs no
+presence proof: the switch only tightens, and the relay is never the gate, so a hostile approved
+device that switches it early causes only an early disruption, the denial of service §2 already
+grants. In `enforce`:
 * admission tags each socket **approved** or **pending** by whether its key is active in the
   roster;
 * `presence` and `known` report the **bound** kind and name for approved devices;
@@ -1136,8 +1162,22 @@ pipe.
 
 ### 7.1 Hosts: who gets a channel's ops
 
-The host's `ChannelHub` gets a roster gate. For a channel from a device that is not active in
-the host's roster, the handshake completes so the device can learn why, and then:
+**The handshake carries nothing identifying in `enforce`.** Today `ChannelHub` puts the machine's
+name and kind in the Noise handshake payload (`intro`), and in Noise XX the responder sends its
+payload in message 2, before it learns the initiator's static key from message 3. So an
+unrostered initiator would learn the machine's name before any gate ran. In `enforce` a host
+therefore sends an empty intro (`{}`) in message 2. As an initiator it learns the responder's
+key from message 2, and sends its intro in message 3 only if that key is active in its roster,
+and an empty one otherwise. An active device gets the name and kind in the host's answer to its
+`hello` instead. Message 2 still carries the host's static key, but that is the key the
+initiator addressed, so it reveals nothing the relay's routing did not. A person's device with
+roster support does the same toward a peer that is not active in its own copy. R3 changes
+`ReadIntro` so that a peer with roster support accepts an empty intro. In `off` and `observe` the
+intro is as today, so old peers are unaffected until a host enforces, and then they are refused
+anyway.
+
+The host's `ChannelHub` also gets a roster gate. For a channel from a device that is not active
+in the host's roster, the handshake completes so the device can learn why, and then:
 
 | Op | Unrostered device |
 |---|---|
@@ -1310,11 +1350,16 @@ decision 6): every existing device enrolls with the mutual codes, once, as a new
    ship. Each machine starts its 72-hour probation, which only limits what it can approve. After it,
    the approving (genesis) device offers "Confirm" for each, so the approving devices among them can later cosign
    the removal of a lost senior device (§3.4).
-4. Every host in `observe` now reports what it would refuse. After a quiet day, the owner switches
-   each host to `enforce` (in the app's Settings, or with
-   `agent-bridge-host config set security.roster enforce` at the machine).
+4. Every host in `observe` now reports what it would refuse, and the relay, still in its own
+   `observe` mode since step 2 (§4.5), lists which devices it would treat as pending. Until here no
+   device has lost anything at the relay. After a quiet day, the owner switches each host to
+   `enforce` (in the app's Settings, or with
+   `agent-bridge-host config set security.roster enforce` at the machine). Then, once the Devices
+   page lists no unapproved device the owner still uses, the owner switches the relay to `enforce`
+   there ("Restrict unapproved devices"), which cannot be undone short of a reset.
 5. A later release makes `enforce` the default for new installs: a new machine serves its own apps
-   until approved.
+   until approved, and a genesis on an account the relay has never seen another device of starts
+   the relay in `enforce` too.
 
 About six exchanges for today's fleet. The lighter alternative, decision 6(b), is a one-time
 **bulk grandfather** on the genesis device. It lists the devices online at that moment, each with
@@ -1344,7 +1389,8 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
    `token-exchange` while it still issues only **unbound** tokens, and the `removed` close code.
    Issuing bound tokens waits until every app uses the exchange, and refusing unbound ones comes
    last (§7.6). Additive: an old client ignores new fields, and the
-   relay keeps today's behaviour for an account with no roster.
+   relay keeps today's behaviour for an account with no roster, or whose relay mode is still
+   `observe` (§4.5).
 2. **Hosts** (Windows, then the Mac host), shipping in `off`: the verifier and state, gossip,
    freshness, person commands, `roster.*` ops, enrollment through the pipe and the CLI, `observe`
    and `enforce`.
@@ -1444,6 +1490,14 @@ Each slice adds its own. Together they cover:
 * A device added with the mutual codes on the PWA (or an Apple client, or the Windows app after R4)
   is served by every host, including one that was offline during the approval.
 * A removed device is refused by every host, including one that was offline at the removal.
+* **Relay mode.** A genesis on an account with existing devices leaves the relay in `observe`: an
+  app and a host not yet enrolled keep their presence, channels, pushes and blobs, and appear as
+  pending on the Devices page. After a person's device switches the relay to `enforce`, they get
+  only `pending: true`. A request to move back is refused; only a reset or the administration path
+  does. A genesis on an account whose relay has admitted no other device starts in `enforce`.
+* In `enforce`, a host's Noise message 2 carries an empty intro, as does its message 3 to a
+  responder not in its roster: an unrostered initiator or responder never learns the machine's
+  name or kind. An active device gets them in the `hello` answer.
 
 **Enrollment**
 * A relay that substitutes keys on either leg: code 1 fails at A and code 2 fails at N. A grinding
@@ -1633,7 +1687,14 @@ Each slice adds its own. Together they cover:
 * With an honest relay, H (approved by G) signs on a parent 5 entries back a copy of the key of X,
   added 3 entries back by a device H is not senior to: the relay appends it, X is conflicted and
   the conflict names H. The same against a device added 10 entries back, signed on a parent 12
-  entries back: every verifier quarantines the copy, and X stays active.
+  entries back: every verifier quarantines the copy, and X stays active. H then signs a
+  presence-proven merge adopting its copy, and so does J, a device H added: the copy stays
+  quarantined and X active. A merge by G, which is neither, adopts it, and G's client warns that
+  it conflicts X before G confirms.
+* An open head left 12 entries behind the newest head (a fork no one merged): H extends it,
+  without forking, with a copy of the key of a device added 10 entries back. The entry is
+  quarantined, as a fork from that head would be, and X stays active. An honest client holding
+  both heads merges them before appending, and its entries are not quarantined.
 * A far fork holding `add(X)` and then `remove(Y)` by an established device: the removal applies,
   `add(X)` stays quarantined and X is not active. A far removal signed by X itself is held until a
   merge adopts that branch.
@@ -1785,7 +1846,8 @@ Each slice adds its own. Together they cover:
    independently approved survivors is also a reset.
 6. **Grandfathering the devices in use now.**
    (a) Enroll each with the mutual codes once (one exchange per machine, about six). Hosts go to
-   `observe` first, then `enforce` per host. (b) Bulk-approve the devices online at cutover after
+   `observe` first, then `enforce` per host, and the relay's restrictions on unapproved devices
+   come last, when the owner switches them on (§4.5), so nothing is cut off mid-enrollment. (b) Bulk-approve the devices online at cutover after
    comparing whole descriptor fingerprints (covering `dh`, `sign`, `signAlg`, presence, `rpId`, the
    credential id and key, `attested`, `backupEligible`, kind and platform, not only the id), with
    nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
@@ -1878,7 +1940,7 @@ Each is one PR, security-reviewed independently before merge.
 | # | Slice | Depends on | Changes behaviour |
 |---|---|---|---|
 | R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, voiding and its limit for removed signers, `voidGrants`, key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine, merges that are never void, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
-| R2 | Relay: store and appends, approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
+| R2 | Relay: store and appends, the account relay mode (`observe` until a person's device switches it, one way; `enforce` at a new account's genesis), approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
 | R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
