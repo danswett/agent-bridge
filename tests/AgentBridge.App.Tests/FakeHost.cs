@@ -163,8 +163,10 @@ sealed class FakeProcesses : IProcesses
     public List<(string Path, IReadOnlyList<string> Args)> Started { get; } = [];
     public List<int> Killed { get; } = [];
     public Action? OnStart;
+    // The processes that run: a launcher the test says is still there.
+    public HashSet<int> Alive { get; } = [];
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
-    public bool IsRunning(int pid) => false;
+    public bool IsRunning(int pid) => Alive.Contains(pid);
     public void Kill(int pid) => Killed.Add(pid);
 }
 

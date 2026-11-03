@@ -91,4 +91,19 @@ public sealed class HostHandoverTests : IDisposable
         await Assert.ThrowsAsync<IOException>(() => old);
         Assert.Empty(serving);
     }
+
+    [Fact]
+    public async Task A_host_under_the_launcher_that_the_app_stopped_while_it_was_starting_does_not_serve_but_one_started_by_hand_does()
+    {
+        bool? beforeStop = null, underLauncher = null, byHand = null;
+        await HostHandover.RunAsync(h => { beforeStop = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
+        File.WriteAllText(Path.Combine(profile, AgentBridge.Local.HostLauncherContract.StopMarker), "");
+
+        await HostHandover.RunAsync(h => { underLauncher = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
+        await HostHandover.RunAsync(h => { byHand = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement);
+
+        Assert.False(beforeStop);
+        Assert.True(underLauncher);
+        Assert.False(byHand);
+    }
 }

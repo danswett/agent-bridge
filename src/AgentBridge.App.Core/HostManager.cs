@@ -215,6 +215,21 @@ public sealed class HostManager
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or OperationCanceledException && !ct.IsCancellationRequested) { return false; }
     }
 
+    // As IsRunningAsync, for stopping: a host that refuses this app's connection (one of them
+    // elevated and the other not, LocalRefusedException) is running, and refused, so it and its
+    // launcher are left alone rather than taken for a host that is not there and ended by force.
+    async Task<bool> AnswersAsync(CancellationToken ct)
+    {
+        try
+        {
+            await using var ch = await connect(ct);
+            await ch.HelloAsync(ct);
+            return true;
+        }
+        catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or OperationCanceledException && !ct.IsCancellationRequested) { return false; }
+    }
+
     // Starts the host if it is not running: through the logon task when there is one, so it
     // runs as it would at sign-in, otherwise through its launcher. Waits until it answers. An
     // elevated app never starts it directly: the host would be elevated too, unable to type
@@ -228,7 +243,10 @@ public sealed class HostManager
         if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
         if (tasks.Exists(TaskName)) { await RunTaskAsync(ct); return; }
         if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
-        launcher = processes.Start(layout.LauncherExe, layout.ServeArguments);
+        // A launcher this app started is still there, between crash restarts: the host it brings
+        // up next is waited for, as the task path waits for the task's run, rather than a second
+        // launcher started beside it and the first one's pid lost (#106 review).
+        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
         await WaitAsync(running: true, StartTimeout, ct);
     }
 
@@ -408,6 +426,9 @@ public sealed class HostManager
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
+        // Refused at the connection (one of the host and this app elevated, the other not): the
+        // host is there and said no, as a refused stop does (#106 review).
+        catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { }
         try { await WaitAsync(running: false, StopTimeout, ct); }
         catch (TimeoutException) when (pid is { } p)
@@ -423,9 +444,12 @@ public sealed class HostManager
     // The launcher (agent-bridge-hostw) outlives a host it is about to start again: between crash
     // restarts (3, 6, 12 s), or with the host it restarted still starting, before its pipe opens.
     // Neither answers on the pipe, so a stop through it alone "succeeded" and the launcher then
-    // brought the host back (#106's independent review). With the marker written it stops at its next look;
-    // a host it was still starting is stopped through its pipe once that opens. One still there
-    // after the start timeout (a launcher that cannot see the marker, say) is ended.
+    // brought the host back (#106's independent review). With the marker written it stops at its
+    // next look; a host it was still starting is stopped through its pipe once that opens, or, if
+    // this has stopped waiting by then (a launcher from an earlier run of the app, which this cannot
+    // see; one ended below), stops itself, since a host the launcher runs looks for the marker once
+    // its pipe is open (HostHandover.StoppedFromTheApp). One still there after the start timeout is
+    // ended.
     async Task EndLauncherAsync(CancellationToken ct)
     {
         var deadline = Time.GetUtcNow() + StartTimeout;
@@ -437,7 +461,7 @@ public sealed class HostManager
                 if (launcher is { } pid) { processes.Kill(pid); }
                 break;
             }
-            if (await IsRunningAsync(ct))
+            if (await AnswersAsync(ct))
             {
                 await StopHostAsync(ct);
                 continue;

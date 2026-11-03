@@ -297,6 +297,72 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Starting_again_while_a_launcher_this_app_started_waits_to_restart_its_host_starts_no_second_launcher()
+    {
+        var up = false;
+        var crashed = false;
+        // The launcher's next host comes up at the first look after the crash.
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            if (crashed) { crashed = false; up = true; host.Start(); throw new IOException("not listening yet"); }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            Elevated = () => false,
+        };
+        processes.OnStart = () => { if (!up) { up = true; host.Start(); } };
+        await m.StartAsync();
+        // Its host crashed; the launcher (pid 99) is still there, waiting to start it again.
+        processes.Alive.Add(99);
+        await host.StopAsync();
+        up = false;
+        crashed = true;
+
+        await m.StartAsync();
+
+        Assert.Single(processes.Started);
+        Assert.True(await m.IsRunningAsync());
+    }
+
+    [Theory]
+    [Trait("Category", "Network")]
+    // Refused at the stop itself, with or without its launcher there, or at a look after it (a
+    // host still starting when stop came).
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task A_host_that_refuses_this_apps_connection_is_left_running_and_its_launcher_left_alone(bool refusedAtTheStop, bool launcherThere)
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var connects = 0;
+        // One of the host and this app elevated, the other not: the host's pipe refuses the app.
+        var m = new HostManager(manager.Layout, tasks, processes,
+            _ =>
+            {
+                if (++connects == 1 && !refusedAtTheStop) { throw new IOException("not listening yet"); }
+                throw new LocalRefusedException("the host's pipe belongs to another user, or one of the host and this app runs as administrator and the other does not");
+            },
+            userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        m.SetStartAtSignIn(true);
+        tasks.StillRunningWhile = () => { clock.Advance(TimeSpan.FromSeconds(1)); return launcherThere; };
+
+        await Assert.ThrowsAsync<HostRefusedException>(() => m.StopAsync());
+
+        Assert.Empty(tasks.Ended);
+        Assert.False(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Starting_after_a_stop_clears_the_stop_marker_and_the_host_runs()
     {
         manager.SetStartAtSignIn(true);
