@@ -301,7 +301,7 @@ internal static class ClaudeSessionDiscovery
     // process of its generation that could not be read is a session discovery cannot see, and
     // one that says it is an SDK or print-mode run accounts for its process as nobody's session.
     public static IReadOnlyList<DiscoveredSession> Find(string claudeHome, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
-        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null)
+        ICollection<string>? holds = null, ISet<int>? accounted = null, IReadOnlyList<AgentProcess>? unidentified = null, IReadOnlyList<string>? probeRoots = null)
     {
         var root = Path.Combine(claudeHome, "sessions");
         unidentified ??= [];
@@ -342,7 +342,7 @@ internal static class ClaudeSessionDiscovery
                 continue;
             }
             accounted?.Add(filePid);
-            if (!entry.Interactive || IsUsageProbe(holder, entry)) { continue; }
+            if (!entry.Interactive || IsUsageProbe(holder, entry, probeRoots ?? [])) { continue; }
             live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: holder.StartedAt));
         }
         return live;
@@ -351,12 +351,26 @@ internal static class ClaudeSessionDiscovery
     // A host's /usage probe (#200), which Claude Code 2.1.316 records as kind interactive (entrypoint
     // sdk-cli, which nothing promises), so it was listed as a session for the second or two it ran.
     // Told by what the host controls instead: the probe's exact options, or, where macOS's ps has
-    // flattened an install path with a space in it, options that end so and the folder every host
-    // runs it in (<profile>/usage-probe). The folder alone is not enough: anyone may name one so.
-    static bool IsUsageProbe(AgentProcess holder, Entry entry) =>
+    // flattened an install path with a space in it, options that end so and a folder only a host
+    // runs it in: <profile>/usage-probe under one of probeRoots (the product's own profile folders).
+    // A folder merely named usage-probe is not enough: a flattened prompt that quotes the probe's
+    // options, in a project of that name, is a real session (#238 review).
+    static bool IsUsageProbe(AgentProcess holder, Entry entry, IReadOnlyList<string> probeRoots) =>
         CommandLine.IsClaudeUsageProbe(holder.CommandLine)
-        || (CommandLine.MayBeClaudeUsageProbe(holder.CommandLine) && entry.Cwd is { } cwd
-            && Path.GetFileName(cwd.Replace('\\', '/').TrimEnd('/')).Equals(AgentBridge.Host.Core.Usage.UsageProbes.FolderName, StringComparison.OrdinalIgnoreCase));
+        || (CommandLine.MayBeClaudeUsageProbe(holder.CommandLine) && entry.Cwd is { } cwd && IsProbeFolder(cwd, probeRoots));
+
+    internal static bool IsProbeFolder(string cwd, IReadOnlyList<string> probeRoots)
+    {
+        static string Plain(string p) => p.Replace('\\', '/').TrimEnd('/');
+        var folder = Plain(cwd);
+        var cut = folder.LastIndexOf('/');
+        if (cut <= 0 || !folder[(cut + 1)..].Equals(AgentBridge.Host.Core.Usage.UsageProbes.FolderName, StringComparison.OrdinalIgnoreCase)) { return false; }
+        var profile = folder[..cut];
+        var parent = profile.LastIndexOf('/');
+        if (parent <= 0 || profile[(parent + 1)..] is "" or "." or "..") { return false; }
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return probeRoots.Any(r => r.Length > 0 && Plain(r).Equals(profile[..parent], comparison));
+    }
 
     static DateTimeOffset? Written(string path)
     {

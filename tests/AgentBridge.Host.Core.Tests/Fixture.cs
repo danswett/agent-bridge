@@ -32,7 +32,7 @@ internal sealed class Fixture : IDisposable
     // dated about T0 while the clock reads an hour later, so each working session would read as
     // stalled.
     public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null) => new()
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
@@ -49,11 +49,12 @@ internal sealed class Fixture : IDisposable
         StateFile = stateFile,
         NotRespondingAfter = stalledAfter ?? TimeSpan.MaxValue,
         NotRespondingBusyAfter = stalledAfter is { } after ? after * 3 : TimeSpan.MaxValue,
+        UsageProbeRoots = probeRoots ?? [],
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter), Processes, Time, drivers);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null, TimeSpan? stalledAfter = null, IReadOnlyList<string>? probeRoots = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots, stalledAfter: stalledAfter, probeRoots: probeRoots), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).

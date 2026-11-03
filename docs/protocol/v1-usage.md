@@ -303,7 +303,10 @@ them, even one word long, still holds discovery. Claude Code 2.1.316 writes a pr
 `sessions/<pid>.json` like any interactive CLI's (`kind: interactive`, only `entrypoint: sdk-cli`
 differing, which nothing promises), so that file is not taken for a session either when its process
 is the probe by those options, or, where `ps` has split the executable's path, ends with them and
-the file's `cwd` is a folder named `usage-probe`. The `claude auth status` that gates a probe is
+the file's `cwd` is the host's own probe folder: `usage-probe` directly inside a profile folder
+under the product's data root (or the serving host's profile parent). A project merely named
+`usage-probe` is not one, so a flattened prompt that quotes the options there is still a session.
+The `claude auth status` that gates a probe is
 neither a session nor a hold on discovery or worktree reclaim when it is exactly `auth status` after
 the executable (or a runtime and its script) and this host started it (its parent, or the `cmd.exe`
 an npm `claude.cmd` runs through, is the host, which began first). Anyone else's `claude auth

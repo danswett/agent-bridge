@@ -109,6 +109,8 @@ var options = new SessionSourceOptions
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
+    UsageProbeRoots = [.. new[] { Identity.DefaultRoot, serveFolder is null ? null : Path.GetDirectoryName(Path.GetFullPath(serveFolder)) }
+        .OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase)],
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
     // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.

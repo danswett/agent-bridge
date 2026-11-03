@@ -524,9 +524,14 @@ internal sealed class JsonLinesLink(Stream input, Stream output) : IRpcLink
 {
     const int MaxLine = 4 * 1024 * 1024;
     readonly StreamWriter writer = new(input, new UTF8Encoding(false)) { NewLine = "\n", AutoFlush = false };
-    readonly StreamReader reader = new(output, Encoding.UTF8);
-    readonly char[] buffer = new char[8 * 1024];
+    // Lines are framed from the bytes themselves. A StreamReader read asks again whenever its byte
+    // buffer comes back exactly full, so an answer that happened to fill it on an open pipe was never
+    // handed over until more arrived, which it never did (#238 review). A Stream read returns what
+    // has arrived.
+    readonly byte[] buffer = new byte[8 * 1024];
+    readonly MemoryStream line = new();
     int start, end;
+    bool first = true;
 
     public async Task SendAsync(string message)
     {
@@ -539,22 +544,30 @@ internal sealed class JsonLinesLink(Stream input, Stream output) : IRpcLink
     // follows a line's end in the same read is kept for the next.
     public async Task<string?> ReceiveAsync()
     {
-        var line = new StringBuilder();
+        line.SetLength(0);
         while (true)
         {
             if (start == end)
             {
                 start = 0;
-                end = await reader.ReadAsync(buffer.AsMemory());
-                if (end == 0) { return line.Length > 0 ? line.ToString() : null; }
+                end = await output.ReadAsync(buffer.AsMemory());
+                if (end == 0) { return line.Length > 0 ? Decode() : null; }
             }
-            var newline = Array.IndexOf(buffer, '\n', start, end - start);
+            var newline = Array.IndexOf(buffer, (byte)'\n', start, end - start);
             var stop = newline < 0 ? end : newline;
             if (line.Length + (stop - start) > MaxLine) { throw new InvalidDataException("a line from codex app-server was too long"); }
-            line.Append(buffer, start, stop - start);
+            line.Write(buffer, start, stop - start);
             start = newline < 0 ? end : newline + 1;
-            if (newline >= 0) { return line.ToString().TrimEnd('\r'); }
+            if (newline >= 0) { return Decode(); }
         }
+    }
+
+    string Decode()
+    {
+        var bytes = line.GetBuffer().AsSpan(0, (int)line.Length);
+        if (first && bytes.StartsWith(Encoding.UTF8.Preamble)) { bytes = bytes[Encoding.UTF8.Preamble.Length..]; }
+        first = false;
+        return Encoding.UTF8.GetString(bytes).TrimEnd('\r');
     }
 
     // Standard input is the process's to close (IProbeProcess.CloseInput), after the grace period.

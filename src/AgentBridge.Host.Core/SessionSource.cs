@@ -487,7 +487,7 @@ public sealed class SessionSource : ISessionSource
             // (status, permission prompts) and wins. One CLI owns one session.
             var ids = sessions.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
             var pids = sessions.Select(s => s.ProcessId).ToHashSet();
-            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified);
+            var own = ClaudeSessionDiscovery.Find(_options.ClaudeHome, observed.Processes, findTranscript, holds, accounted, observed.Unidentified, _options.UsageProbeRoots);
             sessions = [.. sessions, .. own.Where(s => !ids.Contains(s.Id) && !pids.Contains(s.ProcessId))];
         }
         if (agent == AgentKind.Codex)

@@ -261,7 +261,7 @@ public class DiscoveryTests
         const string flattened = "/Volumes/Agent Tools/claude -p /usage --safe-mode --no-session-persistence --output-format json";
         ClaudeUsageProbeFile(f, 711, "/Users/u/Library/Application Support/AgentBridge/live/usage-probe/");
         f.Processes.Run(AgentKind.Claude, 711, flattened);
-        await using var source = f.Source();
+        await using var source = f.Source(probeRoots: ["/Users/u/Library/Application Support/AgentBridge"]);
 
         await source.RefreshAsync();
 
@@ -272,6 +272,32 @@ public class DiscoveryTests
         await source.RefreshAsync();
 
         Assert.Equal(712, Assert.Single(source.Snapshot()).ProcessId);
+    }
+
+    [Fact]
+    public async Task A_flattened_session_quoting_the_probes_options_in_a_project_named_usage_probe_is_still_listed()
+    {
+        using var f = new Fixture();
+        ClaudeUsageProbeFile(f, 713, "/Users/u/src/usage-probe");
+        f.Processes.Run(AgentKind.Claude, 713, "/Volumes/Agent Tools/claude explain -p /usage --safe-mode --no-session-persistence --output-format json");
+        await using var source = f.Source(probeRoots: ["/Users/u/Library/Application Support/AgentBridge"]);
+
+        await source.RefreshAsync();
+
+        Assert.Equal(713, Assert.Single(source.Snapshot()).ProcessId);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Users\u\AppData\Local\AgentBridge\live\usage-probe", true)]
+    [InlineData("C:/users/u/appdata/local/agentbridge/live/usage-probe/", true)]
+    [InlineData(@"C:\Users\u\AppData\Local\AgentBridge\usage-probe", false)]
+    [InlineData(@"C:\Users\u\AppData\Local\AgentBridge\live\x\usage-probe", false)]
+    [InlineData(@"C:\Users\u\AppData\Local\AgentBridge\..\usage-probe", false)]
+    [InlineData(@"C:\src\live\usage-probe", false)]
+    public void Only_a_usage_probe_folder_directly_in_a_profile_under_the_product_root_is_the_hosts(string cwd, bool hosts)
+    {
+        if (OperatingSystem.IsLinux() && cwd.StartsWith("C:/users", StringComparison.Ordinal)) { return; }
+        Assert.Equal(hosts, ClaudeSessionDiscovery.IsProbeFolder(cwd, [@"C:\Users\u\AppData\Local\AgentBridge\"]));
     }
 
     [Fact]

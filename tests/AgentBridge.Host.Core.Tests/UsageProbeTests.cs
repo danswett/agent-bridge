@@ -122,6 +122,48 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_codex_answer_that_exactly_fills_a_read_on_a_pipe_still_open_is_handed_over_at_once()
+    {
+        foreach (var size in new[] { 1024, 4096, 8192 })
+        {
+            var answer = "{\"id\":1,\"pad\":\"" + new string('x', size - 18) + "\"}\n";
+            Assert.Equal(size, Encoding.UTF8.GetByteCount(answer));
+            var link = new JsonLinesLink(new MemoryStream(), new OpenPipe(Encoding.UTF8.GetBytes(answer)));
+
+            var received = link.ReceiveAsync();
+
+            Assert.Same(received, await Task.WhenAny(received, Task.Delay(TimeSpan.FromSeconds(10))));
+            Assert.Equal(answer.TrimEnd('\n'), await received);
+        }
+    }
+
+    // A pipe whose writer has said all it will for now: what arrived, then nothing, never an end.
+    sealed class OpenPipe(byte[] arrived) : Stream
+    {
+        int at;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException("read asynchronously");
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (at == arrived.Length) { await Task.Delay(Timeout.Infinite, cancellationToken); }
+            var n = Math.Min(buffer.Length, arrived.Length - at);
+            arrived.AsSpan(at, n).CopyTo(buffer.Span);
+            at += n;
+            return n;
+        }
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task A_stale_Claude_reading_starts_exactly_one_probe_and_a_pass_while_it_runs_starts_no_second()
     {
         ClaudeSaved(Now.AddMinutes(-20));
