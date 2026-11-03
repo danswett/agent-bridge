@@ -17,7 +17,11 @@ sealed record Selection(
     IReadOnlyList<SelectedSuite> Suites,
     IReadOnlyList<SkippedSuite> Skipped)
 {
-    /// <summary>Each platform, with the selected suites that run on it: the OS matrix for CI.</summary>
+    /// <summary>
+    /// Each platform, with the selected suites that run on it: the OS matrix. With a platform
+    /// filter it's this machine's run, and what was left out is in <see cref="Skipped"/>; CI
+    /// plans with no filter, so its matrix is complete.
+    /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Matrix =>
         Suites.SelectMany(s => s.Suite.Platforms.Select(p => (Platform: p, s.Suite.Id)))
             .GroupBy(x => x.Platform)
@@ -40,6 +44,8 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
     readonly List<Glob> noTestPaths = catalog.NoTestPaths.Select(g => new Glob(g)).ToList();
     readonly List<(Suite Suite, List<Glob> Triggers)> triggers =
         catalog.Suites.Select(s => (s, s.Triggers.Select(t => new Glob(t)).ToList())).ToList();
+    // In catalog order, so reasons come out in the same order on every run.
+    readonly List<Suite> projectSuites = catalog.Suites.Where(s => s.Project is not null).ToList();
 
     public Selection Select(IEnumerable<string> changedFiles, int ring, string? platform = null, IReadOnlyCollection<string>? named = null)
     {
@@ -141,7 +147,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
         foreach (var owner in graph.OwnersOf(file))
         {
             var reachers = graph.ReachersOf(owner.Folder);
-            foreach (var suite in catalog.Suites.Where(s => s.Project is not null && reachers.Contains(s.Project)))
+            foreach (var suite in projectSuites.Where(s => reachers.Contains(s.Project!)))
             {
                 claimed = true;
                 if (suite.Ring <= ring)
