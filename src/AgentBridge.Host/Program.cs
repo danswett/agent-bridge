@@ -391,7 +391,6 @@ async Task<int> ServeAsync(HostHandover handover)
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
-    usageMonitor?.Start();
     // Other machines' readings, asked of the account's other hosts and kept in the profile's own
     // private folder, so an account's allowance is still shown once the machine that read it is
     // offline (#172). Only where this machine reports usage itself.
@@ -605,6 +604,9 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"stopped from the {Product.App} while starting; not serving");
         return 0;
     }
+    // Only now: a host stopped while starting, whose pipe the app could not reach, must start no
+    // usage probe it would cut short on its way out, past the app's probe hold (#238 review).
+    usageMonitor?.Start();
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();
