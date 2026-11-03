@@ -303,9 +303,11 @@ connector's Install button on a machine the dashboard drives.
   requests and pushes, so main's versions only rise, with gaps; a re-run keeps its number.
   Renaming or recreating `ci.yml` starts the count at 1 again, below every release, and no
   installed copy would ever take one: move the minor version up (`0.2.<n>`) in the same change.
-* **When:** after the `product` tests (Linux, Windows x64 and Windows on Arm) and both `app`
-  jobs (x64 and Arm64: build, pack, self-test, install) pass, for pushes to
-  `danswett/agent-bridge`'s `main` only: never a pull request or a fork. It
+* **When:** after every check job in CI on that commit has passed: the `product` tests (Linux,
+  Windows x64 and Windows on Arm) and both `app` jobs (x64 and Arm64: build, pack, self-test,
+  install), and also the PWA, Home Assistant, spike and light jobs, none of which may have failed
+  or been cancelled. It runs for pushes to `danswett/agent-bridge`'s `main` only: never a pull
+  request or a fork. It
   is the only job with `contents: write`, and runs one at a time (concurrency group
   `publish-prerelease`). Before it, `publish-gate` lets through only the commit `main` is at
   now: GitHub keeps one waiting job per concurrency group and cancels the older waiting one, so

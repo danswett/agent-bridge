@@ -305,9 +305,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 
    A final `quality-gate` job (`if: always()`) needs all of them and fails if any failed or
    was cancelled; skipped is fine. It's the check to make required, so skipped jobs never
-   leave branch protection waiting (§9: the owner decides when). `publish-gate` still needs
-   `product` and `app` to have succeeded, and on `main` they always run, so a selection miss
-   is caught before a release publishes.
+   leave branch protection waiting (§9: the owner decides when). `publish-gate` needs every
+   check job on `main` to have passed (`product` and `app` to have succeeded, and none failed
+   or cancelled), and on `main` they all run, so a selection miss, or any red suite, is caught
+   before a release publishes.
 8. **Keeping the selector honest:** ring 2 runs everything on `main`, and each `main` run's
    summary also says which jobs ring 1 chose for the same change. For every ring-2
    failure, a nightly job asks whether ring 1's selection for that PR would have included
