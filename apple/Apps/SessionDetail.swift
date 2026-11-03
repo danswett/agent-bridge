@@ -3,7 +3,7 @@ import SwiftUI
 
 enum SessionDetailLayout { case combined, conversation, inspector }
 
-struct SessionDetail: View {
+struct SessionDetail<InspectorControls: View>: View {
     let session: BridgeSession
     var readOnlyReason: String?
     var machineName: String?
@@ -12,6 +12,7 @@ struct SessionDetail: View {
     var onLoadDelegate: (@MainActor (String, String) async throws -> JSONValue)?
     var onAskMainToStop: (@MainActor (String) -> Void)?
     var layout: SessionDetailLayout = .combined
+    @ViewBuilder var inspectorControls: () -> InspectorControls
 
     @State private var historyExpanded = false
     @State private var fullSession: JSONValue?
@@ -88,6 +89,9 @@ struct SessionDetail: View {
                                 .textSelection(.enabled)
                         }
                     }
+                }
+                if layout == .inspector {
+                    inspectorControls()
                 }
                 if let tool = session.activity?["currentTool"], tool != .null {
                     Section("Current tool") {

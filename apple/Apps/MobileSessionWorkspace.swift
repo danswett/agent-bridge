@@ -86,12 +86,6 @@
                     Divider()
                 }
                 inspector().frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let host = entry.host, !entry.ended {
-                    Divider()
-                    SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .inspector)
-                        .id(entry.id)
-                        .padding(.horizontal).padding(.vertical, 10)
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
