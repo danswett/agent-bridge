@@ -47,26 +47,30 @@ public sealed class HostLauncherProcessTests : IDisposable
     public async Task A_host_in_the_launchers_job_ends_with_the_launcher_and_an_agent_it_started_runs_on()
     {
         if (!OperatingSystem.IsWindows()) { return; }
-        var go = Path.Combine(folder, "go");
-        var agentPid = Path.Combine(folder, "agent.pid");
-        // The "host": once in the job, it starts an "agent" of its own, and waits.
-        var host = Run(System32(@"WindowsPowerShell\v1.0\powershell.exe"), "-NoProfile", "-NonInteractive", "-Command",
-            $"while (-not (Test-Path '{go}')) {{ Start-Sleep -Milliseconds 50 }}; " +
-            $"$a = Start-Process -FilePath '{System32("PING.EXE")}' -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; " +
-            $"Set-Content -Path '{agentPid}' -Value $a.Id; Start-Sleep -Seconds 300");
+        var agentPid = Path.Combine(folder, "agent pid.txt");
+        var told = Path.Combine(folder, "told.txt");
+        // The "host", started in the job with the launcher's word in its environment and an
+        // argument that needs quoting: it starts an "agent" of its own, and waits.
         var job = HostJob.Create();
         try
         {
-            job.Add(host);
-            File.WriteAllText(go, "");
-            await Wait.UntilAsync(() => File.Exists(agentPid) && File.ReadAllText(agentPid).Trim().Length > 0, "the host to start its agent", TimeSpan.FromSeconds(60));
+            using var host = job.Start(System32(@"WindowsPowerShell\v1.0\powershell.exe"), ["-NoProfile", "-NonInteractive", "-Command",
+                $"Set-Content -Path \"{told}\" -Value $env:{HostLauncherContract.Variable}; " +
+                $"$a = Start-Process -FilePath '{System32("PING.EXE")}' -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; " +
+                $"Set-Content -Path '{agentPid}.part' -Value $a.Id; Move-Item -LiteralPath '{agentPid}.part' -Destination '{agentPid}'; Start-Sleep -Seconds 300"],
+                new Dictionary<string, string> { [HostLauncherContract.Variable] = "1" }, folder);
+            // Written aside and moved into place, so it is never read half written or still held.
+            await Wait.UntilAsync(() => File.Exists(agentPid), "the host to start its agent", TimeSpan.FromSeconds(60));
             var agent = int.Parse(File.ReadAllText(agentPid).Trim(), System.Globalization.CultureInfo.InvariantCulture);
             try
             {
+                Assert.Equal("1", File.ReadAllText(told).Trim());
+                Assert.False(host.HasExited);
+
                 // The launcher ends: its handle to the job closes, as it does when it is killed.
                 job.Dispose();
 
-                Assert.True(host.WaitForExit(TimeSpan.FromSeconds(30)), "the host outlived its launcher");
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
                 Assert.True(Alive(agent), "the agent ended with the host");
             }
             finally
@@ -76,6 +80,19 @@ public sealed class HostLauncherProcessTests : IDisposable
             }
         }
         finally { job.Dispose(); }
+    }
+
+    [Theory]
+    [InlineData("", "\"\"")]
+    [InlineData("plain", "plain")]
+    [InlineData("two words", "\"two words\"")]
+    [InlineData("say \"hi\"", "\"say \\\"hi\\\"\"")]
+    [InlineData(@"C:\a b\", "\"C:\\a b\\\\\"")]
+    [InlineData(@"a\\b", @"a\\b")]
+    public void An_argument_is_quoted_as_the_host_reads_its_command_line_back(string argument, string quoted)
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        Assert.Equal(quoted, HostJob.Quote(argument));
     }
 
     [Fact]
@@ -111,7 +128,7 @@ public sealed class HostLauncherProcessTests : IDisposable
     [Fact]
     public void The_launcher_reads_and_clears_the_apps_stop_marker_in_the_profile_folder()
     {
-        var files = new LauncherFiles(folder, _ => { });
+        using var files = new LauncherFiles(folder, _ => { });
         Assert.False(files.Stopped());
 
         File.WriteAllText(Path.Combine(folder, HostLauncherContract.StopMarker), "");
@@ -123,20 +140,37 @@ public sealed class HostLauncherProcessTests : IDisposable
     }
 
     [Fact]
-    public void A_launcher_removes_its_own_record_as_it_ends_but_never_one_a_later_launcher_wrote()
+    public void Only_one_launcher_at_a_time_holds_the_record_which_the_app_can_read_and_which_goes_with_it()
     {
         var record = Path.Combine(folder, HostLauncherContract.LauncherRecord);
         var first = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
-        var files = new LauncherFiles(folder, _ => { });
+        var logged = new List<string>();
+        var serving = new LauncherFiles(folder, _ => { });
+        using var second = new LauncherFiles(folder, logged.Add);
 
-        files.RecordSelf(77, first);
-        Assert.True(HostLauncherContract.TryParseLauncher(File.ReadAllText(record), out var pid, out var ticks));
-        Assert.Equal((77, first.Ticks), (pid, ticks));
-        files.ForgetSelf(77, first);
+        Assert.True(serving.HoldRecord(77, first));
+        Assert.False(second.HoldRecord(78, first.AddMinutes(1)));
+        Assert.False(second.HoldRecord(78, first.AddMinutes(1)));
+        // Read as the app reads it, while it is held.
+        using (var read = new StreamReader(new FileStream(record, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)))
+        {
+            Assert.True(HostLauncherContract.TryParseLauncher(read.ReadToEnd(), out var pid, out var ticks));
+            Assert.Equal((77, first.Ticks), (pid, ticks));
+        }
+        Assert.Single(logged);
+
+        serving.Dispose();
         Assert.False(File.Exists(record));
+        Assert.True(second.HoldRecord(78, first.AddMinutes(1)));
+    }
 
-        files.RecordSelf(78, first.AddMinutes(1));
-        files.ForgetSelf(77, first);
-        Assert.True(File.Exists(record));
+    [Theory]
+    [InlineData(new[] { "serve", "--profile", "shadow" }, true)]
+    [InlineData(new[] { "shadow", "run", "--profile", "shadow" }, false)]
+    public void Only_a_serving_launcher_answers_to_the_apps_stop_and_records_itself(string[] args, bool serving)
+    {
+        using var files = LauncherFiles.ForServe(args, folder, _ => { });
+
+        Assert.Equal(serving, files is not null);
     }
 }

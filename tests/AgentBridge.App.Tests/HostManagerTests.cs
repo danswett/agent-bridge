@@ -504,6 +504,105 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.True(await manager.IsRunningAsync());
     }
 
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_cancelled_while_the_launcher_is_still_starting_its_host_leaves_no_stop_marker()
+    {
+        // No host answers yet; the launcher's run goes on, its host on the way.
+        var m = new HostManager(manager.Layout, tasks, processes, _ => throw new IOException("not listening yet"), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+        };
+        m.SetStartAtSignIn(true);
+        using var cancel = new CancellationTokenSource();
+        // Cancelled (the app closing, say) while it waits for the launcher's run to end.
+        var looks = 0;
+        tasks.StillRunningWhile = () =>
+        {
+            if (++looks == 3) { cancel.Cancel(); }
+            return true;
+        };
+
+        await Assert.ThrowsAnyAsync<Exception>(() => m.StopAsync(cancel.Token));
+
+        Assert.True(cancel.IsCancellationRequested);
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(tasks.Ended);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_stop_that_ends_the_launcher_returns_only_once_the_host_in_its_job_has_gone_too()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var dying = false;
+        var answered = 0;
+        // Each look takes a second. The host comes up just as its launcher is ended, and answers
+        // twice more on its way out with it.
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            if (dying && ++answered > 2)
+            {
+                dying = false;
+                await host.StopAsync();
+            }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(30),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+        processes.OnKill = _ => { dying = true; host.Start(); };
+
+        await m.StopAsync();
+
+        Assert.Equal([77], processes.Killed);
+        Assert.False(await m.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_after_the_launcher_this_app_started_has_ended_ends_one_that_replaced_it()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+            Elevated = () => false,
+        };
+        processes.OnStart = () => host.Start();
+        // This app's launcher (99) started its host, then ended with it; another launcher (77),
+        // started since, is waiting to start the host again.
+        await m.StartAsync();
+        await host.StopAsync();
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+
+        await m.StopAsync();
+
+        Assert.Equal([77], processes.Killed);
+    }
+
     [Theory]
     [Trait("Category", "Network")]
     [InlineData(true)]
@@ -526,7 +625,8 @@ public sealed class HostManagerTests : IAsyncLifetime
         // Recorded by the launcher itself, as it does; the process with pid 77 now is that launcher,
         // or another that started later and was given its pid.
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
-        new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { }).RecordSelf(77, startedUtc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
         processes.Alive.Add(77);
         processes.Others.Add((77, stillThatLauncher ? startedUtc.Ticks : startedUtc.AddMinutes(5).Ticks));
 
@@ -555,7 +655,8 @@ public sealed class HostManagerTests : IAsyncLifetime
             Elevated = () => false,
         };
         var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
-        new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { }).RecordSelf(77, startedUtc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
         processes.Alive.Add(77);
         processes.Others.Add((77, startedUtc.Ticks));
 

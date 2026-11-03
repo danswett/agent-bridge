@@ -203,10 +203,13 @@ switch (command)
     case "serve":
         {
             // Started by the logon task's launcher (#106), which then starts the replacement after
-            // host.restart. Cleared, so nothing this host starts inherits it.
+            // host.restart; and told by it to look for the app's stop itself when the app's Stop
+            // might not reach it otherwise (#420). Cleared, so nothing this host starts inherits them.
             var supervised = Environment.GetEnvironmentVariable(HostLauncherContract.Variable) == "1";
+            var checkStop = Environment.GetEnvironmentVariable(HostLauncherContract.CheckStopVariable) == "1";
             Environment.SetEnvironmentVariable(HostLauncherContract.Variable, null);
-            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised);
+            Environment.SetEnvironmentVariable(HostLauncherContract.CheckStopVariable, null);
+            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised, checkStop);
         }
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
@@ -590,6 +593,13 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
+    // Stopped from the app while starting, where its Stop might not have reached this through the
+    // pipe or the launcher (HostHandover.StoppedFromTheApp, #420): not served at all.
+    if (handover.StoppedFromTheApp(identity.Folder))
+    {
+        Log("stopped from the Agent Bridge app while starting; not serving");
+        return 0;
+    }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();

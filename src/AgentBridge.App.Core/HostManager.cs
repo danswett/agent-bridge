@@ -284,8 +284,7 @@ public sealed class HostManager
         // restarts: the host it brings up next is waited for, as the task path waits for the task's
         // run, rather than a second launcher started beside it and the first one's pid lost (#106
         // review, #420).
-        launcher ??= RecordedLauncher();
-        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
+        if (CurrentLauncher() is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
         await WaitAsync(running: true, StartTimeout, ct);
     }
 
@@ -293,12 +292,26 @@ public sealed class HostManager
     // an earlier run of the app started, found by its record.
     int? launcher;
 
+    // That launcher, while it runs; else one found by its record now, as one that had ended may
+    // since have been replaced by another (#420's review).
+    int? CurrentLauncher()
+    {
+        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = RecordedLauncher(); }
+        return launcher;
+    }
+
     // A launcher an earlier run of this app started, by the record it keeps of itself
     // (HostLauncherContract.LauncherRecord): with no logon task, nothing else knows it (#420).
+    // Read sharing everything, since the launcher holds it open for writing and deletion.
     int? RecordedLauncher()
     {
         string text;
-        try { text = File.ReadAllText(Path.Combine(layout.ProfileFolder, HostLauncherContract.LauncherRecord)); }
+        try
+        {
+            using var record = new FileStream(Path.Combine(layout.ProfileFolder, HostLauncherContract.LauncherRecord), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(record);
+            text = reader.ReadToEnd();
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
         return HostLauncherContract.TryParseLauncher(text, out var pid, out var started) && processes.Adopt(pid, started) ? pid : null;
     }
@@ -462,14 +475,30 @@ public sealed class HostManager
             ClearStopped();
             throw;
         }
-        // Failed otherwise (timed out, cancelled) with the host still running: not stopped either,
-        // so no marker left to keep its launcher from restarting it after a crash or a host.restart
-        // (#420). A host that has gone keeps it: the stop got that far.
+        // Failed otherwise (timed out, cancelled) with the host or its launcher still there: not
+        // stopped either, so no marker left to keep the launcher from restarting it after a crash
+        // or a host.restart (#420). A host that refuses this app's connection is there too. Once
+        // both have gone the marker stays: the stop got that far.
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
-            if (await IsRunningAsync(CancellationToken.None)) { ClearStopped(); }
+            if (await StillThereAsync()) { ClearStopped(); }
             throw;
         }
+    }
+
+    // After a stop that failed: whether the host or its launcher is still there. Unknown is gone,
+    // keeping the marker, which at worst spares a launcher's restart the person can still make.
+    async Task<bool> StillThereAsync()
+    {
+        try
+        {
+            if (LauncherRunning()) { return true; }
+            await using var ch = await connect(CancellationToken.None);
+            await ch.HelloAsync(CancellationToken.None);
+            return true;
+        }
+        catch (LocalRefusedException) { return true; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return false; }
     }
 
     // Through the host's pipe, as above.
@@ -516,6 +545,7 @@ public sealed class HostManager
             {
                 if (tasks.Exists(TaskName)) { tasks.Stop(TaskName); }
                 if (launcher is { } pid) { processes.Kill(pid); }
+                await EndedAsync(ct);
                 break;
             }
             if (await AnswersAsync(ct))
@@ -528,11 +558,21 @@ public sealed class HostManager
         launcher = null;
     }
 
-    bool LauncherRunning()
+    // After ending the launcher: waits, up to the stop timeout, for it and the host in its job to
+    // be gone, so a Start or Restart after this never takes the answer of a host on its way out
+    // for one that runs (#420's review).
+    async Task EndedAsync(CancellationToken ct)
     {
-        launcher ??= RecordedLauncher();
-        return tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
+        var deadline = Time.GetUtcNow() + StopTimeout;
+        while (LauncherRunning() || await AnswersAsync(ct))
+        {
+            if (Time.GetUtcNow() > deadline) { throw new TimeoutException("the host's launcher did not stop"); }
+            await Task.Delay(Poll, ct);
+        }
     }
+
+    bool LauncherRunning() =>
+        tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || CurrentLauncher() is not null;
 
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)

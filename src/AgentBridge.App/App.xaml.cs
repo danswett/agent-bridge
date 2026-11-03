@@ -390,6 +390,7 @@ sealed class NoProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) => throw new InvalidOperationException("the demo does not start a host");
     public bool IsRunning(int pid) => false;
     public void Kill(int pid) { }
+    public bool Adopt(int pid, long startedTicks) => false;
 }
 
 sealed class NoRunKey : IAppAtSignIn

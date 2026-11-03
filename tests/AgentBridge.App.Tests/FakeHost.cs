@@ -302,7 +302,14 @@ sealed class FakeProcesses : IProcesses
     public HashSet<int> Alive { get; } = [];
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
     public bool IsRunning(int pid) => Alive.Contains(pid);
-    public void Kill(int pid) => Killed.Add(pid);
+    // Ending a process ends it; and what else happens then, as a test says.
+    public Action<int>? OnKill;
+    public void Kill(int pid)
+    {
+        Killed.Add(pid);
+        Alive.Remove(pid);
+        OnKill?.Invoke(pid);
+    }
     // Processes an earlier run of the app started, by pid and start time, that this can take on.
     public HashSet<(int Pid, long StartedTicks)> Others { get; } = [];
     public bool Adopt(int pid, long startedTicks) => Others.Contains((pid, startedTicks)) && Alive.Contains(pid);
