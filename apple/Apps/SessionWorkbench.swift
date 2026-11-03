@@ -67,7 +67,7 @@ struct SessionWorkbench: View {
                 }
                 if search.isEmpty, !needsOnly, !store.endedEntries.isEmpty {
                     Section("Recently ended") {
-                        ForEach(store.endedEntries.filter { store.includesSelectedMachine($0.host) }) { entry in row(entry).opacity(0.6) }
+                        ForEach(store.endedEntries.filter { store.includesSelectedMachine($0.host) }) { entry in row(entry) }
                     }
                 }
             }
@@ -149,7 +149,7 @@ struct SessionWorkbench: View {
     private func row(_ entry: SessionEntry) -> some View {
         NavigationLink(value: entry.id) {
             VStack(alignment: .leading, spacing: 4) {
-                SessionRow(session: entry.session)
+                SessionRow(session: entry.session, ended: entry.ended)
                 HStack(spacing: 6) {
                     if store.pinned.contains(entry.id) {
                         Image(systemName: "pin.fill")

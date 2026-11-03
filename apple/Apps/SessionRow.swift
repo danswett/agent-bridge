@@ -3,11 +3,12 @@ import SwiftUI
 
 struct SessionRow: View {
     let session: BridgeSession
+    var ended = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: symbol)
-                .foregroundStyle(session.question != nil ? .orange : session.status == "working" ? .blue : .secondary)
+                .foregroundStyle(ended ? Color.secondary : session.question != nil ? Color.orange : session.status == "working" ? Color.blue : Color.secondary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 Text(session.title).font(.headline).lineLimit(2)
@@ -24,6 +25,9 @@ struct SessionRow: View {
     }
 
     private var symbol: String {
+        if ended {
+            return "clock.arrow.circlepath"
+        }
         if session.status == "ending" {
             return "circle.dotted"
         }
