@@ -116,12 +116,14 @@ public sealed class RemoteAuthorization : IDisposable
                     Store.Reset();
                     return new { reset = true };
                 case "host.peers.put":
-                    var request = data.Deserialize<PutRequest>(ProtocolJson.Options) ?? throw new ArgumentException("a full key, role and expiry are required");
-                    var key = BlobFormat.FromBase64Url(request.PublicKey) ?? throw new ArgumentException("a full public key is required");
-                    return Store.Put(key, request.Role, request.ExpiresAt);
+                    var key = ReadKey(data);
+                    if (!data.TryGetProperty("role", out var roleValue) || roleValue.ValueKind != JsonValueKind.String
+                        || roleValue.GetString() is not { } role) { throw new ArgumentException("a peer role is required"); }
+                    if (!data.TryGetProperty("expiresAt", out var expiryValue) || expiryValue.ValueKind != JsonValueKind.String
+                        || !expiryValue.TryGetDateTimeOffset(out var expiry)) { throw new ArgumentException("a valid expiry timestamp is required"); }
+                    return Store.Put(key, role, expiry);
                 case "host.peers.revoke":
-                    var encoded = data.GetProperty("publicKey").GetString() ?? throw new ArgumentException("a full public key is required");
-                    Store.Revoke(BlobFormat.FromBase64Url(encoded) ?? throw new ArgumentException("a full public key is required"));
+                    Store.Revoke(ReadKey(data));
                     return new { revoked = true };
                 default:
                     throw new ArgumentException("unknown trusted-peer management operation");
@@ -130,7 +132,15 @@ public sealed class RemoteAuthorization : IDisposable
         finally { Revalidate(); }
     }
 
-    sealed record PutRequest(string PublicKey, string Role, DateTimeOffset ExpiresAt);
+    static byte[] ReadKey(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty("publicKey", out var encoded)
+            || encoded.ValueKind != JsonValueKind.String || BlobFormat.FromBase64Url(encoded.GetString()) is not { } key)
+        {
+            throw new ArgumentException("a full public key is required");
+        }
+        return key;
+    }
 
     public void Dispose() => timer?.Dispose();
 }

@@ -80,7 +80,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var usage = new UsageService(monitor, peers: peers);
         var service = new SessionService(source, new MachineInfo(device.Id, name, "windows", "0.1.0"), usage: usage);
         device.Hub.JsonOptions = ProtocolJson.Options;
-        device.Hub.Handler = service.HandleAsync;
+        device.Hub.Handler = trust?.Handler(service) ?? service.HandleAsync;
         var asking = new UsagePeers(peers, device.Id, time: time) { Trust = trust };
         owned.Add(asking);
         asking.Attach(device.Relay, device.Hub);
@@ -107,6 +107,32 @@ public sealed class UsageSharingTests : IAsyncLifetime
     {
         var ch = await OpenAsync(phone, host);
         return Report(await ch.RequestAsync(UsageProtocol.Get, shared ? new { shared = true } : new { }));
+    }
+
+    [Fact]
+    public async Task An_enforcing_usage_host_shapes_capabilities_and_refuses_a_pinned_hosts_session_reads_and_usage_feed()
+    {
+        RemoteAuthorization? authorization = null;
+        var desk = await HostAsync("Desk", [() => Copilot(40, Now)], policy: device =>
+        {
+            var store = new TrustedPeerStore(folder, device.Key.Public, () => device.Relay.AccountId, time);
+            store.Reset();
+            return authorization = new RemoteAuthorization(true, store, time);
+        });
+        using var trust = authorization!;
+        var vm = await relay.ConnectAsync(token, "Other", "host");
+        trust.Store.Put(vm.Key.Public, TrustedPeerStore.Host, Now.AddHours(1));
+        var channel = await OpenAsync(vm, desk.Device);
+
+        var hello = Result(await channel.RequestAsync(Ops.Hello, new { })).Deserialize<HelloResult>(ProtocolJson.Options)!;
+        Assert.Equal([UsageProtocol.Capability, UsageProtocol.SharedCapability], hello.Capabilities);
+        Assert.Single(Report(await channel.RequestAsync(UsageProtocol.Get, new { })).Agents);
+        foreach (var op in new[] { Ops.SessionsList, UsageProtocol.Subscribe })
+        {
+            var refused = await channel.RequestAsync(op, new { });
+            Assert.False(refused.GetProperty("ok").GetBoolean());
+            Assert.Equal("the peer role does not allow this operation", refused.GetProperty("error").GetString());
+        }
     }
 
     [Fact]

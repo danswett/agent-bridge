@@ -193,6 +193,10 @@ or import from relay presence:
 | `host.peers.put` | `{publicKey, role, expiresAt}`; full key and explicit UTC expiry |
 | `host.peers.revoke` | `{publicKey}`; full key already pinned here |
 
+Missing or wrongly typed key, role or expiry fields return a field-specific error
+before the requested mutation. Store validation still checks the full curve key,
+known role and future expiry.
+
 The owner must transfer each full key over an independently authenticated,
 owner-controlled path, including host keys. A key learned from the relay or a
 short fingerprint is not approval. Reset invalidates every old lease. Reapproval

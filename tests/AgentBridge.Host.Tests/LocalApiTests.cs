@@ -577,6 +577,34 @@ public sealed class LocalApiTests : IAsyncLifetime
         }
     }
 
+    [Theory]
+    [InlineData("host.peers.put", """{"publicKey":"$key"}""", "a peer role is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":null}""", "a peer role is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"later"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.revoke", "{}", "a full public key is required")]
+    [InlineData("host.peers.revoke", "null", "a full public key is required")]
+    [InlineData("host.peers.revoke", """{"publicKey":42}""", "a full public key is required")]
+    public async Task Malformed_pin_management_reports_the_required_field_without_changing_trust(string op, string json, string error)
+    {
+        using var person = P256KeyPair.Generate();
+        var app = await ConnectAsync();
+        await app.CallAsync("host.peers.reset");
+        await app.CallAsync("host.peers.put", new
+        {
+            publicKey = B64Url.Encode(person.Public), role = "person", expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        });
+        var path = Path.Combine(profile, TrustedPeerStore.FileName);
+        var before = File.ReadAllText(path);
+        var data = JsonSerializer.Deserialize<JsonElement>(json.Replace("$key", B64Url.Encode(person.Public), StringComparison.Ordinal));
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(op, data));
+
+        Assert.Equal(error, refused.Message);
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.False(Assert.Single(authorization.Store.Pins).Revoked);
+    }
+
     [Fact]
     public async Task Only_the_app_reports_this_machines_updates_and_the_pipe_asks_for_none()
     {
