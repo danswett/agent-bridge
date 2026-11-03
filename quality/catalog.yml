@@ -628,7 +628,7 @@ suites:
     # request, but analyses only the languages the pull request changes (its `languages` job,
     # #459); main pushes and the weekly run analyse all three.
     command: see codeql.yml (csharp build-mode none, javascript-typescript, actions)
-    where: codeql.yml analyze
+    where: codeql.yml languages, analyze
     status: exists
 
   - id: dependency-review
