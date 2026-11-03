@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text.Json;
 using AgentBridge.Relay;
@@ -13,6 +14,19 @@ public class RelayTests
     static readonly GitHubUser Mallory = new(2, "mallory");
 
     [Theory]
+    [InlineData("https://github.com/login/device?redirect=elsewhere", 20)]
+    [InlineData("https://github.com/login/device", 201)]
+    [Trait("Category", "Network")]
+    public async Task Relay_only_returns_device_grants_its_clients_can_use(string page, int codeLength)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        relay.GitHub.DeviceResponseOverride = JsonSerializer.Serialize(new { device_code = new string('a', codeLength),
+            user_code = "1234-ABCD", verification_uri = page, interval = 1, expires_in = 300 });
+        using var response = await relay.Http.PostAsync(new Uri(relay.Url, "/v1/auth/device"), null);
+        Assert.Equal(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+    }
+
+    [Theory]
     [InlineData("not json")]
     [InlineData("[]")]
     [InlineData("{\"device_code\":\"code\",\"interval\":false}")]
@@ -23,6 +37,33 @@ public class RelayTests
         relay.GitHub.DeviceResponseOverride = payload;
         using var response = await relay.Http.PostAsync(new Uri(relay.Url, "/v1/auth/device"), null);
         Assert.Equal(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Network")]
+    public async Task Unsafe_upstream_tokens_and_unknown_errors_are_never_echoed(bool credential)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        const string value = "secret\r\nfixture";
+        var name = credential ? "access_token" : "error";
+        relay.GitHub.TokenResponseOverride = JsonSerializer.Serialize(new Dictionary<string, string> { [name] = value });
+        using var response = await relay.Http.PostAsJsonAsync(new Uri(relay.Url, "/v1/auth/token"), new { deviceCode = "fixture" });
+        Assert.Equal(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.DoesNotContain("secret", await response.Content.ReadAsStringAsync());
+        if (credential) { Assert.Equal(value, Assert.Single(relay.GitHub.Revoked)); }
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_revocation_redirect_cannot_forward_the_GitHub_credential_to_another_origin()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        relay.GitHub.RevocationRedirect = relay.PushService.Url + "/sink";
+        await relay.SignInAsync(Octo);
+        Assert.Empty(relay.PushService.Received);
+        Assert.Contains(relay.Logs, line => line.Contains("revoking the GitHub token returned 307"));
     }
 
     [Fact]

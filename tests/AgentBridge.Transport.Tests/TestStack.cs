@@ -23,6 +23,8 @@ public sealed class FakeGitHub
     readonly ConcurrentDictionary<string, Code> codes = new();
     readonly ConcurrentDictionary<string, GitHubUser> tokens = new();
     public string? DeviceResponseOverride { get; set; }
+    public string? TokenResponseOverride { get; set; }
+    public string? RevocationRedirect { get; set; }
     public int? UserStatusOverride { get; set; }
     public ConcurrentBag<string> Revoked { get; } = [];
     public ConcurrentBag<string> Issued { get; } = [];
@@ -44,6 +46,7 @@ public sealed class FakeGitHub
         });
         app.MapPost("/login/oauth/access_token", async (HttpRequest req) =>
         {
+            if (TokenResponseOverride is { } content) { return Results.Text(content, "application/json"); }
             var form = await req.ReadFormAsync();
             if (!codes.TryGetValue(form["device_code"].ToString(), out var c)) { return Results.Ok(new { error = "incorrect_device_code" }); }
             if (c.Denied) { return Results.Ok(new { error = "access_denied" }); }
@@ -61,6 +64,7 @@ public sealed class FakeGitHub
                 : Results.Unauthorized());
         app.MapDelete("/applications/{client}/token", async (HttpRequest req) =>
         {
+            if (RevocationRedirect is { } redirect) { return Results.Redirect(redirect, preserveMethod: true); }
             var body = await JsonDocument.ParseAsync(req.Body);
             var t = body.RootElement.GetProperty("access_token").GetString()!;
             tokens.TryRemove(t, out _);
@@ -92,7 +96,7 @@ public sealed class FakePushService
         b.WebHost.UseUrls("http://127.0.0.1:0");
         b.Logging.ClearProviders();
         var app = b.Build();
-        app.MapPost("/{**path}", async (HttpRequest req) =>
+        app.MapMethods("/{**path}", ["POST", "DELETE"], async (HttpRequest req) =>
         {
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);

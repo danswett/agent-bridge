@@ -77,7 +77,7 @@ public static class RelayApp
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("agent-bridge-relay", "0.1"));
             c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             c.Timeout = TimeSpan.FromSeconds(15);
-        }).RemoveAllLoggers();
+        }).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false }).RemoveAllLoggers();
         builder.Services.Configure<ForwardedHeadersOptions>(o =>
         {
             // Behind the hosting platform's ingress, the client address arrives in X-Forwarded-For.
@@ -170,7 +170,8 @@ public static class RelayApp
             using var json = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
             var j = json.RootElement;
             if (!Text(j, "device_code", out var code) || !Text(j, "user_code", out var userCode)
-                || !Text(j, "verification_uri", out var uri) || !Uri.TryCreate(uri, UriKind.Absolute, out _)
+                || code.Length > 200 || userCode.Length > 200
+                || !Text(j, "verification_uri", out var uri) || !SignIn.IsDevicePage(uri)
                 || !Integer(j, "interval", 1, 60, out var interval) || !Integer(j, "expires_in", 1, 3600, out var expiry))
             { return Results.StatusCode(StatusCodes.Status502BadGateway); }
             return Results.Ok(new
@@ -207,12 +208,15 @@ public static class RelayApp
                 {
                     "authorization_pending" => Results.Json(new { pending = true }, statusCode: 202),
                     "slow_down" => Results.Json(new { pending = true, interval = delay }, statusCode: 202),
-                    _ => SignInFailed(metrics, error),
+                    "access_denied" or "expired_token" or "incorrect_device_code" => SignInFailed(metrics, error),
+                    _ => Results.StatusCode(StatusCodes.Status502BadGateway),
                 };
             }
             Account account;
             try
             {
+                if (githubToken.Length > 4096 || githubToken.Any(c => c < '!' || c > '~'))
+                { return Results.StatusCode(StatusCodes.Status502BadGateway); }
                 using var userReq = new HttpRequestMessage(HttpMethod.Get, $"{options.GitHubApiUrl}/user");
                 userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
                 using var ur = await gh.SendAsync(userReq);
