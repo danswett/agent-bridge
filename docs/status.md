@@ -411,7 +411,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #200: live Claude and Codex readings from the agents themselves (in review; needs an independent review, and E1 to E14 against the build on a disposable VM).
 - **Design:**
   - #20 and #84: sub-agents on the card. The design is [design/subagents.md](design/subagents.md), with §8 answered by the owner on 2026-11-01. The host and protocol for Copilot are S1 (#173); Claude and Codex are #174, HA and shadow #175, the clients #176. agent-ha-bridge keeps its card as it is (the latest writer's text): a known, intentional difference from the HA connector's main-agent-only card, labelled by the shadow;
-  - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on;
+  - #55: device approval with a matching code. Until then a device's kind is self-declared to the relay, which folder trust and remote update both rely on. Proposed design, awaiting the owner's decisions and a security review: [design/device-approval.md](design/device-approval.md);
   - #164 to #168: UI.
 
 ## 7. History

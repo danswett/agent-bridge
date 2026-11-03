@@ -470,6 +470,10 @@ at `danswett.github.io/agent-bridge/s2/` for real-device runs.
 
 ### 5.4 Accounts, devices and the signed roster
 
+The detailed design for device approval and the signed roster, with the decisions it needs
+from the owner, is [design/device-approval.md](design/device-approval.md) (#55, proposed). It
+refines the roster and pairing bullets below.
+
 * **Account** = GitHub user id, through the "Agent Bridge" GitHub OAuth app registered
   under `danswett`. Hosts and the desktop app use the **device flow**, the PWA uses the
   web flow through the relay. The relay issues its own short-lived session tokens.
