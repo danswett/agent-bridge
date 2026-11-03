@@ -107,7 +107,6 @@ export class PromptMemory {
     const a = s?.activity ?? {};
     const from = a.userMessageFrom ?? 'person';
     const text = a.userMessage ?? null;
-    const key = text === null ? null : `${from}\n${a.userMessageLabel ?? ''}\n${text}`;
     const running = s?.status === 'working' || s?.status === 'waiting';
     // From when it began, not from a question answered or a resume within it.
     if (running && !this.#running) { this.#ran = s.statusSince ?? null; }
@@ -120,6 +119,10 @@ export class PromptMemory {
     }
     const ran = this.#ran;
     if (turns !== null) { this.#ran = null; }
+    // A host that omits the words says nothing of which prompt this is: the one shown stays it.
+    if (text === null) { return { repeat: false, at: null, fresh: false }; }
+    // Apart, not joined: a label can hold a line break, so no separator keeps two prompts apart.
+    const key = JSON.stringify([from, a.userMessageLabel ?? null, text]);
     const cur = this.#current;
     let at;
     let settled;
@@ -137,7 +140,7 @@ export class PromptMemory {
       settled = true;
     }
     let repeat = false;
-    if (from === 'schedule' && text !== null) {
+    if (from === 'schedule') {
       const label = a.userMessageLabel ?? '';
       repeat = this.#bySchedule.get(label) === text;
       this.#bySchedule.set(label, text);

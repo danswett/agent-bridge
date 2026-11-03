@@ -130,3 +130,13 @@ test('a host that doesn\'t count turns never has a repeat folded', () => {
   m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: null }));
   assert.equal(m.observe(session({ from: 'schedule', label: '4', turns: null })).repeat, false);
 });
+
+test('a line break in a label never makes a new prompt look the same, and words a host leaves out never make the same one look new', () => {
+  const joined = new PromptMemory();
+  joined.observe(session({ from: 'schedule', label: '4', text: 'B\nC' }));
+  assert.equal(joined.observe(session({ from: 'schedule', label: '4\nB', status: 'working', text: 'C' })).fresh, true);
+  const omitted = new PromptMemory();
+  omitted.observe(session({ from: 'schedule', label: '4', text: 'A' }));
+  assert.deepEqual(omitted.observe(session({ from: 'schedule', label: '4', text: null })), { repeat: false, at: null, fresh: false });
+  assert.deepEqual(omitted.observe(session({ from: 'schedule', label: '4', text: 'A' })), { repeat: false, at: null, fresh: false });
+});
