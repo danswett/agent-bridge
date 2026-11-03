@@ -216,10 +216,13 @@ private struct SessionActionContent: View {
                 Text(error)
             }
             if attempt.uncertain {
-                Text("Retry uses the same action identity and will not create a second press. It is available only while the same host process is running.").font(.caption)
-                Button("Check Delivery Again") { Task { await host.retry(slot) } }
-                    .disabled(!host.isLive || host.readOnlyReason != nil || host.instance != attempt.hostInstance || !attempt.canRetry)
-                if !attempt.canRetry {
+                if attempt.result != nil {
+                    Text("The machine could not confirm delivery. Check this session at the machine.").font(.caption)
+                } else if attempt.canRetry {
+                    Text("Check delivery with the same request while the original host process is running.").font(.caption)
+                    Button("Check Delivery Again") { Task { await host.retry(slot) } }
+                        .disabled(!host.isLive || host.readOnlyReason != nil || host.instance != attempt.hostInstance)
+                } else {
                     Text("The safe retry window expired. Check this session at the machine.").font(.caption)
                 }
             }
