@@ -25,6 +25,7 @@ public sealed partial class SessionsPage : UserControl
         ListColumn.Width = new GridLength(DesignLayout.List);
         Motion.Banner(FleetNote);
         ListPane.SizeChanged += OnListPaneSized;
+        MoreMachines.SizeChanged += OnTabSized;
         SizeChanged += (_, _) => Measure();
         Loaded += (_, _) => { Measure(); SyncList(); Ready(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
         // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
@@ -324,6 +325,7 @@ public sealed partial class SessionsPage : UserControl
         {
             var item = new SelectorBarItem { Tag = choice };
             item.Loaded += OnTabLoaded;
+            item.SizeChanged += OnTabSized;
             NameTab(item, choice);
             tabs[choice] = item;
             // A machine is named once its host says its name, after its tab is made.
@@ -371,7 +373,8 @@ public sealed partial class SessionsPage : UserControl
     internal IReadOnlyList<MachineChoice> MachinesUnderMore => overflow;
     internal Button MoreMachinesButton => MoreMachines;
     internal TextBlock MoreMachinesWords => MoreMachinesText;
-    internal void ArrangeMachineTabsNow() => ArrangeMachineTabs();
+    // How many times the tabs have been arranged, for the self-test to see them settle.
+    internal int Arrangements { get; private set; }
     // What the tabs were last arranged from, for the self-test to say.
     internal string Arranged { get; private set; } = "";
 
@@ -394,18 +397,30 @@ public sealed partial class SessionsPage : UserControl
         if (e.NewSize.Width != e.PreviousSize.Width) { QueueArrange(); }
     }
 
-    // Later, so a change never lands inside the bar's own selection change.
+    // A tab or More drawn at another width with the pane's unchanged: Windows' text size changed under
+    // them (Settings, Accessibility, Text size), or a name or More's count did. Their widths were fitted
+    // by the old size, so More could be clipped at the narrowest list until something else refitted.
+    // Fitting again is settled: it changes the bar only when what it measures has changed, so it raises
+    // no new size of its own.
+    void OnTabSized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width != e.PreviousSize.Width) { QueueArrange(); }
+    }
+
+    // Later, so a change never lands inside the bar's own selection change; at low priority, after the
+    // layout pass, so every size that pass changed is fitted once.
     void QueueArrange()
     {
         if (arrangeQueued) { return; }
         arrangeQueued = true;
-        if (!DispatcherQueue.TryEnqueue(() => { arrangeQueued = false; ArrangeMachineTabs(); })) { arrangeQueued = false; }
+        if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { arrangeQueued = false; ArrangeMachineTabs(); })) { arrangeQueued = false; }
     }
 
     // Which tabs the bar holds, from their names' widths and the bar's own, and which it selects.
     void ArrangeMachineTabs()
     {
         if (viewModel is null) { return; }
+        Arrangements++;
         var choices = viewModel.Machines.Where(tabs.ContainsKey).ToList();
         var chosen = Math.Max(0, choices.IndexOf(viewModel.SelectedMachine!));
         var room = ListPane.ActualWidth - ListPane.BorderThickness.Left - ListPane.BorderThickness.Right - MachineBar.Padding.Left - MachineBar.Padding.Right;

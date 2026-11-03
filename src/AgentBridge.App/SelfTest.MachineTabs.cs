@@ -122,19 +122,33 @@ static partial class SelfTest
             check(themed.Count == 0, $"keeps every machine a tab or under More once the theme changes ({Drawn()}){(themed.Count > 0 ? $": {string.Join("; ", themed)}" : "")}");
 
             // Windows' text made larger (#368 review): a wider More beside the chosen tab's whole
-            // 128 px name went past the narrowest list's edge. The chosen name is cut to what More leaves.
+            // 128 px name went past the narrowest list's edge. The chosen name is cut to what More
+            // leaves, and the tabs refit by themselves when More's size changes under an unchanged pane,
+            // as it does when Windows' text size changes while the page is open.
+            TextBlock? ChosenName() => bar.SelectedItem is { } chosenTab ? NameOf(chosenTab) : null;
+            // Settled: no arrangement for a second, so fitting again never sets itself off.
+            async Task<bool> Settles()
+            {
+                for (var tries = 0; tries < 10; tries++)
+                {
+                    var before = page.Arrangements;
+                    await Task.Delay(1000);
+                    if (page.Arrangements == before) { return true; }
+                }
+                return false;
+            }
+            var arrangedBefore = page.Arrangements;
             page.MoreMachinesWords.FontSize = 32;
-            page.ArrangeMachineTabsNow();
-            await Task.Delay(400);
+            var refitted = await Until(() => ChosenName() is { MaxWidth: < DesignLayout.MachineTab } && Wrong().Count == 0, TimeSpan.FromSeconds(5));
+            var settled = await Settles();
             var larger = Wrong();
-            var cutName = bar.SelectedItem is { } chosenTab ? NameOf(chosenTab) : null;
-            check(larger.Count == 0 && bar.SelectedItem?.Tag == target && cutName is { IsTextTrimmed: true } && cutName.MaxWidth < DesignLayout.MachineTab,
-                $"cuts the chosen tab's name to what a wider More leaves at the narrowest list, so More stays on the pane ({Drawn()}; the name up to {cutName?.MaxWidth:0} px){(larger.Count > 0 ? $": {string.Join("; ", larger)}" : "")}");
+            var cutName = ChosenName();
+            check(refitted && settled && page.Arrangements > arrangedBefore && larger.Count == 0 && bar.SelectedItem?.Tag == target && cutName is { IsTextTrimmed: true },
+                $"refits by itself when More grows under an unchanged pane, cutting the chosen tab's name to what More leaves at the narrowest list, and settles ({Drawn()}; the name up to {cutName?.MaxWidth:0} px; {page.Arrangements - arrangedBefore} arrangements, settled {settled}){(larger.Count > 0 ? $": {string.Join("; ", larger)}" : "")}");
             page.MoreMachinesWords.ClearValue(TextBlock.FontSizeProperty);
-            page.ArrangeMachineTabsNow();
-            await Task.Delay(400);
-            var restored = bar.SelectedItem is { } again ? NameOf(again) : null;
-            check(restored?.MaxWidth == DesignLayout.MachineTab && Wrong().Count == 0, $"gives the chosen tab's name its whole room back once More is its own width again ({restored?.MaxWidth:0} px)");
+            var regrown = await Until(() => ChosenName()?.MaxWidth == DesignLayout.MachineTab && Wrong().Count == 0, TimeSpan.FromSeconds(5));
+            var settledAgain = await Settles();
+            check(regrown && settledAgain, $"gives the chosen tab's name its whole room back by itself once More is its own width again, and settles ({ChosenName()?.MaxWidth:0} px)");
 
             // Two panes at the list's default, and one column: the same, whatever fits.
             page.ListDividerView.Reset();
