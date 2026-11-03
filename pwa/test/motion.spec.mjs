@@ -532,6 +532,50 @@ test('a question that arrives with a longer response is brought into sight below
   }, long);
   await expect(v.locator('.question-slot .question')).toBeInViewport();
 });
+
+test('a question that arrives after the response has grown, in an update of its own, is brought into sight: nobody scrolled away from the end', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  await upsert(page, CODEX, { activity: { response: 'Short.', userMessage: null, reasoning: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  // The response grows below, on its own: the conversation isn't followed, and stays where it is.
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('Line 60 of a long answer.');
+  expect(await scroller.evaluate((el) => ({ top: el.scrollTop, longer: el.scrollHeight > el.clientHeight + 100 }))).toEqual({ top: 0, longer: true });
+  // Then a question, in an update of its own: followed as if both had come together.
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-after-long', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question, status: 'waiting', updatedAt: new Date(Date.now() + 6000).toISOString() });
+  });
+  await expect(v.locator('.question-slot .question')).toBeInViewport();
+});
+
+test('a question that arrives after the reader opened the reasoning leaves the conversation where they are reading', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  const long = Array.from({ length: 60 }, (_, i) => `Thought ${i + 1}.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: 'Short.', reasoning: long, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  // Read to its end, then grown by an update of its own: still at its end.
+  expect(await scroller.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await upsert(page, CODEX, { activity: { response: 'Short, and then a little more.' }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('a little more');
+  // The reader opens the reasoning, which grows the conversation with no scroll, and reads it.
+  await v.locator('details.reasoning').evaluate((d) => { d.open = true; });
+  await expect(scroller).toContainText('Hide reasoning');
+  expect(await scroller.evaluate((el) => ({ top: el.scrollTop, longer: el.scrollHeight > el.clientHeight + 100 }))).toEqual({ top: 0, longer: true });
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-after-reasoning', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question, status: 'waiting', updatedAt: new Date(Date.now() + 6000).toISOString() });
+  });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
 test('a session the address names at startup, or after a reload, is there at once on a phone: nothing slides in', async ({ page }) => {
   await openDemo(page, { width: 390, height: 844 });
   const host = await row(page, CLAUDE).getAttribute('data-host-id');
@@ -1114,6 +1158,39 @@ test('a question that arrives while the page is in the background takes no click
     return true;
   });
   expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+test('a question that arrives while another window has the focus takes no click for a moment when this one has it again, though the page stayed visible', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  // Another window over a browser still partly in sight: focus goes, visibility doesn't.
+  await page.evaluate(() => window.dispatchEvent(new FocusEvent('blur')));
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-blur', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(view(page, CODEX).locator('.question-slot .choice').first()).toBeAttached();
+  // Long past the wait, spent while this window didn't have the focus.
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // The click that gives this window the focus lands where the question's first choice is.
+  const tapped = await page.evaluate(() => {
+    const visible = document.visibilityState === 'visible';
+    window.dispatchEvent(new FocusEvent('focus'));
+    const lane = document.querySelector('#needs-you .needs-you-list').hasAttribute('data-arriving');
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return null; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return { visible, lane };
+  });
+  expect(tapped).toEqual({ visible: true, lane: true });
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });

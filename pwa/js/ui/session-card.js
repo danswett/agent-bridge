@@ -94,6 +94,12 @@ export class SessionCard {
   #pressing = false;
   // A mouse or pen over the conversation: someone reading it, perhaps about to click.
   #hovering = false;
+  // Whether the conversation is read to its end (ui.md §5.3, Scroll to a question): measured when
+  // first seen on screen and again whenever it scrolls, and kept while only its content changes,
+  // since a response growing below isn't followed and so doesn't take the reader from its end.
+  // Forgotten (null) while it isn't on screen, and when it may come back, where the browser can
+  // have moved it without a scroll event.
+  #readToEnd = null;
   // Until when the question's controls ignore a pointer's click (QUESTION_ARRIVAL_GUARD_MS).
   #guardUntil = 0;
   // The question's view the guard covers, and the question it was armed for.
@@ -239,7 +245,7 @@ export class SessionCard {
   update(s) {
     const first = this.#s === null;
     // Whether the conversation is read to its end, before this update draws anything into it.
-    const atEnd = this.#atEnd();
+    const atEnd = this.#reading();
     this.#s = s;
     const e = this.els;
     const state = sessionStatus(s);
@@ -434,6 +440,7 @@ export class SessionCard {
   setSelected(selected) {
     if (selected === this.#selected) { return; }
     this.#selected = selected;
+    this.#readToEnd = null;
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
@@ -454,6 +461,7 @@ export class SessionCard {
 
   // The inspector became a pane of its own, or stopped being one.
   layoutChanged() {
+    this.#readToEnd = null;
     const { inspector } = this.layout();
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
@@ -469,6 +477,7 @@ export class SessionCard {
     this.#applyTab();
     this.#revealTools();
     if (this.#tab === was) { return; }
+    this.#readToEnd = null;
     // Back on the conversation, its question shows again where a click may be headed: the same
     // wait as a question arriving, one that came while another tab was shown included.
     if (this.#tab === 'conversation' && this.#guarded?.isConnected && this.#selected) { this.#guard(); }
@@ -552,7 +561,7 @@ export class SessionCard {
   // The machine's capabilities changed (a reconnect to another version of its host).
   refreshQuestion() {
     if (!this.#s) { return; }
-    const atEnd = this.#atEnd();
+    const atEnd = this.#reading();
     this.#renderQuestion(this.#s);
     this.#renderReply(this.#s);
     this.#renderStop(this.#s);
@@ -691,6 +700,15 @@ export class SessionCard {
     return sc.scrollHeight - sc.scrollTop - sc.clientHeight < 24;
   }
 
+  #reading() {
+    if (!this.els.scroll.getClientRects().length) {
+      this.#readToEnd = null;
+      return this.#atEnd();
+    }
+    this.#readToEnd ??= this.#atEnd();
+    return this.#readToEnd;
+  }
+
   // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
   // reader was before the update, since a longer response drawn with the question moves it.
   // Held is a finger on it, a mouse button down, or a mouse or pen over it: someone reading,
@@ -751,6 +769,10 @@ export class SessionCard {
   // is still down. A mouse button holds it until released, wherever that is, and a mouse or pen
   // holds it while it is over it.
   #watchHold(scroller) {
+    scroller.addEventListener('scroll', () => { this.#readToEnd = this.#atEnd(); }, { passive: true });
+    // What the person opens or presses in it (Show reasoning, a disclosure in a response) can
+    // grow it with no scroll: where they are is measured afresh at the next update.
+    for (const type of ['toggle', 'click']) { scroller.addEventListener(type, () => { this.#readToEnd = null; }, true); }
     const fingers = (e) => { this.#touches = (e.touches?.length ?? 0) > 0; };
     scroller.addEventListener('touchstart', () => { this.#touches = true; }, { passive: true });
     for (const end of ['touchend', 'touchcancel']) { scroller.addEventListener(end, fingers, { passive: true }); }

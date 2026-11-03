@@ -307,8 +307,9 @@ export class SessionsPage {
           }
         }
       });
-      // Back from the background (another tab, the app switcher, the back-forward cache): what
-      // Sessions shows is seen now, and a question in sight waits as one arriving does.
+      // Back from the background (another tab, the app switcher, the back-forward cache, another
+      // window over a browser still partly in sight, which leaves it visible): what Sessions
+      // shows is seen now, and a question in sight waits as one arriving does, as does the lane.
       const doc = globalThis.document;
       if (doc) {
         this.#shown = new AbortController();
@@ -320,6 +321,8 @@ export class SessionsPage {
         };
         doc.addEventListener('visibilitychange', back, { signal: this.#shown.signal });
         globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
+        // The window's own focus only (an element's doesn't reach a listener here that isn't capturing).
+        globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
       }
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
