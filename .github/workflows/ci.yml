@@ -157,11 +157,14 @@ jobs:
         if: (success() || failure()) && env.DOTNET_TEST != ''
         continue-on-error: true
         shell: pwsh
+        # The matrix now comes from the plan's output, so it reaches the script as data, not code.
+        env:
+          MATRIX_OS: ${{ matrix.os }}
         run: |
           if (Test-Path TestResults/coverage.cobertura.xml) {
-            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge ${{ matrix.os }}"
+            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge $env:MATRIX_OS"
           }
-          pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
+          pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title ".NET tests: $env:MATRIX_OS" >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
