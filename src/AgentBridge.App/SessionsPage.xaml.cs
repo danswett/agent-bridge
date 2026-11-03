@@ -30,6 +30,7 @@ public sealed partial class SessionsPage : UserControl
         Unloaded += (_, _) => laneTimer?.Stop();
         // The list shown for the first time (one column, after a session opened at start).
         List.SizeChanged += (_, _) => Ready();
+        List.Loaded += (_, _) => WatchListScroll();
     }
 
     // Nothing moves as the app starts (ui.md §5.3): not the first rows, not a session a toast
@@ -107,6 +108,10 @@ public sealed partial class SessionsPage : UserControl
         try { List.SelectedItem = want; }
         finally { syncing = false; }
         if (want is null) { return; }
+        // The row brought into view moves the list, and Needs you with it (the lane is the list's
+        // header): the second click of a habit that opened this from Needs you must not land on
+        // another entry's Approve once.
+        if (Layout?.ShowList == true) { GuardLane(); }
         // Scrolled to smoothly (ui.md §5.3, Scroll to a question) when its row is drawn; one far
         // off screen has no row yet, and the list jumps to it.
         if (List.ContainerFromItem(want) is ListViewItem row) { row.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = ready && Motion.Scrolls }); }
@@ -357,6 +362,35 @@ public sealed partial class SessionsPage : UserControl
     // keyboard focus and keys work as ever.
     readonly AnswerGuard laneGuard = new();
     Microsoft.UI.Dispatching.DispatcherQueueTimer? laneTimer;
+
+    // Each step of the list's own scroll, while the lane is held, holds it until the list is still.
+    ScrollViewer? listScroll;
+
+    void WatchListScroll()
+    {
+        if (listScroll is not null || Find<ScrollViewer>(List) is not { } scroll) { return; }
+        listScroll = scroll;
+        scroll.ViewChanged += (_, _) => laneGuard.Scrolled(DateTimeOffset.UtcNow);
+    }
+
+    static T? Find<T>(DependencyObject node) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is T found) { return found; }
+            if (Find<T>(child) is { } deeper) { return deeper; }
+        }
+        return null;
+    }
+
+    // The window activated again (brought back from behind another, not only restored): what it
+    // shows is under a pointer aimed at what was in front of it.
+    internal void Reactivated()
+    {
+        if (Layout is { ShowList: true, OnScreen: true }) { GuardLane(); }
+        Session.Reactivated();
+    }
 
     // The list back on screen (the Sessions page chosen again, the window shown from the tray, the
     // list popped back) puts the lane under a pointer aimed at what was there.

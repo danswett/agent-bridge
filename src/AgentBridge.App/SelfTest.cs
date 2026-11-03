@@ -605,6 +605,27 @@ static partial class SelfTest
             kept &= await At(w, 900, mode) && main.Selected == card && page.Rows.SelectedItem == card && page.SessionPaneView.Card == card && Shows(Pane("SessionPane"));
         }
         check(kept, "keeps the session open, and its row selected, through every breakpoint and back");
+
+        // Needs you is the list's header: it moves as the list scrolls to a session chosen
+        // elsewhere, and it and the question come back under a pointer as the window is activated
+        // again from behind another. Each holds their buttons from the pointer (AnswerGuard).
+        if (page.FindName("LaneItems") is UIElement laneItems && main.Sessions.FirstOrDefault(c => c != card) is { } other)
+        {
+            await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            main.Selected = other;
+            var heldOnScroll = !laneItems.IsHitTestVisible;
+            var releasedAfter = await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            check(heldOnScroll && releasedAfter, $"holds Needs you's buttons from the pointer as the list scrolls to a session chosen elsewhere, then takes clicks again (held: {heldOnScroll}, released: {releasedAfter})");
+
+            main.Selected = card;
+            layout.Tab = SessionTab.Conversation;
+            var settled = await Until(() => page.SessionPaneView.QuestionShown is { IsHitTestVisible: true } && laneItems.IsHitTestVisible, TimeSpan.FromSeconds(5));
+            window.Reactivated();
+            var question = page.SessionPaneView.QuestionShown is { IsHitTestVisible: false };
+            var lane = !laneItems.IsHitTestVisible;
+            check(settled && question && lane, $"holds the question's and Needs you's buttons from the pointer as the window is activated again (question: {question}, Needs you: {lane})");
+        }
+        else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a

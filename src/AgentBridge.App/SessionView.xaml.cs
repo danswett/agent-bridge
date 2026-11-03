@@ -552,6 +552,12 @@ public sealed partial class SessionView : UserControl
     readonly AnswerGuard guard = new();
     Microsoft.UI.Dispatching.DispatcherQueueTimer? guardTimer;
 
+    // The window activated again with the conversation in view (SessionsPage.Reactivated).
+    internal void Reactivated() { if (layout?.ViewingConversation == true) { GuardAnswer(); } }
+
+    // For the self-test: the question's controls, and whether they take a pointer.
+    internal UIElement? QuestionShown => questionView;
+
     void GuardAnswer()
     {
         if (questionView is null) { return; }
