@@ -376,7 +376,8 @@ connector's Install button on a machine the dashboard drives.
     longer gives the G6 refusal.
 
   Nothing else reads it: not updates, delivery, migration or the relay.
-* A pre-release is unsigned (below), but attested: after `publish`, CI's `attest` job downloads
+* A pre-release is unsigned (below), but attested: once `publish` has uploaded it (not on a
+  re-run that finds it already out, whose rebuilt SBOMs would not be of it), CI's `attest` job downloads
   the release's packages back (the full and delta packages, `Setup.exe` and `Portable.zip` of
   each architecture) and records, in GitHub's attestation store, SLSA build provenance for each
   (the workflow run and commit that built it) and its architecture's CycloneDX SBOM (every

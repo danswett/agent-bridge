@@ -428,6 +428,9 @@ jobs:
       group: publish-prerelease
       cancel-in-progress: false
     timeout-minutes: 30
+    outputs:
+      # 'true' only when this run uploaded the release: attest then signs it.
+      published: ${{ steps.publish.outputs.published }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -445,6 +448,7 @@ jobs:
           name: agent-bridge-windows-arm64-${{ env.APP_VERSION }}
           path: out/app-arm64/releases
       - name: Publish the pre-release and prune old ones
+        id: publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -455,9 +459,11 @@ jobs:
     # §3.3, supply-chain), so anyone can check a download with
     # `gh attestation verify <file> -R danswett/agent-bridge` (docs/app-windows.md). The subjects
     # are the release's own assets, downloaded back, since publishing may rebuild a delta after
-    # the app job packed it. Its own job, so the signing token is not in the job that runs vpk and
-    # holds contents: write.
+    # the app job packed it. Only when this run uploaded them: a re-run that finds its version
+    # already out rebuilds the app, and its SBOMs would not be of what is out. Its own job, so the
+    # signing token is not in the job that runs vpk and holds contents: write.
     needs: [publish]
+    if: needs.publish.outputs.published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -468,18 +474,11 @@ jobs:
       attestations: write
     steps:
       - name: Download the packages publish uploaded
-        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           tag="v$APP_VERSION"
-          # publish uploads nothing when this version is out already or a newer one is.
-          if ! gh release view "$tag" -R "$REPO" --json tagName > /dev/null; then
-            echo "::notice::no release $tag, so nothing to attest"
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           # Velopack's names (build/app-channels.ps1): x64's `win` channel has no suffix.
           gh release download "$tag" -R "$REPO" -D "$RUNNER_TEMP/release/win-x64" \
             -p "*-$APP_VERSION-full.nupkg" -p "*-$APP_VERSION-delta.nupkg" -p '*-win-Setup.exe' -p '*-win-Portable.zip'
@@ -491,26 +490,21 @@ jobs:
             done
           done
           ls -l "$RUNNER_TEMP"/release/*
-          echo "published=true" >> "$GITHUB_OUTPUT"
-      - if: steps.release.outputs.published == 'true'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: sbom-*-${{ env.APP_VERSION }}
           path: ${{ runner.temp }}/sbom
           merge-multiple: true
       - name: Attest the packages' build provenance
-        if: steps.release.outputs.published == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/release/*/*
       - name: Attest the x64 packages' SBOM
-        if: steps.release.outputs.published == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/release/win-x64/*
           sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-x64-${{ env.APP_VERSION }}.cdx.json
       - name: Attest the Arm64 packages' SBOM
-        if: steps.release.outputs.published == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/release/win-arm64/*
