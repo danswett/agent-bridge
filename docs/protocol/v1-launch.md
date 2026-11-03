@@ -9,7 +9,9 @@ mirrors them in `pwa/js/launch.js`, and the Windows app's Launch page
 (`src/AgentBridge.App.Core/LaunchViewModel.cs`) uses the records directly. How a Windows host carries a launch out is
 [host-launch.md](../host-launch.md); its settings are [host-config.md](../host-config.md).
 Resuming here a session that ended on another of the account's machines is a launch with a
-`transfer` ([v1-transfer.md](v1-transfer.md)).
+`transfer` ([v1-transfer.md](v1-transfer.md)). Its records' test vectors are in
+[`vectors/launch.json`](vectors/README.md); [v1-sessions.md](v1-sessions.md#test-vectors) says
+how to regenerate them.
 
 Nothing a client sends can widen what a machine allows. A session starts only in a folder a
 person approved **at that machine**, and every value is checked against what the machine
