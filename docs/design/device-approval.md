@@ -566,8 +566,21 @@ Two verifiers that received a far fork in different orders can therefore differ 
 quarantined entries they apply: adds, and removals that depend on them. The verifier that took
 them first applies them, and the other
 quarantines them. That lasts until a person signs a `merge`, which every verifier accepts and
-which makes them converge. Every device shows "the device list forked" until then, since an
-honest relay never causes a fork. A verifier that quarantines is the stricter of the two about
+which makes them converge. Every device shows "the device list forked" until then.
+
+**Forks that removals make.** Apart from removals, an honest relay and honest devices never fork:
+approvers extend the single head (§3.6). A removal is different by design: its client signs it on
+a parent every host already holds (§3.3), which may already have children, so it forks. Such a fork
+is expected, is never quarantined (rule 3) and is not reported as misbehavior. It needs no merge to
+take effect, since every verifier applies the state of all its heads. The remover's client joins it
+straight away: in the same confirmation it signs a `merge` of the removal and the other heads it
+holds, with its own presence proof (a second prompt where the platform needs one per signature).
+A remover still on probation, whose client does not offer merges, leaves the join to the next
+person's device that appends, which merges every head it knows first anyway (rule 3, the window).
+While the only branches besides the main line are removals, devices show "a removal is being
+joined", not "the device list forked".
+
+A verifier that quarantines is the stricter of the two about
 grants: it never makes a device active that the other has not, apart from a device that a copy
 the other applied has conflicted there (§3.3). It also waits to apply a removal
 signed by a device only that branch added, so the device such a removal targets stays active there
@@ -697,7 +710,8 @@ protocol, or a missing capability. Only a local setting does (§8.1).
 * **The relay is an untrusted store.** It keeps one set of entries per account, beside the
   machine roster ([roster.md](../protocol/roster.md)) under the same naming and ETag rules, and
   serves it to approved devices only. It appends an entry only if it is valid by §3.5 against
-  the relay's own copy. Honest approvers therefore extend its single head. An approver that
+  the relay's own copy. Honest approvers therefore extend its single head, except that a removal
+  forks from an older parent by design and is joined by a merge straight after (§3.5). An approver that
   finds the head moved re-reads and re-verifies it. It stops if the new head removed it or already
   added the same device. Otherwise it shows the person what changed and asks for the presence
   proof again: the new `prev` and `seq` make a new body, which the old signature and assertion do
@@ -1157,8 +1171,18 @@ A removed device can no longer fetch a roster (it is refused admission and `rost
 proof comes with the refusal. It is narrowly scoped:
 * the device sends its heads in `hello`, as every device does;
 * the relay, refusing it with `removed`, or a host, refusing it in `hello`, attaches a **removal
-  proof**: the removal entry and every entry between the device's heads and it, and nothing else;
-* the device verifies it from the roster it already holds.
+  proof**: the removal entry and every entry between the device's heads and it. Where the removal
+  applies only through an adopted branch (its signers' or cosigner's adds are on a branch that
+  the device's own copy would quarantine, §3.5), the proof also carries the `merge` that adopted
+  that branch and every entry between the device's heads and that merge. Nothing else is sent;
+* the device verifies it from the roster it already holds: the removal must apply under §3.5 in
+  the state that roster plus the proof gives.
+
+A host that adopted the branch only **locally** (`devices adopt`, §3.5) has no entry that proves
+the adoption to anyone else. It still refuses the device, but sends only what it has, so the device
+stays at "not confirmed" until some person's device signs a merge adopting the branch, which the
+remover's Devices page offers when it sees a removal applied only by local adoption. That is a
+denial of service to the removed device's own cleanup, never trust kept by it.
 
 The proof can include devices added since the device last synced, which it would have seen had it
 been online while still approved. It never goes to a device that was never approved, because such
@@ -1252,7 +1276,14 @@ A host acts only if:
 * `target.machine` is this host, and the action and its target match the op;
 * the lifetime is at most 10 minutes, it was not issued more than 2 minutes in the host's future,
   and it has not expired;
-* `request` was never used before (the existing replay store);
+* `request` was never used before, by a **durable** replay record. Today's `CommandMemory`
+  (`src/AgentBridge.Host/SignedCommands.cs`) is in memory and recreated by `SessionTransfers`, so it
+  forgets across a restart. R6 replaces it with a record in the host's private store, written and
+  flushed **before** the action executes; an action whose record cannot be written does not run.
+  Records are kept until `expiresAt` plus the 2-minute allowance has passed by the host's persisted
+  wall-clock high-water mark, never by the current reading, and a command whose `expiresAt` is
+  before that mark is refused. So a command used once, before a restart or a clock moved back,
+  is refused after it. This matters most for transfers, which carry no nonce;
 * where the command arrives on a channel from `by` itself (folder trust, update), `nonce` is one
   the host gave that channel in `hello`;
 * the host is fresh (§6.3) and holds every head the command names, syncing first if not. The one
@@ -1368,11 +1399,17 @@ decision 6): every existing device enrolls with the mutual codes, once, as a new
    `observe` mode since step 2 (§4.5), lists which devices it would treat as pending. Until here no
    device has lost anything at the relay. After a quiet day, the owner switches each host to
    `enforce` (in the app's Settings, or with
-   `agent-bridge-host config set security.roster enforce` at the machine). Then, once the Devices
-   page lists no unapproved device the owner still uses, the owner switches the relay to `enforce`
-   there ("Restrict unapproved devices"), which cannot be undone short of a reset.
-5. A later release makes `enforce` the default for new installs: a new machine serves its own apps
-   until approved, and a genesis on an account the relay has never seen another device of starts
+   `agent-bridge-host config set security.roster enforce` at the machine). The owner also switches
+   **every person's device** to `enforce` in its own Settings (each Windows app, the PWA, the Apple
+   clients), since a client's mode is separate from its machine's: a client left in `observe`
+   refuses nothing, and a dishonest relay could still show it a fake host called "Desk" and collect
+   replies and attachments (§7.4). The Devices page lists any of the owner's devices still in `off`
+   or `observe`. Then, once it lists no unapproved device the owner still uses, the owner switches
+   the relay to `enforce` there ("Restrict unapproved devices"), which cannot be undone short of a
+   reset.
+5. A later release makes `enforce` the default for new installs of hosts and clients: a new
+   machine serves its own apps until approved, a new client talks only to rostered hosts once it
+   holds a roster, and a genesis on an account the relay has never seen another device of starts
    the relay in `enforce` too.
 
 About six exchanges for today's fleet. The lighter alternative, decision 6(b), is a one-time
@@ -1722,6 +1759,21 @@ Each slice adds its own. Together they cover:
   kept, gossiped, not applied, and adopted only by a presence-signed `merge`. Two verifiers fed the
   same branches in opposite orders converge after that merge.
 * An entry offered by an unrostered channel peer through anything but `roster.submit`: refused.
+* **Removal forks.** A removal signed on a common parent that already has children at the relay:
+  the relay appends it, no verifier quarantines it or reports misbehavior, it applies at once, and
+  the remover's merge of it and the other heads joins it. Without that merge (a remover on
+  probation), the next honest append merges first, and its entry is within the window.
+* **Removal proofs.** A device whose copy would quarantine its remover's add receives a proof with
+  the adopting merge and the entries leading to it, and confirms its removal. Without the merge
+  (the host adopted the branch only locally), it stays at "not confirmed" and the host still
+  refuses it; after a person's device signs the adopting merge, the proof confirms it.
+* **Durable replay.** A transfer person command used once; the source host restarts, becomes fresh
+  again, and the asking host replays the same command within its lifetime: refused. The same after
+  the source's wall clock is moved back 30 minutes. A host whose replay record cannot be written
+  does not run the action.
+* **Client mode.** A dishonest relay advertises an unrostered host named "Desk": a client in
+  `enforce` shows it only as "Not approved" and sends it nothing; a client in `observe` reports it
+  and still talks to it, which is why the cutover switches every client to `enforce`.
   Through `roster.submit`: a valid chain from a device the host missed is accepted, and a removal
   in it applies even while the host's app is uninformed; the answer is only `accepted` or
   `refused`, identical whatever the host holds; the 257th entry, and a second submission within a
@@ -1865,8 +1917,9 @@ Each slice adds its own. Together they cover:
    independently approved survivors is also a reset.
 6. **Grandfathering the devices in use now.**
    (a) Enroll each with the mutual codes once (one exchange per machine, about six). Hosts go to
-   `observe` first, then `enforce` per host, and the relay's restrictions on unapproved devices
-   come last, when the owner switches them on (§4.5), so nothing is cut off mid-enrollment. (b) Bulk-approve the devices online at cutover after
+   `observe` first, then `enforce` per host and on every person's device, and the relay's
+   restrictions on unapproved devices come last, when the owner switches them on (§4.5), so nothing
+   is cut off mid-enrollment. (b) Bulk-approve the devices online at cutover after
    comparing whole descriptor fingerprints (covering `dh`, `sign`, `signAlg`, presence, `rpId`, the
    credential id and key, `attested`, `backupEligible`, kind and platform, not only the id), with
    nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
@@ -1965,7 +2018,7 @@ Each is one PR, security-reviewed independently before merge.
 | R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
-| R6 | Person-only actions on person commands: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
+| R6 | Person-only actions on person commands, with the durable replay store that replaces `CommandMemory`: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
 | R7 | Removal end to end: revocation, offline hosts, removed-device experience, Forget/Remove | R5, R6 | Yes |
 | R8 | Owner cutover: runbook and live checks (the issue's "Validate live"), then `enforce` per host | R1-R7, decision 6 | On the owner's machines, with their go-ahead |
 | R9 | `enforce` by default for new installs | R8 | Yes |
