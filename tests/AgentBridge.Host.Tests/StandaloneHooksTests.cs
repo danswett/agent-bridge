@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
 using AgentBridge.Hooks;
@@ -111,6 +112,107 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.True(File.Exists(Hook)); // Already-running sessions still need their executable.
         Assert.NotNull(IntakeState.Load(Profile).State);
         Assert.Equal(original, File.ReadAllText(Path.Combine(Profile, "hooks", "backups", "claude-settings.json")));
+    }
+
+    [Fact]
+    public async Task Claude_removal_recognizes_a_differently_cased_Windows_profile_without_orphaning_hooks()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var sameProfile = new StandaloneHooks(Profile.ToUpperInvariant(), Homes, Source, Legacy, () => active, locator, codex);
+
+        await sameProfile.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.Null(Read(Registration("claude"))["hooks"]);
+        Assert.False(File.Exists(Owner("claude")));
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.Single(Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray());
+    }
+
+    void ConfigurePath(string agent, string path) => Write(Path.Combine(Profile, HostSettings.FileName),
+        new JsonObject { ["launch"] = new JsonObject { ["agents"] = new JsonObject { [agent] = new JsonObject { ["path"] = path } } } }.ToJsonString());
+
+    [Theory]
+    [InlineData("copilot", "copilot")]
+    [InlineData("copilot", "agency")]
+    [InlineData("claude", "claude")]
+    [InlineData("codex", "codex")]
+    public async Task Hook_setup_uses_the_profiles_configured_CLI_even_when_it_is_not_on_PATH(string agent, string configured)
+    {
+        ConfigurePath(configured, Path.Combine(root, "custom-cli.exe"));
+        locator.Locate = (_, config) => config.Path;
+
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+
+        Assert.True(File.Exists(Owner(agent)));
+        Assert.NotNull(IntakeState.Load(Profile).State);
+    }
+
+    [Fact]
+    public async Task Codex_removal_uses_the_profiles_configured_CLI_even_when_it_is_not_on_PATH()
+    {
+        await Setup.InstallAsync("codex", false, TextWriter.Null);
+        ConfigurePath("codex", Path.Combine(root, "custom-codex.exe"));
+        locator.Locate = (_, config) => config.Path;
+
+        await Setup.RemoveAsync("codex", false, TextWriter.Null);
+
+        Assert.False(codex.Present);
+        Assert.False(File.Exists(Owner("codex")));
+    }
+
+    [Theory]
+    [InlineData("{broken")]
+    [InlineData("{\"launch\":{\"agents\":false}}")]
+    public async Task Broken_profile_settings_do_not_silently_select_a_different_CLI_or_write_hooks(string config)
+    {
+        Write(Path.Combine(Profile, HostSettings.FileName), config);
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Refresh_replaces_the_Windows_hook_while_its_previous_image_is_running()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        File.Copy(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"), Source, overwrite: true);
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        using var running = Process.Start(new ProcessStartInfo(Hook, "/d /c set /p answer=ready")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true,
+        })!;
+        try
+        {
+            Assert.True(await running.StandardOutput.ReadAsync(new char[1], 0, 1).WaitAsync(TimeSpan.FromSeconds(5)) > 0);
+            Assert.False(running.HasExited);
+            File.WriteAllText(Source, "the next hook version");
+
+            StandaloneHooks.Refresh(Profile, Source);
+
+            Assert.Equal("the next hook version", File.ReadAllText(Hook));
+            Assert.False(running.HasExited);
+        }
+        finally
+        {
+            if (!running.HasExited) { running.Kill(entireProcessTree: true); }
+            await running.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task An_interrupted_refresh_restores_the_previous_hook_even_when_the_new_source_is_missing()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        var previous = File.ReadAllBytes(Hook);
+        File.Move(Hook, Hook + ".old");
+        File.Delete(Source);
+
+        Assert.Throws<FileNotFoundException>(() => StandaloneHooks.Refresh(Profile, Source));
+
+        Assert.Equal(previous, File.ReadAllBytes(Hook));
     }
 
     [Fact]
@@ -295,7 +397,8 @@ public sealed class StandaloneHooksTests : IDisposable
 
     sealed class Locator : IAgentLocator
     {
-        public string? Find(Launcher launcher, AgentConfig config) => "fixture-" + launcher.Id;
+        public Func<Launcher, AgentConfig, string?> Locate = (launcher, _) => "fixture-" + launcher.Id;
+        public string? Find(Launcher launcher, AgentConfig config) => Locate(launcher, config);
     }
 
     sealed class Processes : IProcessInspector

@@ -27,6 +27,9 @@ Choose only agents you have installed. `copilot` covers Copilot and Agency. Setu
 `COPILOT_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the corresponding host home options;
 Codex plugin commands receive that selected `CODEX_HOME`. `--profile <name>` selects the
 host profile. Nothing automatically approves launch workspaces or trusts agent hooks.
+CLI lookup uses that profile's `launch.agents.<id>.path`, including Agency as the Copilot
+fallback and Codex removal. Unreadable profile or invalid launch settings refuse setup
+instead of silently choosing another CLI.
 
 Restart the host from the app and **start new agent sessions**: open sessions retain their
 old commands. Start Codex locally and approve its hook trust prompt once; until then Codex
@@ -38,6 +41,10 @@ stable native hook and pointer in `<profile>\hooks`. It refuses an existing lega
 legacy registrations, migrated profiles and another profile's ownership marker. G5 still
 checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
 home, changes a legacy task or starts a host automatically.
+Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
+finishes on the previous image, and an interrupted replacement restores that image before
+retrying. Equivalent Windows profile casing does not leave owned Claude commands behind
+when removing or reinstalling hooks.
 
 Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into
 `settings.json` with unrelated settings and hooks preserved, plus its first original settings

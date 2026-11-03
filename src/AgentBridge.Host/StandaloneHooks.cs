@@ -81,14 +81,25 @@ public sealed class StandaloneHooks(
         return string.Equals(Normal(left), Normal(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
+    LaunchConfig LaunchSettings()
+    {
+        var (settings, problem) = HostSettings.Load(profile);
+        if (problem is not null || settings.LaunchProblems.Count > 0)
+        {
+            throw new InvalidOperationException($"Hook setup cannot use this profile's launch settings: {problem ?? string.Join("; ", settings.LaunchProblems)}");
+        }
+        return settings.Launch;
+    }
+
     public async Task InstallAsync(string agent, bool dryRun, TextWriter output, CancellationToken ct = default)
     {
         Preflight(agent, removing: false);
         using var held = dryRun ? null : Lock();
         Preflight(agent, removing: false);
         var launcher = Launchers.Find(agent)!;
-        var executable = locator.Find(launcher, AgentConfig.Default);
-        if (agent == "copilot") { executable ??= locator.Find(Launchers.Find("agency")!, AgentConfig.Default); }
+        var launch = LaunchSettings();
+        var executable = locator.Find(launcher, launch.Agent(agent));
+        if (agent == "copilot") { executable ??= locator.Find(Launchers.Find("agency")!, launch.Agent("agency")); }
         if (executable is null) { throw new InvalidOperationException($"{agent} is not installed; no hooks were registered"); }
         var owner = Path.Combine(Home(agent), OwnerFile);
         var ownerBefore = MigrationRecord.Hash(owner);
@@ -153,7 +164,7 @@ public sealed class StandaloneHooks(
         var path = agent == "copilot" ? Path.Combine(homes.Copilot, "hooks", "agent-bridge.json") : Path.Combine(homes.Claude, "settings.json");
         if (agent == "codex")
         {
-            executable = locator.Find(Launchers.Find("codex")!, AgentConfig.Default)
+            executable = locator.Find(Launchers.Find("codex")!, LaunchSettings().Agent("codex"))
                 ?? throw new InvalidOperationException("Codex is unavailable; its plugin and ownership record were preserved");
             present = await CheckMarketplaceAsync(executable, owned: true, ct);
         }
@@ -196,9 +207,11 @@ public sealed class StandaloneHooks(
     {
         var folder = Path.Combine(profile, "hooks");
         var hook = Path.Combine(folder, "agent-bridge-host-hook.exe");
+        Directory.CreateDirectory(folder);
+        Migrator.RecoverHook(hook);
         if (MigrationRecord.Hash(hook) != MigrationRecord.Hash(source))
         {
-            DurableFile.Write(hook, File.ReadAllBytes(source));
+            Migrator.CopyHook(source, hook);
         }
         Write(Path.Combine(folder, HookRunner.PointerFile), new JsonObject { ["version"] = 1, ["runtimeRoot"] = Path.Combine(profile, "runtime") });
     }
@@ -247,7 +260,8 @@ public sealed class StandaloneHooks(
                 {
                     foreach (var hook in inner.OfType<JsonObject>().ToList())
                     {
-                        if ((string?)hook["command"] is { } command && new[] { "ask", "notification", "stop", "register" }.Any(n => command == $"\"{Hook}\" claude {n}")) { inner.Remove(hook); }
+                        if ((string?)hook["command"] is { } command && new[] { "ask", "notification", "stop", "register" }
+                            .Any(n => string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))) { inner.Remove(hook); }
                     }
                     if (inner.Count == 0) { entries.Remove(entry); }
                 }
