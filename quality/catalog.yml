@@ -624,7 +624,9 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     # Blocking only if the analysis breaks, or (code scanning's own check) on new high or
-    # critical alerts. Swift joins once apple/ lands on main.
+    # critical alerts. Swift joins once apple/ lands on main. The workflow runs on every pull
+    # request, but analyses only the languages the pull request changes (its `languages` job,
+    # #459); main pushes and the weekly run analyse all three.
     command: see codeql.yml (csharp build-mode none, javascript-typescript, actions)
     where: codeql.yml analyze
     status: exists
