@@ -28,6 +28,10 @@ public sealed class CardContext
     // Where what a fetch brings back is applied: the UI thread. Inline when unset.
     public IUiDispatcher? Ui { get; init; }
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    // Set by the card's Machine (#269): whether its rows are its host's word now, to be acted on;
+    // and what a row says while the machine is away, null while it is not.
+    public Func<bool> Current { get; internal set; } = () => true;
+    public Func<DateTimeOffset, StatusLine?> Away { get; internal set; } = _ => null;
 }
 
 public sealed record ToolRow(StatusGlyph Glyph, string Status, string Name, string? Summary, string When);
@@ -77,8 +81,12 @@ public sealed partial class SessionCardViewModel : Observable
     public string Title => string.IsNullOrEmpty(session.Title) ? "Untitled session" : session.Title;
     public string Meta => string.Join(" · ", new[] { ctx.ShowMachine() ? ctx.MachineName() : null, AgentName, session.Repository ?? Words.LastSegment(session.Cwd), session.Branch, session.Model }.Where(s => !string.IsNullOrEmpty(s)));
 
-    // What the card says about the session: ui.md §2.2's glyph and words (StatusRules).
-    public StatusLine Line => StatusRules.For(session);
+    // What the card says about the session: ui.md §2.2's glyph and words (StatusRules); while its
+    // machine is away, that it is offline (or reconnecting) instead, since what it last said may
+    // no longer be so (#269).
+    public StatusLine Line => ctx.Away(ctx.Time.GetUtcNow()) ?? StatusRules.For(session);
+    // Its machine is away: the row is what the session last said, and nothing on it can be done.
+    public bool Away => Line.Rule == StatusRules.Away;
     public (string View, string Text) State => (Line.View, Line.Text);
 
     public string View => Line.View;
@@ -91,7 +99,7 @@ public sealed partial class SessionCardViewModel : Observable
     // An agent launched it, or answered or replied to it, and nobody has taken it back since: the
     // violet diamond on the glyph (rule 7), said in words too. An older host never says so, and
     // then it is the person's.
-    public bool Driven => session.Driver == DriverKind.Agent;
+    public bool Driven => session.Driver == DriverKind.Agent && !Away;
     public string DriverText => Driven ? "Driven by an agent" : "";
     // Which agent, when the host knows ("homeassistant:<user id>").
     public string? DriverPrincipal => Driven ? session.DriverPrincipal : null;
@@ -244,6 +252,16 @@ public sealed partial class SessionCardViewModel : Observable
         RaiseAll();
     }
 
+    // Its machine went away, came back, or its new snapshot confirmed this card (#269): what the
+    // row says, and whether its question, reply and End session can be used.
+    internal void CurrentChanged()
+    {
+        question?.Refresh();
+        reply?.Refresh();
+        end?.Refresh();
+        RaiseAll();
+    }
+
     void Sync()
     {
         var caps = ctx.Capabilities();
@@ -276,7 +294,7 @@ public sealed partial class SessionCardViewModel : Observable
         }
         if (q is not null && question is null)
         {
-            var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name);
+            var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current);
             if (rebuilt is not null) { next.TakeDraft(rebuilt); }
             Question = next;
         }
@@ -289,7 +307,7 @@ public sealed partial class SessionCardViewModel : Observable
         var blobMax = files && ctx.BlobsFor is not null ? LargeAttachments.Max(caps, ctx.Blobs) : 0;
         if (replies && reply is null)
         {
-            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large) { Blobs = ctx.Blobs, BlobsFor = ctx.BlobsFor };
+            Reply = new ReplyViewModel(session, files, ctx.Deliveries, ctx.Host, ctx.Shrinker, name, large, ctx.Current) { Blobs = ctx.Blobs, BlobsFor = ctx.BlobsFor };
             if (parkedReply is not null) { reply!.TakeDraft(parkedReply); parkedReply = null; }
         }
         else if (!replies && reply is not null)
@@ -302,7 +320,7 @@ public sealed partial class SessionCardViewModel : Observable
         reply?.Update(session, files, large, blobMax);
 
         var stops = caps.Contains(Capabilities.SessionsStop);
-        if (stops && end is null) { End = new EndSessionViewModel(session, ctx.Deliveries, name); }
+        if (stops && end is null) { End = new EndSessionViewModel(session, ctx.Deliveries, name, ctx.Current); }
         else if (!stops && end is not null) { end.Dispose(); End = null; }
         end?.Update(session);
     }
@@ -337,8 +355,15 @@ public sealed partial class SessionCardViewModel : Observable
         Raise(nameof(UpdatedText));
         Raise(nameof(AgeText));
         Raise(nameof(ResponseAgeText));
+        // "last seen 2m ago" moves on with the clock too.
+        if (Away) { RaiseStatus(); }
         SyncDetails();
         Delegates.RefreshTimes(now);
+    }
+
+    void RaiseStatus()
+    {
+        foreach (var p in new[] { nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel) }) { Raise(p); }
     }
 
     // The tool history, from session.get, newest first.

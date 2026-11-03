@@ -198,7 +198,7 @@ public sealed partial class LaunchViewModel : Observable
 
     // The machine shown does not take launches now, but is shown for a folder-trust question
     // that may be waiting on it, read-only.
-    bool InspectOnly => machine is { } m && !m.Host.Can(LaunchProtocol.Capability);
+    bool InspectOnly => machine is { } m && (!m.Host.Can(LaunchProtocol.Capability) || m.Offline);
     string Name => machine?.Name ?? "this machine";
 
     public IReadOnlyList<Choice> Resumes { get; private set; } = [];
@@ -696,6 +696,9 @@ public sealed partial class LaunchViewModel : Observable
         var transfer = launch.Transfer is not null;
         var sent = m.Deliveries.Submit(Key, LaunchProtocol.Launch, request => launch with { Request = request }, _ => false, payload: launch, replayAfterRestart: false,
             timeout: transfer ? Transfers.LaunchTimeout : LaunchTimeout, resendOnBusy: false, giveUp: transfer ? Transfers.GiveUp : null);
+        // Held (the machine went offline under the page, #269): nothing went, so there is nothing to
+        // confirm.
+        if (sent.Outcome == Deliveries.Held) { SetProblem($"Not launched: {Sentence(sent.Reason ?? "the machine is offline")}"); return; }
         // Submit returns its first snapshot; the delivery may already have moved on (no connection:
         // waiting), and that newer state is the one to show.
         last = m.Deliveries.Get(Key) is { } now && now.Request == sent.Request ? now : sent;

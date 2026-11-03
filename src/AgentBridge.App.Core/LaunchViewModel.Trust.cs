@@ -107,7 +107,7 @@ public sealed partial class LaunchViewModel
     // machine, its loopback.
     Machine? TrustVia(Machine m) => m.IsLocal ? watchedLoopback : m;
 
-    bool Answers(Machine? via) => via is not null && main.Fleet is not null && via.Host.Can(TrustProtocol.Capability);
+    bool Answers(Machine? via) => via is not null && main.Fleet is not null && !via.Offline && via.Host.Can(TrustProtocol.Capability);
 
     IEnumerable<TrustQuestion> TrustFor(Machine m)
     {

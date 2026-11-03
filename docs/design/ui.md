@@ -79,6 +79,12 @@ an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
 While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
 `ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.
 
+While a session's machine is away (#269), none of the rules apply: what the row last said may no
+longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in secondary text,
+"Offline · last seen 2m ago" once the machine has left the relay's presence, or "Reconnecting…"
+while it is listed but its link is down; rule 7's overlay does not apply. A row's line 2 is
+"Offline · *machine*". Nothing on it can be acted on (§6.1, "A machine away").
+
 N is a number before its noun, singular for one ("1 delegate", "1 agent", "1 background
 command"). A glyph's accessible name is the row read aloud (§9).
 
@@ -407,6 +413,8 @@ Sections, top to bottom:
    - The lane references sessions; it never moves their rows.
    - Its count is the app's badge: the Windows app's tray and Sessions badge, and the PWA's
      app badge where the browser has one.
+   - A question on a machine that is away, or back but not yet confirmed by its next full list,
+     is in neither the lane nor the count, nor raised as a notification (#269).
 2. **Pinned.**
 3. **Sessions,** in your order (#164).
 4. **Ended · N,** collapsed.
@@ -432,6 +440,21 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
   or out of view ends nothing.
 - **Unread:** a row whose session updated since the row was last open: the selected row (an
   unfolded card in the PWA until #179 lands). A session seen for the first time starts read.
+
+**A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
+network blip), often for under a minute. While its machine has left the relay's presence, and the
+client's own relay link is up on the same account:
+- Its rows stay where they are, read as stale (§2.2), and so do the session open, its machine tab,
+  your order and pins.
+- Nothing on them can be done: answering, Approve once and Deny, replying, attaching, End session,
+  and launching or resuming on that machine are disabled. Their questions leave Needs you, the
+  badges and notifications.
+- Back again, they can be acted on only once the machine's next full list (its snapshot) has
+  confirmed that the session and its question still exist, never on the copy kept meanwhile. A
+  session that ended meanwhile goes to Ended then, and a question that ended never becomes
+  answerable. A question notification withdrawn meanwhile comes back silently if still asked.
+- After **15 minutes** away its rows go, and the machine is listed as offline (§6.6). It goes at
+  once when it is forgotten, when the client is signed out or refused, or when the account changes.
 
 **Row anatomy (two lines):**
 - **Leading:** the status glyph, aligned to line 1.
@@ -570,6 +593,9 @@ machine, online ones first, then the account's offline machines (#213):
   app found, how the last update ended, Check and Install) and, for an offline machine, Forget.
   Every action is the same small secondary button. Check for updates, for every machine at once,
   sits under the rows in the same column.
+- **A machine away (§6.1):** listed once, as offline ("Offline", and "Last seen 2m ago" on line
+  2), with Forget, both while its rows are kept and after they have gone. A client whose relay
+  keeps no roster lists it so only while its rows are kept.
 
 ## 7. Platform shells
 

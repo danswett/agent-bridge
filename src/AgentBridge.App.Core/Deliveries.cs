@@ -78,6 +78,18 @@ public sealed class Deliveries
     internal TimeProvider Time => time;
     public TimeSpan GiveUp { get; init; } = TimeSpan.FromMinutes(9);
 
+    // Set by another machine's Machine (#269): why nothing new may go now for an op, or null. Every
+    // answer, reply and End session passes here, a toast's answer and Needs you's included, so none
+    // can act on a session kept from before its machine went away. What is already on its way goes
+    // on: it went while the session was current, and its request id lets the host act on it once.
+    internal Func<string, string?>? Hold { get; set; }
+
+    // Whether Hold would refuse the op now.
+    public bool Holds(string op) => Hold?.Invoke(op) is not null;
+
+    // The outcome of a submit Hold refused: nothing sent, nothing kept.
+    public const string Held = "offline";
+
     // Raised on the UI thread whenever an entry changes.
     public event Action<Delivery>? Changed;
 
@@ -90,6 +102,7 @@ public sealed class Deliveries
         Func<Func<string, object?, TimeSpan?, Task<JsonElement>>, Action<long, long>, Task>? before = null, bool replayAfterRestart = true, TimeSpan? timeout = null, bool resendOnBusy = true, TimeSpan? giveUp = null)
     {
         Delivery entry;
+        var held = Hold?.Invoke(op);
         lock (gate)
         {
             if (entries.TryGetValue(key, out var existing)
@@ -97,6 +110,7 @@ public sealed class Deliveries
             {
                 return existing;
             }
+            if (held is not null) { return new Delivery { Key = key, Request = "", State = DeliveryState.Done, Outcome = Held, Reason = held, Payload = payload }; }
             entries[key] = entry = new Delivery { Key = key, Request = uuid(), State = DeliveryState.Sending, Payload = payload, ReplayAfterRestart = replayAfterRestart, Timeout = timeout ?? DefaultTimeout, ResendOnBusy = resendOnBusy, GiveUp = giveUp };
         }
         Publish(entry);
@@ -109,7 +123,7 @@ public sealed class Deliveries
     {
         Delivery? entry;
         lock (gate) { entry = entries.GetValueOrDefault(key); }
-        if (entry?.State != DeliveryState.Failed) { return; }
+        if (entry?.State != DeliveryState.Failed || Hold?.Invoke(op) is not null) { return; }
         _ = RunAsync(entry, op, data, before, resend: true);
     }
 

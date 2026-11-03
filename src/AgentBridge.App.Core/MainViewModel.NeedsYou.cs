@@ -19,8 +19,10 @@ public sealed partial class MainViewModel
     {
         var now = Time.GetUtcNow();
         var several = machines.Count > 1;
+        // Only questions that can be answered now: another machine's kept while it is away, or not
+        // yet confirmed by its snapshot, may be gone, and are not counted as waiting on you (#269).
         var want = byId
-            .Where(p => p.Value.Session.Question is not null && owner.ContainsKey(p.Value))
+            .Where(p => p.Value.Session.Question is not null && owner.TryGetValue(p.Value, out var m) && m.Current)
             .Select(p => (Key: p.Key, Card: p.Value, Machine: owner[p.Value]))
             .OrderBy(e => e.Card.Session.Question!.AskedAt)
             .ThenBy(e => e.Machine.Name, StringComparer.Ordinal)

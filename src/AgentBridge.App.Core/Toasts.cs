@@ -45,6 +45,9 @@ public sealed class ToastPlanner
         // While a delegate's question is pending (NoteWait).
         public bool WaitFromTurn;
         public string? ResponseBeforeWait;
+        // The question whose toast was withdrawn while the machine was away (Away): raised again
+        // quietly, if still asked.
+        public string? Again;
     }
 
     public ToastPlanner(IToastSink sink, TimeProvider? time = null)
@@ -65,6 +68,9 @@ public sealed class ToastPlanner
     // Another machine's relay device id: its toasts keep tags of their own, and a click says
     // which machine to answer. Null for this machine's.
     public string? MachineKey { get; init; }
+    // Set by another machine's Machine (#269): its sessions are not its host's word now (it is
+    // away, or its snapshot has not confirmed them), so nothing is raised for them until they are.
+    public Func<bool> Held { get; internal set; } = () => false;
 
     // The sessions as the app first hears of them: a turn that finished before is not news, but
     // a question already pending is notified, as the host does after a restart. Sessions it
@@ -162,9 +168,26 @@ public sealed class ToastPlanner
         sessions.Clear();
     }
 
+    // The machine went away (#269): a question it toasted may be gone by the time it is back, and a
+    // toast's buttons would answer it, so its question toasts go. Each one still asked once the
+    // machine's snapshot confirms it is raised again, quietly: it was news when it first came.
+    public void Away()
+    {
+        foreach (var (id, t) in sessions)
+        {
+            if (t.Shown is not { } q) { continue; }
+            sink.Withdraw(TagOf(id));
+            t.Shown = null;
+            t.Notified.Remove(q);
+            t.Again = q;
+        }
+    }
+
     // Called every second or so: raises what is due.
     public void Tick()
     {
+        // Kept due, not dropped: raised once the machine's sessions are confirmed, if still so.
+        if (Held()) { return; }
         var now = time.GetUtcNow();
         foreach (var (id, t) in sessions)
         {
@@ -174,9 +197,11 @@ public sealed class ToastPlanner
             {
                 if (s.Question is not { } q || q.Id != due.Question) { continue; }
                 t.Notified.Add(q.Id);
+                var again = t.Again == q.Id;
+                t.Again = null;
                 if (!Enabled() || WindowActive()) { continue; }
                 t.Shown = q.Id;
-                sink.Show(new ToastNotice(TagOf(id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), Quiet()));
+                sink.Show(new ToastNotice(TagOf(id), ToastXml.Question(s, Capabilities(), MachineName(), MachineKey), Quiet() || again));
             }
             else
             {

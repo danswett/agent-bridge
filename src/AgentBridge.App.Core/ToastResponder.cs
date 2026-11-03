@@ -28,8 +28,9 @@ public sealed class ToastResponder
     public TimeSpan OutcomeWait { get; init; } = TimeSpan.FromSeconds(90);
 
     // A click that started the app can come before the relay has said which machines are on:
-    // another machine's answer waits this long for it to turn up, rather than calling a machine
-    // that is online gone and dropping the answer.
+    // another machine's answer waits this long for it to turn up, and for its sessions to be
+    // confirmed (Machine.Current, #269), rather than calling a machine that is online gone and
+    // dropping the answer. One still away then is not answered: Deliveries holds it.
     public TimeSpan MachineWait { get; init; } = TimeSpan.FromSeconds(15);
 
     async Task<Deliveries?> FindAsync(string? machine)
@@ -37,8 +38,9 @@ public sealed class ToastResponder
         var waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            if (deliveriesFor(machine) is { } d) { return d; }
-            if (machine is null || waited.Elapsed >= MachineWait) { return null; }
+            var d = deliveriesFor(machine);
+            if (d is not null && !d.Holds(AgentBridge.Protocol.Ops.SessionAnswer)) { return d; }
+            if (machine is null || waited.Elapsed >= MachineWait) { return d; }
             await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
     }

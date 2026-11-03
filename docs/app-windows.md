@@ -87,11 +87,20 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
 * **Which machines.** Every host in the relay's presence for the account, other than this
   machine's own (its device id is the `machine.id` its hello gives), which the app reaches over
   its pipe. Each gets a connection that subscribes to sessions and usage and reconnects as the
-  pipe's does. A machine that leaves presence goes, with its cards and toasts (answer outcomes
-  too); while the app's relay connection is down, every machine stays as it was and reconnects
-  when it is back. With no account to find them through (this machine's host signed out, or
-  refused), they all go, and so do the last account's when the host signs in to another account
-  or relay, without waiting for the new one to connect. The
+  pipe's does. A machine that leaves presence while the app's relay connection stays up on the
+  same account stays (#269): its rows, the session open, its tab, your order and pins are kept,
+  each row saying "Offline · last seen …", and its connection goes on trying. Nothing on those rows
+  can be answered, approved, replied to, attached to, ended or launched on, and their questions
+  are not in Needs you, the badges or toasts (a question toast it raised is withdrawn, and raised
+  again quietly if still asked once it is back). Its rows are acted on again only once the
+  snapshot after it returns has confirmed them: rows that ended meanwhile go then, and a question
+  that ended never becomes answerable. Every answer, reply and End session passes one gate
+  (`Deliveries.Hold`, set by `Machine`), so a toast's button is held too. It goes, with its cards
+  and toasts (answer outcomes too), once forgotten or after 15 minutes offline (`Fleet.OfflineKeep`,
+  as the PWA), and stays listed with the offline machines. While the app's relay connection is down,
+  every machine stays as it was and reconnects when it is back. With no account to find them
+  through (this machine's host signed out, or refused), they all go, and so do the last account's
+  when the host signs in to another account or relay, without waiting for the new one to connect. The
   app serves nothing on the relay: it only opens channels, as the PWA does.
 * **Offline machines.** The account's hosts that are not connected, from the relay's roster
   ([roster.md](protocol/roster.md)), are listed at the foot of the Machines page with when each was last seen,
