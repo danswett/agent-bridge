@@ -64,15 +64,12 @@ public sealed partial class SettingsView : UserControl
     // approves there, and the host finishes signing in by itself.
     async void OnOpenSignIn(object sender, RoutedEventArgs e)
     {
-        if (viewModel is not { SignInCode: { } code, SignInUri: { } uri }) { return; }
-        try
+        if (viewModel is not { } v) { return; }
+        await v.OpenSignInPageAsync(code =>
         {
             var data = new DataPackage();
             data.SetText(code);
             Clipboard.SetContent(data);
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(uri));
-        }
-        // async void: an escape would end the app. The code and the page are on screen anyway.
-        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }
+        }, async uri => await Windows.System.Launcher.LaunchUriAsync(uri));
     }
 }

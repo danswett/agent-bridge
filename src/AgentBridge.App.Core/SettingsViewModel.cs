@@ -45,6 +45,8 @@ public sealed class SettingsViewModel : Observable
     string? error;
     bool busy;
     string updateStatus = "";
+    string? feedbackCode;
+    string? signInActionStatus;
     string? updateVersion;
     string log = "";
     string agentSetupStatus = "";
@@ -112,6 +114,33 @@ public sealed class SettingsViewModel : Observable
     public string? SignInCode => SignInUri is null ? null : Status?.SignIn.UserCode;
     public string? SignInUri => Transport.SignIn.IsDevicePage(Status?.SignIn.VerificationUri) ? Transport.SignIn.DevicePage : null;
     public string? SignInError => Status?.SignIn.State == SignInState.Failed ? Status.SignIn.Error : null;
+    public string? SignInActionStatus => feedbackCode is not null && feedbackCode == SignInCode ? signInActionStatus : null;
+
+    // Clipboard and launcher can fail independently. The displayed code and URL
+    // let the person complete whichever part Windows could not do.
+    public async Task OpenSignInPageAsync(Action<string> copy, Func<Uri, Task<bool>> open)
+    {
+        if (!SignInPending || SignInCode is not { } code || SignInUri is not { } uri) { return; }
+        bool copied;
+        try { copy(code); copied = true; }
+        catch (Exception) { copied = false; }
+
+        bool opened;
+        try { opened = await open(new Uri(uri)); }
+        catch (Exception) { opened = false; }
+
+        if (SignInCode != code) { return; }
+        feedbackCode = code;
+        signInActionStatus = (copied, opened) switch
+        {
+            (true, true) => "Code copied. Paste it on GitHub.",
+            (false, true) => "Could not copy the code. Select and copy it here, then paste it on GitHub.",
+            (true, false) => "Code copied. Could not open GitHub. Open the address shown here and paste the code.",
+            (false, false) => "Could not copy the code or open GitHub. Open the address shown here and enter the code manually.",
+        };
+        Raise(nameof(SignInActionStatus));
+    }
+
     public bool CanSignIn => HostRunning && !SignInPending && Status?.Relay.State != RelayState.Off;
 
     public string RelayUrl { get => relayUrl; set => Set(ref relayUrl, value); }

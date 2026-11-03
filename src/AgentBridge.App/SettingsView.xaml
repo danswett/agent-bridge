@@ -116,7 +116,10 @@
                             <Button Content="Copy code and open the page" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" />
                             <Button Content="Cancel" Click="OnCancelSignIn" />
                         </local:WrapRow>
-                        <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.SignInUri, Mode=OneWay}" />
+                        <TextBlock Style="{StaticResource AbSecondaryText}" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.SignInUri, Mode=OneWay}" />
+                        <TextBlock TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                            Text="{x:Bind ViewModel.SignInActionStatus, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Some(ViewModel.SignInActionStatus), Mode=OneWay}" />
                     </StackPanel>
                 </Border>
                 <TextBlock
