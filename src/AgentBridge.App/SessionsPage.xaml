@@ -105,22 +105,50 @@
                 </Button>
             </Grid>
 
-            <!-- The machine tabs (§6.1): All, then each machine by name. -->
-            <ScrollViewer
-                x:Name="MachineTabsScroll"
+            <!-- The machine tabs (§6.1, #290): All, then each machine by name, as many as fit, the
+                 one chosen always among them; the rest under More. Never scrolled sideways. -->
+            <Grid
+                x:Name="MachineBar"
                 Grid.Row="1"
                 Padding="8,0,8,4"
-                HorizontalScrollBarVisibility="Auto"
-                HorizontalScrollMode="Auto"
-                VerticalScrollBarVisibility="Disabled"
-                VerticalScrollMode="Disabled"
+                ColumnSpacing="4"
                 Visibility="{x:Bind local:Ui.Show(ViewModel.ShowMachines), Mode=OneWay, FallbackValue=Collapsed}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
                 <SelectorBar
                     x:Name="MachineTabs"
                     AutomationProperties.AutomationId="MachinePicker"
                     AutomationProperties.Name="Show sessions from"
                     SelectionChanged="OnMachineTab" />
-            </ScrollViewer>
+                <Button
+                    x:Name="MoreMachines"
+                    Grid.Column="1"
+                    MinHeight="32"
+                    MinWidth="32"
+                    Padding="8,0"
+                    VerticalAlignment="Center"
+                    BorderThickness="0"
+                    Background="{ThemeResource SubtleFillColorTransparentBrush}"
+                    CornerRadius="{StaticResource AbRadiusControl}"
+                    Visibility="Collapsed"
+                    AutomationProperties.AutomationId="MoreMachines"
+                    ToolTipService.ToolTip="More machines">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock x:Name="MoreMachinesText" VerticalAlignment="Center" Style="{StaticResource AbTypeRow}" />
+                        <ContentControl Style="{StaticResource AbIconChevron}" Width="12" Height="12" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                            <ContentControl.RenderTransform>
+                                <RotateTransform Angle="90" />
+                            </ContentControl.RenderTransform>
+                        </ContentControl>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout x:Name="MoreMachinesMenu" Placement="BottomEdgeAlignedLeft" Opening="OnMoreMachinesOpening" />
+                    </Button.Flyout>
+                </Button>
+            </Grid>
 
             <StackPanel x:Name="ListNotes" Grid.Row="2" Padding="16,0,16,0" Spacing="8">
                 <InfoBar

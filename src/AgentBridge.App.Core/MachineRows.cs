@@ -77,9 +77,8 @@ public sealed partial class MainViewModel
             var row = MachineRows.FirstOrDefault(r => r.Key == m.Key) ?? new MachineRowViewModel(m.Key);
             var connected = m.Host.State == LinkState.Connected;
             var count = byId.Values.Count(c => owner[c] == m);
-            var why = m.IsLocal ? ReadOnlyWhy ?? m.Host.Hello?.Machine.ReadOnly : m.Host.Hello?.Machine.ReadOnly;
             row.Name = m.Name;
-            row.ViewOnlyWhy = string.IsNullOrEmpty(why) ? null : why;
+            row.ViewOnlyWhy = ViewOnlyWhy(m);
             row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
                 : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.ViewOnly ? "View only" : null }.Where(s => s is not null));
             row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
@@ -103,5 +102,13 @@ public sealed partial class MainViewModel
             if (at < 0) { MachineRows.Insert(i, want[i]); }
             else if (at != i) { MachineRows.Move(at, i); }
         }
+    }
+
+    // Why a machine is view only, as its host says (and, for this one, agent-ha-bridge beside it);
+    // null when it isn't.
+    string? ViewOnlyWhy(Machine m)
+    {
+        var why = m.IsLocal ? ReadOnlyWhy ?? m.Host.Hello?.Machine.ReadOnly : m.Host.Hello?.Machine.ReadOnly;
+        return string.IsNullOrEmpty(why) ? null : why;
     }
 }

@@ -215,8 +215,8 @@ static partial class SelfTest
             var watched = main.AllCards.First(c => !c.Id.StartsWith("demo-remote", StringComparison.Ordinal) && c.Id != "demo-approval");
             main.Selected = main.AllCards.First(c => c.Id == "demo-approval");
             main.SelectedMachine = main.Machines.First(m => m.Key == DemoHost.RemoteId);
-            var narrowed = await Until(() => Rows(window).Count == remote.Count, TimeSpan.FromSeconds(10));
-            Check(narrowed && tabs?.SelectedItem?.Text == remote.MachineName, "shows only the chosen machine's rows, its tab selected");
+            var narrowed = await Until(() => Rows(window).Count == remote.Count && tabs?.SelectedItem?.Text == remote.MachineName, TimeSpan.FromSeconds(10));
+            Check(narrowed, "shows only the chosen machine's rows, its tab selected");
             Check(main.Selected is null, "closes a session whose row the machine tabs hide");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".remote.png"));
             await Task.Delay(500);
@@ -245,6 +245,7 @@ static partial class SelfTest
 
             await CheckPanes(window, main, Check, outFile);
             await CheckDividers(window, main, Check, outFile);
+            await CheckMachineTabs(window, main, Check, outFile);
             await CheckDelegates(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.

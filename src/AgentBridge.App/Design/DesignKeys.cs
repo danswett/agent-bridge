@@ -87,6 +87,7 @@ static class DesignKeys
         "AbLayoutDivider",
         "AbLayoutDividerLine",
         "AbLayoutReadingMax",
+        "AbLayoutMachineTab",
     ];
 
     public static readonly string[] Glyphs =

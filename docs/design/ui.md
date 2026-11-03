@@ -506,7 +506,19 @@ dot with the preceding fact.
 joined words at a separator, since a fact can carry a delegate's name (#286).
 
 **Machine filter:**
-- Windows and the PWA: SelectorBar-style text tabs.
+- Windows and the PWA: SelectorBar-style text tabs: All, then each machine by name.
+  - **They never scroll sideways** (#290): a thin scrollbar under them hid the machines past the
+    pane's edge. As many tabs as fit show, in their order, and the chosen one always shows, in its
+    own place. The rest are under **"N more"** at the tabs' end, a button whose menu lists each
+    machine with its state, as the tooltip says it. One chosen there is selected and takes its
+    place among the tabs shown, the last of the others giving way to it.
+  - **A long name** is cut short with "…" at `layout.windows.machineTab` (128 px). A tab's tooltip and
+    accessible name are the whole name and the machine's state: "Build server · 3 sessions", with
+    "· View only" for a read-only machine (§6.6) and "connecting…" while it is.
+  - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
+    opens its menu. Touch and the mouse reach More as any button.
+  - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
+    sideways (#351).
 - macOS: a "Machines" sidebar section.
 - iOS: a toolbar button.
 - Android: filter chips.
@@ -726,8 +738,8 @@ question, as choosing its row does.
   Settings at the foot) with a selection pill.
 - **Content:** a layer with an 8 px top-left radius.
 - **Controls:** ListView rows with a 3×16 Bridge pill on selection, SelectorBar for
-  machines, an Accent button for New, subtle icon buttons for header actions, and a
-  `ToggleButton` for Needs you · N.
+  machines (those that don't fit under More, §6.1), an Accent button for New, subtle icon buttons
+  for header actions, and a `ToggleButton` for Needs you · N.
 - **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Agent
   Bridge · 3 need you"). A question's toast follows the rules above: an approval's toast has
   Open only.
