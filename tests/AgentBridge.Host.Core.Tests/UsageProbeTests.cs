@@ -1021,6 +1021,33 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public void An_inherited_Claude_home_named_otherwise_than_the_profiles_is_never_probed_though_it_is_the_same_folder()
+    {
+        var variable = "AB_TEST_HOME_" + Guid.NewGuid().ToString("N")[..8];
+        var root = Path.Combine(Path.GetTempPath(), "abn-" + Guid.NewGuid().ToString("N")[..8]);
+        var target = Path.Combine(root, "claude-work");
+        var link = Path.Combine(root, "claude-link");
+        Directory.CreateDirectory(target);
+        Environment.SetEnvironmentVariable(variable, target);
+        try
+        {
+            // Claude names its credential by the variable's text: the same folder spelt otherwise
+            // may be another login. Codex, which does not, still shares it.
+            Assert.Null(ProbeEnvironment.Home(variable, target + Path.DirectorySeparatorChar, ".claude", namespaced: true));
+            Assert.Empty(ProbeEnvironment.Home(variable, target + Path.DirectorySeparatorChar, ".codex")!);
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+            Assert.Null(ProbeEnvironment.Home(variable, link, ".claude", namespaced: true));
+            Assert.Empty(ProbeEnvironment.Home(variable, target, ".claude", namespaced: true)!);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, null);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void A_Codex_home_reached_through_a_link_shares_the_lease_of_its_target()
     {
         var root = Path.Combine(Path.GetTempPath(), "abl-" + Guid.NewGuid().ToString("N")[..8]);

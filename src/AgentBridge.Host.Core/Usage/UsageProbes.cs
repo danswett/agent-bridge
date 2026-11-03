@@ -231,6 +231,10 @@ internal static class ProbeEnvironment
         var inherited = Environment.GetEnvironmentVariable(variable);
         if (inherited is { Length: > 0 } && Same(inherited, home))
         {
+            // The same folder, but named otherwise (through a link, say): where the credential is
+            // named by the variable's very text, the inherited text may be another login than the
+            // home's would be, and neither can be told to be the profile's (#238 review).
+            if (namespaced && !string.Equals(inherited, home, StringComparison.Ordinal)) { return null; }
             if (Path.IsPathFullyQualified(inherited)) { return environment; }
             if (namespaced) { return null; }
             environment[variable] = UsageProbes.Absolute(inherited);

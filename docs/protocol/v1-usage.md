@@ -223,7 +223,9 @@ refresh and locking, and runs no model turn.
   executable found as a launch finds it, in a folder the host owns and keeps empty
   (`<profile>/usage-probe`), with no standard input, and `CLAUDE_CONFIG_DIR` set only for a profile
   that is not the default (Claude Code names its Windows credential by it, so a relative home, which
-  the probe would read from its own folder, is not probed at all; nor is a home whose account this
+  the probe would read from its own folder, is not probed at all; nor is a host started with a
+  `CLAUDE_CONFIG_DIR` that reaches the profile's home only through a link or under another
+  spelling, whose credential may be another login's; nor is a home whose account this
   host reads anywhere but where the probe would save it, such as a `--claude-home` laid out as
   another home's `~/.claude` with its account beside it: given `CLAUDE_CONFIG_DIR`, the probe would
   be another profile). `/usage` is a local
