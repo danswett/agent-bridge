@@ -37,16 +37,25 @@ public sealed partial class SessionView : UserControl
     public SessionView()
     {
         InitializeComponent();
-        Loaded += (_, _) => Attach();
+        Loaded += (_, _) => { Attach(); WatchReleases(); };
         SizeChanged += (_, e) => FitComposer(e.NewSize.Height);
-        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); } };
+        Unloaded += (_, _) => { if (!IsLoaded) { Detach(); UnwatchReleases(); } };
         // The Words states' ThemeResources are read as a state is entered: entered again, they are
         // the new theme's.
         ActualThemeChanged += (_, _) => { words = null; ShowWords(); };
         // Where the person has left the conversation, and whether a finger is on it (ui.md §5.3,
         // Scroll to a question). Touch through handled events too: the scroller handles them.
-        ConversationScroll.ViewChanged += (_, _) => follow.Scrolled(ConversationScroll.VerticalOffset, ConversationScroll.ScrollableHeight);
-        ConversationScroll.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); } }), true);
+        ConversationScroll.ViewChanged += (_, _) =>
+        {
+            follow.Scrolled(ConversationScroll.VerticalOffset, ConversationScroll.ScrollableHeight);
+            // A question still moving into view is held from the pointer until it has stopped.
+            guard.Scrolled(DateTimeOffset.UtcNow);
+        };
+        ConversationScroll.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) =>
+        {
+            if (Touch(e)) { follow.TouchDown(e.Pointer.PointerId); }
+            else { follow.Pressed(e.Pointer.PointerId); }
+        }), true);
         ConversationScroll.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
         ConversationScroll.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         ConversationScroll.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
@@ -59,6 +68,33 @@ public sealed partial class SessionView : UserControl
 
     readonly ConversationFollow follow = new();
     static bool Touch(PointerRoutedEventArgs e) => e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch;
+
+    // A mouse or pen pressed in the conversation is let go wherever in the window it is released,
+    // or, released outside the window, as soon as it moves in the window again not pressed.
+    UIElement? releases;
+    PointerEventHandler? onRelease, onMove;
+
+    void WatchReleases()
+    {
+        if (releases is not null || XamlRoot?.Content is not UIElement root) { return; }
+        releases = root;
+        onRelease ??= (_, e) => { if (!Touch(e)) { follow.Released(e.Pointer.PointerId); } };
+        onMove ??= (_, e) => { if (!Touch(e) && !e.Pointer.IsInContact) { follow.Released(e.Pointer.PointerId); } };
+        root.AddHandler(PointerReleasedEvent, onRelease, true);
+        root.AddHandler(PointerCanceledEvent, onRelease, true);
+        root.AddHandler(PointerCaptureLostEvent, onMove, true);
+        root.AddHandler(PointerMovedEvent, onMove, true);
+    }
+
+    void UnwatchReleases()
+    {
+        if (releases is null) { return; }
+        releases.RemoveHandler(PointerReleasedEvent, onRelease);
+        releases.RemoveHandler(PointerCanceledEvent, onRelease);
+        releases.RemoveHandler(PointerCaptureLostEvent, onMove);
+        releases.RemoveHandler(PointerMovedEvent, onMove);
+        releases = null;
+    }
 
     // What the conversation last showed of these, so only a change on this session moves.
     string shownMessage = "";

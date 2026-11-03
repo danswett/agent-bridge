@@ -57,6 +57,7 @@ public sealed partial class SessionsPage : UserControl
             Session.Layout = Layout;
             InspectorDelegate.Layout = Layout;
             Layout.Moved += OnMoved;
+            Layout.PropertyChanged += OnLaneShown;
             value.PropertyChanged += OnMain;
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;
@@ -354,6 +355,14 @@ public sealed partial class SessionsPage : UserControl
     // keyboard focus and keys work as ever.
     readonly AnswerGuard laneGuard = new();
     Microsoft.UI.Dispatching.DispatcherQueueTimer? laneTimer;
+
+    // The list back on screen (the Sessions page chosen again, the window shown from the tray, the
+    // list popped back) puts the lane under a pointer aimed at what was there.
+    void OnLaneShown(object? sender, PropertyChangedEventArgs e)
+    {
+        if (Layout is null || e.PropertyName is not (nameof(PaneLayoutViewModel.ShowList) or nameof(PaneLayoutViewModel.OnScreen) or "" or null)) { return; }
+        if (laneGuard.Shown(Layout.ShowList && Layout.OnScreen, DateTimeOffset.UtcNow)) { GuardLane(); }
+    }
 
     void GuardLane()
     {

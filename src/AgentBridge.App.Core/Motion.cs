@@ -112,12 +112,13 @@ public sealed class ConversationFollow
 
     readonly HashSet<uint> contacts = [];
     readonly HashSet<uint> over = [];
+    readonly HashSet<uint> pressed = [];
     bool manipulating;
     double? offset;
 
     public bool AtEnd { get; private set; } = true;
-    // A finger on the conversation, a pan under way, or a mouse or pen over it.
-    public bool Held => contacts.Count > 0 || manipulating || over.Count > 0;
+    // A finger on the conversation, a pan under way, or a mouse or pen over it or pressed in it.
+    public bool Held => contacts.Count > 0 || manipulating || over.Count > 0 || pressed.Count > 0;
 
     // The view moved. Only a move of the view counts: the conversation growing or shrinking under
     // a still view (a response streaming in, a question laid out above) leaves the person where
@@ -148,6 +149,10 @@ public sealed class ConversationFollow
     // A mouse or pen over the conversation, by pointer id, until it leaves (or is lost).
     public void PointerOver(uint pointer) => over.Add(pointer);
     public void PointerLeft(uint pointer) => over.Remove(pointer);
+    // A mouse button or pen pressed in the conversation holds it until released anywhere: a drag
+    // (selecting text, the scroll bar's thumb) carries on after the pointer has left it.
+    public void Pressed(uint pointer) => pressed.Add(pointer);
+    public void Released(uint pointer) => pressed.Remove(pointer);
 
     // A question arrived on the session shown: whether to bring it into view.
     public bool Follows => AtEnd && !Held;
@@ -171,6 +176,11 @@ public sealed class AnswerGuard
 
     // Whether the controls' place (the conversation, behind a tab) is on screen. Coming back into
     // view puts them under a pointer aimed at the tab that was there, so it arms as appearing does.
+    // The controls moved under the pointer while held (the scroll that brought them into view, or
+    // any other): the window runs again from the last movement, so it is whole once they are still.
+    // Once it has run out, the person's own scrolling holds nothing back.
+    public void Scrolled(DateTimeOffset now) { if (Remaining(now) > TimeSpan.Zero) { armed = now; } }
+
     public bool Shown(bool visible, DateTimeOffset now)
     {
         var revealed = visible && !shown;

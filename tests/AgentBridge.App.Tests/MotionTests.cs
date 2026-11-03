@@ -173,4 +173,31 @@ public sealed class MotionTests
         Assert.False(guard.Accepts(pointer: true, t0.AddSeconds(3).AddMilliseconds(499)));
         Assert.True(guard.Accepts(pointer: true, t0.AddSeconds(3).AddMilliseconds(500)));
     }
+
+    [Fact]
+    public void A_question_still_scrolling_into_view_is_held_until_500_ms_after_it_stops_and_a_later_scroll_holds_nothing()
+    {
+        var t0 = DateTimeOffset.Parse("2026-11-02T16:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var guard = new AnswerGuard();
+        guard.Arm(t0);
+        guard.Scrolled(t0.AddMilliseconds(300));
+        guard.Scrolled(t0.AddMilliseconds(700));
+        Assert.False(guard.Accepts(pointer: true, t0.AddMilliseconds(1199)));
+        Assert.True(guard.Accepts(pointer: true, t0.AddMilliseconds(1200)));
+
+        guard.Scrolled(t0.AddSeconds(2));
+        Assert.True(guard.Accepts(pointer: true, t0.AddSeconds(2)));
+    }
+
+    [Fact]
+    public void A_mouse_pressed_in_the_conversation_holds_it_after_leaving_until_released()
+    {
+        var follow = new ConversationFollow();
+        follow.PointerOver(1);
+        follow.Pressed(1);
+        follow.PointerLeft(1);
+        Assert.False(follow.Follows);
+        follow.Released(1);
+        Assert.True(follow.Follows);
+    }
 }
