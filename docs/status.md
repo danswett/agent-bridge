@@ -98,7 +98,10 @@ In flight on #317 (publication owner above):
   legacy-function recordings (`PublicationTests`). It does not enable publication.
   The next slice adds protected local receipts and authoritative HA resource/dashboard
   observation, including restart/lost-policy refusals and legacy-function recordings.
-  Renderer and versioned card publication, then connector integration, remain next.
+  The following slice adds the complete deterministic renderer and exact MIT card,
+  fenced policy-before-artifact writes, actual content/node-receipt readback, 108
+  legacy-renderer contracts and a disposable-HA integration test. These internal
+  primitives do not enable a runtime writer; fleet/connector integration remains next.
 - #319: writer cutover remains blocked until #318 and the disposable-HA handover/
   rollback rehearsal pass. No live HA or legacy-install changes during development.
 

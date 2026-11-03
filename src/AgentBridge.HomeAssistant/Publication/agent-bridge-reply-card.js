@@ -1,0 +1,4175 @@
+/*
+ * agent-bridge-reply-card
+ *
+ * The reply box for a bridged coding-agent session.
+ *
+ * It exists because Home Assistant's own `text` entity cannot do this job:
+ *   - a text entity only commits on blur or Enter, so tapping a separate Send
+ *     button sent whatever was in the box *before* you typed - the reason Send
+ *     used to need pressing twice;
+ *   - entity state is capped at 255 characters, so longer replies were impossible;
+ *   - there is no way to put an image into an entity state at all.
+ *
+ * This card owns its own Send button, so it reads the live textarea value, and it
+ * publishes over MQTT rather than writing an entity state, which removes the
+ * length cap. Images are uploaded to Home Assistant and referenced by id; the
+ * daemon downloads them and attaches them to the prompt.
+ *
+ * Anything that is not an image travels inside the payload itself, base64'd. It
+ * cannot go the way images go: /api/image/upload runs the upload through an image
+ * decoder and answers 400 for a .md, a .log or a .csv, so there is no id to hand
+ * over. The reply is already published over MQTT with no length cap, which leaves
+ * the file bytes somewhere to ride - hence the size limit below, since unlike an
+ * uploaded image these sit in the sensor's attributes.
+ */
+
+/*
+ * 1.28.0 and not 1.27.1: 1.27.0 was published to a live Home Assistant from a
+ * work-in-progress build of #96, and the branch moved on before it merged. The
+ * released 1.27.0 is therefore different bytes under the same number, which the
+ * publication fence correctly refuses to overwrite ("Equal card versions have
+ * conflicting content"), so that Home Assistant went on serving the unfinished
+ * card indefinitely.
+ *
+ * The dashboard generator gates on the served version alone, so it offered that
+ * card 1.27.0 features it did not have: Send answer never published the reply box,
+ * so every answer came back "Answer unconfirmed - check the terminal".
+ *
+ * Skipping the number is the fence's own first remedy, and what was done when
+ * #98 contaminated 1.26.0 the same way. The card itself was unchanged.
+ *
+ * 1.29.0 is the second half of that report. Installing 1.28.0 fixed the
+ * unconfirmed answers but left the two Send buttons, which showed that they were
+ * never the contamination at all: the reply card draws its own Send unconditionally,
+ * so whenever a question armed the choices card beside it, both were on screen at
+ * once and only one of them could answer. The reply card now stands its Send down
+ * while the form is holding one - see FORM_SENDS.
+ *
+ * 1.30.0 stops a form's typed answer being lost to a race it reported as sent. The
+ * publish resolving only means Home Assistant dispatched it; if the question is
+ * answered from the terminal in the gap before the daemon reads it, the daemon
+ * discards the payload by design. The card said Sent and emptied the box, so the
+ * words were gone from everywhere. The daemon now publishes answer_consumed_at
+ * naming the publish it used, and the card holds the words until it sees that name
+ * or sees the question go without it - see _checkAnswerConsumed (#104).
+ *
+ * 1.36.0 lets a multi-select field be answered with nothing ticked, where its own
+ * schema says that is an answer. Unticking the last row used to write the field
+ * slot's 'Choose...' placeholder, which is the one value the daemon reads as "not
+ * answered yet", so Send refused a form the terminal would have accepted. The bridge
+ * now publishes the carrier to write instead, in field_<n>_empty, and the card writes
+ * that - keeping the placeholder for a field that must have something chosen, and for
+ * any bridge old enough not to send the attribute (#81).
+ *
+ * 1.37.0 draws the prompt's own "Other (type your answer)" entry as a row. Every
+ * Copilot option list ends in one and the daemon has always taken an answer typed
+ * through it, but nothing on the card ever offered it - and because the choices card
+ * holds the reply card's Send down while a question is armed, a single-choice
+ * question left the box on screen with no way whatsoever to send what was typed in
+ * it. The bridge says which questions really have that entry, in takes_typed_answer.
+ *
+ * 1.38.0 puts the number of times a session's conversation has been compacted on its
+ * card, beside the status. A compaction is the one thing that happens to a session
+ * without anything on the card changing: the summary replaces the history, the
+ * session carries on, and nothing it says afterwards is evidence of what was lost.
+ * The bridge publishes it as a `compactions` attribute of the status entity and the
+ * card draws it when there is one to draw.
+ *
+ * 1.39.0 keeps a page that has been left open showing every live session. Home
+ * Assistant parks the whole panel after the tab has been hidden for five minutes and
+ * re-attaches the same element afterwards, which silently and permanently costs this
+ * dashboard its lovelace_updated subscription - so a session that started while it
+ * was away never appeared, and a hard reload was the only way to see it. The cards
+ * now hold a subscription of their own; see CONFIG_WATCH.
+ *
+ * 1.42.0 wraps the code blocks in a reply and gives each a Copy button, so a long
+ * command can be read and copied whole on a phone; see codeBlockCss. The dashboard
+ * config is unchanged, so the generator needs no gate for it.
+ */
+const CARD_VERSION = '1.42.0';
+
+/*
+ * How large a non-image attachment may be.
+ *
+ * Images are not counted against this: they are uploaded to Home Assistant and only
+ * their id travels. An inline file, though, becomes base64 (a third larger again) in
+ * an MQTT payload that Home Assistant keeps as a state attribute, so the ceiling is
+ * about being a good citizen of the state machine rather than about any hard limit -
+ * 256 KB carried intact in testing, and covers the documents this is for.
+ */
+const MAX_INLINE_FILE_BYTES = 256 * 1024;
+
+// The working line, in the style of Claude Code's own spinner: its glyph cycle, and a
+// word picked once per turn. Claude Code does not record which word it chose, so the
+// card picks its own from the same kind of list.
+// Each followed by U+FE0E, which asks for the plain character: without it iOS draws ✳
+// (U+2733) as an emoji - a green square - and the spinner flashed green once a cycle.
+const SPINNER_GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'].map((g) => `${g}︎`);
+const SPINNER_VERBS = [
+  'Thinking', 'Pondering', 'Slithering', 'Brewing', 'Conjuring', 'Noodling', 'Percolating',
+  'Mulling', 'Cogitating', 'Simmering', 'Ruminating', 'Tinkering', 'Churning', 'Musing',
+  'Crafting', 'Forging', 'Marinating', 'Synthesizing', 'Deliberating', 'Puttering',
+];
+
+/*
+ * What to say when Home Assistant turns an upload down.
+ *
+ * "403 Forbidden" is accurate and useless. Both refusals that happen in practice
+ * leave the rest of the card working, which is what makes them so baffling to hit:
+ * a reply is published over the page's websocket, which stays authenticated for as
+ * long as the tab is open, while an image has to go over HTTP to /api/image/upload,
+ * which does not. So replies kept sending and images stopped, and nothing on screen
+ * said why - the card reported the status line and left you to guess.
+ *
+ * A 403 is not about the token at all. An ip_bans entry answers every HTTP request
+ * that way, and behind a reverse proxy the banned address is the one the proxy
+ * reports - which can be a public address shared by everyone arriving over it, so
+ * the block need have nothing to do with this browser or this account.
+ */
+function describeUploadRefusal(status, statusText) {
+  if (status === 401) {
+    return "this page's sign-in has lapsed - reload Home Assistant and try again";
+  }
+  if (status === 403) {
+    return 'Home Assistant refused this browser (403). Replies still work because they go over the '
+      + 'websocket, which uploads cannot use. Check its IP bans for the address it sees this browser as';
+  }
+  if (status === 413) {
+    return 'that image is larger than Home Assistant will accept (413)';
+  }
+  return `Home Assistant returned ${status}${statusText ? ` ${statusText}` : ''}`;
+}
+
+function describeSize(bytes) {
+  return bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} bytes`;
+}
+
+/*
+ * Base64 for the bytes of an inline attachment.
+ *
+ * In chunks because btoa needs a binary string and String.fromCharCode takes the
+ * bytes as arguments: spreading a whole file into one call overflows the argument
+ * stack and throws on anything but a tiny file.
+ */
+function toBase64(bytes) {
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/*
+ * A thrown value is not always an Error. home-assistant-js-websocket rejects with
+ * bare numbers, so a token renewal Home Assistant turned down arrived here as the
+ * number 2 and reached the status line as "Upload failed: 2", which told nobody
+ * anything whatsoever.
+ */
+function describeThrown(err) {
+  if (err && err.message) { return err.message; }
+  if (err === 1 || err === 3) { return 'lost contact with Home Assistant - try again'; }
+  if (err === 2) { return "Home Assistant would not renew this page's sign-in - reload it and try again"; }
+  return String(err);
+}
+
+/*
+ * Every reply card on the page, by the MQTT topic it publishes to.
+ *
+ * The reply card and the choices card are separate custom elements sitting side by
+ * side in one session card, and on a mixed form only the reply card holds the typed
+ * words: they reach the daemon when - and only when - that card publishes them.
+ * "Send answer" pressed the submit entity and published nothing, so the daemon read
+ * no payload, fell back to a text entity the card never writes, and submitted the
+ * form with that field empty. An empty free-text field is a valid answer, so nothing
+ * refused it and the typed answer was simply gone (#93).
+ *
+ * They are siblings rather than ancestor and descendant, so a bubbling event cannot
+ * carry the words across and the DOM between them is Home Assistant's to arrange.
+ * The topic is already unique per session, which makes it the one name both cards
+ * can be given and agree on.
+ */
+const REPLY_CARDS = new Map();
+
+/*
+ * The reply topics whose Send is currently being held by the choices card beside
+ * them, by the choices card holding it.
+ *
+ * Two Send buttons were on screen together for every question that armed a form:
+ * the choices card's "Send answer" and the reply card's own "Send", which is drawn
+ * whenever there is text to send and knows nothing about the question. Only "Send
+ * answer" can answer - it commits the picked options and publishes the typed words
+ * with them - so the other one was an invitation to lose the picks, and the daemon
+ * had to defend against it after the fact ("Not sent - this question takes
+ * options").
+ *
+ * Held by the choices card rather than decided by the reply card because only the
+ * choices card knows whether it drew a Send at all. It does not draw one for a
+ * question answered purely in free text - there is nothing to commit but the words -
+ * and there the reply card's Send is the only way to answer, so a reply card that
+ * simply stood down whenever a question was armed would leave no way to send it.
+ *
+ * Keyed by reply topic, which is already the one name both cards are given and
+ * agree on, and holding the element so a card that has been replaced cannot release
+ * a hold its successor now owns - the same reason REPLY_CARDS checks identity.
+ */
+const FORM_SENDS = new Map();
+
+/*
+ * A subscription to lovelace_updated of the cards' own, because Home Assistant
+ * throws the panel's away and never replaces it.
+ *
+ * This dashboard is generated whole, so a session that starts gets a card only when
+ * the writer republishes the Lovelace config - and the page learns that happened
+ * from the `lovelace_updated` event. ha-panel-lovelace subscribes to it once, in
+ * firstUpdated, and drops the subscription in disconnectedCallback for every
+ * dashboard except the cached default one. partial-panel-resolver detaches the panel
+ * element once the tab has been hidden for five minutes and re-attaches that same
+ * element when it comes back, so firstUpdated never runs again: from then on the page
+ * never hears that the config changed, no session that starts afterwards ever
+ * appears, and reloading is the only cure.
+ *
+ * Measured against 2026.10.1, driving the real dashboard: with the subscription
+ * intact a session card taken out of the page's config came back 0.5 s after
+ * lovelace_updated; after a single detach and re-attach the same event changed
+ * nothing at all, while a `config-refresh` from a card restored it immediately.
+ *
+ * So the cards keep their own subscription and ask the panel to refetch through
+ * `config-refresh`, which ha-panel-lovelace already listens for on hui-root. It is
+ * deliberately never unsubscribed: being detached is the very condition this exists
+ * to survive, so tearing it down on disconnect would reproduce the bug exactly.
+ *
+ * The status card alone keeps it, because it is on the generated dashboard exactly
+ * once however many sessions are running - including none, which is precisely when
+ * a session appearing has to be noticed. That is also what makes one config arriving
+ * mean one fetch: every card on the view is handed its config again on a refetch, so
+ * a count kept by all of them could not tell one fetch from seven.
+ */
+const CONFIG_WATCH = {
+  connection: null,
+  card: null,
+  // Counted, not clocked. Two of these can land in the same millisecond, and then a
+  // config applied before a change reads as having answered it - which is exactly
+  // the case this exists for, a change arriving while the page is parked. A counter
+  // also owes nothing to a clock that can be set backwards under a page left open
+  // for days.
+  changes: 0,
+  applied: 0,
+  requested: 0,
+  // Whether the config about to arrive is one this card asked for. A fetch can only
+  // carry the changes that had already happened when it started, so a config this
+  // card requested is credited with the change it asked about and nothing later -
+  // see noteDashboardConfig.
+  ours: false,
+  timer: null,
+};
+
+/*
+ * How long to let the panel's own subscription answer first.
+ *
+ * A refetch hands every card on the view its config again, including the cards whose
+ * config did not change, so a config arriving inside this window is proof the panel
+ * is still listening - and the request stands down rather than fetching the same
+ * config twice and rebuilding every card for nothing.
+ */
+const CONFIG_REFRESH_GRACE_MS = 3000;
+
+/*
+ * The dashboard this page is showing, under the name lovelace_updated gives it.
+ *
+ * The event carries a dashboard's url_path, and the default dashboard's is null while
+ * it is served under /lovelace - so the two are reconciled here. Without the match
+ * this dashboard would refetch itself every time an unrelated one was saved.
+ */
+function dashboardUrlPath() {
+  try { return String(window.location.pathname).split('/')[1] || 'lovelace'; }
+  catch (e) { return ''; }
+}
+
+/*
+ * Whether the dashboard is being edited.
+ *
+ * Refusing to refetch while it is, is Home Assistant's own rule, and the reason for
+ * it is that a refetch replaces whatever is in the editor - the panel shows a toast
+ * instead and leaves the choice to the person typing. It puts edit=1 in the address
+ * bar for exactly as long as that is true, which is the one sign of it a card can
+ * read without reaching into the panel. The request is only stood down, not spent,
+ * so closing the editor picks it up on the next state update.
+ */
+function dashboardIsEditing() {
+  try { return /(^|[?&])edit=1(&|$)/.test(String(window.location.search || '')); }
+  catch (e) { return false; }
+}
+
+function armConfigRefresh() {
+  if (CONFIG_WATCH.timer) { return; }
+  if (CONFIG_WATCH.applied >= CONFIG_WATCH.changes) { return; }
+  // One request per change. A refetch that answers nothing must not become a card
+  // asking for the same config again every time it is handed a state update.
+  if (CONFIG_WATCH.requested >= CONFIG_WATCH.changes) { return; }
+  CONFIG_WATCH.timer = setTimeout(runConfigRefresh, CONFIG_REFRESH_GRACE_MS);
+}
+
+function runConfigRefresh() {
+  CONFIG_WATCH.timer = null;
+  if (CONFIG_WATCH.applied >= CONFIG_WATCH.changes) { return; }
+  if (dashboardIsEditing()) { return; }
+  const card = CONFIG_WATCH.card;
+  // Detached is not failed: the tab is hidden, or Home Assistant has parked the whole
+  // panel. The next hass the card is handed re-arms this, which is the first moment
+  // the page could have acted on it anyway.
+  if (!card || card.isConnected === false) { return; }
+  CONFIG_WATCH.requested = CONFIG_WATCH.changes;
+  CONFIG_WATCH.ours = true;
+  card.dispatchEvent(new CustomEvent('config-refresh', { bubbles: true, composed: true }));
+}
+
+function onLovelaceUpdated(event) {
+  const path = dashboardUrlPath();
+  if (!path) { return; }
+  const data = (event && event.data) || {};
+  if (String(data.url_path || 'lovelace') !== path) { return; }
+  CONFIG_WATCH.changes += 1;
+  armConfigRefresh();
+}
+
+/*
+ * Called by a bridge card whenever it is handed a hass. Takes out the subscription
+ * the first time, and is also where a change that arrived while the card was parked
+ * is picked up, because a parked card is handed nothing until it is back.
+ */
+function watchDashboardConfig(card, hass) {
+  CONFIG_WATCH.card = card;
+  const connection = hass && hass.connection;
+  if (connection && typeof connection.subscribeEvents === 'function' &&
+      CONFIG_WATCH.connection !== connection) {
+    CONFIG_WATCH.connection = connection;
+    try {
+      Promise.resolve(connection.subscribeEvents(onLovelaceUpdated, 'lovelace_updated'))
+        .catch(() => { CONFIG_WATCH.connection = null; });
+    }
+    catch (e) { CONFIG_WATCH.connection = null; }
+  }
+  armConfigRefresh();
+}
+
+/*
+ * The panel handing the card its config again. There are two reasons that happens
+ * and they are credited differently.
+ *
+ * A config that arrived on its own is the panel's own subscription answering, and
+ * the panel fetches once per change, so everything seen so far is covered.
+ *
+ * A config this card asked for is not. It can only carry the changes that had
+ * already happened when its fetch started, and a change landing during that round
+ * trip would otherwise be marked as answered by a config that predates it - with
+ * the panel's subscription gone, nothing would ever ask again and that session
+ * would simply never appear. So a requested config is credited with the change it
+ * asked about and nothing later, which leaves the newer change outstanding and asks
+ * for it next.
+ */
+function noteDashboardConfig() {
+  if (CONFIG_WATCH.ours) {
+    CONFIG_WATCH.ours = false;
+    if (CONFIG_WATCH.requested > CONFIG_WATCH.applied) { CONFIG_WATCH.applied = CONFIG_WATCH.requested; }
+    return;
+  }
+  CONFIG_WATCH.applied = CONFIG_WATCH.changes;
+}
+
+class AgentBridgeReplyCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._built = false;
+    this._images = [];
+    this._files = [];
+    this._busy = false;
+    this._statusTimer = null;
+    this._registeredTopic = '';
+    this._trimmedPublished = '';
+    this._pendingAnswer = null;
+  }
+
+  setConfig(config) {
+    if (!config || !config.topic) {
+      throw new Error('agent-bridge-reply-card: "topic" is required');
+    }
+    this._config = Object.assign({ name: 'Reply', placeholder: 'Type a reply...' }, config);
+    this._register();
+    if (this._built) {
+      this._applyConfig();
+    }
+  }
+
+  connectedCallback() {
+    this._register();
+  }
+
+  disconnectedCallback() {
+    // Only if it is still us. Home Assistant rebuilds a view by connecting the
+    // replacement before disconnecting the original, so deleting unconditionally
+    // removed the card that had just taken over and left the topic unclaimed.
+    if (this._registeredTopic && REPLY_CARDS.get(this._registeredTopic) === this) {
+      REPLY_CARDS.delete(this._registeredTopic);
+    }
+    this._registeredTopic = '';
+  }
+
+  _register() {
+    const topic = this._config ? String(this._config.topic || '') : '';
+    if (!topic) { return; }
+    if (this._registeredTopic && this._registeredTopic !== topic &&
+        REPLY_CARDS.get(this._registeredTopic) === this) {
+      REPLY_CARDS.delete(this._registeredTopic);
+    }
+    this._registeredTopic = topic;
+    REPLY_CARDS.set(topic, this);
+    // The choices card may already hold this topic's Send - it renders independently
+    // and may have got there first, and nothing will tell this card again until the
+    // hold next changes.
+    this._syncSendState();
+  }
+
+  /*
+   * Whether the box holds typed words a form could use as its free-text field.
+   *
+   * Attachments deliberately do not count. Read-DaemonDecisionCardText discards any
+   * payload carrying images or files - an image cannot be typed into an arrow-key
+   * prompt, and consuming it there would destroy it - so publishing one on a form's
+   * behalf would submit the field empty anyway and leave the attachment to arrive
+   * afterwards as a stray reply.
+   */
+  hasUnsentFormText() {
+    if (!this._built || !this._els || !this._els.textarea) { return false; }
+    return this._els.textarea.value.trim().length > 0;
+  }
+
+  /*
+   * Put the cursor in the box, for the choices card beside this one.
+   *
+   * Tapping "Other (type your answer)" there says the answer is going to be typed,
+   * and the box it has to be typed into is a separate card further down the session.
+   * On a phone that is a scroll and a second tap away from the row just pressed, so
+   * the row does it, exactly as selecting the prompt's own Other entry opens its text
+   * input. Failures are swallowed: a browser that refuses focus must not take the
+   * tap's real work - clearing the slot - down with it.
+   */
+  focusInput() {
+    if (!this._built || !this._els || !this._els.textarea) { return; }
+    try { this._els.textarea.focus(); }
+    catch (err) { /* focus is a convenience; the row still did its job */ }
+  }
+
+  /*
+   * Take out of the box what has just been published, leaving anything typed since,
+   * and remember what was taken so it can be put back.
+   *
+   * The textarea stays editable while Send is disabled, so a slow publish can finish
+   * against a value that has grown. Clearing it all erased words that were never
+   * sent; keeping it all left the sent ones to go a second time.
+   *
+   * A value that no longer begins with what went is left whole, and nothing is
+   * remembered: the published words cannot be picked out of it any more, and the
+   * person has deliberately replaced them. Dropping an edit nobody has seen
+   * delivered is the failure all of this exists to remove - a duplicate is visible,
+   * a loss is not.
+   */
+  _trimPublished(text) {
+    this._trimmedPublished = '';
+    // Any earlier publish is settled by this one: its words are no longer the ones
+    // held in reserve, so a late verdict on it must not put them back.
+    this._pendingAnswer = null;
+    if (!this._els || !this._els.textarea) { return; }
+    const now = this._els.textarea.value;
+    if (now === text) {
+      this._els.textarea.value = '';
+      this._trimmedPublished = text;
+    } else if (text && now.startsWith(text)) {
+      this._els.textarea.value = now.slice(text.length);
+      this._trimmedPublished = text;
+    }
+  }
+
+  /*
+   * Put back words that were published for a question which has since gone.
+   *
+   * The daemon deliberately discards a payload tagged for a question it is not
+   * holding, so without this the words exist neither in the session nor in the box
+   * the card has just told the person to send again from.
+   *
+   * Exactly the inverse of the trim, so an answer that was appended to while the
+   * publish was in flight comes back whole. Testing the box for emptiness instead
+   * lost the published half of precisely that case: the tail had been kept, so the
+   * box was not empty, so the words that went were never restored.
+   */
+  restoreFormText() {
+    const text = this._trimmedPublished;
+    // Nothing is held any more either way, so no later verdict can act on it.
+    this._pendingAnswer = null;
+    if (!text || !this._els || !this._els.textarea) { return; }
+    this._els.textarea.value = text + this._els.textarea.value;
+    this._trimmedPublished = '';
+    this._syncSendState();
+  }
+
+  /*
+   * Publish just the typed words, for a form being submitted from the choices card.
+   *
+   * Anything attached stays in the box on purpose: the reply path stages and
+   * delivers it properly once the question is gone, which is the only route that
+   * can carry it at all.
+   *
+   * The question is named in the payload. A publish is a round trip, and
+   * Read-DaemonFormAnswer treats any new text payload as a submission for a complete
+   * form - so if the question is answered or replaced while this is in flight, an
+   * untagged payload would be consumed by the replacement, answering it with words
+   * typed for something else. The daemon drops one tagged for a question that has
+   * gone.
+   */
+  async publishFormText(decisionId, decisionEntity) {
+    if (this._busy || !this.hasUnsentFormText()) { return false; }
+    const text = this._els.textarea.value;
+    this._busy = true;
+    this._syncSendState();
+    this._setStatus('Sending...', 'busy');
+    const payload = {
+      at: new Date().toISOString(),
+      text: text,
+      images: [],
+      files: [],
+      card_version: CARD_VERSION,
+    };
+    if (decisionId) { payload.decision_id = String(decisionId); }
+    let published = false;
+    try {
+      await this._hass.callService('mqtt', 'publish', {
+        topic: this._config.topic,
+        payload: JSON.stringify(payload),
+        qos: 0,
+        retain: false,
+      });
+      // Only the words, and only the ones that were not sent. Clearing the chips would
+      // throw away an attachment the form never received; clearing unconditionally
+      // would erase anything typed while the publish was in flight, since the textarea
+      // stays editable while Send is disabled. Keeping the whole value was no better -
+      // it left the published words in the box, so the next send carried them twice.
+      this._trimPublished(text);
+      // Held, not forgotten, until the daemon says which publish it consumed. The
+      // words are off screen but recoverable; see _checkAnswerConsumed (#104).
+      this._armAnswerWatch(payload.at, decisionId, decisionEntity);
+      this._setStatus('Sent', 'ok');
+      published = true;
+    } catch (err) {
+      this._setStatus(`Send failed: ${err.message || err}`, 'err');
+    } finally {
+      this._busy = false;
+      this._syncSendState();
+    }
+    return published;
+  }
+
+  /*
+   * Start watching for the fate of a publish made on a form's behalf.
+   *
+   * Only when there is an activity sensor to watch and a question to watch it
+   * against. A dashboard generated before the daemon published answer_consumed_at
+   * has neither, and must keep exactly the behaviour it has: no watch, no restore.
+   * Arming without a way to see confirmation would put the words back every time -
+   * including after an answer that was delivered perfectly - and a duplicated answer
+   * typed into an arrow-key prompt is its own kind of damage.
+   */
+  _armAnswerWatch(stamp, decisionId, decisionEntity) {
+    this._pendingAnswer = null;
+    const activity = this._config ? String(this._config.activity || '') : '';
+    const decision = String(decisionEntity || '');
+    if (!activity || !decision || !stamp) { return; }
+    this._pendingAnswer = {
+      stamp: String(stamp),
+      activity: activity,
+      decision: decision,
+      generation: String(decisionId || ''),
+    };
+  }
+
+  /*
+   * Settle an answer published for a form, once the daemon says what became of it.
+   *
+   * Publishing is a round trip, and for a form the payload *is* the submission. The
+   * publish resolving proves only that Home Assistant dispatched the message - not
+   * that the daemon read it as the answer. The terminal, or another dashboard, can
+   * answer the same question inside that gap, and the daemon then deliberately
+   * discards a payload tagged for a question it is no longer holding. The card had
+   * already said Sent and taken the words out of the box, so they survived nowhere:
+   * not in the session, and not in the box it was telling the person to use (#104).
+   *
+   * answer_consumed_at names the publish the daemon actually consumed. Matching it
+   * is the only proof the words were delivered. The question going without it is
+   * proof that they were not.
+   */
+  _checkAnswerConsumed() {
+    const pending = this._pendingAnswer;
+    if (!pending || !this._hass || !this._hass.states) { return; }
+    const states = this._hass.states;
+    const consumed = String(
+      ((states[pending.activity] || {}).attributes || {}).answer_consumed_at || '');
+    if (consumed === pending.stamp) {
+      // Delivered, and known to be. The words can go for good.
+      this._pendingAnswer = null;
+      this._trimmedPublished = '';
+      return;
+    }
+    const generation = String(
+      ((states[pending.decision] || {}).attributes || {}).decision_id || '');
+    // Still the same question: the daemon has not read the payload yet. Waiting is
+    // correct - the words stay held and off screen, and nothing is claimed either way.
+    if (generation === pending.generation) { return; }
+    // The question has gone and no publish of ours was named as its answer. Put the
+    // words back: telling someone to send again is only honest if there is something
+    // left to send.
+    //
+    // The claim is deliberately narrow. What was observed is that this publish was
+    // not used as the answer, which is certain. What became of it otherwise is not:
+    // the reply path stages a payload the question did not consume and delivers it
+    // once the question is gone, so "not sent" would be a stronger statement than
+    // this card is in a position to make.
+    this._pendingAnswer = null;
+    this.restoreFormText();
+    this._setStatus('Not used as the answer - check the session, then send again.', 'err');
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) {
+      this._build();
+    }
+    // Deliberately almost nothing else. Re-rendering on every state update would
+    // wipe whatever is half-typed in the textarea, which is exactly the failure this
+    // card is meant to remove. The one exception touches the textarea only to put
+    // back words an answer lost, which is the same failure seen from the other side.
+    this._checkAnswerConsumed();
+  }
+
+  getCardSize() {
+    return 3;
+  }
+
+  _build() {
+    this._built = true;
+    const style = document.createElement('style');
+    style.textContent = `
+      ha-card { padding: 12px; }
+      /* stretch, not flex-end: the buttons are pinned to the bottom of their own
+         full-height column rather than aligned against the textarea's box directly.
+         Aligning them against the textarea meant trusting how its box resolves in
+         the flex line, which left them sitting a few pixels high. */
+      .row { display: flex; align-items: stretch; gap: 8px; }
+      .actions { display: flex; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
+      textarea {
+        flex: 1 1 auto;
+        /* Block, not the default inline-block: an inline textarea sits on the text
+           baseline and reserves a few pixels of descender space below itself. */
+        display: block;
+        vertical-align: bottom;
+        min-height: 44px;
+        max-height: 40vh;
+        resize: vertical;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid var(--divider-color, #444);
+        background: var(--card-background-color, #1c1c1c);
+        color: var(--primary-text-color, #fff);
+        font-family: inherit;
+        font-size: 15px;
+        line-height: 1.35;
+        box-sizing: border-box;
+      }
+      textarea:focus { outline: none; border-color: var(--primary-color, #03a9f4); }
+      /* Author styles beat the user agent's [hidden] rule, and the display below is
+         one: without this, standing the Send down left it on screen and merely
+         disabled, which is the duplicate control it is there to remove. The other
+         cards in this file carry the same rule for the same reason. */
+      [hidden] { display: none !important; }
+      button {
+        /* Fixed height on both, so the pair match each other and the textarea's
+           bottom edge. Left to their content they differ, because an icon and a
+           word do not produce the same line box. */
+        height: 44px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 10px;
+        padding: 0 16px;
+        cursor: pointer;
+        color: var(--text-primary-color, #fff);
+        background: var(--primary-color, #03a9f4);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      button.ghost {
+        background: transparent;
+        color: var(--secondary-text-color, #aaa);
+        border: 1px solid var(--divider-color, #444);
+        font-weight: 500;
+      }
+      button.attach { width: 44px; padding: 0; flex: 0 0 auto; }
+      button.attach ha-icon { --mdc-icon-size: 20px; display: flex; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .chip {
+        display: flex; align-items: center; gap: 6px;
+        background: var(--secondary-background-color, #2b2b2b);
+        border-radius: 14px; padding: 3px 6px 3px 3px; font-size: 12px;
+        color: var(--primary-text-color, #fff);
+      }
+      .chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 11px; display: block; background: var(--divider-color, #444); }
+      .chip ha-icon {
+        --mdc-icon-size: 18px;
+        width: 28px; height: 28px; border-radius: 11px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--divider-color, #444); color: var(--primary-text-color, #fff);
+      }
+      .chip .x { cursor: pointer; opacity: 0.6; padding: 0 3px; }
+      .chip .x:hover { opacity: 1; }
+      .status { margin-top: 8px; font-size: 12px; min-height: 1em; }
+      .status.err { color: var(--error-color, #ff5252); }
+      .status.ok { color: var(--success-color, #4caf50); }
+      .status.busy { color: var(--secondary-text-color, #aaa); }
+      .hint { margin-top: 6px; font-size: 11px; color: var(--secondary-text-color, #888); }
+      input[type=file] { display: none; }
+    `;
+
+    const card = document.createElement('ha-card');
+    card.innerHTML = `
+      <div class="row">
+        <textarea part="input"></textarea>
+        <div class="actions">
+          <button class="ghost attach" title="Attach a file"><ha-icon icon="mdi:paperclip"></ha-icon></button>
+          <button class="send">Send</button>
+        </div>
+      </div>
+      <div class="chips"></div>
+      <div class="status"></div>
+      <div class="hint">Paste or attach an image or file to send it with your reply.</div>
+      <input type="file" multiple />
+    `;
+
+    this.shadowRoot.appendChild(style);
+    this.shadowRoot.appendChild(card);
+
+    this._els = {
+      card,
+      textarea: card.querySelector('textarea'),
+      attach: card.querySelector('button.attach'),
+      send: card.querySelector('button.send'),
+      chips: card.querySelector('.chips'),
+      status: card.querySelector('.status'),
+      file: card.querySelector('input[type=file]'),
+    };
+
+    this._els.send.addEventListener('click', () => this._send());
+    this._els.attach.addEventListener('click', () => this._els.file.click());
+    this._els.file.addEventListener('change', (e) => {
+      this._ingest(Array.from(e.target.files || []));
+      e.target.value = '';
+    });
+    this._els.textarea.addEventListener('paste', (e) => this._onPaste(e));
+    this._els.textarea.addEventListener('input', () => this._syncSendState());
+    this._els.textarea.addEventListener('keydown', (e) => {
+      // Ctrl/Cmd+Enter sends, matching the muscle memory of most chat boxes.
+      // A bare Enter must stay a newline so multi-line replies are possible.
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        this._send();
+      }
+    });
+
+    this._applyConfig();
+    this._syncSendState();
+  }
+
+  _applyConfig() {
+    if (!this._els) { return; }
+    this._els.textarea.placeholder = this._config.placeholder;
+    if (this._config.name) {
+      this._els.card.setAttribute('header', this._config.name);
+    }
+  }
+
+  _onPaste(event) {
+    const items = (event.clipboardData && event.clipboardData.items) || [];
+    const files = [];
+    for (const item of items) {
+      // Any pasted file, not only an image: a document copied from a file manager
+      // arrives here exactly as a screenshot does. `kind` is what keeps this safe -
+      // pasted text and rich text are 'string' items and are left well alone.
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) { files.push(file); }
+      }
+    }
+    if (files.length) {
+      // Only swallow the paste when it carried a file; a plain text paste must
+      // still land in the textarea normally.
+      event.preventDefault();
+      this._ingest(files);
+    }
+  }
+
+  async _ingest(files) {
+    const usable = files.filter((f) => f && (f.name || f.type));
+    if (!usable.length) { return; }
+
+    this._busy = true;
+    this._syncSendState();
+    for (const file of usable) {
+      const isImage = !!(file.type && file.type.startsWith('image/'));
+      const label = file.name || (isImage ? 'image' : 'file');
+      this._setStatus(`${isImage ? 'Uploading' : 'Reading'} ${label}...`, 'busy');
+      try {
+        if (isImage) { this._images.push(await this._upload(file)); }
+        else { this._files.push(await this._read(file)); }
+        this._renderChips();
+        this._setStatus('', '');
+      } catch (err) {
+        this._setStatus(`${isImage ? 'Upload' : 'Attach'} failed: ${describeThrown(err)}`, 'err');
+      }
+    }
+    this._busy = false;
+    this._syncSendState();
+  }
+
+  /*
+   * Reads a non-image attachment into the payload.
+   *
+   * The length is checked twice on purpose. A File's `size` is metadata, and the
+   * cheap check keeps a large file from being read into memory at all; the one
+   * after the read is the one that is actually true, because a file growing between
+   * being picked and being read is exactly the case the first check cannot see.
+   */
+  async _read(file) {
+    const tooBig = (n) => new Error(
+      `${describeSize(n)} is over the ${describeSize(MAX_INLINE_FILE_BYTES)} limit for a file attachment`);
+
+    if (typeof file.size === 'number' && file.size > MAX_INLINE_FILE_BYTES) { throw tooBig(file.size); }
+    if (typeof file.arrayBuffer !== 'function') { throw new Error('this browser cannot read that file'); }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.length > MAX_INLINE_FILE_BYTES) { throw tooBig(bytes.length); }
+    if (!bytes.length) { throw new Error('that file is empty'); }
+
+    return {
+      name: file.name || 'attachment',
+      content_type: file.type || 'application/octet-stream',
+      size: bytes.length,
+      b64: toBase64(bytes),
+    };
+  }
+
+  async _upload(file) {
+    const form = new FormData();
+    form.append('file', file, file.name || 'pasted.png');
+
+    const resp = await this._authFetch('/api/image/upload', { method: 'POST', body: form });
+    if (!resp.ok) {
+      throw new Error(describeUploadRefusal(resp.status, resp.statusText));
+    }
+    const body = await resp.json();
+    if (!body || !body.id) { throw new Error('no image id returned'); }
+    return {
+      id: body.id,
+      name: body.name || file.name || 'image.png',
+      content_type: body.content_type || file.type || 'image/png',
+    };
+  }
+
+  _accessToken() {
+    const auth = this._hass && this._hass.auth;
+    if (!auth) { return null; }
+    if (auth.data && auth.data.access_token) { return auth.data.access_token; }
+    return auth.accessToken || null;
+  }
+
+  // An authenticated request to Home Assistant. Access tokens live 30 minutes, and
+  // a browser tab left open keeps its websocket but never refreshes the token until
+  // something asks - so reading hass.auth's token directly sent an expired one and
+  // got a 401. hass.fetchWithAuth refreshes first; without it, refresh when expired,
+  // and once more on a 401.
+  //
+  // No step here may end the attempt. fetchWithAuth renews the token before it sends,
+  // and a renewal Home Assistant turns down rejects with ERR_INVALID_AUTH - the bare
+  // number 2, not an Error - so an upload was abandoned before the token already in
+  // hand had been tried even once. That token is usually still good: the page's
+  // websocket is authenticated and streaming, which is exactly why replies went on
+  // working while images stopped.
+  async _authFetch(path, init = {}) {
+    const hass = this._hass;
+    const auth = hass && hass.auth;
+    if (hass && typeof hass.fetchWithAuth === 'function') {
+      try {
+        const resp = await hass.fetchWithAuth(path, init);
+        if (resp.status !== 401 || !auth) { return resp; }
+      }
+      catch (err) {
+        // Nothing left to fall back to, so the caller should see what went wrong.
+        if (!auth) { throw err; }
+      }
+    }
+    if (!auth) { throw new Error('no access token'); }
+    const send = () => fetch(path, {
+      ...init,
+      headers: { ...(init.headers || {}), authorization: `Bearer ${this._accessToken()}` },
+    });
+    if (auth.expired) { await this._refreshed(auth); }
+    let resp = await send();
+    if (resp.status === 401 && await this._refreshed(auth)) {
+      resp = await send();
+    }
+    return resp;
+  }
+
+  // Whether the token was renewed. Best effort by design: the answer decides only
+  // whether sending again is worth it, never whether to give up on what was asked.
+  async _refreshed(auth) {
+    if (!auth || typeof auth.refreshAccessToken !== 'function') { return false; }
+    try {
+      await auth.refreshAccessToken();
+      return true;
+    }
+    catch {
+      return false;
+    }
+  }
+
+  _renderChips() {
+    this._els.chips.innerHTML = '';
+    this._images.forEach((img, index) => {
+      const thumb = document.createElement('img');
+      thumb.alt = img.name;
+      // The serve endpoint needs auth, so the thumbnail is fetched as a blob
+      // rather than pointed at directly with a plain src.
+      this._authFetch(`/api/image/serve/${img.id}/256x256`)
+        .then((r) => (r.ok ? r.blob() : null))
+        .then((b) => { if (b) { thumb.src = URL.createObjectURL(b); } })
+        .catch(() => {});
+      this._addChip(this._images, index, img.name, img.name, thumb);
+    });
+    this._files.forEach((file, index) => {
+      // Nothing to show a thumbnail of, so an icon stands in. The size goes in the
+      // tooltip rather than the label: it is the one thing about a file attachment
+      // that can get it refused, and the name is what identifies it.
+      const icon = document.createElement('ha-icon');
+      icon.setAttribute('icon', 'mdi:file-document-outline');
+      this._addChip(this._files, index, file.name, `${file.name} (${describeSize(file.size)})`, icon);
+    });
+  }
+
+  _addChip(list, index, name, title, leading) {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.setAttribute('title', title);
+
+    const label = document.createElement('span');
+    label.textContent = name.length > 18 ? `${name.slice(0, 15)}...` : name;
+
+    const remove = document.createElement('span');
+    remove.className = 'x';
+    remove.textContent = '\u2715';
+    remove.title = 'Remove';
+    remove.addEventListener('click', () => {
+      list.splice(index, 1);
+      this._renderChips();
+      this._syncSendState();
+    });
+
+    chip.appendChild(leading);
+    chip.appendChild(label);
+    chip.appendChild(remove);
+    this._els.chips.appendChild(chip);
+  }
+
+  _syncSendState() {
+    if (!this._els) { return; }
+    const hasText = this._els.textarea.value.trim().length > 0;
+    // Hidden rather than disabled: a greyed-out Send beside a live "Send answer"
+    // reads as something that ought to work, and the thing to do is to use the
+    // other one.
+    const held = this._formHoldsSend();
+    this._els.send.hidden = held;
+    this._els.send.disabled = held || this._busy
+      || (!hasText && this._images.length === 0 && this._files.length === 0);
+  }
+
+  /* Whether the choices card beside this one is drawing the Send for this question. */
+  _formHoldsSend() {
+    const topic = this._config ? String(this._config.topic || '') : '';
+    return !!topic && FORM_SENDS.has(topic);
+  }
+
+  /* The choices card beside this one took or released the Send. */
+  noteFormSendChanged() {
+    this._syncSendState();
+  }
+
+  _setStatus(text, kind) {
+    this._els.status.textContent = text;
+    this._els.status.className = `status ${kind || ''}`;
+    if (this._statusTimer) { clearTimeout(this._statusTimer); this._statusTimer = null; }
+    if (kind === 'ok') {
+      this._statusTimer = setTimeout(() => this._setStatus('', ''), 4000);
+    }
+  }
+
+  async _send() {
+    if (this._busy) { return; }
+    // Ctrl+Enter reaches here with the button hidden, and sending the words alone
+    // would answer the question with the picks left behind.
+    if (this._formHoldsSend()) { return; }
+    // Read straight from the element. This is the whole point of the card: the
+    // value cannot be stale because nothing had to commit it first.
+    const text = this._els.textarea.value;
+    if (!text.trim() && this._images.length === 0 && this._files.length === 0) { return; }
+
+    this._busy = true;
+    this._syncSendState();
+    this._setStatus('Sending...', 'busy');
+
+    const payload = {
+      at: new Date().toISOString(),
+      text: text,
+      images: this._images.map((i) => ({ id: i.id, name: i.name, content_type: i.content_type })),
+      files: this._files.map((f) => ({ name: f.name, content_type: f.content_type, b64: f.b64 })),
+      card_version: CARD_VERSION,
+    };
+
+    try {
+      await this._hass.callService('mqtt', 'publish', {
+        topic: this._config.topic,
+        payload: JSON.stringify(payload),
+        qos: 0,
+        retain: false,
+      });
+      // Only what was not sent. The textarea stays editable while Send is disabled,
+      // so anything typed during the publish was not in the payload and must neither
+      // be erased with it nor left to go a second time.
+      this._trimPublished(text);
+      this._images = [];
+      this._files = [];
+      this._renderChips();
+      this._setStatus('Sent', 'ok');
+    } catch (err) {
+      // Keep the text: losing a long reply because the publish failed would be
+      // far worse than an error message.
+      this._setStatus(`Send failed: ${err.message || err}`, 'err');
+    } finally {
+      this._busy = false;
+      this._syncSendState();
+    }
+  }
+}
+
+/*
+ * Code blocks in a rendered reply: wrapped, and each with a Copy button.
+ *
+ * A reply is often a command to paste somewhere else - a 1000-character
+ * `pwsh -EncodedCommand <base64>`, say. Home Assistant draws a code block as one
+ * horizontally scrolling line, so on a phone it ran off the side of the card and
+ * selecting all of it by hand was close to impossible. Blocks now wrap, and carry a
+ * button that copies the block's own text, which wrapping does not touch.
+ *
+ * Neither can be done with the card's own styles or markup. ha-markdown renders into
+ * a shadow root of its own - `<ha-markdown>` > #shadow-root > `<ha-markdown-element>`
+ * > `<pre>` - so a rule in this card never reaches a `pre`, and the render happens
+ * later, off the main thread, so there is nothing to decorate when the content is
+ * set. A stylesheet goes into that shadow root, and the buttons are added whenever
+ * its tree changes.
+ */
+const CODE_COPY_FEEDBACK_MS = 1500;
+// The buttons this card made. Membership, not a class name, is what marks a block as
+// done: a class could just as well arrive in a reply's own HTML.
+const CODE_COPY_BUTTONS = new WeakSet();
+const CODE_COPY_WATCHED = new WeakSet();
+
+// Selectors carry one more type than ha-markdown's own (`pre`, `pre code`) so they
+// win whichever of the two sheets the browser happens to order last.
+function codeBlockCss(scope) {
+  return `
+    ${scope} pre {
+      position: relative;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: normal;
+    }
+    ${scope} pre code { white-space: inherit; overflow-wrap: inherit; }
+    /* Room above the code for the button, so it never sits over the first line. */
+    ${scope} pre.agent-bridge-copyable { padding-top: 48px; }
+    ${scope} pre > button.agent-bridge-copy {
+      position: absolute; top: 2px; right: 2px;
+      min-width: 64px; min-height: 44px; padding: 0 12px; box-sizing: border-box;
+      font-family: var(--ha-font-family-body, var(--mdc-typography-font-family, sans-serif));
+      font-size: 0.85em; line-height: 1;
+      color: var(--primary-text-color);
+      background: var(--card-background-color, var(--primary-background-color));
+      border: 1px solid var(--divider-color, rgba(127, 127, 127, 0.4)); border-radius: 8px;
+      cursor: pointer; touch-action: manipulation;
+      user-select: none; -webkit-user-select: none;
+      white-space: nowrap;
+    }
+  `;
+}
+
+// The text of a block as written. Wrapping is only drawn, so it is not in here; the
+// button is skipped; and the one newline marked always ends a block with is dropped,
+// so pasting into a terminal does not run the command before it can be read.
+function codeBlockText(pre) {
+  let text = '';
+  for (const node of Array.from(pre.childNodes || [])) {
+    if (!CODE_COPY_BUTTONS.has(node)) { text += node.textContent; }
+  }
+  return text.replace(/\n$/, '');
+}
+
+/*
+ * The Clipboard API is missing altogether over plain http, which is how Home
+ * Assistant is often reached on the LAN, and the companion apps' WebViews can refuse
+ * it even when it is there. A selected textarea and execCommand('copy') works in
+ * both; it is deprecated, but nothing has replaced it for an insecure page.
+ */
+// The element that really has focus. document.activeElement stops at the outermost
+// shadow host, and the Copy button sits several shadow roots below it.
+function deepActiveElement(doc) {
+  let el = doc.activeElement || null;
+  while (el && el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; }
+  return el;
+}
+
+function copyWithTextarea(text) {
+  const doc = typeof document !== 'undefined' ? document : null;
+  if (!doc || !doc.body || typeof doc.execCommand !== 'function') { return false; }
+  // Selecting the textarea takes focus, and removing it leaves focus on the page, so
+  // a keyboard user who pressed Copy would lose their place in the card.
+  const focused = deepActiveElement(doc);
+  const area = doc.createElement('textarea');
+  area.value = text;
+  // Read-only keeps a phone's keyboard down; 12pt stops iOS zooming in on focus.
+  area.setAttribute('readonly', '');
+  area.setAttribute('aria-hidden', 'true');
+  Object.assign(area.style, {
+    position: 'fixed', top: '0', left: '-9999px', opacity: '0', fontSize: '12pt',
+  });
+  doc.body.appendChild(area);
+  let copied = false;
+  try {
+    area.select();
+    if (typeof area.setSelectionRange === 'function') { area.setSelectionRange(0, text.length); }
+    copied = !!doc.execCommand('copy');
+  } catch (err) {
+    copied = false;
+  } finally {
+    doc.body.removeChild(area);
+    if (focused && focused !== doc.body && typeof focused.focus === 'function') {
+      try { focused.focus({ preventScroll: true }); } catch (err) { /* gone; nothing to return to */ }
+    }
+  }
+  return copied;
+}
+
+async function copyCodeText(text) {
+  const clipboard = typeof navigator !== 'undefined' && navigator ? navigator.clipboard : undefined;
+  if (clipboard && typeof clipboard.writeText === 'function') {
+    try {
+      await clipboard.writeText(text);
+      return true;
+    } catch (err) {
+      // Refused (a WebView, or a lapsed user gesture): the textarea may still work.
+    }
+  }
+  return copyWithTextarea(text);
+}
+
+function addCopyButton(pre) {
+  const button = document.createElement('button');
+  CODE_COPY_BUTTONS.add(button);
+  button.type = 'button';
+  button.className = 'agent-bridge-copy';
+  button.textContent = 'Copy';
+  button.setAttribute('aria-label', 'Copy code');
+  let reset = null;
+  const show = (label) => {
+    button.textContent = label;
+    button.setAttribute('aria-label', label === 'Copy' ? 'Copy code' : label);
+  };
+  button.addEventListener('click', async (event) => {
+    if (event && event.preventDefault) { event.preventDefault(); }
+    if (event && event.stopPropagation) { event.stopPropagation(); }
+    const copied = await copyCodeText(codeBlockText(pre));
+    show(copied ? 'Copied' : 'Copy failed');
+    if (reset) { clearTimeout(reset); }
+    reset = setTimeout(() => { reset = null; show('Copy'); }, CODE_COPY_FEEDBACK_MS);
+  });
+  pre.classList.add('agent-bridge-copyable');
+  pre.insertBefore(button, pre.firstChild);
+}
+
+// Idempotent, because it runs on every change to the tree - including the one its own
+// buttons make, which is what stops that from becoming a loop: the second pass finds
+// nothing left to do and changes nothing.
+function decorateCodeBlocks(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') { return; }
+  for (const pre of Array.from(root.querySelectorAll('pre'))) {
+    const has = Array.from(pre.childNodes || []).some((node) => CODE_COPY_BUTTONS.has(node));
+    if (!has) { addCopyButton(pre); }
+  }
+}
+
+/*
+ * Called after every content change. The shadow root only exists once the element is
+ * connected, and the blocks only once marked has answered, so it tries now, again when
+ * ha-markdown says that render is complete, and from then on whenever the tree
+ * changes - which also covers re-renders this card did not ask for.
+ */
+function enhanceMarkdownCode(md) {
+  const attach = () => {
+    // A frontend old enough to render ha-markdown without a shadow root puts the
+    // blocks in the card's own tree, where its own stylesheet already reaches them.
+    const root = md.shadowRoot || md;
+    if (!CODE_COPY_WATCHED.has(root)) {
+      CODE_COPY_WATCHED.add(root);
+      if (md.shadowRoot) {
+        const style = document.createElement('style');
+        style.textContent = codeBlockCss('ha-markdown-element');
+        // First, ahead of Lit's own render marker, so a re-render never clears it.
+        root.insertBefore(style, root.firstChild);
+      }
+      if (typeof MutationObserver === 'function') {
+        new MutationObserver(() => decorateCodeBlocks(root)).observe(root, { childList: true, subtree: true });
+      }
+    }
+    decorateCodeBlocks(root);
+  };
+  attach();
+  Promise.resolve(md.updateComplete).then(attach, () => {});
+}
+
+/*
+ * agent-bridge-activity-card
+ *
+ * The live header of a session card: status, the last response, and the reasoning
+ * and activity expanders.
+ *
+ * A markdown card re-renders its whole template whenever any referenced attribute
+ * changes. With reasoning streaming in, that meant the expander snapped shut and
+ * the page jumped on every update. This card builds its DOM once and afterwards
+ * only swaps the text of the parts that changed, so an open expander stays open and
+ * nothing else moves.
+ */
+class AgentBridgeActivityCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._built = false;
+    this._last = {};
+  }
+
+  setConfig(config) {
+    if (!config || !config.activity || !config.status) {
+      throw new Error('agent-bridge-activity-card: "activity" and "status" are required');
+    }
+    this._config = Object.assign({ name: '', machine: '', decision: '' }, config);
+    this._last = {};
+    if (this._hass) { this._render(); }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) { this._build(); }
+    this._render();
+  }
+
+  getCardSize() {
+    return this._compact ? 1 : 4;
+  }
+
+  // Set by a session card that folds; the header then keeps only its first lines.
+  set compact(value) {
+    this._compact = !!value;
+    const card = this.shadowRoot && this.shadowRoot.querySelector('ha-card');
+    if (card) { card.classList.toggle('compact', this._compact); }
+  }
+
+  get compact() { return !!this._compact; }
+
+  _build() {
+    this._built = true;
+    const style = document.createElement('style');
+    style.textContent = `
+      ha-card { padding: 0 16px 8px; background: none; box-shadow: none; border: none; }
+      .title {
+        font-size: 1.25em; font-weight: 500; margin: 12px 0 4px;
+        /* Inside a session card: room for its chevron, and the title folds it. */
+        padding-right: var(--agent-bridge-title-inset, 0);
+        cursor: var(--agent-bridge-title-cursor, default);
+      }
+      /* Folded: the header keeps its title, status line and spinner only. */
+      ha-card.compact .question, ha-card.compact .response,
+      ha-card.compact .reasoning, ha-card.compact .history { display: none !important; }
+      .meta { color: var(--secondary-text-color); margin-bottom: 8px; }
+      .meta b { color: var(--primary-text-color); }
+      .waiting { font-weight: 600; margin: 8px 0 4px; }
+      hr { border: none; border-top: 1px solid var(--divider-color); margin: 8px 0; }
+      details { margin-top: 8px; }
+      summary { cursor: pointer; font-style: italic; color: var(--secondary-text-color); }
+      ul { margin: 6px 0; padding-left: 20px; }
+      .plain { white-space: pre-wrap; }
+      /* A thinking summary shown as the newest line, as the terminal shows it. */
+      .response.thinking { font-style: italic; color: var(--secondary-text-color); }
+      .response.thinking::before { content: '🧠'; float: left; margin: 0 6px 0 0; font-style: normal; }
+      .working { margin: 8px 0 6px; color: var(--agent-bridge-spinner-color, #d97757); font-variant-numeric: tabular-nums; }
+      .working .glyph { display: inline-block; width: 1.1em; text-align: center; font-variant-emoji: text; }
+      .working .elapsed { color: var(--secondary-text-color); }
+      [hidden] { display: none !important; }
+      ${codeBlockCss('.md')}
+    `;
+
+    const card = document.createElement('ha-card');
+    card.innerHTML = `
+      <div class="title"></div>
+      <div class="meta"></div>
+      <div class="question" hidden><hr><div class="waiting">Waiting on you:</div><div class="md q"></div></div>
+      <div class="md response" hidden></div>
+      <details class="reasoning" hidden><summary>🧠 reasoning</summary><div class="md r"></div></details>
+      <details class="history" hidden><summary>recent activity</summary><ul></ul></details>
+      <div class="working" hidden><span class="glyph"></span><span class="verb"></span><span class="elapsed"></span></div>
+    `;
+    this.shadowRoot.appendChild(style);
+    this.shadowRoot.appendChild(card);
+    card.classList.toggle('compact', !!this._compact);
+    // A session card around this one folds on a click of the title.
+    card.querySelector('.title').addEventListener('click', () => {
+      this.dispatchEvent(new CustomEvent('agent-bridge-toggle', { bubbles: true, composed: true }));
+    });
+
+    this._els = {
+      title: card.querySelector('.title'),
+      meta: card.querySelector('.meta'),
+      question: card.querySelector('.question'),
+      q: card.querySelector('.q'),
+      response: card.querySelector('.response'),
+      reasoning: card.querySelector('.reasoning'),
+      r: card.querySelector('.r'),
+      history: card.querySelector('.history'),
+      list: card.querySelector('.history ul'),
+      working: card.querySelector('.working'),
+      glyph: card.querySelector('.working .glyph'),
+      verb: card.querySelector('.working .verb'),
+      elapsed: card.querySelector('.working .elapsed'),
+    };
+
+    // ha-markdown is loaded lazily by the frontend. If it was not there at build
+    // time the text went in as plain text, so render it again once it arrives.
+    if (!customElements.get('ha-markdown')) {
+      customElements.whenDefined('ha-markdown').then(() => {
+        this._last = {};
+        this._render();
+      });
+    }
+  }
+
+  _changed(key, value) {
+    if (this._last[key] === value) { return false; }
+    this._last[key] = value;
+    return true;
+  }
+
+  // Only two small spans change on each frame, so the animation never re-renders the
+  // card or moves anything around it.
+  _startSpinner() {
+    // Not `this._spinner`: while the page is hidden there is deliberately no interval,
+    // and keying the guard on it would register a second listener on every call.
+    if (this._spinning) { return; }
+    this._spinning = true;
+    let frame = 0;
+    const tick = () => {
+      this._els.glyph.textContent = SPINNER_GLYPHS[frame++ % SPINNER_GLYPHS.length];
+      const secs = Math.max(0, Math.floor((Date.now() - this._since) / 1000));
+      const text = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+      if (this._els.elapsed.textContent !== ` (${text})`) { this._els.elapsed.textContent = ` (${text})`; }
+    };
+    const hidden = () => typeof document !== 'undefined' && !!document.hidden;
+    const resume = () => {
+      if (this._spinner || hidden()) { return; }
+      // At once, so the elapsed time is right the instant the tab is looked at rather
+      // than up to 120ms later.
+      tick();
+      this._spinner = setInterval(tick, 120);
+    };
+    // Home Assistant sits in a pinned tab for days, with one of these per working
+    // session. Returning early from the tick is not enough - the timer still fires and
+    // still wakes the main thread, it just does nothing once it has - so the interval
+    // is stopped outright while the page is hidden and started again when it is not.
+    this._onVisible = () => {
+      if (!hidden()) { resume(); return; }
+      if (this._spinner) { clearInterval(this._spinner); this._spinner = null; }
+    };
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', this._onVisible);
+    }
+    resume();
+  }
+
+  _stopSpinner() {
+    this._spinning = false;
+    if (this._spinner) { clearInterval(this._spinner); this._spinner = null; }
+    if (this._onVisible) {
+      document.removeEventListener('visibilitychange', this._onVisible);
+      this._onVisible = null;
+    }
+  }
+
+  connectedCallback() {
+    // Re-attached after navigating away and back: resume if the session is working.
+    if (this._els && !this._els.working.hidden) { this._startSpinner(); }
+  }
+
+  disconnectedCallback() {
+    this._stopSpinner();
+  }
+
+  _setMarkdown(container, text) {
+    if (customElements.get('ha-markdown')) {
+      let md = container.firstElementChild;
+      if (!md || md.tagName !== 'HA-MARKDOWN') {
+        container.textContent = '';
+        container.classList.remove('plain');
+        md = document.createElement('ha-markdown');
+        md.breaks = true;
+        container.appendChild(md);
+      }
+      md.content = text;
+      enhanceMarkdownCode(md);
+    } else {
+      container.classList.add('plain');
+      container.textContent = text;
+    }
+  }
+
+  _render() {
+    if (!this._els || !this._hass || !this._config) { return; }
+    const states = this._hass.states;
+    const activity = states[this._config.activity];
+    const status = states[this._config.status];
+    const decision = this._config.decision ? states[this._config.decision] : undefined;
+    const attr = (entity, name) => (entity && entity.attributes ? entity.attributes[name] : undefined);
+
+    const question = attr(decision, 'question') || '';
+    // A session's entities are removed once it has exited, but a dashboard that has
+    // not reloaded yet still shows its card. That read "status: unknown" over an empty
+    // card; it is the end of the session, so it says so.
+    const rawStatus = status ? String(status.state) : 'unknown';
+    const statusText = ['unknown', 'unavailable'].includes(rawStatus) ? 'ended' : rawStatus;
+    // A session whose own turn has ended while background agents it started are still
+    // running is not idle, and closing it throws that work away - so it reads in
+    // words, with a count and a colour of its own rather than the idle grey.
+    const agents = statusText === 'agents' ? Number(attr(status, 'background_agents') || 0) : 0;
+    // The same for a background command it started and has not collected - a build, a
+    // test run, a CI watch. Shown in the session's own words rather than as the bare
+    // status, and not in idle grey, because the whole point is that it is not idle.
+    const shells = statusText === 'shell' ? Number(attr(status, 'background_shells') || 0) : 0;
+    const dot = question ? '🟡'
+      : (statusText === 'working' ? '🟢'
+        : (['agents', 'shell'].includes(statusText) ? '🔵'
+          : (['ending', 'ended'].includes(statusText) ? '⏹️' : '⚪')));
+
+    const title = `${dot} ${this._config.name}`;
+    if (this._changed('title', title)) { this._els.title.textContent = title; }
+
+    const shownStatus = question ? 'waiting for you'
+      : (statusText === 'agents'
+        ? `waiting for ${agents > 0 ? `${agents} ` : ''}background agent${agents === 1 ? '' : 's'}`
+        : (statusText === 'shell'
+          ? `waiting for ${shells > 0 ? `${shells} ` : ''}background command${shells === 1 ? '' : 's'}`
+          : statusText));
+    let activityText = activity ? String(activity.state || '') : '';
+    // The summary is usually the first line of the newest message, which the body
+    // right below already starts with. Repeating it read as the card saying
+    // everything twice, so it is shown only when it adds something ("Running: Edit",
+    // a permission message). The state can be cut at Home Assistant's 255-character
+    // limit with a trailing "...", so that is ignored when comparing.
+    const bodyText = question ? '' : String(attr(activity, 'response') || '');
+    const squash = (s) => s.replace(/\s+/g, ' ').trim();
+    const summaryCore = squash(activityText.replace(/\.\.\.$/, ''));
+    if (summaryCore && squash(bodyText).startsWith(summaryCore)) { activityText = ''; }
+    // How many times this conversation has been compacted. Published only once there
+    // is one, so a session that has never been compacted reads exactly as it did and
+    // no card ever says "0 compactions". It sits next to the status rather than at the
+    // end of the line because the activity text beside it changes constantly, and a
+    // number that moves about is one nobody reads.
+    const compactions = Number(attr(status, 'compactions') || 0);
+    const compactionText = compactions > 0
+      ? `compacted ${compactions === 1 ? 'once' : `${compactions} times`}`
+      : '';
+    const meta = `${this._config.machine}\u0001${shownStatus}\u0001${compactionText}\u0001${activityText}`;
+    if (this._changed('meta', meta)) {
+      this._els.meta.textContent = '';
+      const machine = document.createElement('i');
+      machine.textContent = this._config.machine;
+      const bold = document.createElement('b');
+      bold.textContent = shownStatus;
+      this._els.meta.append(machine, ' • status: ', bold);
+      if (compactionText) { this._els.meta.append(` • ${compactionText}`); }
+      if (activityText) { this._els.meta.append(` • ${activityText}`); }
+    }
+
+    // The question, when one is waiting, takes the place of the response.
+    if (this._changed('question', question)) {
+      this._els.question.hidden = !question;
+      if (question) { this._setMarkdown(this._els.q, String(question)); }
+    }
+
+    const response = question ? '' : String(attr(activity, 'response') || '');
+    const thinking = attr(activity, 'response_kind') === 'reasoning';
+    if (this._changed('response', `${thinking ? 'r' : 't'}\u0001${response}`)) {
+      this._els.response.hidden = !response;
+      this._els.response.classList.toggle('thinking', thinking);
+      if (response) { this._setMarkdown(this._els.response, response); }
+    }
+
+    // The working line runs whenever the session is working and not waiting on you.
+    // Its turn starts when the status last changed to working.
+    const working = !question && statusText === 'working';
+    const since = working && status ? String(status.last_changed || '') : '';
+    if (this._changed('working', since)) {
+      this._els.working.hidden = !working;
+      if (working) {
+        let hash = 0;
+        for (const ch of since) { hash = (hash * 31 + ch.charCodeAt(0)) >>> 0; }
+        this._els.verb.textContent = `${SPINNER_VERBS[hash % SPINNER_VERBS.length]}…`;
+        this._since = Date.parse(since) || Date.now();
+        this._startSpinner();
+      } else {
+        this._stopSpinner();
+      }
+    }
+
+    const reasoning = String(attr(activity, 'reasoning') || '');
+    if (this._changed('reasoning', reasoning)) {
+      this._els.reasoning.hidden = !reasoning;
+      if (reasoning) { this._setMarkdown(this._els.r, reasoning); }
+    }
+
+    const history = attr(activity, 'history');
+    const items = Array.isArray(history) ? history.slice(-8).map(String) : [];
+    if (this._changed('history', items.join('\u0001'))) {
+      this._els.history.hidden = items.length === 0;
+      this._els.list.textContent = '';
+      for (const item of items) {
+        const li = document.createElement('li');
+        li.textContent = item;
+        this._els.list.appendChild(li);
+      }
+    }
+  }
+}
+
+/*
+ * The answer to a question - one choice or a whole form - as tappable rows rather
+ * than dropdowns.
+ *
+ * Home Assistant's own select control is bad here in two specific ways. It sizes its
+ * menu to the longest option and will not wrap, so on a phone a question with real
+ * sentences for answers ran off the right edge and could not be read at all. And it
+ * commits on blur, so answering meant tapping the option, tapping away, and only then
+ * pressing Send. Rows wrap onto as many lines as they need, are the same on every
+ * screen, and are tapped once.
+ *
+ * A question publishes one select per field (`fields`), and the main selector
+ * (`decision`) then carries only 'Cancel request'. Both are rendered here: a labelled
+ * group of rows per armed field, then whatever the main selector offers. Nothing
+ * about the answer path changes - a tap is the same `select_option` call the dropdown
+ * made, on the same entity the daemon reads when Send is pressed.
+ *
+ * 'Awaiting answer...' is the parked state the bridge drives the main selector to and
+ * 'Choose...' is a field's, so neither is ever offered as an answer. 'Cancel request'
+ * is, but as a quieter row at the bottom, because it withdraws the question rather
+ * than answering it.
+ *
+ * A field that takes several of its options at once - `type: array` in an ask_user
+ * schema - is drawn as its own options with as many ticked as you like, not as the
+ * list of combinations its slot has to enumerate to hold the answer. Before 1.22.0
+ * it was those combinations, which is why "pick any of these" could only ever be
+ * answered with one of them.
+ *
+ * Picking is never sending. Every question is committed by Send answer, this card's
+ * own row from 1.22.0 - which is also what lets the reply box below stay the reply
+ * card rather than an entity row with a button beside it. Until then a single choice
+ * went the moment it was touched while the form beside it waited for Send, which is
+ * two behaviours for one gesture and no way back from the easier one to tap by
+ * accident. A selector carrying choices with no field behind it - a legacy `choices`
+ * argument, an MCP client - still answers on the tap, because there is no slot for
+ * it to wait in.
+ *
+ * The last row of a Copilot option list is the prompt's own "Other (type your
+ * answer)", and from 1.37.0 it is drawn here too, wherever the bridge says the
+ * question really has one (takes_typed_answer). The daemon has always taken an
+ * answer typed through it, but the card offered nothing that said so - and because
+ * this card holds the reply card's Send down while a question is armed, a
+ * single-choice question put the box on screen with no way at all to send what was
+ * typed into it. Picking it writes nothing to the slot: an answer in words is read
+ * only while the slot is still on its placeholder, so "I am going to type this one"
+ * is exactly the state of having picked no option.
+ */
+const CHOICE_PLACEHOLDER = 'Awaiting answer...';
+const CHOICE_FIELD_PLACEHOLDER = 'Choose...';
+const CHOICE_CANCEL = 'Cancel request';
+// The prompt's own last entry, worded exactly as the terminal words it so the row on
+// screen and the row the keystrokes land on are plainly the same thing. Drawn only
+// where the bridge says the question really has one (takes_typed_answer): the daemon
+// takes a typed answer for a lone scalar choice, and for choices riding on the main
+// selector, and nowhere else.
+const CHOICE_OTHER = 'Other (type your answer)';
+const CHOICE_OTHER_HINT = 'Type your answer in the box below, then Send answer';
+// Pressing Send with Other picked and the box empty. Said out loud rather than left
+// as a Send that appears to do nothing, which is indistinguishable from a session
+// still thinking about it.
+const CHOICE_OTHER_EMPTY_NOTE = 'Nothing typed yet - write your answer in the box below';
+// What the bridge joins a multi-select field's picked options with. Published beside
+// the options so the label written back here is built exactly as the one the daemon
+// takes apart again; this is only the value to use when an older bridge sends none.
+const CHOICE_MULTI_SEPARATOR = ' + ';
+// Shown while a tap has been sent to Home Assistant but has not come back. Send is
+// held for exactly as long as this is on screen, so the two can never disagree.
+const CHOICE_SAVING_NOTE = 'Saving your choice...';
+// Shown when a slot has moved away from what this card last saw settle, with nothing
+// of its own outstanding to explain it - another viewer answering the same question,
+// or a state arriving out of order. The rows show what is really there; Send is held
+// until somebody looks, because committing it would send a choice nobody made here.
+const CHOICE_CHANGED_NOTE = 'Changed since you chose - check what is ticked';
+const CHOICE_SENT_NOTE = 'Sent - waiting for the session';
+// The states an entity sits in when it is carrying nothing: an unarmed field slot is
+// parked on 'Idle', and a session that has gone leaves its entity behind.
+const CHOICE_UNARMED = ['', 'Idle', 'unknown', 'unavailable'];
+// The short form a slot can hold instead of the picked options written out: '#1,3' is
+// the first and third option, one-based and ascending.
+//
+// Writing the words out is what used to cap this. A Home Assistant select holds one
+// value from a published list, so a set has to be one entry in that list, and six
+// ordinary sentence-length options joined together ran to 350 characters against a
+// 255-character entry - at which point the bridge refused the field and sent the whole
+// question to the terminal. Positions are 22 characters for all ten.
+const CHOICE_CODE_PATTERN = /^#[1-9][0-9]*(,[1-9][0-9]*)*$/;
+
+/*
+ * The picked options as positions: '#1,3'. Ascending, because that is the only order
+ * the bridge accepts and the only one it writes.
+ */
+function multiSelectCode(options, picked) {
+  const indexes = picked
+    .map((option) => options.indexOf(option))
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b);
+  if (indexes.length === 0) { return ''; }
+  return `#${indexes.map((i) => i + 1).join(',')}`;
+}
+
+/*
+ * Which of a multi-select field's options its slot currently stands for.
+ *
+ * Two carriers mean the same thing. Positions are what this card writes when the
+ * bridge says the slot will take them. The options written out and joined are what
+ * every earlier card writes, and are still published whenever they fit, so both have
+ * to read back here.
+ *
+ * Whether this field uses positions is asked *before* the value's shape, and that
+ * order matters: a field may offer an option written like a position, and for that
+ * field '#1' is the option's own text. Testing the shape first showed the first
+ * option ticked when the second was chosen.
+ *
+ * The joined form is matched whole rather than split on the separator: an option's
+ * own text may contain " + ", and then two different answers look identical. The
+ * bridge refuses to split for the same reason.
+ *
+ * emptyValue is this field's own way of saying nothing is ticked, where its schema
+ * accepts that; absent otherwise, and from every bridge older than the attribute.
+ */
+function multiSelectPick(options, separator, state, useCodes, emptyValue) {
+  if (!state || options.length === 0 || options.length > 20) { return []; }
+  // The carrier the bridge published for "nothing ticked". Recognised before the
+  // shapes below rather than left to fall through them: it is a value no subset can
+  // produce, so a scan would only ever end up here anyway, and saying so is what
+  // keeps an answered-with-nothing field from reading like an unresolvable one.
+  if (emptyValue && state === emptyValue) { return []; }
+  if (useCodes && CHOICE_CODE_PATTERN.test(state)) {
+    const seen = new Set();
+    const picked = [];
+    for (const part of state.slice(1).split(',')) {
+      const index = Number(part) - 1;
+      // Out of range or repeated is malformed, not something to make the best of:
+      // showing a set nobody picked is how a wrong answer gets sent.
+      if (!(index >= 0 && index < options.length) || seen.has(index)) { return []; }
+      seen.add(index);
+    }
+    for (const index of Array.from(seen).sort((a, b) => a - b)) { picked.push(options[index]); }
+    return picked;
+  }
+  for (let mask = 1; mask < (1 << options.length); mask++) {
+    const picked = options.filter((_, i) => mask & (1 << i));
+    if (picked.join(separator) === state) { return picked; }
+  }
+  return [];
+}
+
+class AgentBridgeChoicesCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._last = '';
+    this._sent = '';
+    // Whether an accepted Send has committed this question's answer, and which
+    // question that was. Rows are frozen while it is set: Home Assistant had taken
+    // the press but the daemon had not yet swept, and a row changed in that window
+    // was read against the press already made - so the new value went to the session
+    // without anyone pressing Send for it, which is the one thing Send exists to
+    // prevent. The question is kept separately from the flag because a question may
+    // legitimately have no id, and '' is then the id it was committed at.
+    this._committed = false;
+    this._committedAt = '';
+    // Whether every slot that must be answered is answered, as of the last render.
+    // Only a complete form is frozen on Send: an incomplete one is refused by the
+    // daemon, which says which field it is waiting on, and freezing that would leave
+    // no way to go and answer it.
+    this._complete = false;
+    this._takesText = false;
+    this._fields = [];
+    // Whether "Other (type your answer)" is picked, and on which question. Held here
+    // rather than written to the slot on purpose: the daemon reads a typed answer
+    // only while the slot is still on its placeholder (Read-DaemonFormAnswer's
+    // $missingChoice), so "I am going to type this one" is precisely the state of
+    // having chosen no option at all. Tying it to the question stops a pick made on
+    // one surviving into its replacement.
+    this._other = false;
+    this._otherAt = '';
+    // What has been tapped but not yet seen coming back from Home Assistant.
+    // {} when everything on screen is confirmed.
+    //
+    // Two taps in quick succession used to compute from the same state, because the
+    // second ran before the first had been pushed back: ticking Auth then Search
+    // sent "Auth" and then "Search", losing Auth. Send had the matching problem -
+    // pressed straight after a tap it committed whatever the slot still held. A
+    // service call completing and the state actually arriving are separate events,
+    // so the pending set is what later taps compose from and what holds Send.
+    this._pending = {};
+    // Counts taps, so a reply arriving late can be matched to the one that caused
+    // it. The question id cannot do that job: two taps on one question share it.
+    this._op = 0;
+    // Every write still outstanding, by entity. The pending set holds only the
+    // *latest* value asked for, so an earlier write that has not come back is
+    // invisible to it: ticking a row and unticking it leaves two calls in flight, and
+    // acknowledging the second released Send while the first could still land and tick
+    // the row back on. Send is held while anything at all is outstanding.
+    this._inflight = {};
+    // The last value this card saw a slot actually settle on. A slot that moves away
+    // from it without being asked has been changed by something else - another viewer
+    // answering the same question, or a state arriving out of order - and Send must
+    // not quietly commit that. Without this the card showed two rows ticked, became
+    // one row ticked on its own, kept Send live, and sent the one.
+    this._confirmed = {};
+    this._note = '';
+    // The reply topic whose Send this card is holding down, if any. Kept apart from
+    // _config so a reconfiguration cannot lose track of it.
+    this._heldTopic = '';
+  }
+
+  setConfig(config) {
+    if (!config || !config.decision) {
+      throw new Error('agent-bridge-choices-card: "decision" is required');
+    }
+    this._config = Object.assign({}, config);
+    // A single-choice question has no fields; a form has up to four, and the unused
+    // slots stay parked on Idle rather than being deleted, so the list is fixed.
+    this._fields = Array.isArray(config.fields) ? config.fields.map(String).filter(Boolean) : [];
+    this._last = '';
+    if (this._hass) { this._render(); }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._config) { this._render(); }
+  }
+
+  getCardSize() { return 2; }
+
+  disconnectedCallback() {
+    // Home Assistant's conditional card removes this one outright once the question
+    // is gone, so _render is never called again to release the hold - without this
+    // the reply card's Send would stay hidden for the rest of the session.
+    //
+    // Released by the topic actually held rather than the one the config names now,
+    // for the reason _holdReplySend gives.
+    this._releaseHold(this._heldTopic);
+  }
+
+  /*
+   * Take or release the hold on the reply card's own Send.
+   *
+   * The topic held is remembered rather than read back off the config, because
+   * setConfig can repoint this element at another session: _config is replaced
+   * before anything here runs, so a release that trusted it would free the new
+   * topic and leave the old one held by a card that can no longer name it - the
+   * first session's Send and Ctrl+Enter disabled for good.
+   */
+  _holdReplySend(held) {
+    const topic = String((this._config && this._config.reply_topic) || '');
+    if (this._heldTopic && this._heldTopic !== topic) { this._releaseHold(this._heldTopic); }
+    if (!topic) { return; }
+    if (!held) { this._releaseHold(topic); return; }
+    if (FORM_SENDS.get(topic) === this) { return; }
+    FORM_SENDS.set(topic, this);
+    this._heldTopic = topic;
+    this._notifyReply(topic);
+  }
+
+  /*
+   * Give a topic's Send back, if this card is what is holding it.
+   *
+   * Home Assistant rebuilds a view by connecting the replacement before
+   * disconnecting the original, so an unconditional release would drop a hold the
+   * successor had just taken and put the second Send back on screen.
+   */
+  _releaseHold(topic) {
+    const held = String(topic || '');
+    if (!held) { return; }
+    if (this._heldTopic === held) { this._heldTopic = ''; }
+    if (FORM_SENDS.get(held) !== this) { return; }
+    FORM_SENDS.delete(held);
+    this._notifyReply(held);
+  }
+
+  _notifyReply(topic) {
+    const reply = REPLY_CARDS.get(topic);
+    if (reply && reply.noteFormSendChanged) { reply.noteFormSendChanged(); }
+  }
+
+  _build() {
+    this._built = true;
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 0; background: none; box-shadow: none; border: none; }
+        .choices { display: flex; flex-direction: column; gap: 6px; }
+        /* A field's own heading, so a form of three-option groups reads as three
+           questions rather than one long list of unrelated answers. */
+        .label {
+          font-size: 0.85em; font-weight: 500; color: var(--secondary-text-color);
+          margin: 4px 0 -2px 2px; overflow-wrap: anywhere;
+        }
+        .label:first-child { margin-top: 0; }
+        button {
+          /* Wrapping is the whole point: the text decides the height, not the row. */
+          white-space: normal; overflow-wrap: anywhere; text-align: left;
+          width: 100%; min-height: 44px; padding: 10px 12px; box-sizing: border-box;
+          font: inherit; line-height: 1.35; color: var(--primary-text-color);
+          background: var(--secondary-background-color, rgba(127,127,127,0.1));
+          border: 1px solid var(--divider-color); border-radius: 8px; cursor: pointer;
+        }
+        button:hover { border-color: var(--primary-color); }
+        button:active { background: var(--divider-color); }
+        button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
+        /* A form is answered field by field and only sent with Send, so what has
+           already been picked has to stay visible while the rest is filled in. */
+        button.chosen {
+          border-color: var(--primary-color); border-width: 2px; padding: 9px 11px;
+          background: var(--primary-color); color: var(--text-primary-color, #fff);
+        }
+        button.cancel {
+          color: var(--secondary-text-color); background: none;
+          min-height: 36px; font-size: 0.92em;
+        }
+        /* The prompt's own "Other" entry. Drawn as an option because that is what it
+           is, but dashed, so it reads as "none of these" rather than as one more
+           answer to weigh against the real ones. */
+        button.other { border-style: dashed; }
+        button.other.chosen { border-style: solid; }
+        /* Where to type, said under the row that was just pressed: the box itself is
+           a separate card further down, which on a phone is off the screen. */
+        .hint {
+          font-size: 0.82em; color: var(--secondary-text-color);
+          margin: -2px 2px 2px 2px; overflow-wrap: anywhere;
+        }
+        /* Send answer. A form is only sent when this is pressed, so it has to read
+           as the one thing that acts rather than as another option to weigh. */
+        button.send {
+          border-color: var(--primary-color); color: var(--primary-color);
+          font-weight: 600; text-align: center; margin-top: 2px;
+        }
+        /* While the answer is on its way, so a second tap cannot send another. */
+        .choices.sending button { opacity: 0.5; cursor: default; pointer-events: none; }
+        /* A tap that Home Assistant has not confirmed yet. The rows stay live so a
+           choice can still be changed, but Send is held until what is on screen is
+           known to be what the daemon will read. */
+        button.send[disabled] { opacity: 0.45; cursor: default; }
+        .note {
+          font-size: 0.82em; color: var(--secondary-text-color);
+          margin: 2px 2px 0 2px; overflow-wrap: anywhere;
+        }
+        .note.err { color: var(--error-color, #ff5252); }
+        [hidden] { display: none !important; }
+      </style>
+      <ha-card><div class="choices"></div></ha-card>`;
+    this._els = { list: this.shadowRoot.querySelector('.choices') };
+  }
+
+  /*
+   * What one select entity is offering, or null when it is carrying nothing.
+   *
+   * The two placeholders are dropped here rather than at the call site: they are
+   * parked states the bridge drives the entity to so that "waiting" is a state and
+   * not merely an absence, and offering either as an answer would send the prompt
+   * the word 'Choose...'.
+   */
+  _armed(entityId) {
+    const entity = this._hass ? this._hass.states[entityId] : undefined;
+    if (!entity) { return null; }
+    const state = String(entity.state);
+    if (CHOICE_UNARMED.indexOf(state) !== -1) { return null; }
+    const attributes = entity.attributes || {};
+    const options = Array.isArray(attributes.options)
+      ? attributes.options.map(String).filter((o) => o && o !== CHOICE_PLACEHOLDER && o !== CHOICE_FIELD_PLACEHOLDER)
+      : [];
+    if (options.length === 0) { return null; }
+    return {
+      entityId,
+      state,
+      options,
+      label: '',
+      // A field still on its placeholder has not been answered yet.
+      chosen: (state === CHOICE_PLACEHOLDER || state === CHOICE_FIELD_PLACEHOLDER) ? '' : state,
+    };
+  }
+
+  _render() {
+    if (!this._built) { this._build(); }
+
+    const decisionEntity = this._hass ? this._hass.states[this._config.decision] : undefined;
+    const decisionAttrs = (decisionEntity && decisionEntity.attributes) || {};
+    // Every pending tap is tied to the question it was made on, so a question that
+    // is replaced or withdrawn can never have a stale selection sent against it.
+    const generation = String(decisionAttrs.decision_id || '');
+    for (const key of Object.keys(this._pending)) {
+      if (this._pending[key].generation !== generation) { delete this._pending[key]; }
+    }
+    // A commit belongs to the question it answered. A replacement question must be
+    // answerable, and the press that settled the previous one says nothing about it.
+    if (this._committed && this._committedAt !== generation) {
+      this._committed = false;
+      this._committedAt = '';
+    }
+    // The same for "I am going to type this one". A replacement question is a
+    // different question, and carrying the pick across it would draw a row as chosen
+    // that nobody chose - and send the box's words as its answer.
+    if (this._other && this._otherAt !== generation) {
+      this._other = false;
+      this._otherAt = '';
+    }
+    // A write still in flight for a question that has been replaced cannot answer the
+    // one now on screen, so it must not hold its Send either. Home Assistant refuses
+    // a value the republished slot no longer offers, so it cannot quietly land in it.
+    for (const key of Object.keys(this._inflight)) {
+      const set = this._inflight[key];
+      for (const op of Object.keys(set)) {
+        if (set[op] !== generation) { delete set[op]; }
+      }
+      if (Object.keys(set).length === 0) { delete this._inflight[key]; }
+    }
+    for (const key of Object.keys(this._confirmed)) {
+      if (this._confirmed[key].generation !== generation) { delete this._confirmed[key]; }
+    }
+
+    // Fields first, then whatever the main selector offers - which on a form is only
+    // 'Cancel request'. A field group is shown only while it is carrying options, so
+    // a two-field question renders exactly two groups and the spare slots stay away.
+    //
+    // The heading comes from the decision entity's field_<n>_label attribute, which
+    // is where the bridge has published the labels since the per-field dropdowns
+    // existed. The field entity's own friendly_name cannot be used: Home Assistant
+    // builds it from the device name plus the entity name, so every heading would
+    // start with the session's whole title.
+    const fields = [];
+    this._fields.forEach((entityId, i) => {
+      const armed = this._armed(entityId);
+      if (!armed) { return; }
+      armed.label = String(decisionAttrs[`field_${i + 1}_label`] || '');
+      // A multi-select slot can only hold whole combinations, because a Home
+      // Assistant select holds one value. What it is really offering rides on the
+      // decision attributes beside the heading, so the rows drawn here are those
+      // options and the slot is given the one label that stands for what is ticked.
+      if (decisionAttrs[`field_${i + 1}_multi`]) {
+        const base = []
+          .concat(decisionAttrs[`field_${i + 1}_options`] || [])
+          .map(String)
+          .filter(Boolean);
+        if (base.length > 0) {
+          armed.multi = true;
+          armed.separator = String(decisionAttrs[`field_${i + 1}_separator`] || CHOICE_MULTI_SEPARATOR);
+          // Whether this slot will take positions. Absent from an older bridge, which
+          // only ever published the options written out, so the words stay the default.
+          armed.codes = !!decisionAttrs[`field_${i + 1}_codes`];
+          // What to write when every row is unticked. Absent unless this field's own
+          // schema accepts an empty answer, and absent from any bridge older than the
+          // attribute - and then the placeholder stands, as it always did.
+          armed.emptyValue = String(decisionAttrs[`field_${i + 1}_empty`] || '');
+          armed.slotOptions = armed.options;
+          armed.options = base;
+          armed.picked = multiSelectPick(base, armed.separator, armed.chosen, armed.codes, armed.emptyValue);
+        }
+      }
+      fields.push(armed);
+    });
+
+    const decision = this._armed(this._config.decision);
+    const groups = fields.slice();
+    if (decision) { groups.push(Object.assign({}, decision, { isDecision: true })); }
+
+    // Send answer commits whatever is ticked. It is drawn whenever the view has
+    // given this card a submit entity and there is something to commit - a field, or
+    // a main selector carrying its own choices, which is the legacy and lone-Claude
+    // shape. Cancel is not one of those: withdrawing a question is its own act.
+    const commits = fields.length > 0 ||
+      !!(decision && decision.options.some((o) => o !== CHOICE_CANCEL));
+    // Unless the tap is itself the answer. A Codex approval is published without the
+    // snapshot a press is checked against, so the daemon acts on Approve or Deny the
+    // moment it sees it and never looks for a press. Drawing Send beside that offered
+    // a confirmation step that did not exist: the command was already approved by the
+    // tap somebody made expecting to review it first.
+    const tapAnswers = decisionAttrs.answer_on_tap === true;
+    const sends = !!(this._config.submit && commits && !tapAnswers);
+    // Which groups have to be answered before the daemon will take the form. The
+    // decision selector carrying only Cancel is not one of them - on a form question
+    // the fields are the answer and it stays on its placeholder throughout.
+    const mustAnswer = groups.filter((g) => g.options.some((o) => o !== CHOICE_CANCEL));
+    this._complete = mustAnswer.length > 0 && mustAnswer.every((g) => g.chosen !== '');
+    // Whether this question has a free-text field: a slot the bridge gave a heading
+    // but no options, because it is answered in the reply box rather than by a
+    // dropdown. An unused slot carries no heading, which is what tells the two apart.
+    //
+    // Only such a question can be sent by publishing. Read-DaemonFormAnswer submits on
+    // a payload alone ($cardSubmits) only when $takesText, so publishing for an
+    // options-only form - because a draft happened to be sitting in the reply box -
+    // sent nothing at all while this card had already frozen itself as though it had.
+    this._takesText = this._fields.some((entityId, i) =>
+      !this._armed(entityId) && String(decisionAttrs[`field_${i + 1}_label`] || '') !== '');
+
+    // The group that gets the prompt's own "Other (type your answer)" row, when the
+    // bridge says this question really has one. Never derived from the shape of what
+    // this card was handed: the condition is the daemon's (Test-DecisionTakesTypedAnswer),
+    // and a row offering an answer the daemon will not take is worse than no row - the
+    // words would be published and then quietly dropped.
+    //
+    // There is exactly one group it can belong to, because the attribute is published
+    // only for a lone scalar field or for choices riding on the main selector, and the
+    // Cancel-only selector beside a field is not an option list at all.
+    const typedGroup = decisionAttrs.takes_typed_answer === true && !tapAnswers
+      ? groups.find((g) => g.options.some((o) => o !== CHOICE_CANCEL))
+      : null;
+    if (!typedGroup && this._other) { this._other = false; this._otherAt = ''; }
+
+    const show = groups.length > 0;
+    // Before the early return below, so a question that has gone releases the reply
+    // card's Send on the same pass that stops drawing this one.
+    this._holdReplySend(show && sends);
+    this.hidden = !show;
+    if (!show) {
+      this._sent = ''; this._committed = false; this._committedAt = '';
+      this._other = false; this._otherAt = '';
+      this._pending = {}; this._inflight = {}; this._note = '';
+      return;
+    }
+
+    // What has been tapped and not yet confirmed. A slot is only settled once Home
+    // Assistant has both accepted the call and shown the value it was asked for.
+    //
+    // Matching the state alone released it too early in two ways. Toggling a row on
+    // and straight back off asks for the value the slot already holds, so it looked
+    // settled before the untick had been accepted at all - and if that call then
+    // failed, Send went with the row still ticked underneath. An older acknowledgement
+    // arriving after a newer tap did the same thing from the other direction.
+    for (const group of groups) {
+      const pending = this._pending[group.entityId];
+      if (!pending) { continue; }
+      if (pending.acked && pending.value === group.state) {
+        delete this._pending[group.entityId];
+        // Seen to land. From here, anything that moves it is something else.
+        this._confirmed[group.entityId] = { value: group.state, generation };
+      }
+      else if (group.multi) { group.picked = pending.picked.slice(); }
+      else { group.chosen = pending.value; }
+    }
+
+    // What a slot held when this card first drew it counts as confirmed too: it is
+    // what the person is looking at, including a schema default that arrived already
+    // ticked.
+    for (const group of groups) {
+      if (this._confirmed[group.entityId]) { continue; }
+      if (this._pending[group.entityId] || this._inflight[group.entityId]) { continue; }
+      this._confirmed[group.entityId] = { value: group.state, generation };
+    }
+
+    // A slot that has moved away from what was confirmed, with nothing of this card's
+    // outstanding to explain it. The rows below show what is really there - that part
+    // was never wrong - but Send is held and says why, because committing it would
+    // send something nobody on this card chose. Tapping adopts it and clears this.
+    const diverged = groups.filter((g) => {
+      const seen = this._confirmed[g.entityId];
+      if (!seen || this._pending[g.entityId] || this._inflight[g.entityId]) { return false; }
+      return seen.value !== g.state;
+    });
+
+    // "Other" means no option is chosen, so a settled slot that is holding one says
+    // this card is no longer describing the question: the pick cannot survive that.
+    //
+    // The write that clears the slot can be refused. _failPending drops it and says
+    // so, which left Other ticked beside the option it had failed to clear, Send live
+    // and the form reading as complete - and sending then published the words while
+    // Read-DaemonFormAnswer, seeing a chosen slot, would not take them as the answer.
+    // Settled is what is tested, not merely non-empty: a slot being cleared for Other
+    // carries the placeholder as its pending value, which is not '' either.
+    if (this._other && typedGroup && !this._pending[typedGroup.entityId] &&
+        !this._inflight[typedGroup.entityId] && typedGroup.chosen !== '') {
+      this._other = false;
+      this._otherAt = '';
+    }
+    const waiting = Object.keys(this._pending).length > 0 || Object.keys(this._inflight).length > 0;
+    if (!waiting && this._note === CHOICE_SAVING_NOTE) { this._note = ''; }
+    if (waiting && !this._note) { this._note = CHOICE_SAVING_NOTE; }
+    // Nothing of ours outstanding, so this is the one thing worth saying.
+    if (!waiting) {
+      if (diverged.length > 0) { this._note = CHOICE_CHANGED_NOTE; }
+      else if (this._note === CHOICE_CHANGED_NOTE) { this._note = ''; }
+    }
+    const held = waiting || diverged.length > 0 || this._committed;
+
+    // The answer has landed once the selector is no longer parked on the placeholder.
+    if (this._sent && (!decision || decision.state !== CHOICE_PLACEHOLDER)) { this._sent = ''; }
+    // Committed says the press was taken and the rows are no longer yours to change.
+    // Not released by the selector moving, the way Cancel is: on a form question the
+    // selector never leaves its placeholder, and the thing that ends this question is
+    // the daemon clearing it, which hides the card and resets this with it.
+    if (this._committed) { this._note = CHOICE_SENT_NOTE; }
+    else if (this._note === CHOICE_SENT_NOTE) { this._note = ''; }
+    this._els.list.classList.toggle('sending', !!this._sent || this._committed);
+
+    // Every field's current value is in the signature, so picking one redraws the
+    // form and the tick moves. Without it the card short-circuits on an unchanged
+    // option list and a tap appears to do nothing at all. The pending set and the
+    // note are in it too, so holding Send and saying why are drawn as they happen.
+    const signature = groups
+      .map((g) => `${g.entityId}\u0002${g.chosen}\u0002${g.label}\u0002${g.multi ? 'm' : 's'}\u0002${g.options.join('\u0001')}\u0002${g.multi ? g.picked.join('\u0001') : ''}`)
+      .join('\u0003') + `\u0004${sends}\u0004${held}\u0004${this._note}\u0004${this._committed}` +
+      `\u0004${!!typedGroup}\u0004${this._other}`;
+    if (signature === this._last) { return; }
+    this._last = signature;
+
+    this._els.list.textContent = '';
+    let cancel = null;
+    for (const group of groups) {
+      // Only when it says something the rows do not. A lone single-choice group's
+      // heading is the field name, which on its own card only repeats the question
+      // already above it; "(pick any)" is the one thing no row can say.
+      const heading = group.label && (group.multi || fields.length > 1)
+        ? (group.multi ? `${group.label} (pick any)` : group.label)
+        : '';
+      if (heading) {
+        const label = document.createElement('div');
+        label.classList.add('label');
+        label.textContent = heading;
+        this._els.list.appendChild(label);
+      }
+      for (const option of group.options) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = option;
+        if (option === CHOICE_CANCEL) { button.classList.add('cancel'); }
+        else if (group.multi ? group.picked.indexOf(option) >= 0 : option === group.chosen) {
+          button.classList.add('chosen');
+        }
+        // Picking a real option is also the way back from Other: the two are the one
+        // choice, and leaving Other ticked beside it would send the box's words over
+        // the option just tapped. Cleared inside _choose, after its own guard, so a
+        // tap on frozen rows cannot quietly untick it either.
+        button.addEventListener('click', () => this._choose(group, option));
+        // Held back so it stays the quiet last row. Send is the thing being looked
+        // for after a tap; withdrawing the question is not, and putting it in
+        // between would make it the easiest row to hit by mistake.
+        if (option === CHOICE_CANCEL) { cancel = button; continue; }
+        this._els.list.appendChild(button);
+      }
+      // The prompt's own trailing entry, in the place the prompt puts it: last in
+      // this group's list, below every declared option.
+      if (group === typedGroup) {
+        const other = document.createElement('button');
+        other.type = 'button';
+        other.classList.add('other');
+        other.textContent = CHOICE_OTHER;
+        if (this._other) { other.classList.add('chosen'); }
+        other.addEventListener('click', () => this._chooseOther(group));
+        this._els.list.appendChild(other);
+        if (this._other) {
+          const hint = document.createElement('div');
+          hint.className = 'hint';
+          hint.textContent = CHOICE_OTHER_HINT;
+          this._els.list.appendChild(hint);
+        }
+      }
+    }
+    if (sends) {
+      const send = document.createElement('button');
+      send.type = 'button';
+      send.classList.add('send');
+      send.textContent = 'Send answer';
+      if (held) { send.setAttribute('disabled', 'disabled'); }
+      send.addEventListener('click', () => this._send());
+      this._els.list.appendChild(send);
+    }
+    if (cancel) { this._els.list.appendChild(cancel); }
+    if (this._note) {
+      const note = document.createElement('div');
+      note.className = this._note === CHOICE_SAVING_NOTE ? 'note' : 'note err';
+      note.textContent = this._note;
+      this._els.list.appendChild(note);
+    }
+  }
+
+  /*
+   * A tap changes what will be sent; it does not send. Everything waits for Send
+   * answer now - a single choice, a whole form, and a multi-select field's rows,
+   * which tick and untick until they say what you mean. Only Cancel still acts on
+   * the tap, because withdrawing a question is a deliberate act in itself.
+   *
+   * The tap composes from the pending set rather than from the entity, so two taps
+   * in a row build one answer instead of the second overwriting the first.
+   *
+   * KeepOther is set only by _chooseOther, which comes through here to clear the
+   * slot. Every other tap is a real option being picked, and that is also the way
+   * back from "Other": the two are the one choice, and leaving Other ticked beside a
+   * picked option would send the box's words over the option just tapped.
+   */
+  _choose(group, option, keepOther) {
+    if (this._sent || this._committed || !this._hass) { return; }
+    if (!keepOther) { this._other = false; this._otherAt = ''; }
+    const generation = String(
+      ((this._hass.states[this._config.decision] || {}).attributes || {}).decision_id || '');
+    // Each tap is its own operation. The question id alone is not enough to tell
+    // them apart: two taps on the same question share it, so a rejection arriving
+    // late for the first used to delete the second's tick and send the answer
+    // without it.
+    const op = ++this._op;
+    let value = option;
+    let picked = null;
+    if (group.multi) {
+      picked = group.picked.indexOf(option) >= 0
+        ? group.picked.filter((o) => o !== option)
+        : group.options.filter((o) => group.picked.indexOf(o) >= 0 || o === option);
+      // Nothing ticked. Where the field's schema accepts that, the bridge publishes a
+      // carrier of its own for it and the slot holds that, so the daemon reads an
+      // answer rather than an unanswered field. Where it does not, the slot goes back
+      // to its placeholder and the field is unanswered again - which is also what
+      // happens against a bridge too old to publish the carrier.
+      if (picked.length === 0) { value = group.emptyValue || CHOICE_FIELD_PLACEHOLDER; }
+      // Positions where the bridge said the slot will take them, because the options
+      // written out may be far longer than a select entry can hold - which is what
+      // used to send an ordinarily-worded question to the terminal instead.
+      else if (group.codes) { value = multiSelectCode(group.options, picked); }
+      else { value = picked.join(group.separator); }
+    }
+    else if (group.isDecision && option === CHOICE_CANCEL) {
+      this._sent = option;
+      this._els.list.classList.add('sending');
+    }
+
+    if (!(group.isDecision && option === CHOICE_CANCEL)) {
+      this._pending[group.entityId] = { value, picked: picked || [], generation, op, acked: false };
+      this._note = CHOICE_SAVING_NOTE;
+      this._last = '';
+      this._render();
+    }
+
+    let call;
+    try { call = this._hass.callService('select', 'select_option', { entity_id: group.entityId, option: value }); }
+    catch (err) { this._failPending(group.entityId, op, err); return; }
+    if (!call || typeof call.then !== 'function') { return; }
+    this._track(group.entityId, op, true, generation);
+    call.then(
+      () => {
+        // Accepted. Only this tap's own acknowledgement counts: an older one arriving
+        // after a newer tap must not settle the newer one. Usually the new state
+        // arrives separately and clears it, but when the slot already held the value
+        // nothing further is coming, so this redraw is what stops Send being held for
+        // ever.
+        this._track(group.entityId, op, false);
+        const pending = this._pending[group.entityId];
+        if (pending && pending.op === op) { pending.acked = true; }
+        this._last = '';
+        this._render();
+      },
+      // A rejected call must take its own tick back with it, and only its own.
+      (err) => { this._track(group.entityId, op, false); this._failPending(group.entityId, op, err); });
+  }
+
+  /*
+   * "Other (type your answer)": the answer is going to be typed, not picked.
+   *
+   * Nothing about that is written to the slot, and that is the point. The daemon
+   * reads words as the answer only while the slot is still on its placeholder -
+   * Read-DaemonFormAnswer's $missingChoice, and the selector path in
+   * Read-DaemonDecisionAnswer - so "I am going to type this one" *is* the state of
+   * having picked no option. A slot still holding an option tapped earlier would be
+   * read as the answer instead, and the words would go nowhere, so this clears it.
+   *
+   * The box is a separate card further down the session, which on a phone is off the
+   * screen, so the cursor is put in it here - the same thing selecting the prompt's
+   * own Other entry does.
+   */
+  _chooseOther(group) {
+    if (this._sent || this._committed || !this._hass) { return; }
+    this._other = true;
+    this._otherAt = this._generationNow();
+    const reply = REPLY_CARDS.get(String((this._config && this._config.reply_topic) || ''));
+    if (reply && reply.focusInput) { reply.focusInput(); }
+    if (group.chosen !== '') {
+      this._choose(group, group.isDecision ? CHOICE_PLACEHOLDER : CHOICE_FIELD_PLACEHOLDER, true);
+      return;
+    }
+    this._last = '';
+    this._render();
+  }
+
+  /* Adds or removes one outstanding write, tied to the question it was made on. */
+  _track(entityId, op, outstanding, generation) {
+    const set = this._inflight[entityId] || (this._inflight[entityId] = {});
+    if (outstanding) { set[op] = generation; }
+    else { delete set[op]; }
+    if (Object.keys(set).length === 0) { delete this._inflight[entityId]; }
+  }
+
+  /*
+   * Drops a tap Home Assistant would not take, and says so.
+   *
+   * Only if that exact tap is still the pending one. An older failure arriving after
+   * a newer tap must leave the newer tick alone: clearing it would show the answer
+   * as saved while the card quietly held something else.
+   */
+  _failPending(entityId, op, err) {
+    const pending = this._pending[entityId];
+    if (!pending || pending.op !== op) { return; }
+    delete this._pending[entityId];
+    this._note = `Home Assistant would not take that: ${describeThrown(err)}`;
+    this._last = '';
+    this._render();
+  }
+
+  /*
+   * Sends the answer. Held while anything is still unconfirmed, because pressing it
+   * then would commit whatever the slot held before the last tap.
+   *
+   * Deliberately not locked the way Cancel is: the daemon refuses an incomplete form
+   * and says which field is still waiting, and a row that had locked itself would
+   * leave no way to go and answer it. A press Home Assistant refuses is said out
+   * loud for the same reason - a Send that silently did nothing is indistinguishable
+   * from one the session is still thinking about.
+   */
+  _send() {
+    if (this._sent || this._committed || !this._hass || !this._config.submit) { return; }
+    // Nothing outstanding, in either sense: no tap waiting to be shown, and no write
+    // still in flight that could land afterwards and change what is about to be sent.
+    if (Object.keys(this._pending).length > 0) { return; }
+    if (Object.keys(this._inflight).length > 0) { return; }
+    // And nothing has moved under us since we last saw a slot settle. The row is
+    // drawn disabled for this too, but a press can arrive from a keyboard or a stale
+    // click, and sending a choice nobody made here is exactly what must not happen.
+    if (this._note === CHOICE_CHANGED_NOTE) { return; }
+    const generation = this._generationNow();
+    // Whatever is typed in the reply box has to be published before the form is sent.
+    // The daemon reads a form's free-text field out of that payload
+    // (Read-DaemonDecisionCardText); a submit arriving without one left the field
+    // empty, and an empty free-text field is a valid answer, so the form went to the
+    // session with the typed words silently dropped (#93).
+    //
+    // Only ever for a complete form. Publishing is itself a submission -
+    // Read-DaemonFormAnswer submits on the payload alone ($cardSubmits) - so words
+    // published for a form that is not finished would sit there and fire the moment
+    // the last choice was ticked, turning a tap into the send, which is the one thing
+    // Send answer exists to prevent. An incomplete form keeps exactly the behaviour it
+    // had: the press, which is what makes the daemon name the field it is waiting on,
+    // and the words stay in the box until there is a finished form to carry them.
+    //
+    // Or the whole answer, where "Other (type your answer)" is what was picked. The
+    // slot is deliberately still on its placeholder there, so the payload is the
+    // entire answer and the daemon takes it on its own - the same route, for the same
+    // reason, without a press to race the sensor with.
+    const reply = (this._other || (this._complete && this._takesText))
+      ? REPLY_CARDS.get(String(this._config.reply_topic || ''))
+      : null;
+    const typed = !!(reply && reply.hasUnsentFormText());
+    // Other picked and nothing written. Pressing the submit entity here would reach
+    // the daemon as a question with no option chosen and no words to use, which it
+    // reports as "choose an option" - true, but not what was being attempted. Say
+    // where the words go instead, and send nothing.
+    if (this._other && !typed) {
+      this._note = CHOICE_OTHER_EMPTY_NOTE;
+      this._last = '';
+      this._render();
+      return;
+    }
+    // Frozen as the press is dispatched, not when Home Assistant acknowledges it.
+    // callService is a promise, and a tap landing while it was in flight reached the
+    // selector before the daemon read it - so the daemon submitted the changed value
+    // against a press made for the previous one, and the freeze then arrived too late
+    // and locked in what had already been changed.
+    if (this._complete || this._other) {
+      this._committed = true;
+      this._committedAt = generation;
+      this._last = '';
+      this._render();
+    }
+    if (typed) {
+      reply.publishFormText(generation, this._config.decision).then(
+        (published) => {
+          // Only on a publish that landed. Submitting after a failed one is exactly
+          // the loss this exists to prevent, and the reply card keeps the text so it
+          // can be sent again.
+          if (!published) {
+            this._failSend(new Error('the reply box could not be sent - try again'));
+            return;
+          }
+          // And only if this is still the same question. A publish is a round trip,
+          // and the terminal or another dashboard can answer the old question inside
+          // it; the daemon drops a payload tagged for a question that has gone.
+          if (this._generationNow() !== generation) {
+            // The daemon discards a payload tagged for a question that has gone, so
+            // telling someone to send again is only honest if the words are back in
+            // the box - all of them, including any that were appended meanwhile.
+            reply.restoreFormText();
+            this._failSend(new Error('the question changed - check it and send again'));
+            return;
+          }
+          // Nothing else to do. The payload is the submission, and pressing as well
+          // would race the sensor it depends on: mqtt.publish returns when Home
+          // Assistant has dispatched the message, not when sensor.<node>_reply_payload
+          // has caught up, and a press read in that gap submits the form with an empty
+          // field and the words arrive too late to be part of it.
+        },
+        (err) => this._failSend(err));
+      return;
+    }
+    this._pressSubmit();
+  }
+
+  _generationNow() {
+    return String(((this._hass.states[this._config.decision] || {}).attributes || {}).decision_id || '');
+  }
+
+  _pressSubmit() {
+    let call;
+    try { call = this._hass.callService('button', 'press', { entity_id: this._config.submit }); }
+    catch (err) { this._failSend(err); return; }
+    if (call && typeof call.then === 'function') { call.then(() => {}, (err) => this._failSend(err)); }
+  }
+
+  _failSend(err) {
+    // Released on purpose, so the press can be tried again: nothing was sent.
+    this._committed = false;
+    this._committedAt = '';
+    this._note = `Send failed: ${describeThrown(err)}`;
+    this._last = '';
+    this._render();
+  }
+}
+
+/*
+ * One session's cards on a single surface: the border, background and state glow
+ * (working, waiting on you) drawn here, the section cards inside it.
+ *
+ * This used to be a vertical-stack styled by card-mod. card-mod is a dashboard
+ * resource, and on a hard refresh the stack could be built before it loaded - and
+ * card-mod never went back to it, so every session lost its outline, background
+ * and glow until the next navigation. A custom card type has no such race: Home
+ * Assistant waits for it to be defined before creating it. The children are made
+ * transparent through ha-card's own CSS variables, so they sit on this surface
+ * whether or not card-mod has arrived either.
+ */
+/*
+ * It also folds: collapsed, a session keeps only its header - title, status line,
+ * the working spinner - and hides the response, reasoning, history, reply box and
+ * buttons. The chevron or the title toggles it; each viewer's choice is remembered
+ * per session. A collapsed session that starts waiting on you opens by itself, so a
+ * question is never folded away unseen.
+ */
+class AgentBridgeSessionCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._children = [];
+    this._collapsed = false;
+  }
+
+  setConfig(config) {
+    if (!config || !Array.isArray(config.cards)) {
+      throw new Error('agent-bridge-session-card: "cards" is required');
+    }
+    this._config = Object.assign({ status: '', decision: '' }, config);
+    this._storeKey = `agent-bridge-collapsed:${this._config.status || ''}`;
+    try { this._collapsed = localStorage.getItem(this._storeKey) === '1'; } catch (e) { this._collapsed = false; }
+    this._build();
+  }
+
+  _setCollapsed(collapsed) {
+    this._collapsed = collapsed;
+    try {
+      if (collapsed) { localStorage.setItem(this._storeKey, '1'); } else { localStorage.removeItem(this._storeKey); }
+    } catch (e) { /* a per-viewer nicety; the card works without it */ }
+    this._applyCollapsed();
+  }
+
+  _applyCollapsed() {
+    if (!this._frame) { return; }
+    this._frame.classList.toggle('collapsed', this._collapsed);
+    this._toggle.setAttribute('aria-expanded', this._collapsed ? 'false' : 'true');
+    this._toggle.title = this._collapsed ? 'Expand' : 'Collapse';
+    const header = this._children[0];
+    if (header) { header.compact = this._collapsed; }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    for (const child of this._children) { if (child) { child.hass = hass; } }
+    this._renderState();
+  }
+
+  getCardSize() {
+    if (this._collapsed) { return 2; }
+    return Math.max(4, (this._config && this._config.cards.length) || 4);
+  }
+
+  _build() {
+    const generation = (this._generation = (this._generation || 0) + 1);
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host { display: block; }
+        .frame {
+          position: relative;
+          /* Room for the chevron beside the header's title, and a title that toggles. */
+          --agent-bridge-title-inset: 30px;
+          --agent-bridge-title-cursor: pointer;
+          border-radius: var(--ha-card-border-radius, 12px);
+          background: var(--ha-card-background, var(--card-background-color, #fff));
+          overflow: hidden;
+          padding: 4px 12px 10px 12px;
+          box-sizing: border-box;
+          border: 1px solid var(--divider-color);
+          transition: border-color 0.4s ease, box-shadow 0.4s ease;
+          /* Children draw no surface of their own. */
+          --ha-card-background: transparent;
+          --ha-card-box-shadow: none;
+          --ha-card-border-width: 0;
+          --ha-card-border-color: transparent;
+        }
+        /* The steady core of the glow. Static, so it is painted once when the state
+           changes; the breathing halo on top of it is .glow, below. */
+        .frame.working { border-color: var(--primary-color); box-shadow: 0 0 6px 0 var(--primary-color); }
+        .frame.waiting { border-color: var(--warning-color); box-shadow: 0 0 6px 0 var(--warning-color); }
+        /* Waiting on background agents it started, or on a background command it has
+           not collected: live work, but not the session's own, so it keeps the working
+           colour as a steady edge and none of the breathing. The point of it is only
+           that this is not a card to close. */
+        .frame.delegating { border-color: var(--primary-color); }
+        /* Driven through Home Assistant by an agent rather than by you. The pulse is
+           the same shape so "something is happening" still reads at a glance; only
+           the colour changes, and it holds a steady purple edge while idle so a
+           session left under an agent's control still says so. */
+        .frame.agent { border-color: var(--agent-bridge-agent-color, #a855f7); }
+        .frame.agent.working,
+        .frame.agent.waiting {
+          border-color: var(--agent-bridge-agent-color, #a855f7);
+          box-shadow: 0 0 6px 0 var(--agent-bridge-agent-color, #a855f7);
+        }
+        /*
+         * The halo is a layer of its own holding a shadow that never changes, faded
+         * in and out by its opacity - not a box-shadow animated on the frame.
+         *
+         * box-shadow is not a property the compositor can animate, so the old
+         * keyframes repainted the entire card on the main thread on every frame, for
+         * as long as the session was working. Four sessions working at once meant
+         * four full-card repaints 60 times a second that no state change had asked
+         * for, and Home Assistant - a tab that stays open for days - stuttered and
+         * hung. Opacity is composited on the GPU: the card is rastered once and the
+         * main thread does nothing for the rest of the pulse.
+         *
+         * It has to be a sibling of the frame rather than a child. The frame's
+         * overflow: hidden - which keeps the children's square corners inside the
+         * rounded edge - would clip a glow drawn inside it to nothing.
+         */
+        .shell { position: relative; }
+        .glow {
+          position: absolute;
+          inset: 0;
+          border-radius: var(--ha-card-border-radius, 12px);
+          opacity: 0;
+          pointer-events: none;
+        }
+        .frame.working ~ .glow,
+        .frame.waiting ~ .glow {
+          animation: cpglow 1.6s ease-in-out infinite;
+          /* Only while it is actually pulsing. A promoted layer costs texture memory
+             whether or not it moves, and most sessions on the dashboard are idle. */
+          will-change: opacity;
+        }
+        .frame.working ~ .glow { box-shadow: 0 0 16px 2px var(--primary-color); }
+        .frame.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--warning-color); }
+        .frame.agent.working ~ .glow,
+        .frame.agent.waiting ~ .glow { box-shadow: 0 0 18px 3px var(--agent-bridge-agent-color, #a855f7); }
+        @keyframes cpglow {
+          0%, 100% { opacity: 0; }
+          50%      { opacity: 1; }
+        }
+        /* The breathing is decoration. A viewer who asked for less motion keeps the
+           colour and the glow, held at the middle of the pulse. */
+        @media (prefers-reduced-motion: reduce) {
+          .frame.working ~ .glow,
+          .frame.waiting ~ .glow { animation: none; opacity: 0.6; will-change: auto; }
+        }
+        .fold {
+          position: absolute; top: 14px; right: 10px; z-index: 1;
+          width: 28px; height: 28px; padding: 0; border: none; border-radius: 50%;
+          background: none; cursor: pointer; color: var(--secondary-text-color);
+          display: flex; align-items: center; justify-content: center; --mdc-icon-size: 22px;
+          transition: transform 0.2s ease;
+        }
+        .fold:hover { background: var(--secondary-background-color, rgba(127,127,127,0.15)); }
+        .collapsed .fold { transform: rotate(-90deg); }
+        /* Collapsed, only the header stays. */
+        .collapsed .body > :not(:first-child) { display: none; }
+        .collapsed { padding-bottom: 4px; }
+      </style>
+      <div class="shell">
+        <div class="frame">
+          <button class="fold" aria-expanded="true" title="Collapse"><ha-icon icon="mdi:chevron-down"></ha-icon></button>
+          <div class="body"></div>
+        </div>
+        <div class="glow" aria-hidden="true"></div>
+      </div>`;
+    this._frame = this.shadowRoot.querySelector('.frame');
+    this._body = this.shadowRoot.querySelector('.body');
+    this._toggle = this.shadowRoot.querySelector('.fold');
+    this._toggle.addEventListener('click', () => this._setCollapsed(!this._collapsed));
+    // The header's title asks for the same, from inside its own shadow root.
+    this._frame.addEventListener('agent-bridge-toggle', (ev) => { ev.stopPropagation(); this._setCollapsed(!this._collapsed); });
+    this._state = null;
+    this._children = [];
+    this._applyCollapsed();
+    this._renderState();
+
+    const configs = this._config.cards;
+    const make = (helpers, index) => {
+      const el = helpers.createCardElement(configs[index]);
+      if (this._hass) { el.hass = this._hass; }
+      if (index === 0) { el.compact = this._collapsed; }
+      // A child whose custom type was not defined yet is built as a placeholder that
+      // asks to be rebuilt once it is - the same request a stack card honours.
+      el.addEventListener('ll-rebuild', (ev) => {
+        ev.stopPropagation();
+        if (generation !== this._generation) { return; }
+        const fresh = make(helpers, index);
+        el.replaceWith(fresh);
+        this._children[index] = fresh;
+      }, { once: true });
+      return el;
+    };
+    window.loadCardHelpers().then((helpers) => {
+      if (generation !== this._generation) { return; }
+      configs.forEach((_, index) => {
+        const el = make(helpers, index);
+        this._children[index] = el;
+        this._body.appendChild(el);
+      });
+    });
+  }
+
+  _renderState() {
+    if (!this._frame || !this._hass || !this._config) { return; }
+    const states = this._hass.states;
+    const decision = this._config.decision ? states[this._config.decision] : undefined;
+    const status = this._config.status ? states[this._config.status] : undefined;
+    const activity = this._config.activity ? states[this._config.activity] : undefined;
+    const waiting = !!(decision && decision.attributes && decision.attributes.question);
+    const state = waiting ? 'waiting'
+      : (status && status.state === 'working' ? 'working'
+        : (status && ['agents', 'shell'].includes(status.state) ? 'delegating' : ''));
+    // Who last drove this session. Absent on a card served by an older daemon, which
+    // reads as yours - the safe way round, since a wrong glow is worse than none.
+    const driver = (activity && activity.attributes && activity.attributes.driver) || 'human';
+    const key = `${state}\u0001${driver}`;
+    if (key === this._stateKey) { return; }
+    // A question arriving opens a folded session: it is waiting on you.
+    if (state === 'waiting' && this._collapsed) { this._setCollapsed(false); }
+    this._stateKey = key;
+    this._state = state;
+    this._frame.classList.toggle('waiting', state === 'waiting');
+    this._frame.classList.toggle('working', state === 'working');
+    this._frame.classList.toggle('delegating', state === 'delegating');
+    this._frame.classList.toggle('agent', driver === 'agent');
+  }
+}
+
+/*
+ * Starting a session. The entities card this replaces gave every selector a
+ * full-height row, so the card took a screenful to say "press Launch". Here the
+ * header carries the title, what a press will start (agent - workspace) and the
+ * Launch button itself; the choices fold out beneath it in a compact grid, and the
+ * note about the last press sits right under the button.
+ *
+ * A press shows "Launching..." at once, before the daemon has said anything, and
+ * that stays until the daemon's own note replaces it - so a press never looks as if
+ * it did nothing.
+ */
+const LAUNCH_FRESH = 'New session';
+const LAUNCH_BLANK = ' ';
+// The three per-launch settings, in the order the card shows them. Their options
+// belong to the selected agent and the daemon republishes them when it moves, so the
+// card only ever renders whatever the entity currently offers.
+const LAUNCH_TUNING = ['model', 'effort', 'context'];
+// The option that means "pass nothing and let the agent decide". Worth a row, but
+// not worth a word in the collapsed summary.
+const LAUNCH_TUNING_DEFAULT = 'Agent default';
+// Permissions. The cautious option is the selector's first, and is not worth a word
+// in the collapsed summary - "Allow all" is, because it is the one worth noticing
+// before pressing Launch.
+const LAUNCH_ALLOW_ALL = 'Allow all';
+
+class AgentBridgeLaunchCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._pressedAt = 0;
+    try { this._open = localStorage.getItem('agent-bridge-launch-open') === '1'; } catch (e) { this._open = false; }
+  }
+
+  setConfig(config) {
+    if (!config || !Array.isArray(config.machines) || config.machines.length === 0) {
+      throw new Error('agent-bridge-launch-card: "machines" is required');
+    }
+    this._config = Object.assign({ title: 'Start a new session', selector: '' }, config);
+    this._built = false;
+    if (this._hass) { this._build(); this._render(); }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) { this._build(); }
+    this._render();
+  }
+
+  getCardSize() { return this._open ? 5 : 2; }
+
+  _build() {
+    this._built = true;
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 16px; }
+        .head { display: flex; align-items: center; gap: 10px; }
+        .toggle { flex: 1; min-width: 0; cursor: pointer; user-select: none; }
+        .title { font-size: 1.1em; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        /* An icon, not a glyph: phones drew the triangle as a colour emoji. */
+        .chev { transition: transform 0.2s ease; color: var(--secondary-text-color); --mdc-icon-size: 20px; display: inline-flex; margin-left: -4px; }
+        .open .chev { transform: rotate(90deg); }
+        .summary { color: var(--secondary-text-color); font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        button.launch {
+          border: none; border-radius: 8px; padding: 0 16px; height: 36px; flex: none;
+          font: inherit; font-weight: 600; cursor: pointer;
+          background: var(--primary-color); color: var(--text-primary-color, #fff);
+        }
+        button.launch:disabled { opacity: 0.5; cursor: default; }
+        .fields {
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+          gap: 8px 10px; margin-top: 12px;
+        }
+        label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        label span { font-size: 11px; color: var(--secondary-text-color); }
+        label.wide { grid-column: 1 / -1; }
+        select, input {
+          height: 34px; min-width: 0; box-sizing: border-box; padding: 0 8px;
+          font: inherit; color: var(--primary-text-color);
+          background: var(--secondary-background-color, rgba(127,127,127,0.1));
+          border: 1px solid var(--divider-color); border-radius: 8px;
+        }
+        /* The prompt box takes a whole handover, so it grows instead of scrolling a
+           single line, and resizes vertically only - a horizontal drag would push it
+           out of the card on a phone. */
+        textarea[data-key="prompt"] {
+          min-width: 0; box-sizing: border-box; padding: 7px 8px;
+          font: inherit; color: var(--primary-text-color);
+          background: var(--secondary-background-color, rgba(127,127,127,0.1));
+          border: 1px solid var(--divider-color); border-radius: 8px;
+          resize: vertical; min-height: 34px; max-height: 40vh;
+        }
+        select:focus, input:focus, textarea:focus { outline: none; border-color: var(--primary-color); }
+        .dim { opacity: 0.45; }
+        .note { margin-top: 10px; font-size: 0.92em; color: var(--secondary-text-color); display: flex; gap: 6px; align-items: baseline; }
+        .note .spin { color: var(--agent-bridge-spinner-color, #d97757); }
+        [hidden] { display: none !important; }
+      </style>
+      <ha-card>
+        <div class="head">
+          <div class="toggle" role="button" tabindex="0" aria-expanded="false">
+            <div class="title"><ha-icon class="chev" icon="mdi:chevron-right"></ha-icon><span class="name"></span></div>
+            <div class="summary"></div>
+          </div>
+          <button class="launch">Launch</button>
+        </div>
+        <div class="fields" hidden>
+          <label class="f-machine wide"><span>Machine</span><select data-key="machine"></select></label>
+          <label class="f-resume wide"><span>Resume</span><select data-key="resume"></select></label>
+          <label class="f-agent"><span>Agent</span><select data-key="agent"></select></label>
+          <label class="f-workspace"><span>Workspace</span><select data-key="workspace"></select></label>
+          <label class="f-profile"><span>Profile</span><select data-key="profile"></select></label>
+          <label class="f-model"><span>Model</span><select data-key="model"></select></label>
+          <label class="f-effort"><span>Effort</span><select data-key="effort"></select></label>
+          <label class="f-context"><span>Context</span><select data-key="context"></select></label>
+          <label class="f-permissions"><span>Permissions</span><select data-key="permissions"></select></label>
+          <label class="f-prompt wide"><span>First message (optional)</span><textarea data-key="prompt" rows="3" placeholder="Start with a task, or paste the full context to hand over"></textarea></label>
+        </div>
+        <div class="note" hidden><span class="spin"></span><span class="text"></span></div>
+      </ha-card>`;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = {
+      card: $('ha-card'), toggle: $('.toggle'), name: $('.name'), summary: $('.summary'),
+      launch: $('button.launch'), fields: $('.fields'), note: $('.note'), spin: $('.note .spin'), text: $('.note .text'),
+      prompt: $('textarea[data-key="prompt"]'),
+    };
+    this._els.name.textContent = this._config.title;
+
+    const flip = () => {
+      this._open = !this._open;
+      try { localStorage.setItem('agent-bridge-launch-open', this._open ? '1' : '0'); } catch (e) { /* per-viewer nicety only */ }
+      this._render();
+    };
+    this._els.toggle.addEventListener('click', flip);
+    this._els.toggle.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); flip(); } });
+
+    this.shadowRoot.querySelectorAll('select').forEach((select) => {
+      select.addEventListener('change', () => this._choose(select.dataset.key, select.value));
+    });
+    // Enter now starts a new line: the box takes a whole handover, not one line. So
+    // the keyboard shortcut moves to Ctrl/Cmd+Enter, which is what the reply box
+    // already uses for the same reason.
+    this._els.prompt.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); this._launch(); }
+    });
+    this._els.launch.addEventListener('click', () => this._launch());
+  }
+
+  _machine() {
+    const machines = this._config.machines;
+    const chosen = this._config.selector ? this._state(this._config.selector) : '';
+    return machines.find((m) => m.machine === chosen) || machines[0];
+  }
+
+  _state(entityId) {
+    const s = entityId && this._hass ? this._hass.states[entityId] : undefined;
+    return s ? String(s.state) : '';
+  }
+
+  _options(entityId) {
+    const s = entityId && this._hass ? this._hass.states[entityId] : undefined;
+    return s && s.attributes && Array.isArray(s.attributes.options) ? s.attributes.options.map(String) : [];
+  }
+
+  _entityFor(key) {
+    return key === 'machine' ? this._config.selector : this._machine()[key];
+  }
+
+  _choose(key, value) {
+    const entityId = this._entityFor(key);
+    if (!entityId) { return; }
+    const domain = entityId.split('.')[0];
+    this._hass.callService(domain, 'select_option', { entity_id: entityId, option: value });
+  }
+
+  async _launch() {
+    const m = this._machine();
+    if (!m.launch || this._els.launch.disabled) { return; }
+    this._pressedAt = Date.now();
+    this._pressedNote = this._state(m.result);
+    this._render();
+    try {
+      // The prompt is written before the press: the daemon reads it when it sees
+      // the press, and a value still sitting in this box would otherwise be missed.
+      //
+      // Over MQTT when the machine offers the topic, because a text entity is capped
+      // at 255 characters and a handover prompt is routinely longer than that - it
+      // used to be truncated on the way through, with nothing to say so. The text
+      // entity is still written when there is no topic, so a dashboard talking to an
+      // older bridge keeps working.
+      const typed = this._els.prompt.value.trim();
+      if (m.promptTopic) {
+        await this._hass.callService('mqtt', 'publish', {
+          topic: m.promptTopic,
+          payload: JSON.stringify({ at: new Date().toISOString(), text: typed, card_version: CARD_VERSION }),
+          qos: 0,
+          retain: true,
+        });
+      }
+      else if (m.prompt && typed !== this._state(m.prompt).trim()) {
+        await this._hass.callService('text', 'set_value', { entity_id: m.prompt, value: typed || LAUNCH_BLANK });
+      }
+      await this._hass.callService('button', 'press', { entity_id: m.launch });
+      this._els.prompt.value = '';
+    } catch (err) {
+      this._pressedAt = 0;
+      this._localNote = `Launch failed: ${err.message || err}`;
+      this._render();
+    }
+  }
+
+  _fill(select, entityId, labelEl) {
+    const options = this._options(entityId);
+    labelEl.hidden = !entityId || options.length === 0;
+    if (labelEl.hidden) { return; }
+    const key = options.join('\u0001');
+    if (select.dataset.options !== key) {
+      select.dataset.options = key;
+      select.textContent = '';
+      for (const option of options) {
+        const el = document.createElement('option');
+        el.value = option;
+        el.textContent = option;
+        select.appendChild(el);
+      }
+    }
+    // Never yank a list out from under someone choosing from it.
+    const current = this._state(entityId);
+    if (this.shadowRoot.activeElement !== select && options.includes(current) && select.value !== current) {
+      select.value = current;
+    }
+  }
+
+  _render() {
+    if (!this._els || !this._hass || !this._config) { return; }
+    const m = this._machine();
+    const machines = this._config.machines;
+    const q = (s) => this.shadowRoot.querySelector(s);
+
+    this._els.toggle.parentElement.classList.toggle('open', this._open);
+    this._els.toggle.setAttribute('aria-expanded', this._open ? 'true' : 'false');
+    this._els.fields.hidden = !this._open;
+
+    this._fill(q('select[data-key="machine"]'), machines.length > 1 ? this._config.selector : '', q('.f-machine'));
+    this._fill(q('select[data-key="resume"]'), m.resume, q('.f-resume'));
+    this._fill(q('select[data-key="agent"]'), m.agent, q('.f-agent'));
+    this._fill(q('select[data-key="workspace"]'), m.workspace, q('.f-workspace'));
+    this._fill(q('select[data-key="profile"]'), m.profile, q('.f-profile'));
+    for (const axis of LAUNCH_TUNING) {
+      this._fill(q(`select[data-key="${axis}"]`), m[axis], q(`.f-${axis}`));
+    }
+    this._fill(q('select[data-key="permissions"]'), m.permissions, q('.f-permissions'));
+
+    // A resume brings its own agent and folder, so those choices step back.
+    const resume = m.resume ? this._state(m.resume) : '';
+    const resuming = !!resume && resume !== LAUNCH_FRESH && !['unknown', 'unavailable'].includes(resume);
+    const agent = m.agent ? this._state(m.agent) : '';
+    q('.f-agent').classList.toggle('dim', resuming);
+    q('.f-workspace').classList.toggle('dim', resuming);
+    // The profile applies only under Agency.
+    if (m.agent && agent && agent !== 'Agency') { q('.f-profile').hidden = true; }
+
+    // Model, effort and context still apply to a resume - they are options of this
+    // launch, not properties of the conversation - so unlike agent and workspace they
+    // are not dimmed. An axis left at 'Agent default' is not worth a line in the
+    // summary, but the row itself stays, because it is how you change it.
+    const tuning = LAUNCH_TUNING
+      .map((axis) => (m[axis] ? this._state(m[axis]) : ''))
+      .filter((value) => value && value !== LAUNCH_TUNING_DEFAULT && !['unknown', 'unavailable'].includes(value));
+
+    // Restore a prompt typed on another device, but only when the text entity is
+    // what carries it. With the payload topic the box is the source of truth and the
+    // entity is left blank, so reading it back would wipe what is being typed here.
+    const promptState = m.promptTopic ? '' : this._state(m.prompt);
+    if (!m.promptTopic && this.shadowRoot.activeElement !== this._els.prompt && !this._els.prompt.value &&
+        promptState.trim() && !['unknown', 'unavailable'].includes(promptState)) {
+      this._els.prompt.value = promptState.trim();
+    }
+
+    const workspace = this._state(m.workspace);
+    const bits = resuming ? [`Resume: ${resume}`] : [agent, workspace].filter((b) => b && !['unknown', 'unavailable'].includes(b));
+    if (machines.length > 1) { bits.unshift(m.machine); }
+    // Allow all earns a place in the collapsed summary; asking is the quiet default
+    // and would only be noise. It applies to a resume too, so it sits outside that
+    // branch.
+    const permissions = m.permissions ? this._state(m.permissions) : '';
+    const extras = permissions === LAUNCH_ALLOW_ALL ? tuning.concat(LAUNCH_ALLOW_ALL) : tuning;
+    this._els.summary.textContent = bits.concat(extras).join(' · ');
+    this._els.launch.textContent = resuming ? 'Resume' : 'Launch';
+
+    // The note: the daemon's word on the last press, or "Launching..." from the
+    // moment of the press until the daemon's note changes (20 s at most).
+    let note = this._state(m.result);
+    if (['unknown', 'unavailable'].includes(note)) { note = ''; }
+    const waiting = this._pressedAt && note === this._pressedNote && Date.now() - this._pressedAt < 20000;
+    if (this._pressedAt && !waiting) { this._pressedAt = 0; }
+    if (waiting) { note = 'Launching...'; }
+    if (this._localNote) { note = this._localNote; this._localNote = ''; }
+    const busy = waiting || /\.\.\.$/.test(note.trim());
+    this._els.note.hidden = !note.trim();
+    this._els.text.textContent = note.trim();
+    this._els.spin.textContent = busy ? '⏳' : '';
+    this._els.launch.disabled = waiting;
+    if (waiting && !this._pressTimer) {
+      // Re-check once the optimistic note would expire, even if no state changes.
+      this._pressTimer = setTimeout(() => { this._pressTimer = null; this._render(); }, 20500);
+    }
+  }
+}
+
+/*
+ * The dashboard's top card: how much is running, what is waiting on you, and the
+ * machines it is all running on.
+ *
+ * It replaces a markdown summary card plus a separate Machines card - two cards that
+ * between them took a third of a phone screen to say "three sessions, nothing
+ * waiting". Folded it is one line of each; opened it is a row per machine, with that
+ * machine's Detailed activity switch beside the name it belongs to - or, when the
+ * machine is not running, an X that removes it from the dashboard for good.
+ *
+ * The counts are worked out here rather than by a Jinja template, so they follow
+ * state as it arrives. A template is re-rendered by Home Assistant too, but its
+ * *entity list* is fixed when the dashboard is generated, so a machine that came
+ * online since the last rebuild was missing from the sum until the next one.
+ */
+// Decision states that are not a question waiting on an answer.
+const STATUS_QUIET = ['Idle', 'unavailable', 'unknown', ''];
+// How long a flicked switch holds its new position while the service call lands.
+// Without it the next render - which can arrive before Home Assistant has changed
+// the state - snaps the switch back, and it visibly bounces.
+const STATUS_TOGGLE_GRACE = 5000;
+// How long the X on an offline machine stays armed after the first tap. Removing a
+// machine is not undoable from the dashboard, and the X sits where a Detail switch
+// sits on every other row, so it asks once before doing anything.
+const STATUS_FORGET_CONFIRM = 6000;
+// How long a pressed Update button reports "Starting..." before it goes back to
+// what the entity says. The daemon notices the press on its next maintenance pass
+// and only then publishes a stage, so without this the button sits there still
+// offering an update that is already being installed - and the natural response to
+// that is to press it again.
+const STATUS_UPDATE_GRACE = 120000;
+// The stages the updater reports while it is working, in the words to show for
+// them. Anything outside this and the terminal verdicts below means no update is
+// running, which is also what an older bridge publishing no stage at all reports.
+const STATUS_UPDATE_RUNNING = {
+  checking: 'Checking',
+  downloading: 'Downloading',
+  installing: 'Installing',
+  restarting: 'Restarting',
+  verifying: 'Verifying',
+};
+// How an attempt ended. `current` is deliberately not an error: a press that found
+// the release already installed did nothing wrong, and reporting it as a failure is
+// what sent people to a shell to find out what had broken.
+const STATUS_UPDATE_DONE = {
+  completed: { text: 'Updated', tone: 'good' },
+  current: { text: 'Already current', tone: '' },
+  failed: { text: 'Update failed', tone: 'bad' },
+};
+
+class AgentBridgeStatusCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._rows = [];
+    try { this._open = localStorage.getItem('agent-bridge-status-open') === '1'; } catch (e) { this._open = false; }
+  }
+
+  setConfig(config) {
+    if (!config || !Array.isArray(config.machines) || config.machines.length === 0) {
+      throw new Error('agent-bridge-status-card: "machines" is required');
+    }
+    noteDashboardConfig();
+    this._config = Object.assign({ title: 'Agent sessions', decisions: [] }, config);
+    this._built = false;
+    if (this._hass) { this._build(); this._render(); }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    // This card is on the dashboard whether or not anything is running, which is
+    // exactly when a session appearing has to be noticed.
+    watchDashboardConfig(this, hass);
+    if (!this._built) { this._build(); }
+    this._render();
+  }
+
+  getCardSize() { return this._open ? 1 + this._config.machines.length : 1; }
+
+  _build() {
+    this._built = true;
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 16px; }
+        .head { display: flex; align-items: center; gap: 10px; }
+        .toggle { flex: 1; min-width: 0; cursor: pointer; user-select: none; }
+        .title { font-size: 1.1em; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        /* An icon, not a glyph: phones drew the triangle as a colour emoji. */
+        .chev { transition: transform 0.2s ease; color: var(--secondary-text-color); --mdc-icon-size: 20px; display: inline-flex; margin-left: -4px; }
+        .open .chev { transform: rotate(90deg); }
+        .summary { color: var(--secondary-text-color); font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* A question waiting on you is the one thing here worth colouring. */
+        .summary.waiting { color: var(--warning-color); }
+        .machines { margin-top: 8px; }
+        .row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--divider-color); }
+        /* A dot rather than 🟢/⚪: the same reason as the chevron above, and it takes
+           the theme's colours instead of the platform's idea of green. */
+        .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--disabled-text-color, #9e9e9e); }
+        .row.online .dot { background: var(--success-color, #4caf50); }
+        .who { flex: 1; min-width: 0; }
+        .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .meta { font-size: 0.85em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .detail { display: flex; align-items: center; gap: 6px; flex: none; font-size: 0.85em; color: var(--secondary-text-color); }
+        /* The X sits exactly where the Detail switch does, because an offline machine
+           has nothing to switch and a machine that is gone has to be removable. */
+        .forget { flex: none; display: flex; align-items: center; }
+        .forget button {
+          display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+          font: inherit; font-size: 0.85em; padding: 3px 8px; border-radius: 14px;
+          background: none; border: 1px solid transparent; color: var(--secondary-text-color);
+        }
+        .forget button:hover { color: var(--error-color, #f44336); }
+        .forget button.confirm { color: var(--error-color, #f44336); border-color: var(--error-color, #f44336); }
+        .forget ha-icon { --mdc-icon-size: 20px; }
+        /* The update control sits where the Detail switch does, for the same reason
+           the X does: it belongs to the machine named on this row, and it is only
+           ever there when there is something to say. */
+        .update { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.85em; }
+        .update button {
+          display: inline-flex; align-items: center; cursor: pointer;
+          font: inherit; padding: 3px 10px; border-radius: 14px; white-space: nowrap;
+          background: none; border: 1px solid var(--primary-color, #03a9f4); color: var(--primary-color, #03a9f4);
+        }
+        .update button[disabled] { cursor: default; border-color: var(--divider-color); color: var(--secondary-text-color); }
+        .update button.bad { border-color: var(--error-color, #f44336); color: var(--error-color, #f44336); }
+        .update .note { color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .update .note.good { color: var(--success-color, #4caf50); }
+        .update .note.bad { color: var(--error-color, #f44336); }
+        /* A proportion only, never a substitute for the stage: a bar alone is the
+           spinner this replaced. It is drawn beside the word, not instead of it. */
+        .update .bar { flex: none; width: 48px; height: 4px; border-radius: 2px; background: var(--divider-color); overflow: hidden; }
+        .update .bar span { display: block; height: 100%; width: 0; background: var(--primary-color, #03a9f4); transition: width 0.3s ease; }
+        /* One control for the whole fleet, in the header rather than on a row,
+           because the question it answers - is any of these behind? - is not about
+           any one machine. */
+        .check { flex: none; display: flex; align-items: center; }
+        .check button {
+          display: inline-flex; align-items: center; cursor: pointer;
+          font: inherit; padding: 3px 8px; border-radius: 14px;
+          background: none; border: 1px solid transparent; color: var(--secondary-text-color);
+        }
+        .check button:hover { color: var(--primary-color, #03a9f4); }
+        .check button[disabled] { cursor: default; color: var(--disabled-text-color, #9e9e9e); }
+        .check ha-icon { --mdc-icon-size: 20px; }
+        .check button.busy ha-icon { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        [hidden] { display: none !important; }
+      </style>
+      <ha-card>
+        <div class="head">
+          <div class="toggle" role="button" tabindex="0" aria-expanded="false">
+            <div class="title"><ha-icon class="chev" icon="mdi:chevron-right"></ha-icon><span class="name"></span></div>
+            <div class="summary"></div>
+          </div>
+          <div class="check" hidden>
+            <button type="button" title="Check every machine for a bridge update" aria-label="Check every machine for a bridge update">
+              <ha-icon icon="mdi:cloud-refresh"></ha-icon>
+            </button>
+          </div>
+        </div>
+        <div class="machines" hidden></div>
+      </ha-card>`;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = {
+      card: $('ha-card'), toggle: $('.toggle'), name: $('.name'),
+      summary: $('.summary'), machines: $('.machines'),
+      check: $('.check'), checkButton: $('.check button'),
+    };
+    this._els.name.textContent = this._config.title;
+
+    // Drawn only when the dashboard that generated this config actually named check
+    // buttons. A bridge from before they existed sends none, and a control pointing
+    // at nothing is worse than no control - which is the rule the Detail switch, the
+    // X and the update button all follow.
+    this._checkEntities = this._config.machines
+      .map((m) => m.check)
+      .filter((id) => typeof id === 'string' && id.length > 0);
+    this._els.check.hidden = this._checkEntities.length === 0;
+    this._els.checkButton.addEventListener('click', () => this._checkAll());
+    this._checking = false;
+
+    const flip = () => {
+      this._open = !this._open;
+      try { localStorage.setItem('agent-bridge-status-open', this._open ? '1' : '0'); } catch (e) { /* per-viewer nicety only */ }
+      this._render();
+    };
+    this._els.toggle.addEventListener('click', flip);
+    this._els.toggle.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); flip(); } });
+
+    this._buildRows();
+  }
+
+  // One row per machine, built once. The machine list only changes when the daemon
+  // regenerates the dashboard, and that hands the card a fresh config.
+  _buildRows() {
+    const host = this._els.machines;
+    host.textContent = '';
+    this._rows = this._config.machines.map((machine) => {      const row = document.createElement('div');
+      row.className = 'row';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      const who = document.createElement('div');
+      who.className = 'who';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = machine.machine || '';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      who.appendChild(name);
+      who.appendChild(meta);
+      row.appendChild(dot);
+      row.appendChild(who);
+      const entry = { machine, row, meta, toggle: null, detail: null, forget: null, update: null, pendingAt: 0, pendingFrom: '' };
+      // A machine running a bridge from before the switch existed reports no entity
+      // for it and gets no switch - drawing one anyway would point at nothing.
+      if (machine.detailed) {
+        const box = document.createElement('div');
+        box.className = 'detail';
+        const label = document.createElement('span');
+        label.textContent = 'Detail';
+        const toggle = document.createElement('ha-switch');
+        toggle.addEventListener('change', () => this._flipDetail(entry));
+        box.appendChild(label);
+        box.appendChild(toggle);
+        row.appendChild(box);
+        entry.toggle = toggle;
+        entry.detail = box;
+      }
+      // And the X, for when that machine is not running. It is given the topics to
+      // clear rather than the machine's name, so the card never has to know how the
+      // bridge names anything: the dashboard that drew this row worked them out from
+      // the same lists an uninstall walks.
+      if (Array.isArray(machine.forget) && machine.forget.length) {
+        const box = document.createElement('div');
+        box.className = 'forget';
+        const button = document.createElement('button');
+        const icon = document.createElement('ha-icon');
+        icon.setAttribute('icon', 'mdi:close');
+        button.appendChild(icon);
+        button.setAttribute('title', `Remove ${machine.machine || 'this machine'} from the dashboard`);
+        button.setAttribute('aria-label', `Remove ${machine.machine || 'this machine'} from the dashboard`);
+        button.addEventListener('click', () => this._forget(entry));
+        box.appendChild(button);
+        box.hidden = true;
+        row.appendChild(box);
+        entry.forget = box;
+        entry.forgetButton = button;
+        entry.forgetIcon = icon;
+        entry.forgetArmedAt = 0;
+        entry.forgetBusy = false;
+      }
+      // The update control, from card 1.31.0. A machine whose dashboard was drawn by
+      // an older bridge reports no install button and gets none, the same rule the
+      // Detail switch and the X follow.
+      if (machine.install) {
+        const box = document.createElement('div');
+        box.className = 'update';
+        const button = document.createElement('button');
+        button.addEventListener('click', () => this._install(entry));
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        const fill = document.createElement('span');
+        bar.appendChild(fill);
+        const note = document.createElement('span');
+        note.className = 'note';
+        box.appendChild(button);
+        box.appendChild(bar);
+        box.appendChild(note);
+        box.hidden = true;
+        row.appendChild(box);
+        entry.update = box;
+        entry.updateButton = button;
+        entry.updateBar = bar;
+        entry.updateFill = fill;
+        entry.updateNote = note;
+        entry.pressedAt = 0;
+        entry.pressedFrom = '';
+        entry.pressTimer = null;
+      }
+      host.appendChild(row);
+      return entry;
+    });
+    this._ensureSwitchElement();
+  }
+
+  /*
+   * ha-switch lives in a lazily loaded chunk of the Home Assistant frontend, pulled
+   * in by whichever card first draws a toggle row. This card replaced the entities
+   * card that used to do that, so on a view with no other switch the element could
+   * be undefined and the switches would render as nothing at all. Asking the card
+   * helpers for a row on an input_boolean imports that chunk; the row itself is
+   * thrown away.
+   */
+  _ensureSwitchElement() {
+    const probe = (this._config.machines.find((m) => m.detailed) || {}).detailed;
+    if (!probe || customElements.get('ha-switch') || typeof window.loadCardHelpers !== 'function') { return; }
+    window.loadCardHelpers()
+      .then((helpers) => helpers.createRowElement({ entity: probe }))
+      .catch(() => { /* drawn anyway wherever the chunk is already loaded */ });
+  }
+
+  _state(entityId) {
+    const s = entityId && this._hass ? this._hass.states[entityId] : undefined;
+    return s ? String(s.state) : '';
+  }
+
+  _attr(entityId, name) {
+    const s = entityId && this._hass ? this._hass.states[entityId] : undefined;
+    return s && s.attributes && s.attributes[name] ? String(s.attributes[name]) : '';
+  }
+
+  _count(entityId) {
+    const value = parseInt(this._state(entityId), 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  _flipDetail(entry) {
+    const entityId = entry.machine.detailed;
+    if (!entityId || !this._hass) { return; }
+    entry.pendingAt = Date.now();
+    entry.pendingFrom = this._state(entityId);
+    this._hass.callService(entityId.split('.')[0], 'toggle', { entity_id: entityId });
+  }
+
+  /*
+   * Asks every machine to check for a release, now, instead of waiting out its own
+   * interval.
+   *
+   * One service call per machine, each naming exactly one entity. Home Assistant
+   * expands area_id, device_id, label_id and floor_id to every matching entity, and
+   * a list of ids is pressed in full: on 2026-10-02 a selection that collapsed to
+   * thousands of ids pressed 166 buttons across the house, rebooting the network
+   * mid-request. Assert-BridgeHomeAssistantServiceTarget enforces the scalar rule on
+   * the PowerShell side; nothing enforces it here, so the shape is built explicitly
+   * and each id is checked before it is sent.
+   *
+   * The presses are sequential rather than concurrent for the sake of what they
+   * cause: each one wakes a daemon that will go and ask GitHub. That is a redirect
+   * that spends no API allowance, but three machines answering at the same instant
+   * is still three requests from the same egress address, and nothing is waiting on
+   * the result quickly enough for the difference to matter.
+   *
+   * Returned so the tests can await it; the click handler ignores it.
+   */
+  _checkAll() {
+    if (!this._hass || this._checking || !this._checkEntities.length) { return undefined; }
+    this._checking = true;
+    this._renderCheck();
+    const press = (ids) => {
+      if (!ids.length) { return Promise.resolve(); }
+      const entityId = ids[0];
+      const rest = ids.slice(1);
+      // Never a value this card did not build itself, and never more than one.
+      if (typeof entityId !== 'string' || !entityId.includes('.')) { return press(rest); }
+      return Promise.resolve(this._hass.callService('button', 'press', { entity_id: entityId }))
+        .catch(() => { /* one machine refusing is not the others' problem */ })
+        .then(() => press(rest));
+    };
+    return press(this._checkEntities.slice()).then(() => {
+      // Nothing here waits for an answer: each machine reports on its own row when
+      // its daemon gets to the press, which is a reconcile away.
+      this._checking = false;
+      this._renderCheck();
+    });
+  }
+
+  _renderCheck() {
+    if (!this._els || !this._els.checkButton) { return; }
+    const button = this._els.checkButton;
+    button.disabled = this._checking;
+    button.classList.toggle('busy', this._checking);
+  }
+
+  /*
+   * Starts the update on that machine, and nothing else.
+   *
+   * The press is recorded locally because the daemon only sees the button on its
+   * next maintenance pass: until then the entity still says an update is available,
+   * so the button would sit there offering again what is already being installed.
+   * Pressing twice is exactly what people did when the only feedback was a spinner
+   * (#129), and a second press is a second installer.
+   *
+   * What the entity said at the moment of the press is kept with it, so the local
+   * claim is given up the instant the machine's own report moves on - not after a
+   * fixed wait that could outlast the whole update.
+   */
+  _install(entry) {
+    const entityId = entry.machine.install;
+    if (!entityId || !this._hass || !entry.update) { return undefined; }
+    // Each press gets its own claim and its own re-check. A timer left over from a
+    // press that has already settled - a refusal, say - would stop this one arming,
+    // then fire early and schedule a fresh full grace from that moment, holding
+    // "Starting" for up to twice as long as the claim it belongs to. Review, #129.
+    this._clearPressClaim(entry);
+    entry.pressedAt = Date.now();
+    entry.pressedFrom = this._progressSignature(entry);
+    // Drawn before the call is awaited, not after it. A slow call would otherwise
+    // leave the button visible and enabled for the whole request, and a second click
+    // is a second installer - exactly what the claim exists to prevent. Review, #129.
+    this._render();
+    // Returned so a caller that needs the call finished - the tests - can wait for
+    // it. A click handler simply ignores it, as it does for the X.
+    return Promise.resolve(this._hass.callService('button', 'press', { entity_id: entityId }))
+      .catch(() => {
+        this._clearPressClaim(entry);
+        if (entry.updateNote) { entry.updateNote.setAttribute('title', 'The press was refused; try again.'); }
+        this._render();
+      });
+  }
+
+  // Gives up an optimistic claim and the re-check that belongs to it. The two are
+  // always dropped together: a timer outliving its claim is one that fires against
+  // whatever claim happens to be current when it does.
+  _clearPressClaim(entry) {
+    entry.pressedAt = 0;
+    entry.pressedFrom = '';
+    if (entry.pressTimer) { clearTimeout(entry.pressTimer); entry.pressTimer = null; }
+  }
+
+  // What the machine currently reports about an update, as one string: the press
+  // grace ends when this changes, whichever part of it moved.
+  _progressSignature(entry) {
+    const version = entry.machine.version;
+    return [
+      this._state(version),
+      this._attr(version, 'in_progress'),
+      this._attr(version, 'stage'),
+      this._attr(version, 'stage_detail'),
+      this._attr(version, 'latest_version'),
+    ].join('|');
+  }
+
+  /*
+   * What the update control should say, from the machine's own update entity.
+   *
+   * `kind` is what the row does with it: `running` wins over the X, because a
+   * machine part-way through an update is not one to forget and its liveness sensor
+   * may well have expired during the restart - which is one of the stages.
+   */
+  _updateState(entry, online) {
+    const version = entry.machine.version;
+    const state = this._state(version);
+    const stage = this._attr(version, 'stage');
+    const latest = this._attr(version, 'latest_version');
+    const detail = this._attr(version, 'stage_detail');
+    const running = STATUS_UPDATE_RUNNING[stage];
+    const done = STATUS_UPDATE_DONE[stage];
+    // A press whose effect has not reached the entity yet. Held only while nothing
+    // the machine reports has changed, and never once a stage is actually running.
+    const claimed = entry.pressedAt &&
+      Date.now() - entry.pressedAt < STATUS_UPDATE_GRACE &&
+      this._progressSignature(entry) === entry.pressedFrom;
+    if (!claimed) { this._clearPressClaim(entry); }
+
+    if (running) {
+      let text = running;
+      const share = this._proportion(version);
+      if (share !== null) { text = `${running} ${Math.round(share * 100)}%`; }
+      return { kind: 'running', text, share, title: detail };
+    }
+    if (claimed) { return { kind: 'running', text: 'Starting', share: null, title: '' }; }
+    if (done) {
+      // A failure is the one terminal state you can act on, so it stays a button -
+      // with the reason on it, because "it failed" on its own sent people to a log.
+      if (stage === 'failed') { return { kind: 'retry', text: 'Update failed', title: detail }; }
+      return { kind: 'done', text: detail || done.text, tone: done.tone, title: detail };
+    }
+    if (state === 'on') {
+      return { kind: 'offer', text: latest ? `Update to ${latest}` : 'Update', title: '' };
+    }
+    // An online machine whose update entity exists but cannot say what the latest
+    // release is has not been found to be up to date - its check failed. Saying
+    // nothing there is what made a rate-limited check look like "nothing to
+    // install" (#92). A machine with no update entity at all is not making a claim
+    // either way: update checks can be switched off, and a machine that opted out
+    // must not be reported as broken.
+    if (online && this._has(version) && (state === 'unavailable' || state === 'unknown' || !latest)) {
+      return { kind: 'unknown', text: 'Update check failed', title: this._attr(version, 'release_summary') };
+    }
+    return { kind: 'none' };
+  }
+
+  _has(entityId) {
+    return !!(entityId && this._hass && this._hass.states[entityId]);
+  }
+
+  // The proportion Home Assistant reports, as 0 to 1, or null when there is none.
+  //
+  // `update_percentage` is the update entity's own field rather than anything this
+  // bridge invented: the MQTT state payload is validated against a schema that
+  // accepts no extra keys, and one unknown key makes Home Assistant discard the
+  // whole payload. It is 0-100, and blanked entirely unless in_progress is true.
+  _proportion(entityId) {
+    const s = entityId && this._hass ? this._hass.states[entityId] : undefined;
+    const raw = s && s.attributes ? s.attributes.update_percentage : undefined;
+    if (raw === undefined || raw === null || raw === '') { return null; }
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 && value <= 100 ? value / 100 : null;
+  }
+
+  _drawUpdate(entry, verdict) {
+    const box = entry.update;
+    if (!box) { return; }
+    box.hidden = verdict.kind === 'none';
+    if (box.hidden) { return; }
+    const asButton = verdict.kind === 'offer' || verdict.kind === 'retry';
+    entry.updateButton.hidden = !asButton;
+    entry.updateButton.disabled = !asButton;
+    entry.updateButton.classList.toggle('bad', verdict.kind === 'retry');
+    if (asButton) {
+      entry.updateButton.textContent = verdict.text;
+      entry.updateButton.setAttribute('title', verdict.title || verdict.text);
+      entry.updateButton.setAttribute('aria-label', `${verdict.text} on ${entry.machine.machine || 'this machine'}`);
+    }
+    entry.updateNote.hidden = asButton;
+    if (!asButton) {
+      entry.updateNote.textContent = verdict.text;
+      entry.updateNote.classList.toggle('good', verdict.tone === 'good');
+      entry.updateNote.classList.toggle('bad', verdict.tone === 'bad' || verdict.kind === 'unknown');
+      entry.updateNote.setAttribute('title', verdict.title || verdict.text);
+    }
+    const share = typeof verdict.share === 'number' ? verdict.share : null;
+    entry.updateBar.hidden = share === null;
+    entry.updateFill.style.width = share === null ? '0' : `${Math.round(share * 100)}%`;
+  }
+
+  // The X's label: the icon when it is idle, a word while it is armed or working.
+  // Assigning textContent drops the icon, which is exactly what a browser does too,
+  // so it is put back rather than hidden.
+  _setForgetLabel(entry, text) {
+    const button = entry.forgetButton;
+    if (!button) { return; }
+    button.textContent = text || '';
+    if (!text) { button.appendChild(entry.forgetIcon); }
+    button.classList.toggle('confirm', !!text);
+  }
+
+  _resetForget(entry) {
+    if (!entry.forget || entry.forgetBusy) { return; }
+    entry.forgetArmedAt = 0;
+    this._setForgetLabel(entry, '');
+  }
+
+  /*
+   * First tap arms, second removes. There is no undo from here: the machine's
+   * retained topics are cleared, which is what makes Home Assistant drop its
+   * entities. A machine that is merely switched off republishes all of it when it
+   * comes back, so the cost of a mistake is a row that returns - but a machine that
+   * has been renamed or reimaged never does, and that is what this is for.
+   */
+  _forget(entry) {
+    if (!entry.forget || entry.forgetBusy || !this._hass) { return undefined; }
+    const armed = entry.forgetArmedAt && Date.now() - entry.forgetArmedAt < STATUS_FORGET_CONFIRM;
+    if (!armed) {
+      entry.forgetArmedAt = Date.now();
+      this._setForgetLabel(entry, 'Remove?');
+      setTimeout(() => this._resetForget(entry), STATUS_FORGET_CONFIRM);
+      return undefined;
+    }
+    entry.forgetArmedAt = 0;
+    // Returned so a caller that needs the publishes finished - the tests - can wait
+    // for them. A click handler simply ignores it.
+    return this._publishForget(entry);
+  }
+
+  async _publishForget(entry) {
+    entry.forgetBusy = true;
+    this._setForgetLabel(entry, 'Removing...');
+    try {
+      // An empty retained payload is how a retained topic is withdrawn, and how the
+      // bridge itself clears every one of these on uninstall.
+      for (const topic of entry.machine.forget) {
+        await this._hass.callService('mqtt', 'publish', { topic, payload: '', retain: true, qos: 1 });
+      }
+      // The daemon rebuilds the dashboard within a reconcile and the row goes with
+      // it; hiding it now is so the tap has an answer before then.
+      entry.row.hidden = true;
+      entry.forgetBusy = false;
+      this._setForgetLabel(entry, '');
+    }
+    catch (e) {
+      entry.forgetBusy = false;
+      this._setForgetLabel(entry, 'Failed');
+    }
+  }
+
+  _render() {
+    if (!this._els || !this._hass || !this._config) { return; }
+    this._els.card.classList.toggle('open', this._open);
+    this._els.toggle.setAttribute('aria-expanded', this._open ? 'true' : 'false');
+    this._els.machines.hidden = !this._open;
+    this._renderCheck();
+
+    let live = 0;
+    let soloVersion = '';
+    for (const entry of this._rows) {
+      const machine = entry.machine;
+      // No liveness entity at all means the caller is not tracking it, so the machine
+      // is taken as running - which is what a bridge from before the sensor did.
+      const online = !machine.online || this._state(machine.online) === 'on';
+      // An offline machine's sessions are hidden, because none of them can be
+      // running; counting its retained sensor would keep a dead machine's sessions
+      // in the total indefinitely.
+      const count = online ? this._count(machine.sessions) : 0;
+      live += count;
+      const version = this._attr(machine.version, 'installed_version') || '?';
+      // "(dev)" marks a machine installed from a working copy. VERSION only moves
+      // when a release is cut, so two machines days apart in features otherwise read
+      // as the same number.
+      const stamp = `${version}${machine.dev ? ' (dev)' : ''}`;
+      if (this._rows.length === 1) { soloVersion = stamp; }
+      entry.row.classList.toggle('online', online);
+      entry.meta.textContent = online
+        ? `${count} session${count === 1 ? '' : 's'} \u00b7 ${stamp}`
+        : 'offline';
+
+      if (entry.toggle) {
+        const value = this._state(machine.detailed);
+        const settled = !entry.pendingAt ||
+          value !== entry.pendingFrom ||
+          Date.now() - entry.pendingAt > STATUS_TOGGLE_GRACE;
+        if (settled) {
+          entry.pendingAt = 0;
+          entry.toggle.checked = value === 'on';
+        }
+        entry.toggle.disabled = value !== 'on' && value !== 'off';
+      }
+
+      // An offline machine is shown the X instead of its Detail switch. The switch is
+      // a Home Assistant helper, so it can still be set for when the machine comes
+      // back - but the row it sits on is one line on a phone, and what you want from
+      // a machine that is not running is the ability to say it is not coming back.
+      // A row with no X keeps its switch, which is every dashboard drawn by a bridge
+      // older than this.
+      //
+      // One control at a time, in this order: an update that is running, then the X
+      // on a machine that is not, then anything else the update control has to say,
+      // then the Detail switch. A machine mid-update is not one to forget, and its
+      // liveness sensor expires while the daemon restarts - which is a stage of the
+      // update, so an X is precisely the wrong thing to offer at that moment.
+      const verdict = entry.update ? this._updateState(entry, online) : { kind: 'none' };
+      const updating = verdict.kind === 'running';
+      const showUpdate = verdict.kind !== 'none' && (updating || online);
+      if (entry.forget) {
+        entry.forget.hidden = online || updating;
+        if (entry.forget.hidden) { this._resetForget(entry); }
+      }
+      this._drawUpdate(entry, showUpdate ? verdict : { kind: 'none' });
+      // Re-check once the optimistic claim would expire, even if nothing arrives to
+      // redraw the card. A press that reached Home Assistant whose machine then went
+      // quiet would otherwise sit on "Starting" until some unrelated state changed,
+      // with no way back to the button. Same shape as the launch card's press note.
+      //
+      // The delay is what is left of *this* claim's grace rather than a fresh one,
+      // so a re-check can never outlive the claim that asked for it.
+      if (entry.pressedAt && !entry.pressTimer) {
+        const remaining = Math.max(250, STATUS_UPDATE_GRACE - (Date.now() - entry.pressedAt) + 250);
+        entry.pressTimer = setTimeout(() => { entry.pressTimer = null; this._render(); }, remaining);
+      }
+      if (entry.detail) { entry.detail.hidden = showUpdate || (!online && !!entry.forget); }
+    }
+
+    const pending = (this._config.decisions || [])
+      .filter((entityId) => !STATUS_QUIET.includes(this._state(entityId))).length;
+
+    const bits = [`Live sessions: ${live}`, `Pending decisions: ${pending}`];
+    // With one machine there is no second version to compare against, so the version
+    // belongs in the line you can see without opening anything. With several, each
+    // machine's version sits on its own row where it can be compared.
+    if (soloVersion) { bits.push(`Bridge ${soloVersion}`); }
+    this._els.summary.textContent = bits.join(' \u00b7 ');
+    this._els.summary.classList.toggle('waiting', pending > 0);
+  }
+}
+
+/*
+ * What each coding agent has left to spend, as a bar per metered window.
+ *
+ * Fed one sensor per client per machine, because that is how the daemon publishes
+ * them, but an allowance belongs to an account rather than to a computer - so two
+ * machines signed in to the same account report the same figure twice. Rows are
+ * therefore keyed by client and account and the freshest wins, which is also what
+ * makes a laptop that has been shut for a week harmless: it is outvoted rather than
+ * averaged in.
+ */
+class AgentBridgeUsageCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._groups = new Map();
+    try { this._open = localStorage.getItem('agent-bridge-usage-open') !== '0'; } catch (e) { this._open = true; }
+  }
+
+  setConfig(config) {
+    if (!config || !Array.isArray(config.entities) || config.entities.length === 0) {
+      throw new Error('agent-bridge-usage-card: "entities" is required');
+    }
+    this._config = Object.assign({ title: 'Agent usage' }, config);
+    this._built = false;
+    if (this._hass) { this._build(); this._render(); }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._built) { this._build(); }
+    this._render();
+  }
+
+  getCardSize() { return this._open ? 1 + this._config.entities.length : 1; }
+
+  /*
+   * Home Assistant pushes a state change the moment one happens, so a bar moves as
+   * soon as the daemon publishes. The clock does not get pushed, though: "37m ago"
+   * and "resets in 3h" are worked out at render time, so on a card nobody is touching
+   * they would freeze at whatever they said when the last state arrived - and Codex,
+   * whose figures can sit unchanged for days, would never redraw at all.
+   *
+   * Stopped outright while the page is hidden rather than returning early from the
+   * tick, for the reason the activity card's spinner records: the timer still fires
+   * and still wakes the main thread, and Home Assistant sits in a pinned tab for days.
+   */
+  connectedCallback() {
+    const hidden = () => typeof document !== 'undefined' && !!document.hidden;
+    const resume = () => {
+      if (this._clock || hidden()) { return; }
+      // Half a minute: the text is minute-granular, so this is the longest interval
+      // that cannot leave a stale minute on the screen.
+      this._clock = setInterval(() => this._render(), 30000);
+    };
+    this._onVisible = () => {
+      if (!hidden()) { this._render(); resume(); return; }
+      if (this._clock) { clearInterval(this._clock); this._clock = null; }
+    };
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', this._onVisible);
+    }
+    resume();
+  }
+
+  disconnectedCallback() {
+    if (this._clock) { clearInterval(this._clock); this._clock = null; }
+    if (this._onVisible && typeof document !== 'undefined' && document.removeEventListener) {
+      document.removeEventListener('visibilitychange', this._onVisible);
+    }
+    this._onVisible = null;
+  }
+
+  _build() {
+    this._built = true;
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card { padding: 12px 16px; }
+        .head { display: flex; align-items: center; gap: 10px; }
+        .toggle { flex: 1; min-width: 0; cursor: pointer; user-select: none; }
+        .title { font-size: 1.1em; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        /* An icon rather than a glyph, for the reason the status card records: phones
+           drew the triangle as a colour emoji. */
+        .chev { transition: transform 0.2s ease; color: var(--secondary-text-color); --mdc-icon-size: 20px; display: inline-flex; margin-left: -4px; }
+        .open .chev { transform: rotate(90deg); }
+        .summary { color: var(--secondary-text-color); font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* The same colours as the bars, figure by figure: see _render. */
+        .summary .figure.warn { color: var(--warning-color, #ff9800); }
+        .summary .figure.crit { color: var(--error-color, #f44336); }
+        .groups { margin-top: 4px; }
+        .group { padding: 10px 0 4px; border-top: 1px solid var(--divider-color); }
+        .ghead { display: flex; align-items: baseline; gap: 8px; }
+        .gname { font-weight: 500; }
+        .gacct { font-size: 0.85em; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+        .gage { font-size: 0.8em; color: var(--secondary-text-color); flex: none; }
+        .gage.stale { color: var(--warning-color); }
+        .win { margin-top: 7px; }
+        .wtop, .wfoot { display: flex; justify-content: space-between; gap: 8px; font-size: 0.85em; }
+        .wtop { color: var(--primary-text-color); }
+        .wfoot { color: var(--secondary-text-color); font-size: 0.8em; margin-top: 3px; }
+        .wpct { font-variant-numeric: tabular-nums; font-weight: 500; }
+        .bar { position: relative; height: 9px; border-radius: 5px; margin-top: 4px; overflow: hidden;
+               background: var(--divider-color, rgba(127,127,127,0.25)); }
+        .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px;
+                background: var(--success-color, #4caf50); transition: width 0.4s ease; }
+        .fill.warn { background: var(--warning-color, #ff9800); }
+        .fill.crit { background: var(--error-color, #f44336); }
+        /* Where the spend would be if it were even across the window. A budget two
+           thirds gone means nothing without it: on the 25th that is thrift, on the
+           5th it is a problem, and the bar alone cannot tell you which.
+           The halo is what makes it legible on both sides of the fill - without it
+           the mark read as a gap in the green rather than as a marker, which is
+           exactly how it was first reported. */
+        .pace { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--primary-text-color);
+                box-shadow: 0 0 0 1.5px var(--card-background-color, rgba(0, 0, 0, 0.55)); }
+        /* And the line that says what the mark is, because a dashboard cannot be
+           hovered on a phone and a legend nobody reads is not a legend. */
+        .pacefoot { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px;
+                    font-size: 0.78em; color: var(--secondary-text-color); }
+        .verdict.ahead { color: var(--warning-color, #ff9800); }
+        .err { font-size: 0.8em; color: var(--error-color, #f44336); margin-top: 4px; }
+        [hidden] { display: none !important; }
+      </style>
+      <ha-card>
+        <div class="head">
+          <div class="toggle" role="button" tabindex="0" aria-expanded="true">
+            <div class="title"><ha-icon class="chev" icon="mdi:chevron-right"></ha-icon><span class="name"></span></div>
+            <div class="summary"></div>
+          </div>
+        </div>
+        <div class="groups"></div>
+      </ha-card>`;
+    const $ = (s) => this.shadowRoot.querySelector(s);
+    this._els = { card: $('ha-card'), toggle: $('.toggle'), name: $('.name'), summary: $('.summary'), groups: $('.groups') };
+    this._els.name.textContent = this._config.title;
+
+    const flip = () => {
+      this._open = !this._open;
+      try { localStorage.setItem('agent-bridge-usage-open', this._open ? '1' : '0'); } catch (e) { /* per-viewer nicety only */ }
+      this._render();
+    };
+    this._els.toggle.addEventListener('click', flip);
+    this._els.toggle.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); flip(); }
+    });
+  }
+
+  // One entry per client+account, carrying the freshest reading any machine has.
+  //
+  // A reading outranks a failure however new the failure is, and only then does the
+  // clock decide. A read that fails with nothing to fall back on still returns a
+  // record, and New-BridgeUsageRecord stamps it with the time of the *attempt*, so
+  // judged on the clock alone a machine that cannot read an account's allowance
+  // outvotes one that can: the card showed an error and no figure although the figure
+  // was on the dashboard one entity over.
+  _collect() {
+    const slots = new Map();
+    for (const entityId of this._config.entities) {
+      const entity = this._hass ? this._hass.states[entityId] : undefined;
+      if (!entity || !entity.attributes) { continue }
+      const a = entity.attributes;
+      if (!a.client) { continue }
+      // account_id is what a vendor that names no account publishes in its place (an
+      // opaque id, for Claude); where there is none the account is the identity.
+      const key = `${a.client}\u0000${a.account_id || a.account || ''}`;
+      const percent = Number.parseFloat(entity.state);
+      const entry = {
+        key,
+        client: a.client,
+        at: Date.parse(a.measured_at || a.updated || '') || 0,
+        percent: Number.isFinite(percent) ? percent : null,
+        label: a.label || a.client,
+        account: a.account || '',
+        accountId: a.account_id || '',
+        plan: a.plan || '',
+        machine: a.machine || '',
+        error: a.error || '',
+        windows: Array.isArray(a.windows) ? a.windows : [],
+      };
+      const kind = AgentBridgeUsageCard._hasReading(entry) ? 'reading' : 'failure';
+      const slot = slots.get(key) || {};
+      if (!slot[kind] || slot[kind].at < entry.at) { slot[kind] = entry }
+      slots.set(key, slot);
+    }
+
+    const entries = [];
+    for (const { reading, failure } of slots.values()) {
+      if (!reading) { entries.push(failure); continue }
+      // The reading is what is drawn, but a failure newer than it is still the latest
+      // word on why nothing fresher exists. _renderGroup shows an error only once the
+      // reading has gone stale, so while the reading is fresh this changes nothing; it
+      // is what keeps the reason on screen when the reading is hours old.
+      entries.push(failure && failure.error && failure.at > reading.at
+        ? Object.assign({}, reading, { error: failure.error })
+        : reading);
+    }
+
+    // Two rows of one client with no account to name either - Claude names none, so
+    // what separates its accounts is an opaque id - would look identical on the
+    // dashboard. A few characters of that id keep them apart, and only when there is
+    // something to keep apart: a lone row has no use for a name it was never given.
+    const rows = new Map();
+    for (const entry of entries) { rows.set(entry.client, (rows.get(entry.client) || 0) + 1) }
+    for (const entry of entries) {
+      if (!entry.account && entry.accountId && rows.get(entry.client) > 1) {
+        entry.account = `#${entry.accountId.slice(0, 4)}`;
+      }
+    }
+    // Closest to running out first: that is the one worth seeing without scrolling.
+    return entries.sort((x, y) => (y.percent || 0) - (x.percent || 0));
+  }
+
+  // Whether a record carries a figure at all, as opposed to only the reason there
+  // is not one. One definition, so choosing a record and deciding whether to report
+  // its error can never disagree about which kind it is.
+  static _hasReading(entry) {
+    return Number.isFinite(entry.percent) ||
+      (Array.isArray(entry.windows) && entry.windows.length > 0);
+  }
+
+  // An hour old is not a reading, it is a memory - and Codex's only source is its
+  // own last transcript, so this is routine rather than exceptional for it. One
+  // definition, used both for greying the age and for deciding whether a failed
+  // read is still worth reporting, so the two can never disagree on screen.
+  static _isStale(at) { return Date.now() - at > 3600000 }
+
+  static _severity(percent) {
+    if (!Number.isFinite(percent)) { return '' }
+    if (percent >= 90) { return 'crit' }
+    if (percent >= 75) { return 'warn' }
+    return '';
+  }
+
+  // "in 25d" / "in 4h" / "in 12m". Past is "due" rather than a negative: a window
+  // whose reset has gone by has already rolled over, and the figure beside it is the
+  // old one until the agent runs again.
+  static _until(iso) {
+    const at = Date.parse(iso || '');
+    if (!Number.isFinite(at)) { return '' }
+    const seconds = Math.round((at - Date.now()) / 1000);
+    if (seconds <= 0) { return 'due' }
+    if (seconds >= 86400) { return `in ${Math.round(seconds / 86400)}d` }
+    if (seconds >= 3600) { return `in ${Math.round(seconds / 3600)}h` }
+    return `in ${Math.max(1, Math.round(seconds / 60))}m`;
+  }
+
+  static _ago(at) {
+    if (!at) { return '' }
+    const seconds = Math.round((Date.now() - at) / 1000);
+    if (seconds < 90) { return 'just now' }
+    if (seconds < 3600) { return `${Math.round(seconds / 60)}m ago` }
+    if (seconds < 86400) { return `${Math.round(seconds / 3600)}h ago` }
+    return `${Math.round(seconds / 86400)}d ago`;
+  }
+
+  static _amount(value) {
+    return Number.isFinite(value) ? Math.round(value).toLocaleString() : '';
+  }
+
+  _render() {
+    if (!this._built || !this._hass) { return }
+    this._els.card.classList.toggle('open', this._open);
+    this._els.toggle.setAttribute('aria-expanded', this._open ? 'true' : 'false');
+    this._els.groups.hidden = !this._open;
+
+    const entries = this._collect();
+    const worst = entries.length ? entries[0] : null;
+    // Each figure takes the colour of its own bars. The line used to take the colour
+    // of the worst one as a whole, so one account past 75% turned every agent beside
+    // it amber as well, and the line you read folded shut no longer said which agent
+    // was running short. An entry's percent is its fullest window (the daemon's
+    // headline), so this is the colour of its most-used bar.
+    const summary = this._els.summary;
+    summary.textContent = '';
+    if (worst && Number.isFinite(worst.percent)) {
+      entries.filter((e) => Number.isFinite(e.percent)).forEach((e, i) => {
+        if (i > 0) { summary.append(' \u00b7 '); }
+        const figure = document.createElement('span');
+        figure.className = 'figure';
+        figure.textContent = `${e.label} ${Math.round(e.percent)}%`;
+        const severity = AgentBridgeUsageCard._severity(e.percent);
+        if (severity) { figure.classList.add(severity); }
+        summary.append(figure);
+      });
+    } else {
+      summary.textContent = 'No usage reported yet';
+    }
+
+    if (!this._open) { return }
+    this._els.groups.textContent = '';
+    for (const entry of entries) { this._els.groups.appendChild(this._renderGroup(entry)); }
+  }
+
+  _renderGroup(entry) {
+    const group = document.createElement('div');
+    group.className = 'group';
+
+    const head = document.createElement('div');
+    head.className = 'ghead';
+    const name = document.createElement('span');
+    name.className = 'gname';
+    name.textContent = entry.label;
+    const account = document.createElement('span');
+    account.className = 'gacct';
+    account.textContent = [entry.account, entry.plan].filter(Boolean).join(' \u00b7 ');
+    const age = document.createElement('span');
+    age.className = 'gage';
+    const ago = AgentBridgeUsageCard._ago(entry.at);
+    age.textContent = ago;
+    age.classList.toggle('stale', entry.at > 0 && AgentBridgeUsageCard._isStale(entry.at));
+    head.appendChild(name);
+    head.appendChild(account);
+    head.appendChild(age);
+    group.appendChild(head);
+
+    for (const metered of entry.windows) {
+      if (!metered || !Number.isFinite(Number(metered.percent))) { continue }
+      group.appendChild(this._renderWindow(metered));
+    }
+    // A failed read beside a reading taken minutes ago is noise, not news: the bars
+    // above are still true, and the age already says how true. Reporting it anyway
+    // put a permanent red line under a correct figure on a machine whose path to one
+    // vendor dropped most handshakes, which trains the eye to ignore the colour.
+    //
+    // The test is what survived, not how recent the record is. A read that fails with
+    // nothing to fall back on still returns a record, and New-BridgeUsageRecord stamps
+    // it with the time of the *attempt* - so an error-only record is always "fresh",
+    // and keying off the age alone hid the one diagnostic there was for an hour, at
+    // exactly the moment there were no bars to justify hiding it.
+    const hasReading = AgentBridgeUsageCard._hasReading(entry);
+    const fresh = entry.at > 0 && !AgentBridgeUsageCard._isStale(entry.at);
+    if (entry.error && !(hasReading && fresh)) {
+      const error = document.createElement('div');
+      error.className = 'err';
+      error.textContent = entry.error;
+      group.appendChild(error);
+    }
+    return group;
+  }
+
+  _renderWindow(metered) {
+    const percent = Number(metered.percent);
+    const box = document.createElement('div');
+    box.className = 'win';
+
+    const top = document.createElement('div');
+    top.className = 'wtop';
+    const label = document.createElement('span');
+    label.className = 'wlabel';
+    label.textContent = metered.label || metered.key || '';
+    const value = document.createElement('span');
+    value.className = 'wpct';
+    value.textContent = `${percent}%`;
+    top.appendChild(label);
+    top.appendChild(value);
+    box.appendChild(top);
+
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const fill = document.createElement('div');
+    fill.className = 'fill';
+    const severity = AgentBridgeUsageCard._severity(percent);
+    if (severity) { fill.classList.add(severity); }
+    fill.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    bar.appendChild(fill);
+    const elapsed = Number(metered.elapsed);
+    if (Number.isFinite(elapsed)) {
+      const pace = document.createElement('div');
+      pace.className = 'pace';
+      pace.style.left = `${Math.min(100, Math.max(0, elapsed))}%`;
+      pace.setAttribute('title', `${Math.round(elapsed)}% of the period gone`);
+      bar.appendChild(pace);
+    }
+    box.appendChild(bar);
+
+    const detail = AgentBridgeUsageCard._amount(Number(metered.used));
+    const limit = AgentBridgeUsageCard._amount(Number(metered.limit));
+    const resets = AgentBridgeUsageCard._until(metered.resets_at);
+    if (detail || resets) {
+      const foot = document.createElement('div');
+      foot.className = 'wfoot';
+      const left = document.createElement('span');
+      left.className = 'wdetail';
+      left.textContent = detail && limit ? `${detail} / ${limit}${metered.unit ? ` ${metered.unit}` : ''}` : '';
+      const right = document.createElement('span');
+      right.className = 'wreset';
+      right.textContent = resets ? `resets ${resets}` : '';
+      foot.appendChild(left);
+      foot.appendChild(right);
+      box.appendChild(foot);
+    }
+
+    // Names the mark and says what it means. Both halves matter: the number alone
+    // leaves "what is that line", and the verdict alone leaves no way to check it.
+    if (Number.isFinite(elapsed)) {
+      const paceFoot = document.createElement('div');
+      paceFoot.className = 'pacefoot';
+      const mark = document.createElement('span');
+      mark.className = 'pacemark';
+      mark.textContent = `\u2502 even pace ${Math.round(elapsed)}%`;
+      const verdict = document.createElement('span');
+      verdict.className = 'verdict';
+      const ahead = percent - elapsed;
+      // A tenth of the window either way is noise, not a trend worth colouring.
+      if (ahead > 10) {
+        verdict.textContent = `${Math.round(ahead)}% ahead of pace`;
+        verdict.classList.add('ahead');
+      }
+      else if (ahead < -10) { verdict.textContent = `${Math.round(-ahead)}% under pace`; }
+      else { verdict.textContent = 'on pace'; }
+      paceFoot.appendChild(mark);
+      paceFoot.appendChild(verdict);
+      box.appendChild(paceFoot);
+    }
+    return box;
+  }
+}
+
+if (!customElements.get('agent-bridge-reply-card')) {
+  customElements.define('agent-bridge-reply-card', AgentBridgeReplyCard);
+}
+if (!customElements.get('agent-bridge-status-card')) {
+  customElements.define('agent-bridge-status-card', AgentBridgeStatusCard);
+}
+if (!customElements.get('agent-bridge-launch-card')) {
+  customElements.define('agent-bridge-launch-card', AgentBridgeLaunchCard);
+}
+if (!customElements.get('agent-bridge-session-card')) {
+  customElements.define('agent-bridge-session-card', AgentBridgeSessionCard);
+}
+if (!customElements.get('agent-bridge-activity-card')) {
+  customElements.define('agent-bridge-activity-card', AgentBridgeActivityCard);
+}
+if (!customElements.get('agent-bridge-choices-card')) {
+  customElements.define('agent-bridge-choices-card', AgentBridgeChoicesCard);
+}
+if (!customElements.get('agent-bridge-usage-card')) {
+  customElements.define('agent-bridge-usage-card', AgentBridgeUsageCard);
+}
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: 'agent-bridge-reply-card',
+  name: 'Agent Bridge Reply',
+  description: 'Reply box for a bridged coding-agent session, with image and file attachments.',
+});
+window.customCards.push({
+  type: 'agent-bridge-activity-card',
+  name: 'Agent Bridge Activity',
+  description: 'Live status, response and reasoning for a bridged session, updated in place.',
+});
+window.customCards.push({
+  type: 'agent-bridge-status-card',
+  name: 'Agent Bridge Status',
+  description: 'Live and pending counts, folding open to a row per machine with its Detail switch, or an X when it is offline.',
+});
+window.customCards.push({
+  type: 'agent-bridge-choices-card',
+  name: 'Agent Bridge Choices',
+  description: 'A waiting question or form, as rows that wrap instead of dropdowns.',
+});
+window.customCards.push({
+  type: 'agent-bridge-usage-card',
+  name: 'Agent Bridge Usage',
+  description: 'Plan and rate-limit allowances for each coding agent, with a pace marker per window.',
+});
+
+console.info(`%c AGENT-BRIDGE-REPLY-CARD %c ${CARD_VERSION} `,
+  'color: white; background: #03a9f4; font-weight: 700;',
+  'color: #03a9f4; background: white; font-weight: 700;');

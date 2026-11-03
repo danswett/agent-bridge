@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />
+    <EmbeddedResource Include="Publication\session-templates.json;Publication\agent-bridge-reply-card.js" />
+    <EmbeddedResource Include="HaPublicationRenderer.cs;HaPublicationWriter.cs;HaPublicationPolicy.cs;HaContract.cs">
+      <LogicalName>AgentBridge.HomeAssistant.Publication.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <ItemGroup>

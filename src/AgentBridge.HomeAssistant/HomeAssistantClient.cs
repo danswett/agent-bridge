@@ -35,6 +35,7 @@ public interface IHomeAssistant
 
     Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default);
     Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default);
+    Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default);
 
     // One service call naming at most one entity (ServiceTarget): select.select_option and
     // text.set_value on a session's own controls.
@@ -305,6 +306,9 @@ public sealed class HomeAssistantClient : IHomeAssistant
 
     public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) =>
         ReadInventoryAsync("lovelace/dashboards/list", cancellationToken);
+
+    public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
+        CommandAsync(mutation.Command(), cancellationToken);
 
     async Task<JsonElement> ReadInventoryAsync(string type, CancellationToken cancellationToken)
     {

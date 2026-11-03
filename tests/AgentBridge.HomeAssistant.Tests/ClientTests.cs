@@ -192,6 +192,24 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task Publication_mutations_use_authenticated_commands_and_surface_refusals_and_cancellation()
+    {
+        var command = new JsonObject { ["type"] = "lovelace/resources/update", ["resource_id"] = "policy", ["url"] = "reserved", ["res_type"] = "module" };
+        var mutation = new HaPublicationMutation(command);
+        command["url"] = "changed after authorization";
+        var (client, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
+        await client.ApplyPublicationAsync(mutation);
+        Assert.Equal("auth", received[0]["type"]!.GetValue<string>());
+        Assert.Equal("reserved", received[1]["url"]!.GetValue<string>());
+        Assert.Equal("policy", received[1]["resource_id"]!.GetValue<string>());
+        var (denied, _, _) = Server(_ => new JsonObject { ["success"] = false, ["error"] = new JsonObject { ["code"] = "unauthorized" } });
+        await Assert.ThrowsAsync<HaCommandException>(() => denied.ApplyPublicationAsync(mutation));
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ApplyPublicationAsync(mutation, cancel.Token));
+    }
+
+    [Fact]
     public async Task A_registry_command_authenticates_then_runs_and_reads_its_own_result()
     {
         var (client, received, connected) = Server(_ => new JsonObject

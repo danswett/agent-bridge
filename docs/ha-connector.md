@@ -1356,3 +1356,34 @@ reversible writer handover remain tracked by #318/#319; G7 is unchanged.
 original functions recorded by
 `tools/ha-contract/Export-HaPublicationObservation.ps1`. The recording keeps the
 publication source pin separate from the per-machine compatibility pin.
+
+### Native renderer and fenced write primitives (#318)
+
+The internal native publisher can now advance an **already established** policy,
+read back its exact fence, then publish the versioned inline card or full dashboard.
+It never bootstraps authority. Missing/old/conflicting writer identities, lost
+policies and unconfirmed saves remain failures, not permission to proceed. Shared
+mutations use the existing authenticated command boundary and per-write G5 guard;
+shadow mode explicitly refuses them.
+
+The bundled MIT card is the exact legacy 1.42.0 artifact. The native renderer keeps
+all launch/status/usage controls, MCP cards, twelve form slots, answer/reply/stop
+controls, and every old-card fallback. Its declarative session templates are
+recorded from the complete original renderer, not recreated partially. A renderer
+artifact fingerprints its implementation, templates, policy/digest helpers and
+contract constants, with normalized source line endings.
+
+`Export-HaRenderer.ps1` loads source functions through the syntax tree and stubs
+publication in memory. Its separate publication-pin fixture compares 108 complete
+views, input signatures and whole-config receipts across feature gates, offline
+peers, Unicode and punctuation-sensitive identifier ordering, including Czech
+ASCII contractions. Protocol 1 preserves PowerShell's ambient-culture ordering and
+scalar/null unrolling of the input signature's `SessionNodes`; output is
+deterministic for the same fleet, artifacts and host culture.
+`LivePublicationTests` exercises actual registration, saves, restart/readback and
+overwrite repair only on the explicitly disposable loopback HA of CI.
+
+These are internal primitives, **not an enabled runtime writer or migration
+command**. Fleet reconciliation, explicit opt-in and reversible stopped-writer
+handover still have to be integrated and verified. G7 is unchanged; no live
+cutover is authorized by this implementation slice.

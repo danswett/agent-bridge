@@ -1277,5 +1277,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => inner.ReadDashboardAsync(urlPath, cancellationToken);
         public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => inner.ReadResourcesAsync(cancellationToken);
         public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => inner.ReadDashboardsAsync(cancellationToken);
+        public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
+            Write(() => inner.ApplyPublicationAsync(mutation, cancellationToken));
     }
 }
