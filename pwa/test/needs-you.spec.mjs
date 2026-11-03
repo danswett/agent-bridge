@@ -581,6 +581,54 @@ test.describe('a moment before the lane takes a click', () => {
     await page.waitForTimeout(100);
     expect((await log(page)).length).toBe(1);
   });
+  test('in a scrolled list, an answer going in the last entry moves no other answer, and the lane takes the next click', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
+    await page.evaluate(() => { document.getElementById('list-pane').scrollTop = 40; });
+    await still(page);
+    // The last entry answered by a key: its status appears beneath its own buttons, so nothing
+    // that can be clicked moves. Every Resend stays hidden throughout, with no place of its own.
+    const after = await page.evaluate(async () => {
+      const pane = document.getElementById('list-pane');
+      const [a, b] = document.querySelectorAll('#needs-you .needs-entry');
+      b.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const armed = a.closest('.needs-you-list').hasAttribute('data-arriving');
+      a.querySelector('.needs-deny').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { scrolled: pane.scrollTop, grew: !b.querySelector('.needs-status').hidden, armed };
+    });
+    expect(after).toEqual({ scrolled: 40, grew: true, armed: false });
+    await expect.poll(async () => (await log(page)).length).toBe(2);
+  });
+
+  for (const { name, viewport, push } of [
+    { name: 'a banner above the list', viewport: { width: 1000, height: 700 }, push: 'banner' },
+    { name: 'the app bar, on a phone', viewport: { width: 390, height: 664 }, push: 'appbar' },
+  ]) {
+    test(`${name} appearing pushes the lane down, and the lane takes no click for a moment`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await openDemo(page);
+      const entry = await ask(page, LAND, permission());
+      const before = (await log(page)).length;
+      const moved = await page.evaluate(async (push) => {
+        const b = document.querySelector('#needs-you .needs-approve');
+        const top = b.getBoundingClientRect().top + scrollY;
+        if (push === 'banner') { document.getElementById('update-banner').hidden = false; } else { document.body.dataset.conn = 'busy'; }
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const armed = b.closest('.needs-you-list').hasAttribute('data-arriving');
+        const by = b.getBoundingClientRect().top + scrollY - top;
+        b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        return { armed, pushed: by > 1 };
+      }, push);
+      expect(moved).toEqual({ armed: true, pushed: true });
+      await page.waitForTimeout(100);
+      expect((await log(page)).length).toBe(before);
+      await expect(entry).toHaveCount(1);
+    });
+  }
+
   test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {
     await openDemo(page);
     await ask(page, LAND, permission());

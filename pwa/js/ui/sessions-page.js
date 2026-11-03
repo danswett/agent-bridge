@@ -49,14 +49,20 @@ function guardLane(list, scroller = null) {
   };
   // The entries themselves coming, going or moving; and anything that moves their answers without
   // that (an answer's status appearing or wrapping in an entry above, the note or machine tabs
-  // above the lane changing height, the window's width). Where each answer sits is read, in the
-  // scroller's content so scrolling isn't a move, when an entry, the lane or what is above it
-  // changes size; a move of more than a pixel runs the wait again. An age ticking on moves
-  // nothing, and the guard's own attribute changes no size, so it can't feed itself.
+  // above the lane changing height, a banner or the app bar above the list appearing, the
+  // window's width). Where each answer sits is read when an entry, the lane, anything holding it
+  // or anything before any of those changes size; a move of more than a pixel runs the wait
+  // again. It is read where the page would be unscrolled (the scroller's and the window's
+  // scrolling added back), so scrolling isn't a move but the list being pushed down is; and only
+  // for answers shown, since a hidden one (Resend until a send fails) has no place to keep. An
+  // age ticking on moves nothing, and the guard's own attribute changes no size, so it can't feed
+  // itself.
   const lane = list.parentElement ?? list;
   const where = () => {
-    const base = scroller ? scroller.getBoundingClientRect().top - scroller.scrollTop : 0;
-    return [...list.querySelectorAll(LANE_ANSWERS)].map((b) => b.getBoundingClientRect().top - base);
+    const scrolled = (scroller?.scrollTop ?? 0) + (globalThis.scrollY ?? 0);
+    return [...list.querySelectorAll(LANE_ANSWERS)]
+      .filter((b) => b.getClientRects().length > 0)
+      .map((b) => b.getBoundingClientRect().top + scrolled);
   };
   let was = null;
   const moved = () => {
@@ -65,7 +71,9 @@ function guardLane(list, scroller = null) {
     was = at;
   };
   const sized = typeof ResizeObserver === 'function' ? new ResizeObserver(moved) : null;
-  for (let el = lane; el; el = el.previousElementSibling) { sized?.observe(el); }
+  for (let up = lane; up; up = up.parentElement) {
+    for (let el = up; el; el = el.previousElementSibling) { sized?.observe(el); }
+  }
   for (const el of list.children) { sized?.observe(el); }
   const changes = typeof MutationObserver === 'function' ? new MutationObserver((records) => {
     for (const r of records) {
