@@ -1,0 +1,40 @@
+name: Mac host
+
+on:
+  pull_request:
+    paths: ['src/**', 'tests/**', 'Directory.Build.*', 'global.json', 'AgentBridge.slnx', 'scripts/build-macos-host.sh', '.github/workflows/macos-host.yml']
+  push:
+    branches: [main]
+    paths: ['src/**', 'tests/**', 'Directory.Build.*', 'global.json', 'AgentBridge.slnx', 'scripts/build-macos-host.sh', '.github/workflows/macos-host.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  managed-terminal:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      # Existing worktree fixtures compare paths literally; avoid /var symlink aliases.
+      TMPDIR: /private/tmp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install the managed terminal backend
+        run: brew install tmux
+      - name: Test discovery, owned terminal delivery, and private transport storage
+        run: |
+          dotnet test tests/AgentBridge.Host.Core.Tests -c Release --nologo
+          dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --nologo
+          dotnet test tests/AgentBridge.Transport.Tests -c Release --nologo
+      - name: Test host session operations and operator guards
+        # Full product tests run on Windows and Linux in CI. This Mac gate covers the
+        # host paths changed here; legacy migration watcher tests have a pre-existing
+        # macOS setup timeout documented in docs/macos-host.md.
+        run: >-
+          dotnet test tests/AgentBridge.Host.Tests -c Release --nologo
+          --filter 'FullyQualifiedName~Mac|FullyQualifiedName~HostPathsTests|FullyQualifiedName~LaunchFlowTests|FullyQualifiedName~AnswerFlowTests|FullyQualifiedName~ReplyFlowTests|FullyQualifiedName~StopFlowTests|FullyQualifiedName~CallerGuardTests'
+      - name: Publish the self-contained local host
+        run: bash scripts/build-macos-host.sh
