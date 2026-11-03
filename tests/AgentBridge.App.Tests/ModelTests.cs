@@ -398,6 +398,52 @@ public sealed class MarkdownTests
         Assert.Equal(new MdText("- |"), p.Inlines[2]);
     }
 
+    [Theory]
+    [InlineData("&gt;", 16384)]
+    [InlineData("\\*", 16384)]
+    [InlineData("\\\\", 16384)]
+    [InlineData("<a>", 16384)]
+    public void Text_of_one_inline_per_token_is_read_in_bounded_time_and_memory(string unit, int count)
+    {
+        var text = Repeat(unit, count);
+        MarkdownModel.Parse("warm");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var blocks = MarkdownModel.Parse(text);
+
+        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"{allocated / (1024 * 1024)} MiB");
+        Assert.NotEmpty(Assert.IsType<MdParagraph>(Assert.Single(blocks)).Inlines);
+    }
+
+    [Fact]
+    public void Thousands_of_inlines_in_one_paragraph_are_joined_in_linear_memory()
+    {
+        // Within the budget, so Markdig reads it: an escape, words and a line break on each of 1,800
+        // lines are thousands of nodes, joined into one run of about 57,600 characters.
+        const string words = "abcdefghijklmnopqrstuvwxyzabcd";
+        var text = Repeat("\\*" + words + "\n", 1800);
+        MarkdownModel.Parse("warm");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var blocks = MarkdownModel.Parse(text);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"{allocated / (1024 * 1024)} MiB");
+        Assert.Equal([new MdText(string.Join(' ', Enumerable.Repeat("*" + words, 1800)))], Assert.IsType<MdParagraph>(Assert.Single(blocks)).Inlines);
+    }
+
+    [Fact]
+    public void A_summary_of_text_drawn_as_written_is_never_empty()
+    {
+        // Nested too deep to parse, so drawn as written: its first line is a fence's backticks.
+        var question = Make.Form() with { Message = "```\nexample\n```\n" + Repeat("> ", 33) + "Which one?" };
+
+        Assert.Equal("example", NeedsYouEntry.LineOf(question));
+    }
+
     [Fact]
     public void A_long_realistic_response_is_still_read_as_markdown()
     {

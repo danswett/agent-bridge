@@ -271,7 +271,13 @@ public sealed partial class NeedsYouEntry : Observable
         var (prose, code) = MarkdownModel.Outline(message);
         var lines = message.Split('\n');
         if (prose is int at && at < lines.Length && PlainLine(Container().Replace(HiddenText.Reveal(lines[at]), "")) is { Length: > 0 } line) { return line; }
-        return code is null ? "" : Cut(Spaces().Replace(HiddenText.Reveal(code), " ").Trim());
+        if (code is not null && Cut(Spaces().Replace(HiddenText.Reveal(code), " ").Trim()) is { Length: > 0 } first) { return first; }
+        // Never empty while the message shows anything (#440): text drawn as written has no code, and
+        // its first line can be all marks, a fence's backticks say. Its first line with words, then
+        // its first line with anything.
+        return lines.Select(l => PlainLine(Container().Replace(HiddenText.Reveal(l), ""))).FirstOrDefault(l => l.Length > 0)
+            ?? lines.Select(l => Cut(Spaces().Replace(HiddenText.Reveal(l), " ").Trim())).FirstOrDefault(l => l.Length > 0)
+            ?? "";
     }
 
     [GeneratedRegex(@"^(?: {0,3}(?:>\s?|[-*+]\s+|\d+[.)]\s+))+")]

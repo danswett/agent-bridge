@@ -63,7 +63,9 @@ public static class MarkdownModel
     internal const int MaxChars = 64 * 1024;
     internal const int MaxNesting = 32;
     internal const long InlineBudget = 32_000_000;
-    const string InlineMarks = "[]()<!*_~^=+`|";
+    // Every character that can start an inline of its own: delimiters, brackets, code spans, and the
+    // entities (`&gt;`), backslash escapes and angle-bracket autolinks or tags that each become a node.
+    const string InlineMarks = "[]()<!*_~^=+`|&\\";
 
     public static IReadOnlyList<MdBlock> Parse(string? markdown)
     {
@@ -146,7 +148,8 @@ public static class MarkdownModel
 
     // A paragraph's weight: its marks squared (the delimiter and bracket matching that spans its
     // lines), and each line's marks times its length (the link and autolink scans that run on to the
-    // end of the line from each). A mark is an inline markup character or where an autolink can start.
+    // end of the line from each). A mark is one of InlineMarks, where a bare autolink can start, or a
+    // line break.
     static long InlineWork(ReadOnlySpan<char> text)
     {
         long marks = 0, lineMarks = 0, lineLength = 0, lines = 0;
@@ -327,13 +330,32 @@ public static class MarkdownModel
     {
         var list = new List<MdInline>();
         if (container is not null) { Walk(container, MdStyle.None, list); }
-        // Adjacent runs of one style are one run, which is what a text block wants.
+        // Adjacent runs of one style are one run, which is what a text block wants. Joined once per
+        // run, not by appending each piece to the run so far: 16,384 `&gt;` are 16,384 pieces, and
+        // re-copying the growing run allocated about 256 MiB on the UI thread (#440).
         var merged = new List<MdInline>();
+        var run = new StringBuilder();
+        MdStyle? style = null;
+        void Flush()
+        {
+            if (style is { } s) { merged.Add(new MdText(run.ToString(), s)); }
+            run.Clear();
+            style = null;
+        }
         foreach (var i in list)
         {
-            if (i is MdText t && merged.Count > 0 && merged[^1] is MdText prev && prev.Style == t.Style) { merged[^1] = prev with { Text = prev.Text + t.Text }; }
-            else { merged.Add(i); }
+            if (i is MdText t)
+            {
+                if (style != t.Style) { Flush(); style = t.Style; }
+                run.Append(t.Text);
+            }
+            else
+            {
+                Flush();
+                merged.Add(i);
+            }
         }
+        Flush();
         return merged;
     }
 
