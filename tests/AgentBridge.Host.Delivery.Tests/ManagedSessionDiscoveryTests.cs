@@ -71,6 +71,49 @@ public sealed class ManagedSessionDiscoveryTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Discovery_accepts_both_exact_native_and_dotnet_start_time_representations(bool dotnet)
+    {
+        var rig = new Rig();
+        rig.Run(101);
+        var identity = Identity(101) with { StartedAt = DateTimeOffset.FromUnixTimeSeconds(1793669689).AddTicks(941950) };
+        Assert.NotEqual(identity.StartedAt, identity.ProcessStartTime);
+        rig.Identities[101] = identity;
+        var observed = dotnet ? identity.ProcessStartTime : identity.StartedAt;
+        rig.Processes.Run(AgentKind.Codex, 101, "codex --no-daemon", observed);
+        rig.Holders = (_, _) => [101];
+        Assert.Equal(new[] { 101 }, rig.Inspector.FileHolders("/test/lock"));
+
+        // A neighbouring tick is neither accepted representation, not rounding slack.
+        var unrelated = observed.AddTicks(1);
+        Assert.NotEqual(identity.StartedAt, unrelated);
+        Assert.NotEqual(identity.ProcessStartTime, unrelated);
+        rig.Processes.Run(AgentKind.Codex, 101, "codex --no-daemon", unrelated);
+        rig.Holders = (_, _) => throw new InvalidOperationException("an unrelated start time must not query holders");
+        Assert.Empty(rig.Inspector.FileHolders("/test/lock"));
+    }
+
+    [Fact]
+    public void A_kernel_microsecond_change_after_matching_dotnet_time_still_revokes_the_binding()
+    {
+        var rig = new Rig();
+        rig.Run(101);
+        var identity = Identity(101) with { StartedAt = DateTimeOffset.FromUnixTimeSeconds(1793669689).AddTicks(941950) };
+        rig.Identities[101] = identity;
+        rig.Processes.Run(AgentKind.Codex, 101, "codex --no-daemon", identity.ProcessStartTime);
+        var queried = false;
+        rig.Holders = (_, _) =>
+        {
+            queried = true;
+            rig.Identities[101] = identity with { StartedAt = identity.StartedAt.AddTicks(10) };
+            return [101];
+        };
+        Assert.Empty(rig.Inspector.FileHolders("/test/lock"));
+        Assert.True(queried);
+    }
+
+    [Theory]
     [InlineData("pid")]
     [InlineData("image")]
     [InlineData("ownership")]

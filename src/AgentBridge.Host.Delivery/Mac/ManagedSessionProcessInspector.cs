@@ -51,7 +51,7 @@ public sealed class ManagedSessionProcessInspector : IProcessInspector
             // The classification must refer to this generation of the PID. Never turn
             // an unreadable start time or a changed executable into an ownership guess.
             if (process.StartedAt is not { } start || capture(process.Id) is not { } identity
-                || identity.StartedAt != start) { continue; }
+                || (identity.StartedAt != start && identity.ProcessStartTime != start)) { continue; }
             foreach (var root in registered)
             {
                 if (owns(root, process.Id) != true || capture(process.Id) != identity) { continue; }
