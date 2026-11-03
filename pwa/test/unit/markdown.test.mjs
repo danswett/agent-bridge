@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { codeText, parseApproval, parseMarkdown, revealed, safeHref, textOf } from '../../js/markdown.js';
+import { codeText, parseApproval, parseMarkdown, renderMarkdown, revealed, safeHref, textOf, toDom } from '../../js/markdown.js';
 import { hasRightToLeft, notesFor, revealLineSeparators } from '../../js/hidden-text.js';
 
 // Every element and link the parser would put on the page.
@@ -78,14 +78,67 @@ test('headings sit below the card title, and tables are built cell by cell', () 
   assert.equal(r.tags.filter((t) => t === 'td').length, 2);
 });
 
-test('pathological input finishes quickly', () => {
-  const inputs = ['*a '.repeat(6000), '['.repeat(16000), '[]('.repeat(5000), '`'.repeat(16000), '_x'.repeat(8000), '> '.repeat(8000) + 'x', '- '.repeat(4000) + 'x', '**'.repeat(8000), `${'['.repeat(4000)}${']'.repeat(4000)}`];
-  for (const s of inputs) {
-    const t0 = performance.now();
-    parseMarkdown(s);
-    const ms = performance.now() - t0;
-    assert.ok(ms < 1500, `${JSON.stringify(s.slice(0, 12))}… took ${ms.toFixed(0)} ms`);
-  }
+// Whether parsing grows in proportion to its input, judged so that no machine's speed or load
+// decides it. A fixed bound did both wrong: under load 1.5 s failed linear input (1.75-2.15 s seen),
+// while on a fast machine it let quadratic nested brackets through (0.14 s at 8,000 characters).
+// So each input is parsed at n, 4n and 16n repeats of its unit, once to warm up and then five times,
+// keeping the fastest (load only ever adds time), and fails if 16n takes 2 s, or if it takes 200 ms
+// or more and grew as a square does on both measures: at least 9 times from 4n, and at least 100
+// times from n. Each quadratic this guards against (#439's and #482's) grew at least 14.5 and 143
+// times. A linear parse grows about 4 and 16 times, but the collector slows its largest run, so one
+// measure alone gave false alarms: CI saw "[" grow 11 times from 4n (5.0 to 55.7 ms), and eight
+// copies at once on one machine saw closed emphasis grow 11 times (22.9 to 250.8 ms), each under 50
+// times from n. A ratio failure is timed once more before it counts, as such a pause rarely comes
+// twice; a parse over 2 s is no pause. Each input's 16n is about 400,000 characters, or 800,000 where
+// the quadratic's square is small (from 25,000 to 100,000 characters, closed emphasis searching the
+// rest of the text from each opener grew only 8.4 times); there each quadratic takes 470 ms or more
+// here, most over 2 s, and each linear parse 50-150 ms (about 250 with eight copies running).
+const LINEAR_MS = 2000;
+const RATIO_FROM_MS = 200;
+function parsesLinearly(make, n) {
+  const time = (text) => {
+    let start = performance.now();
+    parseMarkdown(text);
+    let best = performance.now() - start;
+    if (best > LINEAR_MS) { return best; }
+    for (let k = 0; k < 5; k++) { start = performance.now(); parseMarkdown(text); best = Math.min(best, performance.now() - start); }
+    return best;
+  };
+  const sizes = [make(n), make(4 * n), make(16 * n)];
+  const measure = () => {
+    const ms = [];
+    for (const text of sizes) { ms.push(ms.at(-1) > LINEAR_MS ? Infinity : time(text)); }
+    return ms;
+  };
+  const grewAsSquare = (ms) => ms[2] >= RATIO_FROM_MS && ms[2] >= 9 * ms[1] && ms[2] >= 100 * ms[0];
+  let ms = measure();
+  if (ms[2] < LINEAR_MS && grewAsSquare(ms)) { ms = measure(); }
+  const said = `${JSON.stringify(sizes[0].slice(0, 12))}…: ${sizes.map((t, k) => `${t.length} characters in ${ms[k].toFixed(1)} ms`).join(', ')}`;
+  assert.ok(ms[2] < LINEAR_MS, said);
+  assert.ok(!grewAsSquare(ms), said);
+}
+
+test('pathological input parses in time proportional to its length', () => {
+  const inputs = [
+    [(n) => '*a '.repeat(n), 8300], [(n) => '['.repeat(n), 25000], [(n) => '[]('.repeat(n), 8300], [(n) => '`'.repeat(n), 25000],
+    // Every "_" after the first is a closer the word after it refuses: reading each one's span for a
+    // blank line was quadratic, 4.9 s at 512,000 characters. 800,000 at 16n, as its square is small.
+    [(n) => '_x'.repeat(n), 25000],
+    [(n) => '> '.repeat(n) + 'x', 12500], [(n) => '- '.repeat(n) + 'x', 12500], [(n) => '**'.repeat(n), 12500],
+    [(n) => '['.repeat(n) + ']'.repeat(n), 12500],
+  ];
+  for (const [make, n] of inputs) { parsesLinearly(make, n); }
+});
+
+// #482: each opener searched the rest of the text for a blank line, which paragraph text never holds.
+// 800,000 characters at 16n: the search is fast, so its square needs the length to show.
+test('closed emphasis parses in time proportional to its length', () => {
+  const inputs = [
+    [(n) => '*x'.repeat(n), 25000], [(n) => '*a* '.repeat(n), 12500], [(n) => '_a_ '.repeat(n), 12500],
+    [(n) => '**a** '.repeat(n), 8400], [(n) => '~~a~~ '.repeat(n), 8400],
+  ];
+  for (const [make, n] of inputs) { parsesLinearly(make, n); }
+  assert.deepEqual(walk(parseMarkdown('*a* _b_ **c** ~~d~~ *x')).tags, ['p', 'em', 'em', 'strong', 'del']);
 });
 
 test('a button written in the text stays text, in a paragraph and in a code block', () => {
@@ -262,11 +315,48 @@ test('a block holding the private-use characters the parser stands separators in
   assert.equal(blockOf(`\`\`\`\na${held}\rb\u2028c\n\`\`\``), 'a\\u{F0000}\\u{F0001}\\u000Db\\u2028c');
 });
 
-test('an approval says it contains hidden characters for a bare carriage return or an isolate, and a CRLF is none', () => {
-  const noted = (message) => notesFor(textOf(parseApproval(message)[0]));
-  assert.deepEqual(noted('Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN'), ['Contains hidden characters']);
-  assert.deepEqual(noted(`Codex wants to run:\n\n${ISOLATED}`), ['Contains hidden characters']);
-  assert.deepEqual(noted('Codex wants to run:\r\n\r\ngit status\r\n'), []);
+// Just enough of a document for toDom and renderMarkdown in node: elements, attributes and text
+// nodes, a fragment's children taken into what it is appended to.
+const fakeDocument = () => {
+  const node = (tag) => ({
+    tag, attrs: {}, children: [], dataset: {},
+    append(...kids) { for (const k of kids) { if (k.tag === '#fragment') { this.children.push(...k.children); } else { this.children.push(k); } } },
+    prepend(...kids) { this.children.unshift(...kids); },
+    setAttribute(name, value) { this.attrs[name] = String(value); },
+    addEventListener() {},
+    set className(value) { this.attrs.class = value; },
+    set textContent(value) { this.children = [{ text: value }]; },
+  });
+  return { createDocumentFragment: () => node('#fragment'), createElement: node, createTextNode: (text) => ({ text }) };
+};
+const textNodes = (n) => (n.text !== undefined ? [n.text] : n.children.flatMap(textNodes));
+const elements = (n) => (n.text !== undefined ? [] : [n, ...n.children.flatMap(elements)]);
+const cardOf = (message) => renderMarkdown(message, fakeDocument(), { approval: true });
+const cardNotes = (card) => elements(card).filter((e) => e.attrs.class === 'md-note').map((e) => textNodes(e).join(''));
+const cardText = (card) => elements(card).filter((e) => e.attrs.class === 'md-literal').map((e) => textNodes(e).join(''));
+
+test('an approval says it contains hidden characters for a bare carriage return or an isolate', () => {
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN')), ['Contains hidden characters']);
+  assert.deepEqual(cardNotes(cardOf(`Codex wants to run:\n\n${ISOLATED}`)), ['Contains hidden characters']);
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\n\ngit status\n')), []);
+});
+
+// #423: bash takes the CR of a CRLF as part of the command: `cd` fails on `scratch\r`, and `rm` runs here.
+test('an approval\'s card says it contains hidden characters for the CR of a CRLF, which it draws as the line ending it is', () => {
+  const card = cardOf('cd /tmp/scratch\r\nrm -rf ./*');
+  assert.deepEqual(cardNotes(card), ['Contains hidden characters']);
+  assert.deepEqual(cardText(card), ['cd /tmp/scratch\nrm -rf ./*']);
+  // Even one only in the blank lines the card leaves out: the note says what the message holds.
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\n\ngit status\r\n')), ['Contains hidden characters']);
+});
+
+// #423: prose drew a CR before an LF raw, though parseMarkdown had made every CRLF an LF already.
+test('a carriage return before a line feed in an image\'s alt text or a link\'s title reaches the page as an escape, never raw', () => {
+  const page = toDom(parseMarkdown('See ![x\r\r\ny](https://a/i.png) and [docs](https://a/d "t\r\r\nu").'), fakeDocument());
+  const links = elements(page).filter((e) => e.tag === 'a');
+  assert.deepEqual(links.map((a) => textNodes(a).join('')), ['x\\u000D\ny', 'docs']);
+  assert.deepEqual(links.map((a) => a.attrs.title), [undefined, 't\\u000D\nu']);
+  assert.doesNotMatch(textNodes(page).join(''), /\r/);
 });
 // #429: lines of only whitespace at a block's end are as blank as empty ones, drawn and copied.
 test('a block ending in a line of spaces copies without the newline, so a paste does not run it', () => {
@@ -329,4 +419,31 @@ test('an approval with 200,000 blank lines before its text is drawn in linear ti
   const [p] = parseApproval('\n'.repeat(200000) + 'echo hi' + '\n \n'.repeat(100000));
   assert.ok(performance.now() - start < 250, `took ${performance.now() - start} ms`);
   assert.equal(textOf(p), 'echo hi');
+});
+// #439: each "[" scanned afresh to its partner, and each destination to the end of the text.
+test('nested link brackets parse in linear time, drawn as written', () => {
+  // 20,000 of each took 1.35 s, and it grew with the square.
+  parsesLinearly((n) => '['.repeat(n) + ']'.repeat(n), 12500);
+  parsesLinearly((n) => '!' + '['.repeat(n) + ']'.repeat(n), 12500);
+  const text = '['.repeat(100000) + ']'.repeat(100000);
+  assert.equal(textOf({ children: parseMarkdown(text) }), text);
+  assert.equal(textOf({ children: parseMarkdown('!' + text) }), '!' + text);
+});
+
+test('a link\'s opening repeated parses in linear time, drawn as written', () => {
+  // "[a](" repeated took 67 s at 200,000 characters: each destination was read to the end of the text.
+  const inputs = [
+    [(n) => '[a]('.repeat(n), 6250], [(n) => '[a](<'.repeat(n), 10000],
+    [(n) => '[a](x'.repeat(n) + ' '.repeat(2 * n) + 'y', 3600], [(n) => '[a](x'.repeat(n) + ' "' + 'x'.repeat(5 * n), 2500],
+  ];
+  for (const [make, n] of inputs) {
+    parsesLinearly(make, n);
+    const text = make(16 * n);
+    assert.equal(textOf({ children: parseMarkdown(text) }), text);
+  }
+});
+
+test('a link after thousands of unclosed ones is still a link', () => {
+  parsesLinearly((n) => '[a](('.repeat(n) + '[b](https://ok.example/)', 5000);
+  assert.deepEqual(walk(parseMarkdown('[a](('.repeat(20000) + '[b](https://ok.example/)')).hrefs, ['https://ok.example/']);
 });

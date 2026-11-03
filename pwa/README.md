@@ -401,7 +401,9 @@ list, the DOM is built with `createElement` and text nodes, every tag and link i
 again while building, and links keep only `http:`, `https:` and `mailto:` (absolute).
 Images become links and are never loaded. It covers what agents write: paragraphs (line
 breaks kept), headings, emphasis, code, fenced code, nested and task lists, quotes, rules,
-GitHub tables and links. It is linear on hostile input (tested at 16 KiB).
+GitHub tables and links. It is linear on hostile input: its tests parse each pathological input
+(runs of `*`, `_`, `[`, backticks, quotes, list markers, nested brackets, unclosed link
+destinations) at two sizes, and fail one whose time grows faster than its length (#439).
 
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
@@ -418,12 +420,15 @@ drawn. A block says what its escapes stand for, beside Copy: "Contains hidden ch
 "Contains right-to-left text", or both. A bare carriage return (not one of a CRLF), NEL and the
 line and paragraph separators end no line: the parser keeps each in its line as the character it
 is (standing in a private-use character the text does not hold while it parses), so a block can
-tell it from an escape written as text, and prose draws them as escapes too. An approval's
+tell it from an escape written as text, and prose draws them as escapes too, in an image's alt
+text and a link's title as well, even a CR just before a line feed (#423). An approval's
 message, on its card and as its prompt in Needs you, is drawn exactly as written, fence markers
 included, in the code face; nothing in it is read as Markdown (`parseApproval`,
 `renderMarkdown`'s `approval`): a link, code span, backslash escape, emphasis or a fence's own
 backtick lines (a command substitution in bash) could otherwise hide part of what runs. It has
-the same notes, and no Copy, which would take the whole message, fence lines too. ui.md §6.4 and
+the same notes, read from the message as it came, so the CR of a CRLF, drawn as a line ending,
+still says "Contains hidden characters" (#423); and no Copy, which would take the whole message,
+fence lines too. ui.md §6.4 and
 §8's wording on this is the app's (#323), copied word for word; the PWA also draws every code
 span in a sentence this way, and NEL and the separators in prose.
 
