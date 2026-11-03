@@ -552,6 +552,7 @@ suites:
     # (AGENTS.md, Secrets) and flags 13 known false positives (test keys, Azure role ids) only
     # when a commit changes those lines.
     command: pre-commit install, once per clone; then gitleaks runs on each commit (.pre-commit-config.yaml)
+    where: GitHub secret scanning with push protection (a repository setting, not a workflow job)
     status: exists
 
   - id: container-scan
