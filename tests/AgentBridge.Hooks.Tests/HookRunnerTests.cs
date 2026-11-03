@@ -9,6 +9,8 @@ namespace AgentBridge.Hooks.Tests;
 // Ported from agent-ha-bridge's hook/main_test.go and tests/test-native-hook.ps1, for this
 // product's hook. The difference that matters: with no host taking events, it prints the fixed
 // reply and runs nothing else, where agent-ha-bridge's ran its PowerShell hook.
+// Run alone: one test holds every pool thread for a moment, which nothing beside it should feel.
+[Collection(nameof(HookRunnerTests))]
 public sealed class HookRunnerTests : IDisposable
 {
     readonly string _root = Path.Combine(Path.GetTempPath(), "ab-hook-" + Guid.NewGuid().ToString("N")[..8]);
@@ -277,6 +279,53 @@ public sealed class HookRunnerTests : IDisposable
     }
 
     [Fact]
+    public void An_event_that_has_already_ended_is_judged_on_what_it_holds_however_short_the_wait()
+    {
+        // With no time at all to wait, an input already whole is still read and classified, not
+        // reported unfinished: the outcome cannot depend on how soon a slow runner reads it (#266).
+        Heartbeat(TimeSpan.Zero);
+        var none = Env(inputWait: TimeSpan.Zero, letThrough: TimeSpan.Zero);
+        Assert.Equal("{\"permissionDecision\":\"allow\"}\n", Invoke("not json", none, "copilot", "ask_user"));
+        Assert.Equal("", Invoke("{\"session_id\":\"s1\"}", none, "claude", "stop"));
+        var marker = SpoolContract.ApprovalMarkerPath(Runtime, "x1");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        File.WriteAllText(marker, "{}");
+        Invoke("{\"session_id\":\"x1\",\"hook_event_name\":\"Stop\"}", Env(drain: TimeSpan.Zero), "--fallback", "codex", "hook");
+        Assert.False(File.Exists(marker));
+
+        Assert.Single(SpoolFiles());
+        var lines = Log();
+        Assert.Equal(["reply", "spool", "reply"], lines.Select(l => l.GetProperty("path").GetString()));
+        Assert.Equal("unusable event", lines[0].GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void A_pipe_its_agent_has_closed_is_read_in_time_while_every_pool_thread_is_busy()
+    {
+        // A read queued to the pool behind other work waited for a thread, not the writer, and
+        // the deadline ran out with the event long since sent (#266). Run from a thread outside
+        // the pool, as the real hook's Main is: a pool thread waiting would just run it itself.
+        Heartbeat(TimeSpan.Zero);
+        // Not disposed: work items still queued when the test ends wait on it after it is set.
+        var release = new ManualResetEventSlim();
+        ThreadPool.GetMinThreads(out var workers, out _);
+        for (var i = 0; i < workers + 200; i++) { ThreadPool.UnsafeQueueUserWorkItem(_ => release.Wait(TimeSpan.FromSeconds(30)), null); }
+        try
+        {
+            var closed = new OpenPipe("not json"u8.ToArray());
+            closed.Close_();
+            using var output = new MemoryStream();
+            var exit = -1;
+            var hook = new Thread(() => exit = HookRunner.Run(["copilot", "ask_user"], closed, output, Env(inputWait: TimeSpan.FromSeconds(5), letThrough: TimeSpan.FromSeconds(5))));
+            hook.Start();
+            Assert.True(hook.Join(TimeSpan.FromSeconds(30)));
+            Assert.Equal(0, exit);
+        }
+        finally { release.Set(); }
+        Assert.Equal("unusable event", Log().Single().GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void Every_run_is_logged_with_the_path_it_took_and_why()
     {
         Heartbeat(TimeSpan.Zero);
@@ -489,3 +538,6 @@ public sealed class HookRunnerTests : IDisposable
         Assert.Equal("event too large", Log().Last().GetProperty("reason").GetString());
     }
 }
+
+[CollectionDefinition(nameof(HookRunnerTests), DisableParallelization = true)]
+public sealed class HookRunnerTestsRunAlone;

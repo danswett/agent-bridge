@@ -56,7 +56,10 @@ the fixed reply without spooling and logs `event not finished within 5s`. `ask_u
 even that long (invariant 3): its reply needs nothing from the event, so it is printed and the
 hook's output closed before stdin is read, and the event is then read for at most 0.5 s and
 spooled as it can be (the host reads the question from the transcript). agent-ha-bridge's Go hook
-waits for the end.
+waits for the end. These limits time the writer alone: the read runs on a thread of its own, not
+the thread pool's, so a late-scheduled read cannot make an event already sent count as
+unfinished, and an input that has already ended (a file or buffer the hook can seek) is read to
+its end and judged on what it holds, with no deadline at all.
 
 ## The spool contract (both bridges)
 

@@ -80,9 +80,9 @@ public static class HookRunner
                 {
                     SpoolContract.Record(root, agent, hook, "reply", "--fallback", env.Now(), env.ElapsedMs());
                 }
-                var drain = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
-                if (drain.Wait(env.FallbackDrain) && agent == "codex" && drain.Result.Whole
-                    && RuntimeRoot(env.ExecutableDirectory).Root is { } runtimeRoot && SpoolContract.CodexSessionId(Trim(drain.Result.Bytes)) is { } session)
+                var drain = ReadInput(stdin, env.FallbackDrain);
+                if (drain.Finished && agent == "codex" && drain.Whole
+                    && RuntimeRoot(env.ExecutableDirectory).Root is { } runtimeRoot && SpoolContract.CodexSessionId(Trim(drain.Bytes)) is { } session)
                 {
                     SpoolContract.WithdrawCodexApproval(runtimeRoot, session);
                 }
@@ -93,9 +93,7 @@ public static class HookRunner
             // a hook waiting for an end that never comes. Stopped at the deadline, the read is left
             // behind; the process ends without it.
             var wait = letThrough && env.LetThroughInputWait < env.InputWait ? env.LetThroughInputWait : env.InputWait;
-            var read = Task.Run(() => ReadAll(stdin, SpoolContract.MaxEventBytes));
-            var finished = read.Wait(wait);
-            var (utf8, whole) = finished ? read.Result : ([], false);
+            var (finished, utf8, whole) = ReadInput(stdin, wait);
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
             if (runtime is null)
@@ -189,6 +187,24 @@ public static class HookRunner
             writer.WriteEndObject();
         }
         return buffer.WrittenSpan.ToArray();
+    }
+
+    // The event, read within wait unless it has already ended. A stream that can seek (a file,
+    // a buffer) holds all it ever will and nothing can keep it open, so it is read to its end
+    // with no deadline: racing one made an input that was already whole come back "event not
+    // finished within 0.5s" whenever the read was scheduled late, as on a slow CI runner (#266).
+    // Any other is read on a thread of its own rather than the pool's, so the deadline measures
+    // the writer, not how soon a busy pool gets round to starting the read; left behind at the
+    // deadline, that thread is a background one and does not hold the process.
+    static (bool Finished, byte[] Bytes, bool Whole) ReadInput(Stream stdin, TimeSpan wait)
+    {
+        if (stdin.CanSeek)
+        {
+            var (bytes, whole) = ReadAll(stdin, SpoolContract.MaxEventBytes);
+            return (true, bytes, whole);
+        }
+        var read = Task.Factory.StartNew(() => ReadAll(stdin, SpoolContract.MaxEventBytes), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        return read.Wait(wait) ? (true, read.Result.Bytes, read.Result.Whole) : (false, [], false);
     }
 
     // Up to max bytes of stdin, and whether that was all of it. The budget is checked before
