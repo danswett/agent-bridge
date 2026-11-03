@@ -78,7 +78,7 @@ var supervisor = new HostSupervisor
     },
     Log = log,
     Stopped = () => files?.Stopped() ?? false,
-    ClearStopped = () => files?.ClearStopped(),
+    ClearStopped = () => files?.ClearStoppedBefore(startedUtc),
     BeforeStart = () => files?.HoldRecord(Environment.ProcessId, startedUtc),
 };
 try { return await supervisor.RunAsync(); }

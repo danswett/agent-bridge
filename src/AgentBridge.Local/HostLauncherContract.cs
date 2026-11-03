@@ -22,8 +22,9 @@ static class HostLauncherContract
     public const string CheckStopVariable = "AGENT_BRIDGE_HOSTW_CHECK_STOP";
 
     // The launcher's stop marker, in the profile's folder: written by the app's Stop, and while it
-    // is there a launcher starts no host again, after a crash or a restart. A launcher clears it as
-    // it starts, since starting one (at sign-in, or the app's Start) is a start on purpose.
+    // is there a launcher starts no host again, after a crash or a restart. A launcher clears one
+    // written before it started, since starting one (at sign-in, or the app's Start) is a start on
+    // purpose; one written since stands.
     public const string StopMarker = "host.stopped";
 
     // The launcher's record of itself, in the profile's folder: "<pid> <start time, UTC ticks>".

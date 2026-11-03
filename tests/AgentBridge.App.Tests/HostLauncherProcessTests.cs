@@ -126,17 +126,25 @@ public sealed class HostLauncherProcessTests : IDisposable
     }
 
     [Fact]
-    public void The_launcher_reads_and_clears_the_apps_stop_marker_in_the_profile_folder()
+    public void The_launcher_reads_the_apps_stop_marker_and_forgets_only_a_stop_asked_for_before_it_started()
     {
+        var marker = Path.Combine(folder, HostLauncherContract.StopMarker);
+        var started = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
         using var files = new LauncherFiles(folder, _ => { });
         Assert.False(files.Stopped());
 
-        File.WriteAllText(Path.Combine(folder, HostLauncherContract.StopMarker), "");
+        // A stop asked for since this launcher started, by an app that could not find it yet.
+        File.WriteAllText(marker, "");
+        File.SetLastWriteTimeUtc(marker, started.AddSeconds(1));
         Assert.True(files.Stopped());
-        files.ClearStopped();
+        files.ClearStoppedBefore(started);
+        Assert.True(files.Stopped());
 
+        // One asked for before it started.
+        File.SetLastWriteTimeUtc(marker, started.AddSeconds(-1));
+        files.ClearStoppedBefore(started);
         Assert.False(files.Stopped());
-        Assert.False(File.Exists(Path.Combine(folder, HostLauncherContract.StopMarker)));
+        Assert.False(File.Exists(marker));
     }
 
     [Fact]

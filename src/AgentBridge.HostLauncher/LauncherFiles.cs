@@ -21,9 +21,16 @@ public sealed class LauncherFiles(string profileFolder, Action<string> log) : ID
 
     public bool Stopped() => File.Exists(Marker);
 
-    public void ClearStopped()
+    // Forgets a stop asked for before this launcher started: starting one (at sign-in, or the
+    // app's Start, which clears the marker itself first) is a start on purpose. Not one asked for
+    // since, by an app that could not yet find this launcher (it had not reached its record):
+    // that stop stands, and the look before each start honours it (#420's review).
+    public void ClearStoppedBefore(DateTime startedUtc)
     {
-        try { File.Delete(Marker); }
+        try
+        {
+            if (File.Exists(Marker) && File.GetLastWriteTimeUtc(Marker) < startedUtc) { File.Delete(Marker); }
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"an earlier stop could not be cleared: {e.Message}"); }
     }
 

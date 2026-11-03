@@ -241,8 +241,9 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   connection (one of them elevated) is a refused Stop: left running, with its launcher, and the
   marker cleared. Without the task, a Start while a launcher the app (or an earlier run of it)
   started is between crash restarts waits for its host rather than starting a second launcher.
-  Every start clears the marker
-  (the app's Start, and a launcher starting, at sign-in or through the task).
+  Every start clears the marker (the app's Start; a launcher starting, at sign-in or through
+  the task, clears one written before it started, while a Stop since, by an app that could not
+  yet find it, stands).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
