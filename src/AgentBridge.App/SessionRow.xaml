@@ -11,6 +11,7 @@
          hover move and pin it (#164). -->
     <Grid
         x:Name="RowRoot"
+        SizeChanged="OnRowSizeChanged"
         Padding="8,10,12,10"
         ColumnSpacing="12"
         Background="Transparent"
@@ -94,6 +95,8 @@
             Style="{StaticResource AbTypeRow}"
             TextTrimming="CharacterEllipsis"
             TextWrapping="NoWrap"
+            x:Name="SessionTitle"
+            MaxLines="1"
             AutomationProperties.AutomationId="RowTitle"
             FontWeight="{x:Bind local:SessionRow.Weight(Card.Unread), Mode=OneWay}"
             Text="{x:Bind Card.Title, Mode=OneWay}" />

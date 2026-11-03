@@ -597,7 +597,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
    activity dot at the trailing edge. A grid item is min-width:auto, so a long unbroken title or
    path would otherwise make the row wider than the screen. */
-.session { position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
+.session { container-type: inline-size; position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
 .row-main {
   display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: var(--ab-space-3); align-items: start;
   width: 100%; min-height: var(--tap); padding: var(--ab-space-2) var(--ab-space-3); margin: 0;
@@ -609,6 +609,15 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .row-text { grid-column: 2; grid-row: 1; min-width: 0; display: grid; }
 .row-line1 { display: flex; align-items: center; min-width: 0; }
 .row-title { min-width: 0; font-size: var(--type-row); line-height: var(--type-row-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Pane width, rather than viewport width: desktop sidebars are compact too. */
+@container (max-width: 480px) {
+  .row-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    white-space: normal; overflow-wrap: anywhere;
+  }
+  .row-line1 { align-items: flex-start; }
+  .row-line1 .unread-dot { margin-top: calc((var(--type-row-line) - 6px) / 2); }
+}
 .session.unread .row-title { font-weight: 600; }
 /* Line 2: one line, cut short at its end; a separator never starts it. */
 .row-facts {
