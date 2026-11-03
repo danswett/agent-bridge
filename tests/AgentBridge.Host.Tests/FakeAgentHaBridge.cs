@@ -6,6 +6,7 @@ using AgentBridge.Hooks;
 using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Migration;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // An agent-ha-bridge installation laid out under a temporary HOME the way its install.ps1,
@@ -162,7 +163,10 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         ["answerButtons"] = new JsonObject { ["max"] = 4 },
     };
 
-    public Migrator Migrator(TimeSpan? verify = null, string? profile = null, string? hookFolder = null) => new(new MigrationOptions
+    // How often a migration here looks again while it waits.
+    public static readonly TimeSpan PollEvery = TimeSpan.FromMilliseconds(25);
+
+    public Migrator Migrator(TimeSpan? verify = null, string? profile = null, string? hookFolder = null, TimeProvider? time = null) => new(new MigrationOptions
     {
         ProfileFolder = profile ?? Profile,
         BridgeHome = BridgeHome,
@@ -171,8 +175,37 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
         LocalAppData = Path.Combine(Home, "AppData", "Local"),
         StopTimeout = TimeSpan.FromSeconds(2),
         VerifyTimeout = verify ?? TimeSpan.FromSeconds(15),
-        PollEvery = TimeSpan.FromMilliseconds(25),
-    }, Runtime_, Host, Hook);
+        PollEvery = PollEvery,
+    }, Runtime_, Host, Hook, time);
+
+    // A migrate or rollback whose waits these fakes settle at once or never (a daemon stopped or
+    // started, the spool's claim let go or held, a host that never takes the spool), on a clock
+    // moved on by one poll each time it waits. A wait meant to run out (a daemon that never stops,
+    // one never seen back) still takes its whole timeout, of this clock's time: on the real one each
+    // took 2 s, and those waits were most of what made MigrationTests hold up Host.Tests (#479).
+    // Not for a migration that has to see the host start (VerifyAsync): the intake runs on real time.
+    public async Task<MigrationReport> OnWaitedClock(Func<Migrator, Task<MigrationReport>> run, TimeSpan? verify = null)
+    {
+        var clock = new WaitedClock();
+        var work = run(Migrator(verify, time: clock));
+        while (await Task.WhenAny(work, clock.Waited()) != work) { clock.Advance(PollEvery); }
+        return await work;
+    }
+
+    // Says each time something starts waiting on it (a Task.Delay is a timer).
+    sealed class WaitedClock() : FakeTimeProvider(DateTimeOffset.UtcNow)
+    {
+        readonly SemaphoreSlim waits = new(0);
+
+        public Task Waited() => waits.WaitAsync();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            waits.Release();
+            return timer;
+        }
+    }
 
     // Every file under HOME and its hash, but for what the daemon and the hook change by
     // running (the runtime folder), the hook a migration installs, which stays, and the lock a

@@ -96,7 +96,7 @@ A valid MAC says which key signed a command, and any machine of the account can 
 the source also refuses a command signed by the machine asking (or by `to`), by a key not in
 its relay presence now, or by one there as a `host`. A person's device (`pwa`, `app`,
 `phone`) that is connected while they wait for the launch passes; a machine acting with nobody
-pressing anything does not (`LaunchFlowTests.A_machine_of_the_account_cannot_sign_for_itself_and_take_another_machines_sessions`).
+pressing anything does not (`LaunchTransferFlowTests.A_machine_of_the_account_cannot_sign_for_itself_and_take_another_machines_sessions`).
 
 The kind is the device's own word, given when it connected with the account's sign-in. Until
 the device roster (design §5.4), something holding that sign-in, a compromised machine of the

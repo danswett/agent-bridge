@@ -328,8 +328,9 @@ own, so this pointer is never changed under those sessions.
 
 ## What the live rehearsal still checks
 
-The tests (`MigrationTests`) migrate and roll back a fake installation laid out on disk as
-`install.ps1`, `install-claude.ps1` and `install-codex.ps1` lay one out, under a temporary home:
+The tests (`MigrationTests` and `MigrationTasksHooksAndSettingsTests`) migrate and roll back a
+fake installation laid out on disk as `install.ps1`, `install-claude.ps1` and `install-codex.ps1`
+lay one out, under a temporary home:
 
 * registrations in all three agents' files, with the person's own entries beside them;
 * config with secrets and a publication policy, instruction blocks, and runtime receipts.

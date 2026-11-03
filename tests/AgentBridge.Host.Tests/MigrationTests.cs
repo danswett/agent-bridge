@@ -8,9 +8,12 @@ using Xunit;
 
 // Migrating a machine from agent-ha-bridge to the host, and rolling it back (docs/migration.md,
 // issue #38), against a fake installation laid out as agent-ha-bridge's installers lay one out.
-public sealed class MigrationTests : IAsyncLifetime
+// In two classes, sharing this one's fixture, only so that xUnit runs them side by side: it runs one
+// class's tests one after another, and as one class of 122 tests, most of them a real migration's
+// file work, they took about 45 s and held up the whole of Host.Tests (#479).
+public abstract class MigrationFixture : IAsyncLifetime
 {
-    FakeAgentHaBridge _f = null!;
+    private protected FakeAgentHaBridge _f = null!;
 
     public Task InitializeAsync()
     {
@@ -20,11 +23,27 @@ public sealed class MigrationTests : IAsyncLifetime
 
     public async Task DisposeAsync() => await _f.DisposeAsync();
 
-    string Text(string path) => File.ReadAllText(path);
+    private protected string Text(string path) => File.ReadAllText(path);
 
     // Where profiles live; the fixture's is "default".
-    string Root => Path.GetDirectoryName(_f.Profile)!;
+    private protected string Root => Path.GetDirectoryName(_f.Profile)!;
 
+    // Migrated, or the report says why not: a bare Assert.True said nothing when #479 failed once.
+    private protected async Task Migrated()
+    {
+        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+        Assert.True(report.Ok, report.ToString());
+    }
+
+    private protected async Task RolledBack()
+    {
+        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+        Assert.True(report.Ok, report.ToString());
+    }
+}
+
+public sealed class MigrationTests : MigrationFixture
+{
     [Fact]
     public async Task A_dry_run_describes_every_change_and_makes_none()
     {
@@ -128,7 +147,7 @@ public sealed class MigrationTests : IAsyncLifetime
             Assert.True((await _f.Migrator().MigrateAsync(dryRun: true)).Ok);
         }
 
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
     }
 
     [Fact]
@@ -305,7 +324,7 @@ public sealed class MigrationTests : IAsyncLifetime
     public async Task Rolling_back_restores_every_file_byte_for_byte_and_starts_agent_ha_bridge_again()
     {
         var before = _f.Listing();
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         Assert.NotEqual(before, _f.Listing());
 
         var dry = await _f.Migrator().RollbackAsync(dryRun: true);
@@ -325,15 +344,15 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.True(File.Exists(_f.InstalledHook));
 
         // And again: a second migration after a rollback works the same way.
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await Migrated();
+        await RolledBack();
         Assert.Equal(before, _f.Listing());
     }
 
     [Fact]
     public async Task A_hook_file_edited_while_migrated_gets_only_its_own_entries_back()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var claude = FakeAgentHaBridge.Read(_f.ClaudeSettings);
         claude["theme"] = "dark";
         File.WriteAllText(_f.ClaudeSettings, claude.ToJsonString(new() { WriteIndented = true }));
@@ -361,7 +380,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [InlineData("a record without hook")]
     public async Task A_record_missing_what_it_was_written_with_refuses_the_rollback_and_keeps_its_snapshot(string damage)
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var path = MigrationRecord.PathIn(_f.Profile);
         var record = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         var files = record["files"]!.AsArray();
@@ -396,7 +415,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var before = _f.Listing();
         _f.Host.IgnoreIntake = true;
 
-        var report = await _f.Migrator(verify: TimeSpan.FromSeconds(1)).MigrateAsync(dryRun: false);
+        var report = await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false), verify: TimeSpan.FromSeconds(1));
 
         Assert.False(report.Ok);
         Assert.Contains("did not start taking the hook spool", report.ToString());
@@ -467,10 +486,10 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task The_host_is_restarted_on_its_restored_settings_when_rolling_back()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         Assert.NotNull(_f.Host.ConfigAtRestart[^1]);
 
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await RolledBack();
 
         // The migration created the profile's config.json, so the host restarted without one.
         Assert.Null(_f.Host.ConfigAtRestart[^1]);
@@ -483,7 +502,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var before = _f.Listing();
         _f.Runtime_.Stubborn = true;
 
-        var report = await _f.Migrator().MigrateAsync(dryRun: false);
+        var report = await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("still running", report.ToString());
@@ -501,7 +520,7 @@ public sealed class MigrationTests : IAsyncLifetime
         _f.Runtime_.DaemonRunning = false;
         var before = _f.Listing();
 
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
 
         Assert.True(report.Ok, report.ToString());
@@ -513,7 +532,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task Migrating_twice_is_refused_until_rolled_back()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var listing = _f.Listing();
 
         var again = await _f.Migrator().MigrateAsync(dryRun: false);
@@ -526,7 +545,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_second_profile_cannot_migrate_an_installation_another_profile_has_taken()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var other = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_f.Profile)!, "work")).FullName;
         var listing = _f.Listing();
 
@@ -677,7 +696,7 @@ public sealed class MigrationTests : IAsyncLifetime
         _f.Runtime_.Agents[AgentBridge.Protocol.AgentKind.Claude] = 0;
 
         // and re-pointed with the rest.
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var after = FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!;
         Assert.Equal($"\"{_f.InstalledHook}\" claude register", (string?)after["SessionStart"]![0]!["hooks"]![0]!["command"]);
     }
@@ -890,7 +909,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task The_host_is_told_the_agent_homes_whose_hooks_were_re_pointed()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
 
         var (state, problem) = AgentBridge.Host.Core.Intake.IntakeState.Load(_f.Profile);
         Assert.Null(problem);
@@ -936,7 +955,13 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal(mine, File.ReadAllText(hostConfig));
         Assert.True(_f.Runtime_.DaemonRunning);
     }
+}
 
+// Settings files that are links, a rollback that cannot put everything back, agent-ha-bridge's
+// tasks and daemon, the hook as the app updates it, and the settings carried over: MigrationTests'
+// second half (MigrationFixture says why there are two).
+public sealed class MigrationTasksHooksAndSettingsTests : MigrationFixture
+{
     [Fact]
     public async Task A_settings_file_that_is_a_symbolic_link_is_written_through_and_stays_a_link_both_ways()
     {
@@ -948,16 +973,16 @@ public sealed class MigrationTests : IAsyncLifetime
         catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
         var original = File.ReadAllBytes(target);
 
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
 
         Assert.NotNull(new FileInfo(_f.ClaudeSettings).LinkTarget);
         Assert.Contains("agent-bridge-host-hook", File.ReadAllText(target));
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await RolledBack();
         Assert.NotNull(new FileInfo(_f.ClaudeSettings).LinkTarget);
         Assert.Equal(original, File.ReadAllBytes(target));
 
         // And a link something else replaced with a copy of what was migrated is made again.
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var migrated = File.ReadAllBytes(target);
         File.Delete(_f.ClaudeSettings);
         File.WriteAllBytes(_f.ClaudeSettings, migrated);
@@ -973,7 +998,7 @@ public sealed class MigrationTests : IAsyncLifetime
     public async Task A_link_made_again_on_rollback_never_leaves_the_file_missing_nor_loses_a_save_made_meanwhile(bool savedMeanwhile)
     {
         var before = _f.Listing();
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         // Migrated through a link something has since replaced with a copy.
         var path = MigrationRecord.PathIn(_f.Profile);
         var record = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
@@ -1029,7 +1054,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_file_that_cannot_be_put_back_never_stops_a_rollback_turning_agent_ha_bridge_back_on()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var copilot = Path.Combine(MigrationRecord.SnapshotIn(_f.Profile), "copilot.bak");
         var claudeBefore = File.ReadAllBytes(Path.Combine(MigrationRecord.SnapshotIn(_f.Profile), "claude.bak"));
         File.Delete(copilot);
@@ -1078,11 +1103,11 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task Another_installation_s_daemon_running_does_not_count_as_this_one_back()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         _f.Runtime_.StartsNothing = true;
         _f.Runtime_.OtherDaemon = "fedcba9876543210fedcba9876543210";
 
-        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("was not seen running", report.ToString());
@@ -1092,11 +1117,11 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_rollback_is_not_done_until_agent_ha_bridge_is_seen_running_not_merely_when_it_cannot_be_checked()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         _f.Runtime_.StartsNothing = true;
         _f.Runtime_.Unknown = true;
 
-        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("was not seen running", report.ToString());
@@ -1144,14 +1169,14 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.DoesNotContain($"start {daemon}", _f.Runtime_.Calls);
 
         _f.Runtime_.Refused.Clear();
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
     }
 
     [Fact]
     public async Task A_rollback_turns_back_on_only_the_tasks_the_migration_turned_off()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         _f.Runtime_.Calls.Clear();
 
         var report = await _f.Migrator().RollbackAsync(dryRun: false);
@@ -1208,7 +1233,7 @@ public sealed class MigrationTests : IAsyncLifetime
         bool? recorded = true;
         _f.Runtime_.OnStop = () => recorded = MigrationRecord.Load(_f.Profile).Record!.DaemonRunning;
 
-        await _f.Migrator().MigrateAsync(dryRun: false);
+        await _f.OnWaitedClock(m => m.MigrateAsync(dryRun: false));
 
         Assert.Null(recorded);
     }
@@ -1220,7 +1245,7 @@ public sealed class MigrationTests : IAsyncLifetime
         _f.Runtime_.Tasks[daemon] = (true, false);
         _f.Runtime_.DaemonRunning = false;
         var listing = _f.Listing();
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         Assert.False(MigrationRecord.Load(_f.Profile).Record!.DaemonRunning);
         // As a migration cut short between its snapshot and turning the task off leaves it.
         var path = MigrationRecord.PathIn(_f.Profile);
@@ -1244,7 +1269,7 @@ public sealed class MigrationTests : IAsyncLifetime
     public async Task A_task_that_could_not_be_turned_back_on_is_never_reported_as_still_enabled()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         _f.Runtime_.Refused.Add(daemon);
         _f.Runtime_.DaemonRunning = true;
 
@@ -1263,7 +1288,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
         _f.Runtime_.Tasks[keepAwake] = (false, false);
 
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
 
         var record = MigrationRecord.Load(_f.Profile).Record!;
         Assert.True(record.Tasks.Single(t => t.Name == daemon).Disabled);
@@ -1274,7 +1299,7 @@ public sealed class MigrationTests : IAsyncLifetime
     public async Task A_record_from_a_build_that_did_not_say_which_tasks_it_turned_off_still_rolls_back()
     {
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var path = MigrationRecord.PathIn(_f.Profile);
         var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
         foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
@@ -1311,7 +1336,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
         var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
         _f.Runtime_.Tasks[keepAwake] = (true, false);
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var path = MigrationRecord.PathIn(_f.Profile);
         var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
         foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
@@ -1335,7 +1360,7 @@ public sealed class MigrationTests : IAsyncLifetime
     {
         if (!OperatingSystem.IsWindows()) { return; }
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var path = MigrationRecord.PathIn(_f.Profile);
         var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
         foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
@@ -1344,7 +1369,7 @@ public sealed class MigrationTests : IAsyncLifetime
         _f.Runtime_.Calls.Clear();
         try
         {
-            var report = await _f.Migrator().RollbackAsync(dryRun: false);
+            var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
 
             Assert.False(report.Ok);
             Assert.Contains($"* {daemon} was left disabled", report.ToString());
@@ -1360,7 +1385,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
         var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
         _f.Runtime_.Tasks[keepAwake] = (true, false);
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         // As a migration cut short between marking the task and asking the scheduler leaves it.
         _f.Runtime_.Tasks[keepAwake] = (true, false);
         _f.Runtime_.Refused.Add(keepAwake);
@@ -1379,7 +1404,7 @@ public sealed class MigrationTests : IAsyncLifetime
         var daemon = $"AgentBridgeDaemon_{_f.InstallationId}";
         var keepAwake = $"AgentBridgeDevBoxKeepAwake_{_f.InstallationId}";
         _f.Runtime_.Tasks[keepAwake] = (true, false);
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var path = MigrationRecord.PathIn(_f.Profile);
         var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
         foreach (var t in json["tasks"]!.AsArray()) { t!.AsObject().Remove("disabled"); }
@@ -1417,8 +1442,8 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task Migrating_another_installation_after_a_rollback_leaves_the_first_s_hook_pointing_at_its_own_runtime()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await Migrated();
+        await RolledBack();
         // A session started while migrated still runs this hook.
         Assert.Equal(_f.Runtime, HookRunner.RuntimeRoot(_f.InstallationHooks).Root);
         await using var other = new FakeAgentHaBridge(installationId: "fedcba9876543210fedcba9876543210");
@@ -1434,7 +1459,7 @@ public sealed class MigrationTests : IAsyncLifetime
     {
         // Only Windows lets a reader refuse a rename of the file it holds.
         if (!OperatingSystem.IsWindows()) { return; }
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var previous = File.ReadAllText(_f.InstalledHook);
         File.WriteAllText(_f.HookSource, "MZ the next version's hook");
         FileStream? held = null;
@@ -1455,7 +1480,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_hook_replacement_cut_short_is_put_back_when_the_host_starts()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var previous = File.ReadAllText(_f.InstalledHook);
         // Moved aside, and the new one never moved in; the app is mid-update, so no source either.
         File.Move(_f.InstalledHook, _f.InstalledHook + ".old");
@@ -1469,7 +1494,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task An_app_update_s_new_hook_reaches_the_copy_migrated_agents_run_when_the_host_starts()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var pointer = File.ReadAllBytes(Path.Combine(_f.InstallationHooks, HookRunner.PointerFile));
         Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
         File.WriteAllText(_f.HookSource, "MZ the next version's hook");
@@ -1484,7 +1509,7 @@ public sealed class MigrationTests : IAsyncLifetime
         {
             Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
         }
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await RolledBack();
         Assert.Null(Migrator.RefreshHook(_f.Profile, _f.HookSource));
         Assert.Equal("MZ the next version's hook", File.ReadAllText(_f.InstalledHook));
     }
@@ -1516,7 +1541,7 @@ public sealed class MigrationTests : IAsyncLifetime
         Assert.Equal("copilot", (string?)settings["launch"]!["defaultAgent"]);
         Assert.Equal([other, FakeAgentHaBridge.Rooted("repos", "docs")], settings["launch"]!["workspaces"]!.AsArray().Select(w => w is JsonObject o ? (string)o["path"]! : (string)w!));
 
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await RolledBack();
         Assert.Equal(mine, Text(hostConfig));
     }
 
@@ -1607,7 +1632,7 @@ public sealed class MigrationTests : IAsyncLifetime
         settings["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["command"] = launcher;
         File.WriteAllText(_f.ClaudeSettings, settings.ToJsonString(new() { WriteIndented = true }));
         var goForm = (string)FakeAgentHaBridge.Read(_f.ClaudeSettings)["hooks"]!["UserPromptSubmit"]![0]!["hooks"]![0]!["command"]!;
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var migrated = FakeAgentHaBridge.Read(_f.ClaudeSettings);
         migrated["theme"] = "dark";
         // And the person moved UserPromptSubmit's group ahead of SessionStart's in the file.
@@ -1630,7 +1655,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task Hook_registrations_are_put_back_only_once_the_host_has_let_go_of_the_spool()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var claim = Path.Combine(_f.Runtime, HookIntake.ClaimFile);
         var hostConfig = Path.Combine(_f.Profile, "config.json");
         var heldAtWrite = new List<string>();
@@ -1643,7 +1668,7 @@ public sealed class MigrationTests : IAsyncLifetime
         };
         try
         {
-            Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+            await RolledBack();
         }
         finally { DurableFile.BeforeCommit.Value = null; }
 
@@ -1653,11 +1678,11 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task Agent_ha_bridge_is_not_started_while_the_old_host_still_holds_the_spool()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         // The host acknowledged the restart but its last pass has not let go yet.
         _f.Host.Linger = true;
 
-        var report = await _f.Migrator().RollbackAsync(dryRun: false);
+        var report = await _f.OnWaitedClock(m => m.RollbackAsync(dryRun: false));
 
         Assert.False(report.Ok);
         Assert.Contains("still holds the hook spool", report.ToString());
@@ -1670,7 +1695,7 @@ public sealed class MigrationTests : IAsyncLifetime
 
         _f.Host.Linger = false;
         _f.Host.Release();
-        Assert.True((await _f.Migrator().RollbackAsync(dryRun: false)).Ok);
+        await RolledBack();
         Assert.True(_f.Runtime_.DaemonRunning);
         Assert.False(Registrations.Names(File.ReadAllBytes(_f.ClaudeSettings), _f.InstalledHook));
     }
@@ -1678,7 +1703,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_migrated_hook_whose_timeout_was_changed_gets_its_command_back_and_keeps_the_timeout()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var claude = FakeAgentHaBridge.Read(_f.ClaudeSettings);
         claude["hooks"]!["PreToolUse"]![1]!["hooks"]![0]!["timeout"] = 99;
         File.WriteAllText(_f.ClaudeSettings, claude.ToJsonString(new() { WriteIndented = true }));
@@ -1695,7 +1720,7 @@ public sealed class MigrationTests : IAsyncLifetime
     [Fact]
     public async Task A_migrated_hook_changed_past_recognition_is_reported_and_its_snapshot_kept()
     {
-        Assert.True((await _f.Migrator().MigrateAsync(dryRun: false)).Ok);
+        await Migrated();
         var claude = FakeAgentHaBridge.Read(_f.ClaudeSettings);
         claude["hooks"]!["Stop"]![0]!["hooks"]![0]!["command"] = $"\"{_f.InstalledHook}\" claude stop --verbose";
         File.WriteAllText(_f.ClaudeSettings, claude.ToJsonString(new() { WriteIndented = true }));

@@ -15,7 +15,9 @@ using Xunit;
 // launch it, and this machine fetches the bundle that machine seals into the relay's blob store
 // for it, installs it under an id of its own, and resumes it. Two real hosts through the
 // in-process relay, each with its own agent homes.
-public sealed partial class LaunchFlowTests
+// A class of its own beside LaunchFlowTests, on its fixture, so that the two run side by side (#479).
+[Trait("Category", "Network")]
+public sealed class LaunchTransferFlowTests : LaunchFlowFixture
 {
     const string AwayId = "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6";
 

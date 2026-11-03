@@ -9,7 +9,9 @@ using Xunit;
 // launch.trust end to end: a person answering a launched agent's folder-trust question from their
 // phone, through the relay, with a command it signed. The agent is played by the fake screens and
 // starter: what it draws, and what it does with keys that reach it.
-public sealed partial class LaunchFlowTests
+// A class of its own beside LaunchFlowTests, on its fixture, so that the two run side by side (#479).
+[Trait("Category", "Network")]
+public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 {
     // Codex's question as 0.165 drew it on the test VM (2026-10-31), blank rows and all.
     string[] CodexAsks(string root) =>

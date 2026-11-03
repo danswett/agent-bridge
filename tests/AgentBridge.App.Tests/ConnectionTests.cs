@@ -14,16 +14,28 @@ public sealed class ConnectionTests : IAsyncLifetime
     HostConnection connection = null!;
     // Snapshots read in full (sessions.synced), counted from the first connection.
     int syncs;
+    // The connection's states and log as they came, timed, for a failure seen only on CI (#465).
+    readonly List<string> seen = [];
+    LinkState? lastState;
 
     public Task InitializeAsync()
     {
         host.Sessions.Add(Make.Session("s1", response: "hello"));
         host.Start();
-        connection = host.Connect(start: false);
+        void See(string what) { lock (seen) { seen.Add($"{DateTime.UtcNow:HH:mm:ss.fff} {what}"); } }
+        connection = host.Connect(start: false, log: See);
         connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
+        connection.Changed += () =>
+        {
+            if (connection.State == lastState) { return; }
+            lastState = connection.State;
+            See($"{connection.State}: {connection.StateDetail}");
+        };
         connection.Start();
         return Task.CompletedTask;
     }
+
+    string Seen() { lock (seen) { return $"now {DateTime.UtcNow:HH:mm:ss.fff}, {connection.State}, connection {connection.ConnectionNumber}; {string.Join("; ", seen)}"; } }
 
     public async Task DisposeAsync()
     {
@@ -207,9 +219,14 @@ public sealed class ConnectionTests : IAsyncLifetime
     [Fact]
     public async Task With_no_host_running_the_app_says_so()
     {
+        var stopping = DateTime.UtcNow;
         await host.StopAsync();
+        var stopped = DateTime.UtcNow;
 
-        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running");
+        // Timed out once on Windows CI in a loaded run (#465), and not reproduced since: the timeout
+        // says what the connection went through, so the cause need not be guessed at.
+        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running",
+            why: () => $"stop asked {stopping:HH:mm:ss.fff}, done {stopped:HH:mm:ss.fff}; {Seen()}");
     }
 
     [Fact]
