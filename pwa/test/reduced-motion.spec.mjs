@@ -101,9 +101,11 @@ async function walk(page, { phone }) {
   const copilot = await open(page, COPILOT);
   await look('a session opened');
 
-  // Disclosure: reasoning shown.
+  // Disclosure: reasoning shown (the worked example has some).
   const reasoning = copilot.locator('details.reasoning > summary');
-  if (await reasoning.isVisible()) { await reasoning.click(); await look('reasoning shown'); }
+  await expect(reasoning).toBeVisible();
+  await reasoning.click();
+  await look('reasoning shown');
 
   // Send and Answer: a press in flight shows the progress ring.
   await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());

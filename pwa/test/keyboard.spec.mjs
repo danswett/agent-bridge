@@ -90,7 +90,7 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
   const stops = [];
   for (let i = 0; i < max; i += 1) {
     await page.keyboard.press(key);
-    if (await page.evaluate(() => document.activeElement === document.body)) { continue; }
+    if (await page.evaluate(() => !document.activeElement || document.activeElement === document.body || document.activeElement === document.documentElement)) { continue; }
     const stop = await focused(page);
     expect.soft(stop.visible && stop.shown, `focus shown on ${stop.name}`).toBe(true);
     stops.push(stop);
