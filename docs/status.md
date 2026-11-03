@@ -266,7 +266,7 @@ All merged PRs, by area. Each PR describes what it verified.
 - **Discovery and safety:**
   - #59, #62, #66 (discovery holds);
   - #67 (management refused from agent sessions);
-  - #103, #141, #144, #155.
+  - #103, #141, #144, #155, #330.
 - **Hooks and migration:**
   - #65, #68, #116, #117.
 - **HA connector:**
