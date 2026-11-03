@@ -12,6 +12,9 @@
 import { answerability, tapToAnswer } from './answers.js';
 import { parseMarkdown } from './markdown.js';
 import { delegateTitle } from './attribution.js';
+import { hasHidden, hasRightToLeft, reveal } from './hidden-text.js';
+
+export { reveal };
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 const LINE_MAX = 140;
@@ -144,35 +147,11 @@ export function wholePrompt(q) {
   // screen as it will run: a bidi control can make `curl ... | sh` read as a comment.
   // Nor is one with right-to-left letters, which reorder what is drawn around them without any
   // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
-  if (HIDDEN.test(raw) || RTL.test(raw)) { return false; }
+  if (hasHidden(raw) || hasRightToLeft(raw)) { return false; }
   // Every line ending the renderer breaks on is counted: a bare CR is a line too.
   const m = raw.trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines
     && literalShape(m) && !hasTable(parseMarkdown(m));
-}
-
-// Characters a reader cannot see as they run: format characters (bidi controls, zero-width
-// spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
-// of the command), private-use and unassigned code points, lone surrogates, and the line and
-// paragraph separators; and every default-ignorable code point, drawn as nothing though it is
-// there: variation selectors (which can make one name look like another), the combining grapheme
-// joiner, Hangul fillers, tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point).
-const IGNORABLE = '\\u00AD\\u034F\\u061C\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFF8'
-  + '\\u{1BCA0}-\\u{1BCA3}\\u{1D173}-\\u{1D17A}\\u{E0000}-\\u{E0FFF}';
-const HIDDEN_CLASS = `[\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\u2028\\u2029${IGNORABLE}]|[^\\P{Cc}\\n\\t]`;
-const HIDDEN = new RegExp(HIDDEN_CLASS, 'u');
-const HIDDEN_ALL = new RegExp(HIDDEN_CLASS, 'gu');
-// The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
-// supplementary planes' right-to-left ranges.
-const RTL = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
-
-// Any such character drawn as a visible escape (\u202E), so the lane's line reads in the order
-// it runs.
-export function reveal(text) {
-  return String(text ?? '').replace(HIDDEN_ALL, (c) => {
-    const hex = c.codePointAt(0).toString(16).toUpperCase();
-    return hex.length > 4 ? `\\u{${hex}}` : `\\u${hex.padStart(4, '0')}`;
-  });
 }
 
 // The agents whose permission prompts a host writes whole and literal, so the lane can show what

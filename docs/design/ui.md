@@ -574,6 +574,26 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   checkbox and text controls, with Answer in Bridge.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono).
+- **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
+  scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
+  "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
+  outcome said to a screen reader. Every code block reads strictly left to right, and a
+  character that is not on screen as it runs (bidi controls, zero-width and other format or
+  invisible characters, and a bare carriage return, NEL or line or paragraph separator, which a
+  shell does not take as a line break) is drawn as a visible escape such as `\u2067` (#220, the owner's
+  "escape and allow" rule from #253): an agent's isolates must never draw a download as a comment.
+  Right-to-left letters are escaped too (`\u05D0`), since even in a left-to-right line the
+  punctuation between two of them joins their run and is drawn reversed: `echo א#;ב;rm -rf ~` would
+  read as commented out. Such a block also says "Contains right-to-left text" beside Copy. This is
+  the owner's trade-off (#253): Hebrew or Arabic in a code block is harder to read, so that what is
+  read is what runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
+  line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
+  still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
+  this since #296 and the PWA since #415, which draws every code span in a sentence the same way.
+- **An approval's card** (#220): all of the message, prose and code spans as well as fences, is
+  drawn this way, escaped (right-to-left letters included) and left to right, with Approve once
+  still offered. A Codex approval carries its command in prose ("Codex wants to run: …"). Other
+  questions draw as written.
 
 ### 6.5 Reply box
 
@@ -734,6 +754,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
 - **No sentences explaining the UI,** no exclamation marks, and no emoji.
+- **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
+  letters' included, are copied as drawn, so the text pasted is never different from the text read.
+  Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
 
 ## 9. Accessibility
 

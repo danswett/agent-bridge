@@ -534,9 +534,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* Never a tint on a role fill, as in a question: a linked `code` would be bridge at 4.41:1 on
    subtle over the light needs fill (design/tokens.json color.contrast.tints). */
 .needs-prompt.md pre, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
-/* The line and the prompt's code read in the order they run: no surrounding direction reorders them
-   (hidden characters are refused or shown as escapes, js/needs-you.js). */
-.needs-line, .needs-prompt code { unicode-bidi: plaintext; direction: ltr; }
+/* The line reads in the order it runs: no surrounding direction reorders it (hidden characters are
+   refused or shown as escapes, js/needs-you.js). The prompt's code reads as all code does (below). */
+.needs-line { unicode-bidi: plaintext; direction: ltr; }
 .needs-meta { margin: 2px 0 0; font-size: .8rem; color: var(--ab-text2); overflow-wrap: anywhere; }
 .needs-delegate, .needs-at-machine { color: var(--ab-needs-text); font-weight: 600; }
 .needs-age { font-variant-numeric: tabular-nums; }
@@ -860,6 +860,15 @@ summary {
    rather than running off the side. pre-wrap keeps indentation; Copy takes the real text. */
 .md pre code { font: .86em var(--ab-font-mono); background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .md .md-code { position: relative; margin: 8px 0; }
+/* Code, and all of an approval's message, reads strictly left to right in the order it runs, never
+   in a direction guessed from its letters (plaintext would): its hidden characters and right-to-left
+   letters are escapes (js/hidden-text.js, ui.md §6.4, #220). */
+.md code, .md pre, .md.md-approval { direction: ltr; unicode-bidi: isolate; }
+/* Beside Copy, never under it: the block's right-to-left letters are drawn as escapes. */
+.md-code-rtl {
+  position: absolute; top: 0; left: 10px; right: calc(var(--tap) + 64px); min-height: var(--tap);
+  display: flex; align-items: center; color: var(--ab-text2); font-size: .8rem; line-height: 1.1;
+}
 /* The code starts below the Copy button, so the button never covers its first line. */
 .md .md-code > pre { margin: 0; padding-top: var(--tap); }
 .md-copy {

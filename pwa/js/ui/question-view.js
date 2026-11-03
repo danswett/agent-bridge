@@ -93,8 +93,12 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
-  const message = h('div', { class: 'md question-message', id: `${idBase}-m` });
-  message.append(renderMarkdown(q.message));
+  // An approval's message, all of it, reads left to right with its hidden characters and
+  // right-to-left letters as escapes (#220, ui.md §6.4): Approve once allows what was read, and a
+  // Codex approval's command is prose. Other questions draw as written.
+  const approval = q.kind === 'approval';
+  const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });
+  message.append(renderMarkdown(q.message, document, { approval }));
   section.append(message);
   return section;
 }
