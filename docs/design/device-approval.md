@@ -209,7 +209,7 @@ accepted (during a fork, below, one per head), written before it acts on the new
 ### 3.5 Where it lives
 
 * **The relay is an untrusted store.** It keeps one append-only chain per account, beside
-  the machine roster (`docs/protocol/roster.md`) and under the same naming and ETag rules,
+  the machine roster ([roster.md](../protocol/roster.md)) and under the same naming and ETag rules,
   serves it, and accepts an append only if it extends the current head (so two honest
   approvers cannot fork it; the second re-reads, re-verifies and signs again on the new head
   without asking the person again, unless the new head removed it or added the same device).
@@ -264,7 +264,7 @@ channels with two different `h`.
 A plain six-digit code derived from `h` would be weak: a man in the middle completes one leg
 first and then tries about 10⁶ ephemerals on the other until the codes collide. So the code
 also takes nonces in a commit-then-reveal order, the agent-ha-bridge fleet-pairing protocol
-(`docs/fleet-pairing.md` there) with its HA steps replaced by the channel:
+([docs/fleet-pairing.md](https://github.com/danswett/agent-ha-bridge/blob/main/docs/fleet-pairing.md) there) with its HA steps replaced by the channel:
 
 Every hash, MAC and signature input below is framed, so no two inputs share bytes:
 `F(x₁, …, xₙ) = L(x₁) ‖ … ‖ L(xₙ)`, where `L(x)` is the length of `x` in bytes as a 4-byte
@@ -378,7 +378,7 @@ claim it. So nothing about verification is recorded in the roster.
 
 Usually a machine has both, and they are enrolled together with one code. The app is the
 enrollee; it reads the host's ECDH public key over the local pipe (an op limited to the app,
-as `host.manage` is, docs/protocol/local-pipe.md) and asks for both. The approver signs two
+as `host.manage` is, [local-pipe.md](../protocol/local-pipe.md)) and asks for both. The approver signs two
 entries (`app` and `host`) after the one code, and the app hands the chain to the host over
 the pipe, where the host pins it. A host without an app (a Linux or Mac host run by hand)
 enrolls itself with `agent-bridge-host devices join`. It shows the code in the terminal, and
@@ -515,7 +515,7 @@ person types into it.
 ### 7.3 The local pipe and the HA connector
 
 The roster governs the relay path (and the LAN path of design §5.2 when it exists). The local
-pipe keeps its same-user rules (docs/protocol/local-pipe.md). The HA connector acts in-process
+pipe keeps its same-user rules ([local-pipe.md](../protocol/local-pipe.md)). The HA connector acts in-process
 for Home Assistant users (§9.5). Neither is a roster device and neither can change the roster.
 
 ### 7.4 The relay
@@ -593,7 +593,7 @@ owner's, would be caught only by that comparison. Ids from `launch.remoteFolderT
 
 `Unsigner` requires the signer to be an active rostered person's device and still in presence;
 the asking target and the named `to` must be rostered hosts. The "What this does not stop yet"
-paragraphs of `docs/protocol/v1-transfer.md` and `docs/host-transfer.md` go. Commands stay
+paragraphs of [v1-transfer.md](../protocol/v1-transfer.md) and [host-transfer.md](../host-transfer.md) go. Commands stay
 MACs: they already name one verifier. Moving them to ECDSA signatures is possible later and not
 needed.
 
@@ -614,7 +614,7 @@ host becomes Remove:
 * **Remove revokes and forgets** (recommended): a machine that is gone, perhaps with its disk, is
   revoked too. If it connects again it is listed as waiting for approval, and one code brings it
   back. agent-ha-bridge let a forgotten machine come back by itself; this is a deliberate
-  difference, to be recorded in parity.md.
+  difference, to be recorded in [parity.md](../parity.md).
 * **Keep both**: Forget stays listing-only (parity), Remove is a separate action on the Devices
   page.
 
@@ -628,8 +628,8 @@ HA connector's Install button are local paths and unaffected.
 Unchanged. It runs in the host for Home Assistant users and reaches the same services the relay
 path does, guarded by HA credentials, as agent-ha-bridge was. It is not a roster device, it
 shows no roster controls, and nothing it does changes the roster. On a machine with the
-connector on, HA credentials stay a second way in, by design; the note in ha-connector.md says
-so.
+connector on, HA credentials stay a second way in, by design; R6 adds a note saying so to
+[ha-connector.md](../ha-connector.md).
 
 ### 9.6 Apple clients (#260, #358)
 
