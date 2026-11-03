@@ -498,7 +498,7 @@ reaches the real host or its profile.
   `build/pack-app.ps1 -Runtime <win-x64|win-arm64>`: publishes the app, host, launcher, injector
   and hook into one folder for that architecture, checks for the app's `.pri`, the executables
   (each built for that machine) and the bundled Agent Bridge
-  Mono TTFs with their `OFL.txt` (`Assets\Fonts`; SIL Open Font License, not MIT), and packs it
+  Mono TTFs with their `OFL.txt` (`Assets\Fonts`; licensed separately under SIL OFL 1.1, not this project's AGPL), and packs it
   with `vpk` into that architecture's channel, with a delta from the latest release. It then starts the published
   app with `--self-test`, which runs the demo (on CI, on a screen made 1600×1000 or more for the pass, as a
   window is never wider than its screen), finds the rows by automation id, checks each row's two lines, opens sessions from

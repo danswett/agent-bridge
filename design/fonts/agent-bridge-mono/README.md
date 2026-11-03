@@ -52,7 +52,7 @@ files by hand.
 ## License
 
 The fonts are under the **SIL Open Font License 1.1** ([OFL.txt](OFL.txt)), not the
-repository's MIT license. The OFL lets us:
+repository's AGPL-3.0-only license. The OFL lets us:
 - bundle and embed them in the apps and the PWA;
 - keep them in this public repository;
 - modify them.
