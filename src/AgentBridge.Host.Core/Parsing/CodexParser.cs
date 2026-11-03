@@ -25,7 +25,8 @@ namespace AgentBridge.Host.Core.Parsing;
 // stood then (agents_states: "pending_init", "running", "interrupted", "shutdown",
 // "not_found", {"completed": text} or {"errored": text}); spawn_agent's carries the prompt
 // and model as well. A sub-agent that stops tells the session in a user message,
-// <subagent_notification>{"agent_path": its thread id, "status": …}</subagent_notification>.
+// <subagent_notification>{"agent_path": its thread id, "status": …}</subagent_notification>,
+// marked as one by the message's content_item_kinds ("multi_agent.subagent_notification").
 // A sub-agent is a thread of its own with a rollout of its own (never a session, CodexRollout),
 // so what it says reaches this one only through these, never as its response. It stays open
 // for more input until closed, so a finished one is idle, not ended. Its own sub-agents would
@@ -45,6 +46,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     ];
 
     const string NotificationStart = "<subagent_notification>";
+    const string NotificationKind = "multi_agent.subagent_notification";
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
@@ -302,9 +304,12 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         }
     }
 
-    // A <subagent_notification> user message: a sub-agent stopped, and how.
+    // A <subagent_notification> user message: a sub-agent stopped, and how. Only one Codex marks
+    // as one: the person can type the same text.
     bool Notification(JsonElement p, DateTimeOffset? at)
     {
+        if (Json.Obj(p, "internal_chat_message_metadata_passthrough") is not { } metadata || Json.Arr(metadata, "content_item_kinds") is not { } kinds
+            || !kinds.EnumerateArray().Any(k => k.ValueKind == JsonValueKind.String && k.GetString() == NotificationKind)) { return false; }
         if (ContentText(p) is not { } text || !text.StartsWith(NotificationStart, StringComparison.Ordinal)) { return false; }
         var (start, end) = (text.IndexOf('{', StringComparison.Ordinal), text.LastIndexOf('}'));
         if (start < 0 || end < start) { return false; }

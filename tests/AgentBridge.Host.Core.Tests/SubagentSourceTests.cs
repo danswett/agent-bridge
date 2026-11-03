@@ -415,6 +415,9 @@ public class ClaudeSubagentTests
         var count = AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords + 4;
         for (var i = 0; i < count; i++)
         {
+            // The last few written after a pause, so even a file system that keeps creation times
+            // coarsely, or only as set here, has them last.
+            if (i == AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords) { Thread.Sleep(100); }
             // Written later, named earlier.
             var file = Path.Combine(beside, $"agent-a{count - i:x4}.meta.json");
             File.WriteAllText(file, $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
@@ -743,6 +746,19 @@ public class CodexSubagentTests
     }
 
     [Fact]
+    public async Task A_notice_the_person_typed_does_not_stop_a_sub_agent()
+    {
+        // Found in review: only the text was checked, not Codex's mark on the message.
+        await using var r = new Replay();
+        await r.Through(16);
+
+        var s = await r.Append(Notice("done", 17, marked: false));
+
+        Assert.Equal(SubagentStatus.Working, Assert.Single(s.Subagents!).Status);
+        Assert.Equal(1, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
     public async Task A_sub_agent_that_errored_failed()
     {
         await using var r = new Replay(l => l.Replace($"{{\"completed\":\"{Answer}\"}}", "{\"errored\":\"model unavailable\"}", StringComparison.Ordinal)
@@ -787,12 +803,13 @@ public class CodexSubagentTests
         Assert.Null(s.Activity.Background);
     }
 
-    static string Notice(string text, int s) => Codex.Item(new
+    static string Notice(string text, int s, bool marked = true) => Codex.Item(new
     {
         type = "message",
         id = "msg_notice",
         role = "user",
         content = new[] { new { type = "input_text", text = $"<subagent_notification>\n{{\"agent_path\":\"{Thread}\",\"status\":{{\"completed\":\"{text}\"}}}}\n</subagent_notification>" } },
+        internal_chat_message_metadata_passthrough = new { content_item_kinds = marked ? new[] { "multi_agent.subagent_notification" } : [] },
     }, s);
 
     static string Collab(string tool, double s, string state)

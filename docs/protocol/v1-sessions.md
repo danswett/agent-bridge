@@ -1037,7 +1037,10 @@ Read from the session's own rollout. Checked against a Codex CLI 0.166.0 recordi
   `pending_init` and `running` working; `{"completed": text}` ends the run `done`, the text its
   `line`; `{"errored": text}` and `interrupted` end it `failed`; it is then `idle`, open for
   more input. `shutdown` and `not_found` end it. A `user` message
-  `<subagent_notification>{"agent_path", "status"}</subagent_notification>` says the same; after
+  `<subagent_notification>{"agent_path", "status"}</subagent_notification>`, marked by its
+  `internal_chat_message_metadata_passthrough.content_item_kinds`
+  `multi_agent.subagent_notification`, says the same (the same text without that mark is the
+  person's); after
   a `wait` that already said so it is spent on that run, never ending one input has started
   since.
   `send_input`, `resume_agent`, `send_message` and `followup_task` wake their receivers;
