@@ -31,7 +31,7 @@ public sealed partial class SessionCardViewModel
     // header.
     public string RowStatus => Driven && Glyph != StatusGlyph.Needs ? "Driven by an agent" : Line.FirstFact;
     public string RowPlace => Machine ?? Place;
-    public string RowFacts => string.Join(" · ", new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
+    public string RowFacts => string.Join(StatusLine.Separator, new[] { RowStatus, RowPlace }.Where(s => !string.IsNullOrEmpty(s)));
     // A row read aloud (§9): its glyph's name already says the status and machine.
     public string RowLabel => Unread ? $"{GlyphLabel}, new activity" : GlyphLabel;
 

@@ -671,8 +671,10 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   contrast.
 - **Touch targets:** at least 44×44 on touch platforms, 32×32 on desktop.
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
-  Windows App, delegating to 3 agents, DEV-VM1". Facts are joined with commas there, so a
-  delegate's name read aloud has none of its own: "," and the commas drawn like it (U+055D,
+  Windows App, delegating to 3 agents, DEV-VM1": its parts (title, status, driver, machine;
+  a strip item's name, state, time and parent) are joined with commas, while the status's own
+  facts keep " · ". So a delegate's name read aloud has no comma of its own: "," and the
+  commas drawn like it (U+055D,
   U+060C, U+066B, U+07F8, U+1363, U+1802, U+1808, U+201A, U+2E41, U+2E4C, U+3001, U+A4FE,
   U+A60D, U+A6F5, U+FE10, U+FE11, U+FE50, U+FE51, U+FF0C, U+FF64) become a space, and a run of
   spaces one. A name of "x, idle, DEV-VM2" reads "Delegate x idle DEV-VM2 asks", never as
