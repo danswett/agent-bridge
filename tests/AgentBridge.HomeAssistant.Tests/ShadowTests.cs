@@ -142,4 +142,18 @@ public sealed class ShadowTests
         Assert.Equal("not served without answers", decision.Note);
         Assert.Equal("not served without answers", report.Differences.Single(d => d.Topic == HaContract.DiscoveryTopic("select", Node, "f3")).Note);
     }
+
+    // The dry run only pretends to make the machine's Detailed activity switch, so Home Assistant
+    // never gives it a state: the connector's five looks 800 ms apart cost every shadow 3.2 s (#390).
+    [Fact]
+    public async Task The_shadow_looks_once_for_the_state_of_a_switch_it_only_pretended_to_make()
+    {
+        DaemonPublished();
+        sessions.Set(FakeSessions.Copilot(A));
+
+        await Shadow();
+
+        // That one look, and the one every pass takes for the switch's value (HaConnector.DetailedAsync).
+        Assert.Equal(2, ha.ReadsOf("input_boolean." + HaContract.DetailedHelperId(HaContract.MachineSlug(Machine))));
+    }
 }

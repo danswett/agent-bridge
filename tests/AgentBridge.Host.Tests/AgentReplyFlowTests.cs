@@ -59,10 +59,16 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         ConfirmTimeout = TimeSpan.FromSeconds(2),
         PollInterval = TimeSpan.FromMilliseconds(25),
         SubmitAfter = TimeSpan.FromMilliseconds(200),
+        SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
     }, attachments: store);
 
     ReplyService? replier;
+    // Left at the product's 15 s for the tests that press Enter again, which end on what the box
+    // shows, not on the time. A test whose box stays empty and is never recorded waits it out in
+    // full, as it did for 34 s and 17 s (#390), so one that is not about pressing Enter again sets
+    // none to be pressed.
+    TimeSpan submitPatience = new ReplyOptions { CopilotHome = "" }.SubmitPatience;
 
     Task<ReplyResult> ReplyAsync(string id, string text, params string[] files) => (replier ??= Replier()).ReplyAsync(new ReplyRequest
     {
@@ -152,6 +158,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_queued_prompt_taken_later_does_not_confirm_a_second_reply_of_the_same_words()
     {
+        submitPatience = TimeSpan.Zero;
         console.Rows = ClaudeIdle();
         console.OnInject = plan => Fixture.Append(claude, ClaudeQueued(Typed(plan)));
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "again")).Outcome);
@@ -409,6 +416,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_Codex_reply_its_rollout_records_differently_or_not_at_all_is_unconfirmed()
     {
+        submitPatience = TimeSpan.Zero;
         console.Rows = CodexIdle();
         console.OnInject = _ => Fixture.Append(rollout, CodexPrompt("something else"));
         Assert.Contains("recorded a different message", (await ReplyAsync(CodexId, "hello")).Reason);

@@ -195,7 +195,7 @@ public sealed class AuthBackoffTests : IDisposable
     public async Task A_record_that_cannot_be_locked_is_left_alone_and_a_token_not_yet_accepted_is_held()
     {
         var ha = new Answering(time) { Status = HttpStatusCode.OK };
-        var guard = new HaAuthGuard(Record, time);
+        var guard = new HaAuthGuard(Record, time) { LockWait = TimeSpan.Zero, RetryLockWait = TimeSpan.Zero };
         Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
         var before = File.ReadAllText(Record);
         using (new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))

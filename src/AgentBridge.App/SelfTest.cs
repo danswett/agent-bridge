@@ -133,12 +133,18 @@ static partial class SelfTest
             if (movable?.Card is { } moving)
             {
                 bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving);
+                // What was seen when a move's focus did not land, for the failure (#410: twice on
+                // Arm64, with nothing in the log to say which move, or where focus was instead).
+                var seen = new List<string>();
+                string Seen() => $"{FocusedName(window)}; the row {(moving.WantsRowFocus ? "still asking for focus" : "no longer asking for focus")}; the list's item for it {ItemState(window, moving)}";
                 var openBefore = main.Selected;
                 movable.MoveBy(1);
                 var down = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
+                if (!down) { seen.Add($"after the move down: {Seen()}"); }
                 Rows(window).FirstOrDefault(r => r.Card == moving)?.MoveBy(-1);
                 var up = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
-                Check(down && up, "keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row");
+                if (!up) { seen.Add($"after the move up: {Seen()}"); }
+                Check(down && up, $"keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row{(seen.Count > 0 ? $" ({string.Join("; ", seen)})" : "")}");
                 await Task.Delay(300);
                 Check(main.Selected == openBefore && openBefore != moving, $"leaves the open session open while another row moves and takes focus ({main.Selected?.Id ?? "none"})");
             }
@@ -147,15 +153,29 @@ static partial class SelfTest
             // off); once an arrow key has moved it there, the row with focus is opened.
             var ordered = Rows(window).OrderBy(Top).ToList();
             var target = ordered.FirstOrDefault(r => r.Card != main.Selected);
-            if (target?.Card is { } reached && Above<ListViewItem>(target, _ => true) is { } targetItem)
+            // The list's own item for the row: a row control just moved can still be in the visual
+            // tree, put aside for reuse in another item (SessionsPage.OnRowRecycled), and focus given
+            // there is not on any row of the list.
+            if (target?.Card is { } reached && window.Sessions.Rows.ContainerFromItem(reached) is ListViewItem)
             {
                 var openNow = main.Selected;
-                targetItem.Focus(FocusState.Keyboard);
+                ListViewItem? Item() => window.Sessions.Rows.ContainerFromItem(reached) as ListViewItem;
+                bool OnItem() => Item() is { } item && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot), item);
+                // Waited for, rather than read a fixed 300 ms later (#410, x64): a row drawn again
+                // as the list settles can take focus from the item given it, and then the arrow
+                // key's FollowFocus below had no row to open. Asked of the list's item each time,
+                // since the row drawn again may be in another one.
+                Task<bool> Focused() => Until(() => OnItem() || Item() is { } item && item.Focus(FocusState.Keyboard) && OnItem(), TimeSpan.FromSeconds(5));
+                var given = await Focused();
+                // Long enough for selection following focus, were it on, to have chosen the row.
                 await Task.Delay(300);
                 var stayed = main.Selected == openNow;
+                // Again just before the key: focus can have moved during that wait too.
+                given = await Focused() && given;
+                var focusedOn = given ? "" : $"; {FocusedName(window)}";
                 window.Sessions.FollowFocus();
                 var opened = await Until(() => main.Selected == reached, TimeSpan.FromSeconds(5));
-                Check(stayed && opened, $"opens nothing for a row only given focus, and the row an arrow key reached (focus alone: {(stayed ? "opened nothing" : "opened its row")}; after the key: {main.Selected?.Id ?? "none"})");
+                Check(given && stayed && opened, $"opens nothing for a row only given focus, and the row an arrow key reached (focus alone: {(stayed ? "opened nothing" : "opened its row")}; after the key: {main.Selected?.Id ?? "none"}{focusedOn})");
             }
             else { Check(false, "finds a row other than the open one"); }            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.Sessions, Path.ChangeExtension(outFile, ".sessions.png"));
@@ -348,6 +368,22 @@ static partial class SelfTest
     // The list's rows, one per listed session: a recycled row control off screen is not one.
     static List<SessionRow> Rows(MainWindow window) =>
         [.. Find<SessionRow>(window.Sessions.Rows).Where(r => r.Card is { } c && window.ViewModel.Sessions.Contains(c) && r.ActualHeight > 0).DistinctBy(r => r.Card)];
+
+    // What has keyboard focus, for a failure's message: a row's list item by its session, and
+    // whether it is the list's own item for that session or one put aside for reuse.
+    static string FocusedName(MainWindow window) =>
+        Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) switch
+        {
+            ListViewItem { Content: SessionCardViewModel c } item => $"focus on the list item of {c.Id}{(ReferenceEquals(window.Sessions.Rows.ContainerFromItem(c), item) ? "" : ", not the list's own")}",
+            FrameworkElement e => $"focus on {e.GetType().Name} {AutomationProperties.GetAutomationId(e)}".TrimEnd(),
+            { } other => $"focus on {other.GetType().Name}",
+            null => "no focus",
+        };
+
+    static string ItemState(MainWindow window, SessionCardViewModel card) =>
+        window.Sessions.Rows.ContainerFromItem(card) is ListViewItem item
+            ? $"{item.FocusState}, {item.Visibility}, {(item.IsLoaded ? "loaded" : "not loaded")}, {item.ActualHeight:0} px"
+            : "not drawn";
 
     // A TextBlock's words, its runs' included.
     static string Text(TextBlock block) => block.Inlines.Count == 0 ? block.Text : string.Concat(block.Inlines.OfType<Microsoft.UI.Xaml.Documents.Run>().Select(r => r.Text));

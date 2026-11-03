@@ -53,10 +53,12 @@ public sealed class HaAuthGuard
     static readonly TimeSpan Reservation = TimeSpan.FromSeconds(45);
     const int MaxCredentials = 16;
     public const string CorruptSuffix = ".corrupt";
-    static readonly TimeSpan LockWait = TimeSpan.FromSeconds(3);
-    // Short once the record is known to be unavailable: tried again before every request, it must
-    // not hold each up for long.
-    static readonly TimeSpan RetryLockWait = TimeSpan.FromMilliseconds(50);
+    // How long another process's hold on the record's lock is waited out, at first and once the
+    // record is known to be unavailable (short then: tried again before every request, it must not
+    // hold each up for long). Tests holding the lock for good shorten both: they check what is
+    // done without the lock, not how long it is waited for, and once spent 6 s of real time (#390).
+    internal TimeSpan LockWait { get; init; } = TimeSpan.FromSeconds(3);
+    internal TimeSpan RetryLockWait { get; init; } = TimeSpan.FromMilliseconds(50);
     static readonly TimeSpan MoveWait = TimeSpan.FromSeconds(1);
     // Requests out at once from this process, even with an accepted token: one revoked while a
     // burst is on its way is refused once per request already sent, before the first refusal can

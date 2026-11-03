@@ -208,7 +208,18 @@ public sealed class HostManagerTests : IAsyncLifetime
     [Trait("Category", "Network")]
     public async Task Quitting_during_an_update_brings_the_host_back_once_its_task_run_has_ended()
     {
-        manager.SetStartAtSignIn(true);
+        // The update's stop is held on a clock that never moves, so it waits for this test to let
+        // the host go however slow the runner is. On the wall clock its 1 s ran out first on Arm64,
+        // and the update ended in "the host did not stop" rather than the quit (#425).
+        var held = new HostManager(manager.Layout, tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            Time = new FakeTimeProvider(Make.T0),
+        };
+        held.SetStartAtSignIn(true);
         var stopping = new TaskCompletionSource();
         host.On(HostOps.Stop, d => { _ = Task.Run(async () => { await stopping.Task; await host.StopAsync(); }); return new { stopping = true }; });
         host.Start();
@@ -216,19 +227,19 @@ public sealed class HostManagerTests : IAsyncLifetime
         tasks.StillRunningLooks = 3;
         var applied = false;
 
-        var update = manager.StopAndApplyAsync(() => { }, () => applied = true);
+        var update = held.StopAndApplyAsync(() => { }, () => applied = true);
         await Wait.UntilAsync(() => host.Sent(HostOps.Stop).Count == 1, "the update's stop");
         var logged = new List<string>();
-        var quit = Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), logged.Add));
-        await Wait.UntilAsync(() => !manager.UpdateUnderWay, "the quit to begin");
+        var quit = Task.Run(() => held.Quit(TimeSpan.FromSeconds(10), logged.Add));
+        await Wait.UntilAsync(() => !held.UpdateUnderWay, "the quit to begin");
         stopping.SetResult();
         await quit;
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => update);
+        await Assert.ThrowsAsync<OperationCanceledException>(() => update.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.False(applied);
         Assert.Empty(logged);
         Assert.Empty(tasks.Ignored);
-        Assert.True(await manager.IsRunningAsync());
+        Assert.True(await held.IsRunningAsync());
     }
 
     string StopMarker => Path.Combine(manager.Layout.ProfileFolder, HostLauncherContract.StopMarker);
