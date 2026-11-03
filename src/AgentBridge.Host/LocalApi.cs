@@ -62,8 +62,8 @@ public static class LocalApi
 }
 
 // One host per profile on a machine: a lock file in the profile's folder, held for the life of
-// the process and let go by the OS however it ends. A host restarting itself waits for the one
-// it replaces.
+// the process and let go by the OS however it ends. A host restarting itself starts the one
+// that replaces it only after letting go (HostHandover).
 public sealed class HostLock : IDisposable
 {
     readonly FileStream file;
@@ -83,4 +83,34 @@ public sealed class HostLock : IDisposable
     }
 
     public void Dispose() => file.Dispose();
+}
+
+// host.restart (#239): the replacement is started once this host has finished stopping, every
+// disposal done and its lock let go, never when the restart is asked for. It was started at once
+// and waited 15 s for the lock, while the old host's shutdown could take far longer (a usage
+// monitor's disposal alone waits up to 90 s for a probe): the replacement gave up, the old host
+// exited, and the restart ended with no host at all, which nothing brings back until sign-in
+// (#106). Started this late it finds the lock free, so a restart ends with exactly one host: this
+// one is no longer serving, and a host something else started meanwhile keeps the lock and the
+// replacement stands back. A host that fails on its way out still hands over.
+public sealed class HostHandover
+{
+    int requested;
+
+    HostHandover() { }
+
+    public bool Requested => Volatile.Read(ref requested) == 1;
+
+    // Asked for by host.restart, before the host is told to stop.
+    public void Request() => Volatile.Write(ref requested, 1);
+
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement)
+    {
+        var handover = new HostHandover();
+        try { return await serve(handover); }
+        finally
+        {
+            if (handover.Requested) { startReplacement(); }
+        }
+    }
 }
