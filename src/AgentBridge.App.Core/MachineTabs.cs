@@ -26,6 +26,7 @@ public static class MachineTabFit
         var order = selected >= 0 && selected < widths.Count ? all.Where(i => i != selected).Prepend(selected) : all;
         foreach (var i in order)
         {
+            // Each tab shown takes one gap: the n - 1 between them, and the one before More.
             var need = widths[i] + gap;
             // The chosen tab shows even where nothing fits beside More: it is the one being looked at.
             if (need > left && !(i == selected && shown.Count == 0)) { break; }

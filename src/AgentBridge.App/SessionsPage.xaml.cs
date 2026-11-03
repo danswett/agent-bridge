@@ -299,8 +299,9 @@ public sealed partial class SessionsPage : UserControl
     // style's (SelectorBarItemPadding 12 each side, a 1 px border).
     double tabChrome = 26;
     bool chromeSeen;
-    // Measures a name as a tab draws it, off the page.
+    // Measures a name as a tab draws it, off the page; and More's words in More's own style.
     readonly TextBlock ruler = new() { TextWrapping = TextWrapping.NoWrap };
+    readonly TextBlock moreRuler = new() { TextWrapping = TextWrapping.NoWrap };
     bool arrangeQueued;
 
     void BuildMachineTabs()
@@ -410,7 +411,7 @@ public sealed partial class SessionsPage : UserControl
             MoreMachines.Visibility = Visibility.Visible;
             MoreMachines.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             // Not drawn yet, its template may not be applied: its parts, then.
-            var more = Math.Max(MoreMachines.DesiredSize.Width, TextWidth(MoreMachinesText.Text) + MoreMachinesContent.Spacing + MoreMachinesChevron.Width + MoreMachines.Padding.Left + MoreMachines.Padding.Right);
+            var more = Math.Max(MoreMachines.DesiredSize.Width, MoreTextWidth() + MoreMachinesContent.Spacing + MoreMachinesChevron.Width + MoreMachines.Padding.Left + MoreMachines.Padding.Right);
             split = MachineTabFit.Split(widths, chosen, room, Math.Ceiling(more) + MachineBar.ColumnSpacing);
             Arranged = $"room {room:0}, More {more:0}, tabs {string.Join(" ", widths)}, chrome {tabChrome:0.#}";
         }
@@ -448,6 +449,15 @@ public sealed partial class SessionsPage : UserControl
         ruler.Text = text;
         ruler.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
         return ruler.DesiredSize.Width;
+    }
+
+    double MoreTextWidth()
+    {
+        moreRuler.Style = MoreMachinesText.Style;
+        moreRuler.FontFamily = MoreMachinesText.FontFamily;
+        moreRuler.Text = MoreMachinesText.Text;
+        moreRuler.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        return moreRuler.DesiredSize.Width;
     }
 
     void ObserveTabChrome()
