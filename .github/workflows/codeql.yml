@@ -1,0 +1,120 @@
+name: CodeQL
+
+# Static analysis of the product's code and of these workflows (quality/README.md, §3.3, "Supply
+# chain"): C#, the PWA's and tools' JavaScript, and GitHub Actions. Results go to the Security
+# tab. On a pull request, code scanning's own "CodeQL" check compares them with main's and fails
+# only on alerts the pull request adds, at GitHub's default threshold (high or critical security
+# alerts, and errors), so findings already on main never turn a pull request red. The weekly run
+# picks up new queries and advisories while nothing is merged.
+#
+# Main pushes and the weekly run analyse every language. A pull request analyses only the
+# languages it changes (#459): C# for C# sources and the files that shape its build, JavaScript and
+# TypeScript for script and page sources and npm manifests, Actions for workflows and actions. A
+# change to this workflow analyses all three. A language left out uploads nothing, so the
+# pull request's "CodeQL" check reports that configuration as not found on the pull request
+# ("Code scanning cannot determine the alerts introduced by this pull request, because ... was
+# not found"): it never claims that language has no alerts. Nothing on main is closed either,
+# because main's own runs still upload every language. A draft runs nothing; ready for review
+# runs it on the same head (ci.yml's fast ring, quality/README.md §2).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    # Mondays 13:41 UTC: early morning Pacific, off the hour.
+    - cron: '41 13 * * 1'
+
+permissions: {}
+
+concurrency:
+  # A newer push to a pull request supersedes its analysis. Main's and the weekly run are grouped by
+  # their own run id, so none is ever cancelled or displaced by another (as in ci.yml, #431).
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  languages:
+    # Skipped on a draft, and analyze with it.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read # list the pull request's changed files
+    outputs:
+      languages: ${{ steps.pick.outputs.languages }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          all='["csharp","javascript-typescript","actions"]'
+          if [ "$EVENT" != pull_request ]; then
+            echo "languages=$all" >> "$GITHUB_OUTPUT"
+            echo "All languages: a $EVENT run analyses everything." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # A failed listing fails the job (bash -e, pipefail): no file list must never read as
+          # "nothing to analyse".
+          gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/files"
+          count=$(wc -l < "$RUNNER_TEMP/files")
+          # The API lists at most 3000 files; past that, the list may be incomplete. An empty list
+          # (a listing gone wrong, or a pull request with no changes) analyses everything too.
+          if [ "$count" -eq 0 ] || [ "$count" -ge 3000 ] || grep -qFx '.github/workflows/codeql.yml' "$RUNNER_TEMP/files"; then
+            picked=(csharp javascript-typescript actions)
+          else
+            picked=()
+            if grep -qiE '\.(cs|csproj|cshtml|razor|props|targets|sln|slnx)$|(^|/)(Directory\.[^/]+|nuget\.config|global\.json)$' "$RUNNER_TEMP/files"; then
+              picked+=(csharp)
+            fi
+            if grep -qiE '\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|html?|vue)$|(^|/)(package(-lock)?\.json|tsconfig[^/]*\.json)$|^pwa/' "$RUNNER_TEMP/files"; then
+              picked+=(javascript-typescript)
+            fi
+            if grep -qiE '^\.github/|(^|/)action\.ya?ml$' "$RUNNER_TEMP/files"; then
+              picked+=(actions)
+            fi
+          fi
+          json=$(printf '%s\n' "${picked[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+          echo "languages=$json" >> "$GITHUB_OUTPUT"
+          {
+            echo "Pull request #$PR changes $count file(s); analysing: ${picked[*]:-nothing}."
+            echo "A language left out uploads nothing, and code scanning's CodeQL check reports it as not found on this pull request."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  analyze:
+    needs: languages
+    if: needs.languages.outputs.languages != '[]'
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # check out the code
+      security-events: write # upload the results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        # build-mode none everywhere: C# is analysed from source, so this needs none of the
+        # product's build steps (some of which only run on Windows).
+        language: ${{ fromJSON(needs.languages.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Without a build, CodeQL still resolves the C# projects' NuGet references to name types
+      # it would otherwise guess at; that needs the SDK the projects target.
+      - if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

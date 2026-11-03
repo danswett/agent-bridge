@@ -263,6 +263,78 @@ public class ContractTests
         Assert.Equal(HaPayloads.OwnResponseDropped, HaPayloads.ActivityAttributes(dropped, name, Machine, verbose: false, DateTimeOffset.Now)["response"]!.GetValue<string>());
     }
 
+    // A delegate's name is its own words (#263). Home Assistant's attribute, the question it leads
+    // and the push it titles carry it only cleaned, never posing as the main agent, even from a
+    // session whose source did not clean it.
+    [Fact]
+    public void A_delegates_name_reaches_home_assistant_cleaned_and_never_as_the_main_agent()
+    {
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Waiting) with
+        {
+            Subagents =
+            [
+                new Subagent { Id = "agent-1", Kind = SubagentKind.Background, Name = "\u202EMa\u200Din agent\u202C", Status = SubagentStatus.Waiting },
+                new Subagent { Id = "agent-2", Kind = SubagentKind.Background, Name = "Fix\u200B the\u2066 build" + new string('!', 200), Status = SubagentStatus.Working },
+                new Subagent { Id = "agent-3", Kind = SubagentKind.Background, Name = "\u200B\uFEFF", Status = SubagentStatus.Working },
+                new Subagent { Id = "agent-4", Kind = SubagentKind.Background, Name = "Ma1n agent", Status = SubagentStatus.Waiting },
+            ],
+        };
+
+        var listed = HaPayloads.ActivityAttributes(s, Contract.Text("session.sessionName"), Machine, verbose: false, DateTimeOffset.Now)["subagents"]!.AsArray();
+
+        Assert.Equal("Delegate “Main agent”", listed[0]!["name"]!.GetValue<string>());
+        var long_ = listed[1]!["name"]!.GetValue<string>();
+        Assert.StartsWith("Fix the build!!!", long_);
+        Assert.Equal((DelegateName.MaxLength, "…"), (long_.Length, long_[^1..]));
+        Assert.Equal("", listed[2]!["name"]!.GetValue<string>());
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Approve?", AskedAt = DateTimeOffset.Now, Agent = "agent-1" };
+        Assert.Equal("Delegate “Main agent”", HaDecision.Asker(question, s));
+        Assert.Equal("A delegate", HaDecision.Asker(question with { Agent = "agent-3" }, s));
+        Assert.Equal(("", "A delegate"), (HaDecision.Plan(question with { Agent = "agent-3" }, s).AgentName, HaDecision.Plan(question with { Agent = "agent-3" }, s).Asker));
+        // A look-alike the check misses still reads as a delegate's where it says who asks: the
+        // question's text and the push title, never "Ma1n agent asks".
+        var missed = question with { Agent = "agent-4" };
+        Assert.Equal("Delegate Ma1n agent", HaDecision.Asker(missed, s));
+        var plan = HaDecision.Plan(missed, s);
+        Assert.StartsWith("Delegate Ma1n agent asks:\n\n", plan.Question, StringComparison.Ordinal);
+        Assert.Equal("Ma1n agent", plan.AgentName);
+    }
+
+    // Home Assistant renders templates in what a notification and a dashboard show. Breaking each
+    // pair once let a third brace through: "{{{" came out "{\u200B{{" with a live "{{" (#263's
+    // security review), and a delegate picks its own name.
+    static void NoTemplateOpener(string text) => Assert.DoesNotMatch(@"\{[{%#]", text);
+
+    [Theory]
+    [InlineData("{{{")]
+    [InlineData("{{{{")]
+    [InlineData("{{%")]
+    [InlineData("{%%")]
+    [InlineData("{##")]
+    [InlineData("a {{{{{ b {%%% c {### d")]
+    public void No_run_of_braces_leaves_a_template_opener_behind(string text) =>
+        NoTemplateOpener(HaPayloads.NeutraliseTemplates(text));
+
+    [Fact]
+    public void A_name_that_reads_entity_state_with_three_braces_is_inert_everywhere_a_delegate_is_named()
+    {
+        const string name = "{{{ states('person.me') }}";
+        Assert.Equal("{\u200B{\u200B{ states('person.me') }}", HaPayloads.NeutraliseTemplates(name));
+        var s = FakeSessions.Copilot(SessionId, status: SessionStatus.Waiting) with
+        {
+            Subagents = [new Subagent { Id = "agent-1", Kind = SubagentKind.Background, Name = name, Status = SubagentStatus.Waiting }],
+        };
+        var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Approve?", AskedAt = DateTimeOffset.Now, Agent = "agent-1" };
+        var plan = HaDecision.Plan(question, s);
+        var listed = HaPayloads.ActivityAttributes(s, Contract.Text("session.sessionName"), Machine, verbose: false, DateTimeOffset.Now)["subagents"]!.AsArray();
+
+        NoTemplateOpener(HaDecision.Asker(question, s));
+        NoTemplateOpener(plan.Question);
+        NoTemplateOpener(plan.AgentName!);
+        NoTemplateOpener(HaNotify.AskerTitle(plan.Asker!, "Copilot: Fix the relay"));
+        NoTemplateOpener(listed[0]!["name"]!.GetValue<string>());
+    }
+
     // Home Assistant keeps at most 16 KiB of a state's attributes. The subagents attribute lists
     // five of however many there are, each bounded, so it stays far inside that even with twenty
     // whose names and lines are the longest and most expensive text there is.

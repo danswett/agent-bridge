@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 // the session's card, or sends the answer through the host exactly as the card would (the
 // same delivery, so the card shows its progress too), then replaces the toast with what
 // became of it. A stale click is the host's to refuse: it answers stale for a question that
-// has gone, and the toast says so.
+// has gone, and the toast says so. An approval is never answered from a toast (#372).
 public sealed class ToastResponder
 {
     readonly Func<string?, Deliveries?> deliveriesFor;
@@ -28,17 +28,36 @@ public sealed class ToastResponder
     public TimeSpan OutcomeWait { get; init; } = TimeSpan.FromSeconds(90);
 
     // A click that started the app can come before the relay has said which machines are on:
-    // another machine's answer waits this long for it to turn up, rather than calling a machine
-    // that is online gone and dropping the answer.
+    // another machine's answer waits this long for it to turn up, and for its sessions to be
+    // confirmed (Machine.Current, #269), rather than calling a machine that is online gone and
+    // dropping the answer. One still away then is not answered: Deliveries holds it.
     public TimeSpan MachineWait { get; init; } = TimeSpan.FromSeconds(15);
+
+    // The session as the app knows it now (machine null for this one's), or null when it doesn't
+    // yet. Only a second line of defence: no toast this build draws answers an approval. A session
+    // asking for approval now takes no answer from a toast whatever question the click names: a
+    // button for an earlier question is stale anyway, and opening shows what is asked now.
+    public Func<string?, string, AgentBridge.Protocol.Session?> SessionOf { get; init; } = (_, _) => null;
+
+    bool AsksApproval(ToastAction action) =>
+        action.Session is { } session && SessionOf(action.Machine, session)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval };
+
+    // The gates on an answer from a toast, beyond its being one: it carries this build's mark (an
+    // older build's button may be Approve once), and its question is not known to be an approval.
+    bool MayAnswer(ToastAction action)
+    {
+        if (!action.Current) { return false; }
+        return !AsksApproval(action);
+    }
 
     async Task<Deliveries?> FindAsync(string? machine)
     {
         var waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
-            if (deliveriesFor(machine) is { } d) { return d; }
-            if (machine is null || waited.Elapsed >= MachineWait) { return null; }
+            var d = deliveriesFor(machine);
+            if (d is not null && !d.Holds(AgentBridge.Protocol.Ops.SessionAnswer)) { return d; }
+            if (machine is null || waited.Elapsed >= MachineWait) { return d; }
             await Task.Delay(TimeSpan.FromMilliseconds(250));
         }
     }
@@ -67,8 +86,11 @@ public sealed class ToastResponder
     public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = "Agent Bridge")
     {
         var action = ToastAction.Parse(arguments);
-        if (action.Action != "answer" || action.Session is null || action.Question is null)
+        if (action.Action != "answer" || action.Session is null || action.Question is null || !MayAnswer(action))
         {
+            // A click that answers nothing, and any that would answer an approval: an older build's
+            // toast, still in Notification Center, offered Approve once (#372). It opens the
+            // question, where the person approves seeing the whole command.
             open(action.Machine, action.Session);
             return;
         }

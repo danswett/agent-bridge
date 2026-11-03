@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- dotnet-coverage settings for CI's product job (quality/README.md §5). Every module with
+     symbols is collected, so a new product assembly is covered without editing this file; only
+     the test assemblies and their helper console are left out, since their own coverage says
+     nothing about the product and doubled the Cobertura file's size. -->
+<Configuration>
+  <CodeCoverage>
+    <ModulePaths>
+      <Exclude>
+        <ModulePath>.*\.Tests\.dll$</ModulePath>
+        <ModulePath>.*agent-bridge-console-echo\.(dll|exe)$</ModulePath>
+      </Exclude>
+    </ModulePaths>
+  </CodeCoverage>
+</Configuration>

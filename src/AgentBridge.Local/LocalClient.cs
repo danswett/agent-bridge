@@ -114,11 +114,17 @@ public static class LocalClient
         return result.Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
     }
 
+    // A host record, read as a client reads one (Received, v1-sessions.md "Malformed records").
+    public static async Task<T> ReadAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) where T : class =>
+        Received.Read<T>(await channel.CallAsync(op, data, timeout, ct));
+
     // hello, the first request on every connection. A host that refused this process closes
     // the pipe after saying why; that reason is what the caller gets.
     public static async Task<HelloResult> HelloAsync(this IClientChannel channel, CancellationToken ct = default)
     {
-        try { return await channel.CallAsync<HelloResult>(Ops.Hello, ct: ct); }
+        // Read as any host record is (Received): a machine without a readable id or protocol is
+        // refused, any other field it cannot read is absent.
+        try { return await channel.ReadAsync<HelloResult>(Ops.Hello, ct: ct); }
         catch (Exception e) when (e is IOException or HostErrorException && Refusal(channel) is { } reason) { throw new LocalRefusedException(reason); }
     }
 

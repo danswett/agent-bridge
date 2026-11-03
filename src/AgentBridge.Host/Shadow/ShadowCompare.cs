@@ -481,14 +481,16 @@ public static class ShadowCompare
     static void Session(ShadowSession d, ShadowSession h, string s, List<ShadowDifference> diffs, bool? responseLagging = null)
     {
         void Pair(string kind, string? a, string? b) => diffs.Add(new(kind, s, $"daemon={ShadowHash.Token(a)} host={ShadowHash.Token(b)}"));
+        void Count(string kind, int a, int b, bool notRead) =>
+            diffs.Add(new(kind, s, $"daemon={a} host={b}") { Known = notRead ? CopilotOnlyBackground : null });
 
         if (d.Agent != h.Agent) { Pair(ShadowKinds.Agent, d.Agent, h.Agent); }
         var expected = ComparedDaemonStatus(d, h.Status);
         // parity §3: a pending permission prompt is beyond parity, so the host's waiting is the
         // daemon's working.
         if (expected != h.Status && !(h.PermissionPending && h.Status == "waiting" && expected == "working")) { Pair(ShadowKinds.Status, d.Question is not null ? "waiting" : d.Status, h.Status); }
-        if (d.Agents != h.Agents) { Pair(ShadowKinds.BackgroundAgents, d.Agents.ToString(), h.Agents.ToString()); }
-        if (d.Shells != h.Shells) { Pair(ShadowKinds.BackgroundShells, d.Shells.ToString(), h.Shells.ToString()); }
+        if (d.Agents != h.Agents) { Count(ShadowKinds.BackgroundAgents, d.Agents, h.Agents, DelegatesNotRead(d, h)); }
+        if (d.Shells != h.Shells) { Count(ShadowKinds.BackgroundShells, d.Shells, h.Shells, CommandsNotRead(d, h)); }
         if (!string.Equals(d.Model ?? "", h.Model ?? "", StringComparison.Ordinal)) { Pair(ShadowKinds.Model, d.Model, h.Model); }
         if (d.Compactions != h.Compactions) { Pair(ShadowKinds.Compactions, d.Compactions.ToString(), h.Compactions.ToString()); }
         // Only when both have one: an empty response is not something either side shows, and
@@ -553,6 +555,21 @@ public static class ShadowCompare
     // The host's Home Assistant card shows the main agent's own text where agent-ha-bridge's shows
     // a sub-agent's (subagents.md §7, #175): an intentional difference, not a daemon bug.
     public const string MainAgentOnly = "main-agent-only (#175)";
+    // agent-ha-bridge counts background agents only from Copilot's subagent.* events and background
+    // commands only from Copilot's shell markers, so for a Claude or Codex session it counts none,
+    // where the host counts Claude's and Codex's delegates and Claude's run_in_background commands
+    // (subagents.md §3, #174). agent-ha-bridge keeps its behaviour (subagents.md §7).
+    public const string CopilotOnlyBackground = "copilot-only-background (#174)";
+
+    // Only a Claude or Codex session (on both sides) that the daemon counts none for, against
+    // delegates the host lists every one of: a daemon counting any, a Copilot session, or a count
+    // the host's list does not back, stays a mismatch.
+    static bool DelegatesNotRead(ShadowSession d, ShadowSession h) =>
+        d.Agent == h.Agent && d.Agent is "claude" or "codex" && d.Agents == 0 && h.Agents > 0 && h.RunningSubagents?.Count == h.Agents;
+
+    // Likewise background commands, which the host reads for Claude alone.
+    static bool CommandsNotRead(ShadowSession d, ShadowSession h) =>
+        d.Agent == "claude" && h.Agent == "claude" && d.Shells == 0 && h.Shells > 0;
     // CardResponseTail when the main agent has no response of its own to show.
     public const string NoResponse = "(none)";
 

@@ -9,7 +9,8 @@ client shows, and the additive protocol that carries it. It supersedes #20.
 *Status: the owner answered §8 on 2026-11-01, all as proposed. S1 (#173) implements §2,
 §4 and §5 for Copilot, settling the four review points recorded on #173 (§5); the wire
 contract is [v1-sessions.md](../protocol/v1-sessions.md). S5 (#175) implements §7's Home
-Assistant and shadow parts.*
+Assistant and shadow parts. S2 (#174) reads Claude's and Codex's delegates (§3), verified
+against recorded transcripts.*
 
 **Words.** The UI says *delegate*; specs and code say *sub-agent*. The *main agent* is the
 session's own agent.
@@ -31,10 +32,10 @@ of its own.
 
 | Field | Meaning |
 |---|---|
-| `id` | The agent's own id: Copilot `agentId`, Claude sidechain id, Codex thread id |
+| `id` | The agent's own id: Copilot `agentId`, Claude `agentId` (its sidechain's), Codex thread id |
 | `parent` | The id of the agent that started it; `null` for the main agent's direct sub-agents |
 | `kind` | `background` (runs past its starter's turn) or `task` (part of its starter's turn) |
-| `name` | Short label: the `task` call's description, else its agent type |
+| `name` | Short label: the `task` call's description, else its agent type; cleaned and capped by the host (§6) |
 | `task` | The prompt it was given |
 | `model` | Its own model, never copied to the session |
 | `status` | `working`, `idle` (a background agent between runs, which a message can wake), `waiting` (its own question) or `ended` (it can never run again) |
@@ -62,11 +63,15 @@ stay last-writer-wins for older clients; the main agent's own are kept beside th
 | Agent | What exists | Model mapping |
 |---|---|---|
 | **Copilot CLI** | Sub-agent events in the session's `events.jsonl`, stamped with a top-level `agentId`. `subagent.started` carries `toolCallId`, `executionMode`, `model` and, for a nested one, `parentId` (the starter's `agentId`). The starter's `task` tool call (same `toolCallId`) carries the description and prompt. `BackgroundWork` tracks runs by id (v1-sessions.md, Background work) | Full. `name` and `task` come from the `task` call's arguments. `model` comes from the sub-agent's own `subagent.started`, `subagent.configured`, `session.model_change` or `assistant.message`, never copied to the session (#73). `parent` comes from `parentId`, else the stamping on the `task` call that started it (a call stamped with an `agentId` means nested). Copilot gives sub-agents no `ask_user` (none in 33,966 sub-agent tool calls); their permission prompts are attributed through the tool call they gate. Recorded shapes: `tests/fixtures/copilot/subagents.jsonl` |
-| **Claude Code** | `Task` tool calls in the transcript, plus sidechain entries (`isSidechain: true`), which `ClaudeParser` skips today. Background Bash via `run_in_background` | **To verify against a recorded transcript:** whether sidechain entries carry a stable per-task id, and whether nested `Task` calls are distinguishable. Until then, rule 8: a count from open `Task` calls, no entries |
-| **Codex** | Sub-agent threads as separate rollouts and locks (#62); their `session_meta` names a parent thread | **To verify:** the thread-to-parent link and the status events. Until then, rule 8 |
+| **Claude Code** | Verified on 2.1.316 (recorded shapes: `tests/fixtures/claude`). In the session's own transcript: an `Agent` `tool_use` (`description`, `prompt`, `subagent_type`) whose `tool_result` entry carries `toolUseResult` `{isAsync: true, status: "async_launched", agentId, description, prompt, resolvedModel}`; 2.1.316 launched every `Agent` call that way (`requestShape: background`). A `Bash` call with `run_in_background: true` gets `toolUseResult.backgroundTaskId`. Each one's end is a `<task-notification>` (`<task-id>`, `<tool-use-id>`, `<status>completed</status>`, `<summary>`, `<result>`): queued at once as a `queue-operation` `enqueue` for every agent at every depth, then delivered as a `user` entry (`origin.kind: "task-notification"`, `turnOrigin: "task_notification"`, `promptSource: "system"`; a typed prompt is `human`/`typed`) to whoever started it, the main agent or (for a nested one, the queue's `remove`, `delivered_to_agent`) the sub-agent. The queue carries no such mark, and a prompt typed while the agent works is queued too, so only a marked delivery (or a `remove` delivering a notice queued earlier) is taken as an end. An agent notifies only once it has no live background agents of its own, and again each time a message (`SendMessage` with `to`) has woken it. Sidechain entries are no longer in the session's transcript: each sub-agent's are in `<session id>/subagents/agent-<agentId>.jsonl` (every entry `isSidechain: true` with its `agentId`), beside `agent-<agentId>.meta.json` (`agentType`, `description`, `toolUseId`, `spawnDepth`, `requestShape`, `finished`, and `parentAgentId` for a nested one). A nested `Agent` call is the starter's own sidechain entry, and its start is written nowhere else | Full. `id` is the `agentId`, `kind` `background`. `name` and `task` are `toolUseResult`'s `description` and `prompt`, `model` its `resolvedModel`; a nested agent's come from its `meta.json` (`description`, `parentAgentId` for `parent`) and the first entry of its own transcript (when it started, and its prompt), with no `model`. A notice ends the run, `done` for `completed` and `failed` for any other status, leaving the agent `idle` (a message can wake it); it also ends any run still going under that agent. The notice delivered to the main agent starts a turn of its own: never the person's message, and the sub-agent's result in it never reaches the session's text, nor does anything else a sub-agent writes. `run_in_background` commands count in `background.shells` until their notice |
+| **Codex** | Verified on 0.166.0 with `multi_agent` v1 (recorded shapes: `tests/fixtures/codex`). Each sub-agent is a thread with its own rollout and lock; its `session_meta` has `source.subagent.thread_spawn` (`parent_thread_id`, `depth`, `agent_nickname`, `agent_role`), `parent_thread_id` and `thread_source: "subagent"` (#62 keeps it from being a session). The session's own rollout records each multi-agent tool call as an `item_completed` of type `CollabAgentToolCall`: `tool` (`spawn_agent`, `wait`; Codex's schema also has `send_input`, `resume_agent`, `close_agent` and others), `sender_thread_id`, `receiver_thread_ids`, `receiver_agents` (`thread_id`, `agent_nickname`), and `agents_states` per thread (`pending_init`, `running`, `interrupted`, `shutdown`, `not_found`, `{"completed": text}`, `{"errored": text}`); `spawn_agent`'s carries `prompt` and `model`. A sub-agent that stops tells the session in a `user` message `<subagent_notification>{"agent_path": thread id, "status": …}</subagent_notification>`. Its own words are only in its own rollout | Full for the session's own sub-agents. `id` is the thread id, `kind` `background` (it runs beside its starter's turn and takes more input until closed), `name` its `agent_nickname`, `task` and `model` the spawn's. `completed` ends its run `done`, with its text as `line`; `errored` and `interrupted` `failed`; it is then `idle`. `send_input` and the like wake it, `close_agent`, `shutdown` and `not_found` end it. A sub-agent's own sub-agents are in its rollout, which the host does not read: neither listed nor counted (no recording has one) |
 
-Everything above that is marked "to verify" becomes a recorded fixture under
-`tests/fixtures` before any parser relies on it, as #84's acceptance criteria require.
+Recorded on 2026-11-01 PT by the shadow soak on a disposable rehearsal VM, and redacted into
+those fixtures: every text, id, path and time replaced, the structure kept. What no recording
+showed is read from the shapes they do show and, for Codex, its own schema: a Claude notice
+other than `completed`, `SendMessage` waking a Claude agent, a Codex `errored` or
+`interrupted` state, `send_input` and `close_agent`. Each has a test built on the recorded
+entries, and is the first thing to check against the next recording.
 
 ## 4. Status precedence
 
@@ -98,7 +103,7 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   "own": { "response": "…", "responseTruncated": true, "reasoning": "…", "at": "…" }
 }
 
-// Subagent (lists): id, parent, kind, name (≤ 120 B), task (≤ 512 B, start kept), model,
+// Subagent (lists): id, parent, kind, name (≤ 60 chars and 120 B, cleaned: §6), task (≤ 512 B, start kept), model,
 // status, outcome?, startedAt, endedAt?, line (latest reasoning or response, ≤ 300 B,
 // end kept), currentTool?, shells
 ```
@@ -164,6 +169,30 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   and `Delegate “<name>”` for a name that reads as "Main agent", look-alike letters included.
   A line that says a sub-agent asks or works always puts the word "Delegate" before its label
   ("Delegate *name* asks"), so no name, however spelt, reads as "Main agent asks".
+- **The host sends `name` already cleaned (#263).** A prompt-injected sub-agent picks its
+  name, and not every reader is a client that cleans it (Home Assistant's `subagents`
+  attribute, its question text and pushes, future clients). So the host applies the clients'
+  rules (ui.md §6.3) once, where it makes the name, for every agent (`DelegateName.Clean`):
+  1. control, bidi (U+202A–202E, U+2066–2069, U+200E/200F, U+061C), format (zero-width
+     space and joiners, BOM, soft hyphen, tags) and other default-ignorable characters
+     (variation selectors, Hangul fillers) go, and any run of whitespace, line and paragraph
+     separators included, becomes one space;
+  2. longer than 60 characters or 120 bytes, it is cut at a whole character with "…";
+  3. with nothing left, the next source is used (display name, then agent type), else
+     `name` is absent and clients name the delegate by its id;
+  4. a name that reads as "Main agent" after folding case, compatibility forms, marks and
+     common look-alike letters is sent as `Delegate “<name>”` (its own quotes made `'`),
+     within the same caps. A name already in that form is left as it is, so cleaning again
+     changes nothing.
+
+  Every line the host or the HA connector writes that says a sub-agent asks (the host's push
+  titles, HA's question text and push titles) puts the word "Delegate" before the cleaned
+  name (`DelegateName.Titled`), as the clients do: the look-alike list cannot be complete
+  ("Ma1n agent" passes it), and the main agent's own lines never have the word. The HA
+  connector cleans again with the same function, and clients keep their own cleaning and
+  their "Delegate" prefix as defence in depth.
+  The shadow (#40) compares no sub-agent names, since agent-ha-bridge lists none, so a cleaned
+  name never reads as a mismatch.
 
 ## 7. Notifications and Home Assistant
 
@@ -171,6 +200,12 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 - "Finished" fires on the main agent's turn only.
 - "Question" fires for the session's and a sub-agent's questions alike. The title names the
   sub-agent, and both use the same tag, so the newer replaces the older.
+- A notification opens the session at its question. An approval's notification only opens it,
+  with no Approve once or Deny ([ui.md §7](ui.md#7-platform-shells), #253). A sub-agent's
+  `ask_user` is `answerAtMachine`, so it has no buttons either.
+- The question's words are drawn once, in the conversation, under "Delegate *name* asks". The
+  delegate's inspector links to it with Status "Asks you", and never repeats it
+  ([ui.md §6.3, §6.4](ui.md#64-conversation)).
 
 **HA connector (single-slot entity attributes, 16 KB limit):**
 - `response` and `reasoning` publish the main agent's own text (`own` for a field `source`
@@ -181,8 +216,8 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   limit, and the entries make way for the card's own text within Home Assistant's 16 KiB.
   The card draws neither yet.
 - A sub-agent's question is armed and answered through the session's own question path.
-  Its name leads the question text ("*name* asks:"), and the decision entity gains `agent`
-  and `agent_name` beside it. Its pushes are titled "*name* asks · …" and keep the session's
+  Its name leads the question text ("Delegate *name* asks:"), and the decision entity gains `agent`
+  and `agent_name` beside it. Its pushes are titled "Delegate *name* asks · …" and keep the session's
   tag.
 - **agent-ha-bridge keeps its behaviour** (the owner's decision, 2026-11-01): its card shows
   whichever agent wrote last, a delegate's text included. This is a known, intentional

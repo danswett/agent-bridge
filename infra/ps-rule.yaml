@@ -1,0 +1,24 @@
+# PSRule for Azure over the stamp (quality/README.md §3.3, "Supply chain"; the iac-scan suite).
+# .github/workflows/iac-scan.yml runs it on pull requests that touch infra/; locally:
+#   Assert-PSRule -Option infra/ps-rule.yaml -InputPath infra/ -Module PSRule.Rules.Azure -Format File
+# It reads each region's .bicepparam, expanded through main.bicep as the Bicep CLI builds it,
+# so the rules see the resources a deploy would submit.
+
+configuration:
+  AZURE_BICEP_PARAMS_FILE_EXPANSION: true
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 30
+
+input:
+  # Only the parameter files: each expands main.bicep and its modules, which on their own have
+  # required parameters and would only be analysed with placeholders.
+  pathIgnore:
+    - '**'
+    - '!infra/regions/*.bicepparam'
+
+include:
+  module:
+    - PSRule.Rules.Azure
+
+output:
+  culture:
+    - en-US

@@ -103,7 +103,9 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <local:StatusGlyphView
+                        x:Name="HeaderGlyph"
                         VerticalAlignment="Center"
+                        Fades="True"
                         AutomationProperties.AutomationId="StatusGlyph"
                         Size="16"
                         Glyph="{x:Bind Card.Glyph, Mode=OneWay}"
@@ -192,6 +194,10 @@
             ScrollViewer.VerticalScrollBarVisibility="Disabled"
             ItemsSource="{x:Bind Card.Delegates.Strip, Mode=OneWay}"
             Visibility="{x:Bind local:Ui.Show(Layout.ShowStrip), Mode=OneWay, FallbackValue=Collapsed}">
+            <!-- No transitions of its own (ui.md §5.3, Arriving and leaving): a delegate's neighbours never slide. -->
+            <ListView.ItemContainerTransitions>
+                <TransitionCollection />
+            </ListView.ItemContainerTransitions>
             <ListView.ItemsPanel>
                 <ItemsPanelTemplate>
                     <ItemsStackPanel Orientation="Horizontal" />
@@ -237,8 +243,9 @@
             </ListView.Footer>
         </ListView>
 
-        <Grid Grid.Row="2">
-            <!-- The conversation (§6.4): the main agent only, at the reading measure. -->
+        <Grid x:Name="TabContent" Grid.Row="2">
+            <!-- The conversation (§6.4): the main agent only, at the reading measure, centred in the
+                 pane as the PWA's is; the scroll bar stays at the pane's edge. -->
             <ScrollViewer
                 x:Name="ConversationScroll"
                 AutomationProperties.AutomationId="Conversation"
@@ -246,7 +253,7 @@
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
-                    HorizontalAlignment="Left"
+                    HorizontalAlignment="Center"
                     Padding="24,8,24,24"
                     Spacing="24">
 
@@ -272,6 +279,7 @@
                     </InfoBar>
 
                     <TextBlock
+                        x:Name="Receipt"
                         Style="{StaticResource AbTypeRow}"
                         TextWrapping="Wrap"
                         IsTextSelectionEnabled="True"
@@ -287,6 +295,7 @@
                             <ColumnDefinition Width="85*" />
                         </Grid.ColumnDefinitions>
                         <Border
+                            x:Name="YourMessage"
                             Grid.Column="1"
                             HorizontalAlignment="Right"
                             Padding="16,10"
@@ -451,7 +460,7 @@
                 Padding="24,0,24,20"
                 Spacing="6"
                 MaxWidth="{StaticResource AbLayoutReadingMax}"
-                HorizontalAlignment="Left"
+                HorizontalAlignment="Center"
                 AutomationProperties.AutomationId="ReplyBox">
                 <TextBlock
                     Style="{StaticResource AbTypeMeta}"
@@ -547,7 +556,12 @@
                                 ToolTipService.ToolTip="Send (Ctrl+Enter)"
                                 IsEnabled="{x:Bind Card.Reply.CanSend, Mode=OneWay, FallbackValue=False}"
                                 Click="OnSendReply">
-                                <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" />
+                                <!-- The platform's ring in place of the icon while the reply is on its way (ui.md §5.3,
+                                     Send and Answer); still with Windows' animation effects off. -->
+                                <Grid>
+                                    <ContentControl Style="{StaticResource AbIconSend}" Width="16" Height="16" Visibility="{x:Bind local:Ui.Hide(Card.Reply.Pending), Mode=OneWay, FallbackValue=Visible}" />
+                                    <local:InFlightRing AutomationProperties.AutomationId="SendRing" Active="{x:Bind Card.Reply.Pending, Mode=OneWay, FallbackValue=False}" />
+                                </Grid>
                             </Button>
                         </Grid>
                     </StackPanel>

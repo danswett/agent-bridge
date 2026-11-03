@@ -18,7 +18,7 @@ $fixtures = Join-Path $PSScriptRoot '..' 'out' 'test-publish-prerelease-hosts'
 $repo = 'danswett/agent-bridge'
 $commit = '0123456789abcdef0123456789abcdef01234567'
 $env:GH_TOKEN = 'stand-in-token'
-Remove-Item Env:GITHUB_STEP_SUMMARY, Env:GITHUB_RUN_ID, Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+Remove-Item Env:GITHUB_STEP_SUMMARY, Env:GITHUB_RUN_ID, Env:GITHUB_ACTIONS, Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
 
 # Two real assemblies standing in for the host: one with the release metadata a
 # -p:AgentBridgeRelease=true build carries, one without, as host-identity.ps1 reads them.
@@ -309,6 +309,28 @@ Check 'A version older than a published release is not uploaded' {
     Invoke-Publish '0.1.600'
     Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
     Assert (-not ($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600')) 'an older release was created'
+}
+
+Check "Only a run that uploads the release tells CI's attest job so, never a re-run or a dry run" {
+    # attest signs the release's assets with this run's SBOMs; after a re-run rebuilt the app,
+    # those would not describe what is out.
+    $out = Join-Path $scratch '..' 'test-publish-prerelease-output'
+    function Get-Said([scriptblock]$publish) {
+        Reset 3
+        Set-Content $out ''
+        $env:GITHUB_OUTPUT = $out
+        try { & $publish } finally { Remove-Item Env:GITHUB_OUTPUT }
+        (Get-Content $out -Raw).Trim()
+    }
+    $said = Get-Said { Invoke-Publish '0.1.600' }
+    Assert ($said -eq 'published=true') "a run that published said: '$said'"
+    $said = Get-Said { New-PpRelease 'v0.1.600'; Invoke-Publish '0.1.600' }
+    Assert ($said -eq '') "a re-run of a published version said: '$said'"
+    $said = Get-Said { New-PpRelease 'v0.1.601'; Invoke-Publish '0.1.600' }
+    Assert ($said -eq '') "an older version said: '$said'"
+    $said = Get-Said { Invoke-Publish '0.1.600' -DryRun }
+    Assert ($said -eq '') "a dry run said: '$said'"
+    Remove-Item $out
 }
 
 Check 'A draft left by a failed attempt is deleted and the version uploaded again' {

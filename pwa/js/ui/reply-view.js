@@ -95,6 +95,8 @@ export class ReplyBox {
   // A failed reply whose files have changed since: Try again would send the old set, so it
   // goes, and Send sends what the box shows.
   #edited = null;
+  // Why nothing can be sent now (its machine offline, #269), or null.
+  #offline = null;
 
   // replying: { service, hostId, sessionId }. attach: whether the machine takes files.
   // largeMax: the largest it takes through the blob store, 0 for none.
@@ -181,15 +183,17 @@ export class ReplyBox {
   }
 
   // The session as it is now: whether it is asking anything, and whether it is working; and
-  // whether the machine takes files, and how large through the blob store.
-  update(session, { attach = this.#attach, largeMax = this.#largeMax } = {}) {
+  // whether the machine takes files, and how large through the blob store. offline: why nothing
+  // can be sent now (its machine offline, #269), or null; what is in the box stays.
+  update(session, { attach = this.#attach, largeMax = this.#largeMax, offline = null } = {}) {
     this.#session = session;
     this.#attach = attach;
     this.#largeMax = largeMax;
+    this.#offline = offline || null;
     this.#show(this.entry);
   }
 
-  #held() { return !!this.#session?.question; }
+  #held() { return !!this.#session?.question || !!this.#offline; }
 
   #pending(entry = this.entry) { return !!entry && (entry.state === 'sending' || entry.state === 'waiting'); }
 
@@ -205,16 +209,20 @@ export class ReplyBox {
     const held = this.#held();
     const pending = this.#pending();
     e.held.hidden = !held;
-    if (held) {
+    if (this.#offline) {
+      e.held.textContent = this.#offline;
+    } else if (held) {
       e.held.textContent = this.#session.question.answerAtMachine
         ? 'The session is waiting at the machine for a prompt only it can answer. Answer it there first, then reply.'
         : 'The session is waiting for an answer to its question. Answer that first, then reply.';
     }
-    e.input.disabled = held;
+    // Offline, the words can still be written, to go once it is back; a question would take them.
+    e.input.disabled = !!this.#session?.question;
     e.attach.hidden = !this.#attach;
     e.attach.disabled = held || pending || this.#files.length + this.#preparing >= AttachmentLimits.perReply;
     for (const b of e.files.querySelectorAll('button.remove')) { b.disabled = pending; }
     e.send.disabled = held || pending || !!this.#busyTimer || this.#preparing > 0 || (text.trim() === '' && this.#files.length === 0);
+    e.resend.disabled = !!this.#offline;
   }
 
   #clearError() {
@@ -228,8 +236,10 @@ export class ReplyBox {
     this.els.error.hidden = false;
   }
 
-  // Reads picked, pasted or dropped files, and shows each as a chip once it is ready.
+  // Reads picked, pasted or dropped files, and shows each as a chip once it is ready. None while
+  // its machine is offline: nothing is attached to a session that may have gone.
   async #add(files) {
+    if (this.#offline) { return; }
     this.#clearError();
     const room = AttachmentLimits.perReply - this.#files.length - this.#preparing;
     if (files.length > room) {
@@ -308,6 +318,8 @@ export class ReplyBox {
     this.#clearError();
     for (const f of files) { f.offered = true; }
     const entry = service.submit({ hostId, sessionId, text: replyRequest({ sessionId, request: '', text }).text, attachments: files });
+    // Refused unsent: its machine takes nothing now.
+    if (!entry) { for (const f of files) { f.offered = false; } return; }
     this.#sent = { request: entry.request, text, files };
   }
 
@@ -317,7 +329,7 @@ export class ReplyBox {
   }
 
   #resend() {
-    if (this.entry?.request === this.#edited) { return; }
+    if (this.entry?.request === this.#edited || this.#offline) { return; }
     const { service, hostId, sessionId } = this.replying;
     service.resend(hostId, sessionId);
   }

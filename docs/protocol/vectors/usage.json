@@ -1,0 +1,556 @@
+{
+  "about": "How much of each agent's allowance is gone.",
+  "spec": "v1-usage.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "UsageWindow": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "full",
+          "json": {
+            "key": "premium",
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "percent-only",
+          "json": {
+            "key": "5h",
+            "label": "5-hour",
+            "percent": 3
+          }
+        },
+        {
+          "name": "missing-key",
+          "json": {
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          },
+          "reads": {
+            "key": "",
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-label",
+          "json": {
+            "key": "premium",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          },
+          "reads": {
+            "key": "premium",
+            "label": "",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "wrong-type-key",
+          "json": {
+            "key": 42,
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          },
+          "reads": {
+            "key": "",
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-percent",
+          "json": {
+            "key": "premium",
+            "label": "Premium requests",
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "UsageReader": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "another-machine",
+          "json": {
+            "id": "00112233445566778899aabbccddeeff",
+            "name": "DEV-VM2"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "name": "DEV-VM2"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "AgentUsage": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "a-reading",
+          "json": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "a-further-account-read-elsewhere",
+          "json": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "hubot",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z",
+            "slot": 2,
+            "readBy": {
+              "id": "00112233445566778899aabbccddeeff",
+              "name": "DEV-VM2"
+            }
+          }
+        },
+        {
+          "name": "a-failure",
+          "json": {
+            "agent": "claude",
+            "label": "Claude",
+            "accountKey": "a1b2c3d4",
+            "source": "none",
+            "windows": [],
+            "error": "the usage endpoint answered 401",
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "an-unknown-agent-and-source",
+          "json": {
+            "agent": "gemini",
+            "label": "Gemini",
+            "source": "scrape",
+            "windows": [],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "agent": "unknown",
+            "label": "Gemini",
+            "source": "none",
+            "windows": [],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-agent",
+          "json": {
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "agent": "unknown",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-label",
+          "json": {
+            "agent": "copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "agent": "copilot",
+            "label": "",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-source",
+          "json": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "none",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-measuredAt",
+          "json": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ]
+          },
+          "reads": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "0001-01-01T00:00:00.000Z"
+          }
+        },
+        {
+          "name": "wrong-type-label",
+          "json": {
+            "agent": "copilot",
+            "label": 42,
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "agent": "copilot",
+            "label": "",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UsageRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "own",
+          "json": {
+            "shared": false
+          }
+        },
+        {
+          "name": "shared",
+          "json": {
+            "shared": true
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-shared",
+          "json": {
+            "shared": "yes"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "UsageReport": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "two-agents",
+          "json": {
+            "agents": [
+              {
+                "agent": "copilot",
+                "label": "Copilot",
+                "account": "octocat",
+                "plan": "Pro+",
+                "source": "api",
+                "windows": [
+                  {
+                    "key": "premium",
+                    "label": "Premium requests",
+                    "percent": 42.5,
+                    "used": 127.5,
+                    "limit": 300,
+                    "unit": "requests",
+                    "startsAt": "2026-10-28T04:22:43.182Z",
+                    "resetsAt": "2026-11-27T04:22:43.182Z"
+                  }
+                ],
+                "measuredAt": "2026-10-28T04:22:43.182Z"
+              },
+              {
+                "agent": "codex",
+                "label": "Codex",
+                "source": "transcript",
+                "windows": [
+                  {
+                    "key": "weekly",
+                    "label": "Weekly",
+                    "percent": 90
+                  }
+                ],
+                "measuredAt": "2026-10-28T04:22:43.182Z"
+              }
+            ]
+          }
+        },
+        {
+          "name": "none",
+          "json": {
+            "agents": []
+          }
+        },
+        {
+          "name": "wrong-type-agents",
+          "json": {
+            "agents": "wrong"
+          },
+          "reads": {
+            "agents": []
+          }
+        }
+      ],
+      "refused": []
+    }
+  },
+  "knownDifferences": [
+    {
+      "vector": "AgentUsage/missing-label",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "AgentUsage/missing-measuredAt",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "AgentUsage/wrong-type-label",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "UsageWindow/missing-label",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    }
+  ]
+}

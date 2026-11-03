@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { readSession } from '../../js/protocol.js';
-import { NAME_MAX, delegateList, delegateName, delegateTime, delegateTitle, mainVoice } from '../../js/attribution.js';
+import { NAME_MAX, aloud, delegateList, delegateName, delegateTime, delegateTitle, mainVoice } from '../../js/attribution.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const session = (fields = {}) => readSession({ id: 's1', agent: 'copilot', status: 'idle', ...fields });
@@ -165,9 +165,11 @@ test('a delegate named "Main agent", in any case or width, is shown as a delegat
 });
 
 test('a delegate name that starts with, ends with or runs "Main agent" into other words is shown as a delegate quoting it', () => {
-  for (const name of ['Main agent: Read logs', 'Main agent asks', 'Ask main agent', 'Main agent helper', 'MAIN-AGENT', 'main_agent', 'Main.agent', 'MainAgent', 'Mainagent v2', 'Main agents', 'Main agent\u2019s plan', '(Main agent)']) {
+  for (const name of ['Main agent: Read logs', 'Main agent asks', 'Ask main agent', 'Main agent helper', 'MAIN-AGENT', 'main_agent', 'Main.agent', 'MainAgent', 'Mainagent v2', 'Main agents', '(Main agent)']) {
     assert.equal(named(name), `Delegate \u201c${name}\u201d`, name);
   }
+  // A right single quote is a closing quote, so inside the label it is an apostrophe.
+  assert.equal(named('Main agent\u2019s plan'), 'Delegate \u201cMain agent\'s plan\u201d');
 });
 
 test('a delegate name drawn with lookalike letters from other scripts still reads as "Main agent"', () => {
@@ -189,8 +191,9 @@ test('a delegate name drawn with lookalike letters from other scripts still read
 
 test('a delegate name never carries the middle dot a status splits its facts at, real or a lookalike', () => {
   assert.equal(named('Read logs \u00b7 Lint'), 'Read logs - Lint');
-  for (const dot of ['\u00b7', '\u0387', '\u2022', '\u2027', '\u2219', '\u22c5', '\u30fb', '\uff65']) {
-    assert.doesNotMatch(named(`Idle ${dot} Read logs`), /[\u00b7\u0387\u2022\u2027\u2219\u22c5\u30fb\uff65]/u, dot);
+  // The app's list (#303), U+10101 outside the BMP compared by code point.
+  for (const dot of ['\u00b7', '\u0387', '\u1427', '\u16eb', '\u2022', '\u2027', '\u2219', '\u22c5', '\u2e31', '\u2e33', '\u30fb', '\u318d', '\ua78f', '\uff65', '\u{10101}']) {
+    assert.equal(named(`Idle ${dot} Read logs`), 'Idle - Read logs', `U+${dot.codePointAt(0).toString(16)}`);
   }
   assert.equal(named('Main agent asks \u00b7 Read logs'), 'Delegate \u201cMain agent asks - Read logs\u201d');
 });
@@ -198,6 +201,37 @@ test('a delegate name never carries the middle dot a status splits its facts at,
 test('a quote inside a quoted "Main agent" name cannot close the quotes', () => {
   assert.equal(named('Main agent\u201d asks you'), 'Delegate \u201cMain agent\' asks you\u201d');
   assert.equal(named('"Main agent"'), 'Delegate \u201c\'Main agent\'\u201d');
+  // Every opening and closing quote (Pi, Pf), every Quotation_Mark, and what is drawn like one:
+  // primes, geresh and gershayim, modifier-letter primes and apostrophes, the double acute and
+  // the ornament quotes (#303's security review).
+  const like = ['\u2018', '\u2019', '\u201a', '\u201b', '\u201e', '\u2039', '\u203a', '\u2e42', '\u300c', '\u300d', '\u300e', '\u300f', '\u301d', '\u301e', '\u301f', '\ufe41', '\ufe44', '\uff07', '\uff62', '\uff63', '\u2e02', '\u2e09',
+    '\u2032', '\u2033', '\u2034', '\u2035', '\u2036', '\u2037', '\u2057', '\u05f3', '\u05f4', '\u02b9', '\u02ba', '\u02bb', '\u02bc', '\u02dd', '\u02ee', '\u275b', '\u275c', '\u275d', '\u275e', '\u{1f676}', '\u{1f677}', '\u{1f678}'];
+  for (const q of like) {
+    assert.equal(named(`Main agent${q} asks you`), 'Delegate \u201cMain agent\' asks you\u201d', `U+${q.codePointAt(0).toString(16)}`);
+  }
+});
+
+test('a name the host already labelled as a delegate\'s is shown once, never wrapped twice', () => {
+  // The host's form (#287): Delegate “<name>”, with no quote of its own inside.
+  assert.equal(named('Delegate \u201cMain agent\u201d'), 'Delegate \u201cMain agent\u201d');
+  assert.equal(named('Delegate \u201cMain agent\'s plan\u201d'), 'Delegate \u201cMain agent\'s plan\u201d');
+  assert.equal(delegateTitle({ id: 'a1', name: 'Delegate \u201cMain agent\u201d' }), 'Delegate \u201cMain agent\u201d');
+  // A quote inside is not the host's form: it is wrapped, and the quotes made apostrophes.
+  assert.equal(named('Delegate \u201cMain\u201d agent\u201d'), 'Delegate \u201cDelegate \'Main\' agent\'\u201d');
+  assert.equal(named('Delegate \u201cMain agent'), 'Delegate \u201cDelegate \'Main agent\u201d');
+  assert.equal(named('Delegate \u201cx\u201d Main agent \u201cy\u201d'), 'Delegate \u201cDelegate \'x\' Main agent \'y\'\u201d');
+  // An apostrophe is not one of the host's quotes, so its label keeps one (#263).
+  assert.equal(delegateTitle({ id: 'a1b2c3d4e5f6', name: 'Delegate \u201cMain agent says \'approve\'\u201d' }), 'Delegate \u201cMain agent says \'approve\'\u201d');
+  // Checked whole, before it is cut: a long label is cut, not wrapped again.
+  const long = `Delegate \u201cMain agent ${'x'.repeat(40)}\u201d`;
+  assert.ok(named(long).startsWith('Delegate \u201cMain agent x') && named(long).endsWith('\u2026'), named(long));
+});
+
+test('read aloud, a name loses its commas and those drawn like it, one space for each run', () => {
+  assert.equal(aloud('x, idle, DEV-VM2'), 'x idle DEV-VM2');
+  assert.equal(aloud('x\uff0cidle\u3001DEV-VM2'), 'x idle DEV-VM2');
+  assert.equal(aloud('Read  logs'), 'Read  logs');
+  assert.equal(aloud(''), '');
 });
 
 test('a delegate\'s name loses the characters that steer or hide text, so a disguised "Main agent" is still caught', () => {

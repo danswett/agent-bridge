@@ -25,6 +25,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     HostControl control = null!;
     UpdateService updates = null!;
     LocalServer server = null!;
+    readonly P256KeyPair hostKey = P256KeyPair.Generate();
+    RemoteAuthorization authorization = null!;
     string events = "";
     int stops;
     int restarts;
@@ -79,13 +81,16 @@ public sealed class LocalApiTests : IAsyncLifetime
             Stop = () => Interlocked.Increment(ref stops),
             Restart = () => Interlocked.Increment(ref restarts),
         });
-        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }));
+        authorization = new RemoteAuthorization(false, new TrustedPeerStore(profile, hostKey.Public, () => "acct"));
+        server = LocalServer.Start(LocalEndpoint.For(profile), LocalApi.Handler(service, control, callers, m => { lock (logged) { logged.Add(m); } }, authorization));
         owned.Add(server);
     }
 
     public async Task DisposeAsync()
     {
         foreach (var o in owned) { await o.DisposeAsync(); }
+        authorization.Dispose();
+        hostKey.Dispose();
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
@@ -547,7 +552,77 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(0, Volatile.Read(ref stops));
     }
 
-    // Swapped by a test before it connects; asked afresh for every op.
+    [Fact]
+    public async Task Pin_management_requires_a_fresh_app_caller_even_on_an_already_open_pipe()
+    {
+        using var person = P256KeyPair.Generate();
+        var app = await ConnectAsync();
+        await app.CallAsync("host.peers.reset");
+        await app.CallAsync("host.peers.put", new
+        {
+            publicKey = B64Url.Encode(person.Public), role = "person", expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        });
+        Assert.Single(authorization.Store.Pins);
+        var path = Path.Combine(profile, TrustedPeerStore.FileName);
+        var before = File.ReadAllText(path);
+        foreach (var kind in new[] { CallerKind.Agent, CallerKind.Other, CallerKind.HostCli })
+        {
+            callers.Current = new FixedCallerGuard(new Caller(kind, "unapproved caller"));
+            foreach (var op in new[] { "host.peers.status", "host.peers.reset", "host.peers.put", "host.peers.revoke" })
+            {
+                var refused = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(op, new { }));
+                Assert.StartsWith("refused:", refused.Message);
+                Assert.Equal(before, File.ReadAllText(path));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("host.peers.put", """{"publicKey":"$key"}""", "a peer role is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":null}""", "a peer role is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"later"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"2099-01-02T03:04:05"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"2099-01-02"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.revoke", "{}", "a full public key is required")]
+    [InlineData("host.peers.revoke", "null", "a full public key is required")]
+    [InlineData("host.peers.revoke", """{"publicKey":42}""", "a full public key is required")]
+    public async Task Malformed_pin_management_reports_the_required_field_without_changing_trust(string op, string json, string error)
+    {
+        using var person = P256KeyPair.Generate();
+        var app = await ConnectAsync();
+        await app.CallAsync("host.peers.reset");
+        await app.CallAsync("host.peers.put", new
+        {
+            publicKey = B64Url.Encode(person.Public), role = "person", expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        });
+        var path = Path.Combine(profile, TrustedPeerStore.FileName);
+        var before = File.ReadAllText(path);
+        var data = JsonSerializer.Deserialize<JsonElement>(json.Replace("$key", B64Url.Encode(person.Public), StringComparison.Ordinal));
+
+        var refused = await Assert.ThrowsAsync<HostErrorException>(() => app.CallAsync(op, data));
+
+        Assert.Equal(error, refused.Message);
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.False(Assert.Single(authorization.Store.Pins).Revoked);
+    }
+
+    [Fact]
+    public async Task An_explicit_offset_pin_expiry_preserves_the_owners_instant()
+    {
+        using var person = P256KeyPair.Generate();
+        var app = await ConnectAsync();
+        await app.CallAsync("host.peers.reset");
+
+        await app.CallAsync("host.peers.put", new
+        {
+            publicKey = B64Url.Encode(person.Public), role = "person", expiresAt = "2099-01-02T03:04:05-08:00",
+        });
+
+        Assert.Equal(new DateTimeOffset(2099, 1, 2, 11, 4, 5, TimeSpan.Zero),
+            Assert.Single(authorization.Store.Pins).ExpiresAt);
+    }
+
     [Fact]
     public async Task Only_the_app_reports_this_machines_updates_and_the_pipe_asks_for_none()
     {

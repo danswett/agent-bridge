@@ -479,8 +479,8 @@ public sealed class NotifyTests : IDisposable
         sessions.Set(delegated);
         await Pass(c);
         var asked = Assert.Single(Pushes());
-        Assert.Equal("Run full test suite asks · Copilot permission needed", asked["title"]!.GetValue<string>());
-        Assert.Equal("Run full test suite asks:\n\nAllow dotnet test?", asked["message"]!.GetValue<string>());
+        Assert.Equal("Delegate Run full test suite asks · Copilot permission needed", asked["title"]!.GetValue<string>());
+        Assert.Equal("Delegate Run full test suite asks:\n\nAllow dotnet test?", asked["message"]!.GetValue<string>());
 
         sessions.Set(delegated with
         {
@@ -518,9 +518,9 @@ public sealed class NotifyTests : IDisposable
         });
         await Pass(c);
         var shown = Assert.Single(Buttons());
-        Assert.Equal("Run full test suite asks · Copilot: Fix the relay", shown["title"]!.GetValue<string>());
+        Assert.Equal("Delegate Run full test suite asks · Copilot: Fix the relay", shown["title"]!.GetValue<string>());
         Assert.Equal(Tag, shown["data"]!["tag"]!.GetValue<string>());
-        Assert.StartsWith("Run full test suite asks: Cut the release?", shown["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.StartsWith("Delegate Run full test suite asks: Cut the release?", shown["message"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     // Found in review (#175): the protocol budget trims what older clients ignore first, activity.own

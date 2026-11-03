@@ -109,6 +109,8 @@ var options = new SessionSourceOptions
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
+    // Only serve keeps what it listed for its next start (#147); no other command reads or writes it.
+    StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
 
@@ -196,7 +198,13 @@ switch (command)
             return 0;
         }
     case "serve":
-        return await HostHandover.RunAsync(ServeAsync, RestartSelf);
+        {
+            // Started by the logon task's launcher (#106), which then starts the replacement after
+            // host.restart. Cleared, so nothing this host starts inherits it.
+            var supervised = Environment.GetEnvironmentVariable(HostLauncherContract.Variable) == "1";
+            Environment.SetEnvironmentVariable(HostLauncherContract.Variable, null);
+            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised);
+        }
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
             await using var source = new SessionSource(options);
@@ -313,6 +321,10 @@ async Task<int> ServeAsync(HostHandover handover)
     // Instance: this run's own id. A client that lost an outcome sends the request again only to
     // the run that may have acted on it, which remembers the request; never to a fresh one.
     var machine = new MachineInfo(Wire.DeviceId(identity.Key.Public), name, OsName(), HostVersion(), Dev: IsDevBuild() ? true : null, Instance: Guid.NewGuid().ToString("N"));
+    using var trustedPeers = new RemoteAuthorization(settings.TrustedPeers,
+        new TrustedPeerStore(identity.Folder, identity.Key.Public, () => identity.Account?.AccountId,
+            log: settings.TrustedPeers ? Log : null));
+    if (trustedPeers.Enabled) { Log("trusted-peer enforcement is on; only explicit full-key pins grant remote authority"); }
 
     using var stop = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
@@ -336,8 +348,13 @@ async Task<int> ServeAsync(HostHandover handover)
     // all when push.enabled is off (the shadow host beside agent-ha-bridge, which already notifies
     // the phones): no subscription is taken and nothing is sent.
     await using var push = settings.Push
-        ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log)
+        ? new PushNotifier(source, machine, PushStore.Load(Path.Combine(identity.Folder, "push-subscriptions.json"), identity.Account?.AccountId, Log), log: Log, trust: trustedPeers)
         : null;
+    if (push is not null)
+    {
+        trustedPeers.Changed += push.RevalidateTrust;
+        push.RevalidateTrust();
+    }
     push?.Start();
     // Each agent's allowance, asked at the pace its sessions set, and never more often than
     // the idle pace while agent-ha-bridge is asking the same vendors for this user; further Copilot
@@ -357,7 +374,12 @@ async Task<int> ServeAsync(HostHandover handover)
     // offline (#172). Only where this machine reports usage itself.
     var peerUsage = usageMonitor is null ? null
         : PeerUsage.Load(Path.Combine(identity.Folder, "usage"), machine.Id, identity.Account?.AccountId, log: Log);
-    await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log);
+    await using var usagePeers = peerUsage is null ? null : new UsagePeers(peerUsage, machine.Id, Log) { Trust = trustedPeers };
+    if (usagePeers is not null)
+    {
+        trustedPeers.Changed += usagePeers.RevalidateTrust;
+        usagePeers.RevalidateTrust();
+    }
     usagePeers?.Start();
     // The Dev Box keep-awake (docs/host-config.md, #47): on a Dev Box, a pass soon after starting and
     // then every devBox.intervalMinutes while devBox.keepAwake is on, standing back while
@@ -373,11 +395,11 @@ async Task<int> ServeAsync(HostHandover handover)
     // Ended sessions moved between the account's machines, on commands a person's device signs,
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
-    using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log);
+    using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log) { Trust = trustedPeers };
     var launcher = Launcher(source, attachments, transfers);
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
-    var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log);
+    var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log) { Trust = trustedPeers };
     // Before the connector, which launches from the card through it.
     // The host's own updates, from the machine's update entity: through the app's package, which
     // carries the host (Windows only: elsewhere nothing packages it yet). Installing ends this
@@ -496,7 +518,7 @@ async Task<int> ServeAsync(HostHandover handover)
     if (keepAwake is not null) { keepAwake.Changed += control.Refresh; }
     haAuth.Changed += control.Refresh;
     LocalServer? local = null;
-    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log), Log); }
+    try { local = LocalServer.Start(LocalEndpoint.For(identity.Folder), LocalApi.Handler(service, control, callers, Log, trustedPeers), Log); }
     catch (EndpointInUseException e)
     {
         Log(e.Message);
@@ -509,6 +531,13 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
+    // Stopped from the app while starting, before anything could reach this through the pipe
+    // (HostHandover.StoppedFromTheApp, #106's review): not served at all.
+    if (handover.StoppedFromTheApp(identity.Folder))
+    {
+        Log("stopped from the Agent Bridge app while starting; not serving");
+        return 0;
+    }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -535,12 +564,13 @@ async Task<int> ServeAsync(HostHandover handover)
         {
             control.SetRelay(RelayState.Connecting, reconnects > 0 ? $"reconnecting (attempt {reconnects})" : null);
             await using var relay = await RelayClient.ConnectAsync(relayUri, account.Token, identity.Key, name, "host", current.Token);
-            var hub = new ChannelHub(relay, identity.Key, name, "host")
+            var hub = new ChannelHub(relay, identity.Key, name, "host", trustedPeers.Allows)
             {
                 JsonOptions = ProtocolJson.Options,
-                Handler = service.HandleAsync,
+                Handler = trustedPeers.Handler(service),
             };
-            hub.Accepted += ch => Log($"channel from {ch.PeerName} ({ch.PeerKind}, {ch.PeerId[..8]})");
+            trustedPeers.Attach(hub);
+            hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");
             hub.Rejected += (peer, e) => Log($"rejected a frame from {peer[..Math.Min(8, peer.Length)]}: {e.Message}");
             push?.Attach(new RelayPushSender(relay));
             relayBlobs.Attach(relay);
@@ -587,6 +617,7 @@ async Task<int> ServeAsync(HostHandover handover)
         finally
         {
             connection = null;
+            trustedPeers.Attach(null);
             relayBlobs.Attach(null);
             transfers.Attach(null, null);
             usagePeers?.Attach(null, null);
@@ -682,7 +713,8 @@ static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
 static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
 // host.restart: the same command again, without a window, started once this process has stopped
-// serving and let go of the profile's lock (HostHandover).
+// serving and let go of the profile's lock (HostHandover). Only for a host the logon task's
+// launcher does not watch; a watched one leaves this to the launcher.
 void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };

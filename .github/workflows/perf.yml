@@ -1,0 +1,72 @@
+name: Perf
+
+# Records performance (quality/perf.md): perf-hook, the hook every agent waits on, started as an
+# agent starts it; and bench-micro, BenchmarkDotNet over the hot paths. Nothing here gates: hosted
+# runners vary too much to judge a change by (quality/README.md §3.2), so each run's numbers are
+# kept as an artifact to compare with quality/baselines/, and the run fails only when a benchmark
+# or the hook itself is broken. Main and by hand, not pull requests: a minute of noise per pull
+# request would tell nobody anything.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # One run per ref at a time; a newer push's run replaces one still waiting, never one running.
+  group: perf-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  perf:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read # check out the code
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: perf-hook, the published NativeAOT hook started as an agent starts it
+        shell: pwsh
+        run: |
+          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $rid = if ($IsWindows) { "win-$arch" } else { "linux-$arch" }
+          $out = Join-Path $env:RUNNER_TEMP perf
+          dotnet publish src/AgentBridge.Hook -c Release -r $rid -o (Join-Path $env:RUNNER_TEMP hook) --nologo
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $hook = Join-Path $env:RUNNER_TEMP hook ($IsWindows ? 'agent-bridge-host-hook.exe' : 'agent-bridge-host-hook')
+          dotnet build tests/AgentBridge.PerfHook -c Release --nologo -v q
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Built first, so the table below is the run's output alone.
+          dotnet run -c Release --no-build --project tests/AgentBridge.PerfHook -- --hook $hook --work $env:RUNNER_TEMP --out (Join-Path $out "perf-hook-$rid.json") | Tee-Object -Variable table
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "## perf-hook, $rid (ms)`n" >> $env:GITHUB_STEP_SUMMARY
+          $table >> $env:GITHUB_STEP_SUMMARY
+      - name: bench-micro, BenchmarkDotNet over the hot paths
+        shell: pwsh
+        run: |
+          $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $rid = if ($IsWindows) { "win-$arch" } else { "linux-$arch" }
+          $out = Join-Path $env:RUNNER_TEMP perf
+          dotnet run -c Release --project tests/AgentBridge.Benchmarks -- --filter '*' --artifacts (Join-Path $out bench-micro) --summary (Join-Path $out "bench-micro-$rid.json")
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "## bench-micro, $rid`n" >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem (Join-Path $out bench-micro results) -Filter '*-report-github.md' | Sort-Object Name | ForEach-Object { Get-Content $_.FullName >> $env:GITHUB_STEP_SUMMARY; '' >> $env:GITHUB_STEP_SUMMARY }
+      - name: Keep the numbers
+        if: success() || failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-${{ matrix.os }}
+          path: ${{ runner.temp }}/perf/
+          if-no-files-found: ignore
+          retention-days: 90

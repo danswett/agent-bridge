@@ -10,7 +10,7 @@ choice is [docs/design/ui.md](../docs/design/ui.md), and the order of work is
 | `glyphs/*.svg` | The status glyphs, on a 16 grid |
 | `icons/*.svg` | The icon set, on a 20 grid, with a 1.5 stroke and round ends. `mark.svg` is the app mark, on a 48 grid |
 | `app-icon/*.svg` | **Generated.** The app icon in each platform's container, from `tokens.json` `appIcon` and `icons/mark.svg` ([App icon](#app-icon)) |
-| `fonts/agent-bridge-mono/` | Agent Bridge Mono, the monospace: build plan, build script, TTF and WOFF2. **SIL OFL 1.1, not MIT** (see its README) |
+| `fonts/agent-bridge-mono/` | Agent Bridge Mono, the monospace: build plan, build script, TTF and WOFF2, and its specimen. **Licensed separately under SIL OFL 1.1**, not this project's AGPL (see its README) |
 | `preview.png` | The glyphs, icons and colour roles rendered in dark and light. Regenerate it whenever a glyph, icon or role changes |
 | `canvas/` | The design canvas boards' source, rendered to [docs/design/mockups](../docs/design/mockups/README.md) by [tools/design-mockups](../tools/design-mockups/README.md) |
 

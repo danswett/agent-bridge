@@ -161,6 +161,53 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Single(host.Sent(HostOps.Stop));
     }
 
+    // A session with no status reads as idle (v1-sessions.md "Malformed records", #446), which is
+    // what to show, but no evidence the turn has ended: the update waits for one read in full.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_session_read_as_idle_only_because_its_status_could_not_be_read_holds_the_update()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+        var unreadable = JsonSerializer.SerializeToNode(Make.Session("s1", SessionStatus.Working), ProtocolJson.Options)!.AsObject();
+        unreadable["status"] = 3;
+        await host.SendAsync(Events.SessionUpsert, unreadable);
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1")?.Status == SessionStatus.Idle, "the session read as idle");
+
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+
+        // Read in full this time: idle is now the host's word.
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Idle));
+        await Wait.UntilAsync(() => !connection.Sessions.Unsure, "the session read in full");
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+    }
+
+    // An unreadable session followed at once by one read in full, both between ticks, used to keep
+    // the idle time from before it: the update installed without IdleFor of readable idle.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_session_read_past_a_field_restarts_the_idle_wait_even_when_it_is_read_in_full_before_the_next_tick()
+    {
+        await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
+        await auto.TickAsync();
+        time.Advance(AutoUpdater.IdleFor - TimeSpan.FromSeconds(1));
+
+        var unreadable = JsonSerializer.SerializeToNode(Make.Session("s1", SessionStatus.Working), ProtocolJson.Options)!.AsObject();
+        unreadable["status"] = 3;
+        await host.SendAsync(Events.SessionUpsert, unreadable);
+        await Wait.UntilAsync(() => connection.Sessions.Unsure, "the session read past its status");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s1", SessionStatus.Idle));
+        await Wait.UntilAsync(() => !connection.Sessions.Unsure, "the session read in full");
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        await auto.TickAsync();
+        Assert.False(updater.Applied);
+
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_turn_running_holds_the_update_until_the_session_has_been_idle_a_while()

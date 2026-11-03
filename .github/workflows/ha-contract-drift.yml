@@ -23,8 +23,11 @@ on:
   # A change to the guard or the fixtures is checked against the commit the fixtures are pinned
   # at, not main: that proves the committed fixtures are exactly what the exporter records there,
   # and exercises the guard itself, without opening issues about upstream moving meanwhile.
+  # Not on a draft, which runs only ci.yml's fast ring (quality/README.md §2): ready for review
+  # runs it on the same head.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - tools/ha-contract/**
       - tests/AgentBridge.HomeAssistant.Tests/Fixtures/**
@@ -34,14 +37,16 @@ permissions:
   contents: read
 
 # Every run that may write the issue shares one group, so two can never both find no issue open
-# and both open one. Pull requests, which never write it, queue only behind themselves.
+# and both open one: never cancelled, a newer one waits. A pull request never writes it, so it has
+# a group of its own, and a newer push to it cancels the older run, whose result nobody reads.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ha-contract-drift-pr-{0}', github.ref) || 'ha-contract-drift' }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('ha-contract-drift-pr-{0}', github.event.pull_request.number) || 'ha-contract-drift' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   record:
-    # Windows, where the exporter is developed and run by hand.
+    # Windows, where the exporter is developed and run by hand. Not on a draft (above).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     permissions:
       contents: read
@@ -49,19 +54,19 @@ jobs:
       code: ${{ steps.drift.outputs.code }}
       ref: ${{ steps.ref.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Which agent-ha-bridge commit
         id: ref
         shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "pull_request") {
+          if ($env:GITHUB_EVENT_NAME -eq "pull_request") {
             $fixture = Get-Content tests/AgentBridge.HomeAssistant.Tests/Fixtures/ha-contract.json -Raw | ConvertFrom-Json
             "ref=$($fixture.source.commit)" >> $env:GITHUB_OUTPUT
           } else { "ref=main" >> $env:GITHUB_OUTPUT }
       - name: agent-ha-bridge (read-only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: danswett/agent-ha-bridge
           ref: ${{ steps.ref.outputs.ref }}
@@ -79,7 +84,7 @@ jobs:
           exit 0
       - name: Keep what was recorded
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ha-contract-drift
           path: ${{ runner.temp }}/ha-contract-drift
@@ -87,8 +92,12 @@ jobs:
       - name: Fail when the contract moved
         if: steps.drift.outputs.code != '0'
         shell: pwsh
+        # Through env, not pasted into the script: a value with a quote in it would change the script.
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+          DRIFT_CODE: ${{ steps.drift.outputs.code }}
         run: |
-          Write-Host "::error::agent-ha-bridge ${{ steps.ref.outputs.ref }} does not match the fixtures (drift check exit ${{ steps.drift.outputs.code }}); see the run summary$(if ('${{ github.event_name }}' -ne 'pull_request') { ' and the parity issue' })."
+          Write-Host "::error::agent-ha-bridge $env:REF does not match the fixtures (drift check exit $env:DRIFT_CODE); see the run summary$(if ($env:GITHUB_EVENT_NAME -ne 'pull_request') { ' and the parity issue' })."
           exit 1
 
   report:
@@ -99,10 +108,10 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ha-contract-drift
           path: ${{ runner.temp }}/ha-contract-drift

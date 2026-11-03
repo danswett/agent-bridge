@@ -93,8 +93,13 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
-  const message = h('div', { class: 'md question-message', id: `${idBase}-m` });
-  message.append(renderMarkdown(q.message));
+  // An approval's message, all of it, is drawn exactly as written, fence markers included, in the
+  // code face and left to right, with its hidden characters and right-to-left letters as escapes;
+  // nothing in it is read as Markdown (#220, #415, ui.md §6.4): Approve once allows what runs.
+  // Other questions draw as Markdown.
+  const approval = q.kind === 'approval';
+  const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });
+  message.append(renderMarkdown(q.message, document, { approval }));
   section.append(message);
   return section;
 }
@@ -199,6 +204,7 @@ const sendKey = (ev) => ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey);
 export class QuestionPanel {
   #unwatch = null;
   #busyTimer = null;
+  #held = null;
 
   // answering: { service, hostId, sessionId }. state: what a previous panel for the same
   // question held, so a re-render loses nothing.
@@ -219,6 +225,18 @@ export class QuestionPanel {
   }
 
   destroy() { this.#unwatch?.(); clearTimeout(this.#busyTimer); }
+
+  // Why nothing can be sent now (its machine offline, #269), or null: everything entered stays,
+  // and the controls take nothing until it is null again.
+  setHeld(text) {
+    const held = text || null;
+    if (held === this.#held) { return; }
+    this.#held = held;
+    this.els.held.textContent = held ?? '';
+    this.els.held.hidden = !held;
+    this.element.dataset.held = held ? 'true' : 'false';
+    this.#show(this.entry);
+  }
 
   get entry() { const { service, hostId, sessionId } = this.answering; return service.get(hostId, sessionId, this.q.id); }
 
@@ -250,11 +268,12 @@ export class QuestionPanel {
       e.controls.append(h('ol', { class: 'fields' }, q.fields.map((f, k) => this.#field(f, `${id}-f${k}`))));
     }
     e.error = h('p', { class: 'answer-error', id: `${id}-err`, role: 'alert', hidden: true });
+    e.held = h('p', { class: 'note warn answer-held', role: 'status', hidden: true });
     e.send = h('button', { type: 'submit', class: 'button send' }, q.kind === 'approval' ? 'Send' : 'Send answer');
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.actions = h('div', { class: 'answer-actions' }, e.send, e.resend);
     e.status = h('p', { class: 'answer-status', role: 'status', 'aria-live': 'polite' });
-    e.form.append(e.error, e.actions, e.status);
+    e.form.append(e.held, e.error, e.actions, e.status);
     // A tap question has no Send until Other is opened.
     e.send.hidden = this.tap && !this.otherOpen;
     this.element.append(e.form);
@@ -441,6 +460,7 @@ export class QuestionPanel {
   }
 
   #send({ tapped = null } = {}) {
+    if (this.#held) { return; }
     const entry = this.entry;
     if (entry && (entry.state === 'sending' || entry.state === 'waiting')) { return; }
     const q = this.q;
@@ -453,6 +473,7 @@ export class QuestionPanel {
   }
 
   #resend() {
+    if (this.#held) { return; }
     const { service, hostId, sessionId } = this.answering;
     service.resend(hostId, sessionId, this.q.id);
   }
@@ -462,15 +483,17 @@ export class QuestionPanel {
     clearTimeout(this.#busyTimer);
     const shown = entry ? describeAnswer(entry, this.machineName) : { text: '', tone: '' };
     const { again, pause } = answerControls(entry);
+    const held = !!this.#held;
     this.element.dataset.answer = answerState(entry);
     e.status.textContent = shown.text;
     e.status.className = `answer-status${shown.tone ? ` ${shown.tone}` : ''}`;
     e.status.hidden = !shown.text;
     e.form.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
-    e.controls.disabled = !again || pause;
-    e.send.disabled = !again || pause;
+    e.controls.disabled = !again || pause || held;
+    e.send.disabled = !again || pause || held;
     e.resend.hidden = entry?.state !== 'failed';
-    if (pause) { this.#busyTimer = setTimeout(() => { e.controls.disabled = false; e.send.disabled = false; }, BUSY_PAUSE_MS); }
+    e.resend.disabled = held;
+    if (pause) { this.#busyTimer = setTimeout(() => { e.controls.disabled = !!this.#held; e.send.disabled = !!this.#held; }, BUSY_PAUSE_MS); }
     // A tap question shows which option went; one that can be answered again shows none.
     const sent = !again && this.tap ? entry.answer?.fields?.[this.q.fields[0].name] : undefined;
     for (const b of this.element.querySelectorAll('.choice[data-value]')) {

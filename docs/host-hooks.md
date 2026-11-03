@@ -123,7 +123,9 @@ is one JSON value, prints the reply, logs the run and exits 0.
   * agent-ha-bridge's Go hook on the same machine: an average of 45 ms over its last 400
     spooled runs.
 
-  CI runs the published NativeAOT build as an agent does (`HookProcessTests`).
+  CI runs the published NativeAOT build as an agent does (`HookProcessTests`), and `perf.yml`
+  records its start-to-reply time, cold and warm, with the host up and down (`perf-hook`,
+  [quality/perf.md](../quality/perf.md)).
 
 ## The intake (`HookIntake`)
 

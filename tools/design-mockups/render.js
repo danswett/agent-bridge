@@ -1,9 +1,13 @@
 // Renders the design canvas boards (.dc.html) to PNG, offline.
 // Implements only what the boards use: {{holes}}, sc-if, sc-for, dc-import, and a
-// DCLogic class with props, state and renderVals(). Usage: node render.js <projectDir> <outDir>
+// DCLogic class with props, state and renderVals().
+// Usage: node render.js <projectDir> <outDir> [prefix]
+// With a prefix, only the boards whose file names start with it are rendered. Without one, every
+// board but a proposal's (Proposal-*): their images live beside the proposal
+// (docs/design/proposals), not among the platform mock-ups.
 const fs = require('fs'), path = require('path');
 const { chromium } = require('playwright');
-const [projectDir, outDir] = process.argv.slice(2);
+const [projectDir, outDir, only] = process.argv.slice(2);
 const index = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
 const files = {};
 for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
@@ -126,7 +130,7 @@ async function renderBoard(page, file, w, h) {
   const browser = await chromium.launch();
   const skip = new Set(['Glyph.dc.html', 'Icon.dc.html']);
   for (const file of index.order) {
-    if (skip.has(file)) continue;
+    if (skip.has(file) || (only ? !file.startsWith(only) : file.startsWith('Proposal-'))) continue;
     const b = index.boards[file];
     const phone = b.w < 500;
     const page = await browser.newPage({ viewport: { width: b.w, height: b.h }, deviceScaleFactor: phone ? 2 : 1 });

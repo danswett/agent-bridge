@@ -31,7 +31,9 @@ public static class DelegateLabel
     {
         var clean = Undotted(Clean(name, MaxLength));
         if (clean.Length == 0) { return ShortId(id) is { Length: > 0 } s ? $"Delegate {s}" : "Delegate"; }
-        return PosesAsMainAgent(clean) ? $"Delegate “{Unquoted(clean)}”" : clean;
+        // The host already labels such a name this way (DelegateName, #263); wrapping it again
+        // would show Delegate “Delegate 'Main agent'”.
+        return PosesAsMainAgent(clean) && !AgentBridge.Protocol.DelegateName.IsLabelled(clean) ? $"Delegate “{Unquoted(clean)}”" : clean;
     }
 
     // U+00B7 and what is drawn like it or normalises to it, as pwa/js/attribution.js's DOTS: the

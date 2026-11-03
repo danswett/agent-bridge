@@ -134,7 +134,10 @@ second snapshot the first's changes as the state to restore; the second is refus
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
    started with `--copilot-home`, `--claude-home` or `--codex-home`, since the host the app
-   starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for its heartbeat in the
+   starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for the old host's
+   process to end (up to 5 minutes: its shutdown can take minutes while a usage probe finishes,
+   and a migration that judged it by the 45 s below undid itself while the replacement was still
+   to come), then up to 45 s for the new host's heartbeat in the
    runtime folder, and runs the installed hook as Copilot would (`copilot agent_stop`). The
    hook gives the same fixed reply whether or not it could spool, and a Copilot session's own
    `agent_stop` at the same moment would leave the same log line and drain the same way, so
@@ -325,8 +328,9 @@ own, so this pointer is never changed under those sessions.
 
 ## What the live rehearsal still checks
 
-The tests (`MigrationTests`) migrate and roll back a fake installation laid out on disk as
-`install.ps1`, `install-claude.ps1` and `install-codex.ps1` lay one out, under a temporary home:
+The tests (`MigrationTests` and `MigrationTasksHooksAndSettingsTests`) migrate and roll back a
+fake installation laid out on disk as `install.ps1`, `install-claude.ps1` and `install-codex.ps1`
+lay one out, under a temporary home:
 
 * registrations in all three agents' files, with the person's own entries beside them;
 * config with secrets and a publication policy, instruction blocks, and runtime receipts.

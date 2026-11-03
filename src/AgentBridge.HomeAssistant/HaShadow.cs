@@ -47,6 +47,9 @@ public static partial class HaShadow
             FieldPinDelay = TimeSpan.Zero,
             SelectDelay = TimeSpan.Zero,
             SelectAttempts = 1,
+            // The dry run only pretends to make the Detailed activity switch, so Home Assistant
+            // never gives it a state: waiting for one cost every shadow pass 3.2 s (#390).
+            HelperStateAttempts = 1,
             ConsumeAnswers = false,
         };
         // Never asked to deliver anything: the dry run watches nothing, so no press reaches it.

@@ -18,6 +18,8 @@ public sealed class ChannelHub
     // Serves a peer's request: (channel, op, data) -> result. Null means no service, and
     // the peer is told "unknown op". An exception's message goes back as the error.
     public Func<SecureChannel, string, JsonElement, Task<object?>>? Handler { get; set; }
+    // Installed before relay callbacks become reachable; applies in both directions.
+    public Func<SecureChannel, bool>? PeerAllowed { get; set; }
     // A peer opened a channel to this device and the handshake completed. Raised on the
     // receive path: start long work elsewhere, or later frames wait for it.
     public event Action<SecureChannel>? Accepted;
@@ -41,11 +43,12 @@ public sealed class ChannelHub
     public int ChannelCount => channels.Count;
     public RelayClient Relay => relay;
 
-    public ChannelHub(RelayClient relay, P256KeyPair key, string name, string kind)
+    public ChannelHub(RelayClient relay, P256KeyPair key, string name, string kind, Func<SecureChannel, bool>? peerAllowed = null)
     {
         this.relay = relay;
         this.key = key;
         intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind });
+        PeerAllowed = peerAllowed;
         relay.OnData = OnDataAsync;
         relay.PresenceChanged += DropAbsent;
         // The relay could not deliver a frame because the peer has no connection. A peer's
@@ -70,6 +73,25 @@ public sealed class ChannelHub
     {
         channels.TryRemove(new KeyValuePair<(string, ulong), SecureChannel>((ch.PeerId, ch.Id), ch));
         ch.Fail(e);
+    }
+
+    internal void RequirePeer(SecureChannel ch)
+    {
+        if (PeerAllowed?.Invoke(ch) != false) { return; }
+        Forget(ch, new IOException("the peer is no longer authorized"));
+        _ = CloseAsync(ch);
+        throw new InvalidOperationException("the peer is not authorized");
+    }
+
+    public void RevalidatePeers()
+    {
+        foreach (var ch in channels.Values)
+        {
+            // A partial handshake can expose a static key before curve validation completes.
+            if (!ch.IsOpen) { continue; }
+            try { RequirePeer(ch); }
+            catch (InvalidOperationException) when (ch.Closed.IsCompleted) { }
+        }
     }
 
     void DropAbsent(IReadOnlyList<PresenceEntry> present)
@@ -192,6 +214,7 @@ public sealed class ChannelHub
                     Accepted?.Invoke(ch);
                     break;
                 case ChannelKind.Transport when ch is { Handshake.IsComplete: true }:
+                    RequirePeer(ch);
                     var message = JsonDocument.Parse(ch.Handshake.Receive!.DecryptWithAd([], body)).RootElement;
                     // A response has re, an event ev, a request op. Anything else is a frame
                     // from a newer peer this one does not know, and is ignored.
@@ -224,6 +247,7 @@ public sealed class ChannelHub
         var j = JsonDocument.Parse(payload).RootElement;
         ch.PeerName = j.GetProperty("name").GetString() ?? "";
         ch.PeerKind = j.GetProperty("kind").GetString() ?? "";
+        RequirePeer(ch);
     }
 
     async Task ServeAsync(SecureChannel ch, long id, string op, JsonElement data)
@@ -232,6 +256,7 @@ public sealed class ChannelHub
         Func<IProtocolChannel, Task>? then = null;
         try
         {
+            RequirePeer(ch);
             var result = Handler is null ? null : await Handler(ch, op, data);
             if (result is ChannelReply r) { (result, then) = (r.Result, r.Then); }
             reply = ch.Serialize(result is null ? new { re = id, ok = false, error = $"unknown op {op}" } : new { re = id, ok = true, result });

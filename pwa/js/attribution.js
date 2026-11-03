@@ -54,15 +54,28 @@ export function mainVoice(session) {
 //     first: "Idle · Read logs" would have read "Delegate Idle" there (#252);
 //   - cut past NAME_MAX characters (whole graphemes), with an ellipsis;
 //   - with nothing left, "Delegate" and the start of its id;
-//   - and a name that reads as the main agent's, shown as Delegate “<name>” (posesAsMainAgent).
-// The app's DelegateLabel (#250) follows the same rule, but for the middle dot.
+//   - and a name that reads as the main agent's, shown as Delegate “<name>” (posesAsMainAgent),
+//     unless the host has already given it that form (#287).
+// The app's DelegateLabel (#250, #303) follows the same rule.
 export const NAME_MAX = 60;
 const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/gu;
 const HIDDEN = /[\p{Cf}\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Bidi_Control}\p{Default_Ignorable_Code_Point}]/gu;
-// U+00B7 and what looks like it or normalises to it: the fact separator, real or forged.
-const DOTS = /[\u00b7\u0387\u16eb\u2022\u2027\u2219\u22c5\u2e31\u30fb\ua78f\uff65]/gu;
-// Inside Delegate “…”, a quote of the name's own could close the quotes and carry on as other words.
-const QUOTES = /["\u00ab\u00bb\u201c\u201d\u201e\u201f\u2033\u2039\u203a\uff02]/gu;
+// U+00B7 and what looks like it or normalises to it: the fact separator, real or forged. By code
+// point (the u flag), since U+10101 is outside the BMP. The app's DelegateLabel.Dots (#303).
+const DOTS = /[\u00b7\u0387\u1427\u16eb\u2022\u2027\u2219\u22c5\u2e31\u2e33\u30fb\u318d\ua78f\uff65\u{10101}]/gu;
+// Inside Delegate “…”, a quote of the name's own could close the quotes and carry on as other
+// words: everything Unicode files as an opening or closing quote (Pi, Pf) or marks
+// Quotation_Mark, and what is drawn like one: primes, the Hebrew geresh and gershayim,
+// modifier-letter primes and apostrophes, the double acute and the ornament quotes. The app's
+// DelegateLabel.QuoteLike (#303's security review).
+const QUOTE = '[\\p{Pi}\\p{Pf}\\p{Quotation_Mark}\\u2032-\\u2037\\u2057\\u05f3\\u05f4\\u02b9-\\u02bc\\u02dd\\u02ee\\u275b-\\u275e\\u{1f676}-\\u{1f678}]';
+const QUOTES = new RegExp(QUOTE, 'gu');
+// "," and the commas drawn like it. A label read aloud (ui.md §9) joins its facts with ", ", so a
+// name with one of its own ("x, idle, DEV-VM2") would read as facts to a screen reader. The app's
+// DelegateLabel.Commas (#303's security review).
+const COMMAS = /[\u002c\u055d\u060c\u066b\u07f8\u1363\u1802\u1808\u201a\u2e41\u2e4c\u3001\ua4fe\ua60d\ua6f5\ufe10\ufe11\ufe50\ufe51\uff0c\uff64]/gu;
+const OPENING = 'Delegate \u201c';
+const CLOSING = '\u201d';
 
 // Text an agent wrote, safe to put in a label: nothing hidden or steering, on one line.
 export function cleanLabel(text) {
@@ -116,7 +129,28 @@ export function delegateName(agent) {
   }
   const chars = graphemes(name);
   const shown = chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('').trimEnd()}\u2026` : name;
-  return posesAsMainAgent(name) ? `Delegate \u201c${shown.replace(QUOTES, "'")}\u201d` : shown;
+  return posesAsMainAgent(name) && !isLabelled(name) ? `${OPENING}${shown.replace(QUOTES, "'")}${CLOSING}` : shown;
+}
+
+// Already in the form a name that reads as the main agent's is given: Delegate “<name>”, with no
+// quote inside but the apostrophes that form makes of them. The host gives it that form itself
+// (#287, DelegateName.IsLabelled), and without this it would be wrapped twice, Delegate
+// “Delegate 'Main agent'”. The host's own check (DelegateName.IsLabelled) is the same: an
+// apostrophe is not one of its quotes. Checked on the whole name, before it is cut. A delegate that names itself so gains nothing: the line still says
+// Delegate, and its quotes still can't close.
+function isLabelled(s) {
+  if (!(s.length > OPENING.length + CLOSING.length && s.startsWith(OPENING) && s.endsWith(CLOSING))) { return false; }
+  const inner = s.slice(OPENING.length, -CLOSING.length);
+  return inner.replace(QUOTES, "'") === inner;
+}
+
+// A name, or a fact that carries one, as a label reads it aloud (ui.md §9): with no comma of its
+// own, each one a space and a run of spaces one, since the label joins its facts with ", ". What
+// is drawn keeps them. The app's DelegateLabel.Aloud (#303).
+export function aloud(text) {
+  const s = String(text ?? '');
+  const spaced = s.replace(COMMAS, ' ');
+  return spaced === s ? s : spaced.replace(/ {2,}/g, ' ').trim();
 }
 
 // A delegate as a line names it when it says who asks or works: a question's heading, the row's

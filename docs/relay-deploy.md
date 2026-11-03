@@ -86,7 +86,20 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
 
 1. **infra**: `az bicep build` of the stamp and every region's parameters.
 2. **build** (environment `staging`): `docker build`, push `abrelaywus2.azurecr.io/agent-bridge-relay:<sha>`; later jobs deploy its digest.
-3. **staging**: `az containerapp update` to that digest with `Relay__Version=<sha>`, then
+   It also saves the image (`docker save`) as a one-day artifact for scan.
+3. **scan** (no environment, no Azure sign-in): Trivy over that saved image. A high or critical
+   vulnerability with a fix available fails it, so staging and production never run the image;
+   rebuild on the fixed base image or bump the package, or, to accept one for a while, list it
+   in `.trivyignore` with a reason and an `exp:` date. A vulnerability with no fix is not
+   blocking (ci.yml's `relay-image-sarif` reports those to code scanning from main). It also
+   writes the image's CycloneDX SBOM (artifact `relay-image-sbom`). CI's `product` job runs the
+   same check on every pull request, so this catches only what was published since.
+4. **attest** (`main` only, beside staging): SLSA build provenance and the SBOM, bound to the
+   pushed digest, in GitHub's attestation store (nothing is pushed to the registry). To check
+   the image a revision runs, after `az acr login -n abrelaywus2`:
+   `gh attestation verify oci://abrelaywus2.azurecr.io/agent-bridge-relay@sha256:<digest> -R danswett/agent-bridge`
+   (add `--predicate-type https://cyclonedx.org/bom` for the SBOM).
+5. **staging** (after build and scan): `az containerapp update` to that digest with `Relay__Version=<sha>`, then
    `relay-smoke` against staging with staging's token key: health at the new version,
    readiness, no app code, the push key, CORS and origins, 4001, and two devices of a
    throwaway account that find each other in presence, open a Noise channel, echo a
@@ -98,14 +111,19 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    fetched, checked and deleted the same way. The two-device step also checks the machine
    roster ([protocol/roster.md](protocol/roster.md)): the host that left is listed as offline in
    the app's presence, and the app (kind `app`, a person's device) forgets it.
-4. **production** (`main` only, environment `production`): waits for approval by the
+6. **production** (`main` only, environment `production`): waits for approval by the
    required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
    runs again without a token.
-5. **rollback**: run the workflow by hand with `rollback_to=<earlier commit SHA>`. Same
-   approval, same script, same smoke test.
+7. **rollback**: run the workflow by hand with `rollback_to=<earlier commit SHA>`. Same
+   approval, same script, same smoke test. Not scanned again: it returns to an image that ran.
 
-Every job signs in with GitHub OIDC (`azure/login`, `id-token: write`). There is no
+Every job that touches Azure (build, staging, production, rollback) signs in with GitHub OIDC
+(`azure/login`); only those jobs, and `attest`, get `id-token: write`, and `infra`, which only
+compiles the templates, cannot mint a token. `attest`'s token signs the attestations through
+Sigstore and nothing else: it runs without an environment, and each principal below trusts only
+its environment's subject. Trivy runs in `scan`, which has no token beyond `contents: read`,
+never in `build`, which can sign in as staging. There is no
 client secret anywhere. Each environment has its own principal:
 
 | Principal | Roles |
@@ -117,10 +135,19 @@ Each has one federated credential for its environment. GitHub now presents subje
 `production` environment allows only `main` and requires `danswett`'s approval. Repository
 variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` (the stamp's subscription), and each environment's
 `AZURE_CLIENT_ID`, are ids, not secrets. The repository variable `RELAY_DEPLOY=true` turns
-the Azure jobs on; without it (a fork, a fresh clone) the workflow only compiles `infra/`.
+the Azure jobs on; without it (a fresh clone) the workflow only compiles `infra/`. A fork's
+pull request never reaches Azure: GitHub gives it a read-only token, no OIDC token and no
+secrets. Dependabot's pull requests skip the Azure jobs too (`build`'s condition), because their
+branches are in this repository: a bumped action reaches staging's sign-in only once a person
+has reviewed and merged it. That condition, not the `staging` environment, which has no branch
+policy or reviewer, is what keeps Dependabot's branches out.
 
 Infra changes (probes, sizes, secrets, a new region) are not applied by CI. A person runs
 `infra/deploy.ps1`, which never rolls an image: it re-states what each app runs now.
+A pull request that changes `infra/` is also checked by PSRule for Azure (`iac-scan.yml`,
+configured by `infra/ps-rule.yaml`) over each region's `.bicepparam`, production's resources
+included. It is advisory: its findings are warnings and a table in the run's summary, and those
+already on main when it was added, with their fixes, are listed in #441.
 
 ## Building a stamp
 

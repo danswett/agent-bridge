@@ -10,7 +10,9 @@ The Windows app on that machine does the work, as it does its automatic updates
 update feed (never agent-ha-bridge's, design G2), downloads it, waits until no session there has
 a turn running or a question waiting for two minutes (or six hours, whatever they are doing),
 then stops the host and restarts both on the new release. The host only carries what its app
-reports to the devices, and their presses to its app. It decides who may press.
+reports to the devices, and their presses to its app. It decides who may press. Test vectors for
+the records are in [`vectors/update.json`](vectors/README.md); [v1-sessions.md](v1-sessions.md#test-vectors)
+says how to regenerate them.
 
 ## Who may ask
 

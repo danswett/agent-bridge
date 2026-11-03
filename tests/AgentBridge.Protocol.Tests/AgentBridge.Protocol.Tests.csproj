@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\AgentBridge.Protocol\AgentBridge.Protocol.csproj" />
     <None Include="..\..\docs\protocol\examples\*.json" Link="examples\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\protocol\v1-sessions.md" Link="spec\v1-sessions.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

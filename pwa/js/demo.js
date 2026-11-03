@@ -14,7 +14,8 @@
 //   askTrust(question) for a launched agent asking whether to trust its folder, scriptTrust(...)
 //   for the next answers to one, host.trustLog for every launch.trust.answer received,
 //   host.holdResponses() and host.releaseResponses() to keep responses back until a test has
-//   looked
+//   looked, and host.holdSnapshot() and host.releaseSnapshot() to hold and release the end of
+//   a snapshot (sessions.synced)
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets
@@ -153,6 +154,8 @@ export class DemoHost {
   #stopScript = [];
   #responsesHeld = null;
   #letResponsesGo = null;
+  #snapshotHeld = null;
+  #letSnapshotGo = null;
   #arms = new Map();
   // session.launch: outcomes by request, and every request as received.
   launches = new Map();
@@ -249,7 +252,8 @@ export class DemoHost {
         t.subscribed = true;
         reply({ revision: this.revision, count: this.sessions.size });
         for (const s of this.sessions.values()) { this.#event(t, 'session.upsert', withoutHistory(s)); }
-        this.#event(t, 'sessions.synced', { revision: this.revision, ...(this.held ? { discoveryHeld: this.held } : {}) });
+        const synced = () => this.#event(t, 'sessions.synced', { revision: this.revision, ...(this.held ? { discoveryHeld: this.held } : {}) });
+        if (this.#snapshotHeld) { this.#snapshotHeld.then(() => { if (this.transports.has(t)) { synced(); } }); } else { synced(); }
         return undefined;
       }
       case 'session.answer':
@@ -429,6 +433,13 @@ export class DemoHost {
   holdResponses() { this.#responsesHeld ??= new Promise((resolve) => { this.#letResponsesGo = resolve; }); }
 
   releaseResponses() { this.#letResponsesGo?.(); this.#responsesHeld = null; this.#letResponsesGo = null; }
+
+  // Holds the end of the next snapshots (sessions.synced) until releaseSnapshot(): the sessions
+  // arrive, but not word that they are all there, as a host with many sessions is slow to send
+  // them all. For the tests of a machine back from offline (#269), which takes nothing until then.
+  holdSnapshot() { this.#snapshotHeld ??= new Promise((resolve) => { this.#letSnapshotGo = resolve; }); }
+
+  releaseSnapshot() { this.#letSnapshotGo?.(); this.#snapshotHeld = null; this.#letSnapshotGo = null; }
 
   // A response as a host gives one: after the answer delay, and after any hold.
   #after(decide) { return new Promise((resolve) => setTimeout(resolve, this.answerDelayMs)).then(() => this.#responsesHeld).then(decide); }

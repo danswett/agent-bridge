@@ -109,6 +109,24 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Delegates_listed_on_the_session_being_read_shift_its_conversation_and_choosing_a_session_does_not()
+    {
+        Resize(1440);
+        var shifts = 0;
+        ui.Post(() => layout.ConversationShifted += () => shifts++);
+        // The strip shown with a session chosen: its question is drawn afresh, nothing moved.
+        Select("del");
+        Select("counts");
+        Assert.False(Read(l => l.ShowStrip));
+        Assert.Equal(0, TestUi.Read(() => shifts));
+
+        // Its agent starts listing delegates: the strip pushes the conversation down under the pointer.
+        await host.SendAsync(Events.SessionUpsert, Delegating("counts"));
+        await Wait.UntilAsync(() => Read(l => l.ShowStrip), "the strip");
+        Assert.Equal(1, TestUi.Read(() => shifts));
+    }
+
+    [Fact]
     public void The_strip_shows_the_main_agents_delegates_with_their_nested_count_and_folds_the_finished_into_one_item()
     {
         Resize(1440);
@@ -156,7 +174,11 @@ public sealed class DelegatesTests : IAsyncLifetime
         var card = Card("del");
         Assert.True(Read(l => l.ShowSessionInspector && !l.ShowDelegateInspector));
 
+        // Choosing a delegate brings the inspector's content in from the trailing edge (ui.md §5.3).
+        var moves = new List<PaneMove>();
+        ui.Post(() => layout.Moved += moves.Add);
         ui.Post(() => layout.OpenDelegate("witness"));
+        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], TestUi.Read(() => moves.ToList()));
         Assert.True(Read(l => l.ShowDelegateInspector && !l.ShowSessionInspector && !l.WantsTools));
         await Wait.UntilAsync(() => card.Delegates.Detail.Latest == "Read witness shell logic: everything it said.", "the delegate's own words");
 
@@ -328,7 +350,9 @@ public sealed class DelegatesTests : IAsyncLifetime
         Select("del");
         var detail = Card("del").Delegates.Detail;
         ui.Post(() => layout.OpenDelegate("suite"));
-        Assert.True(fetching.Wait(FakeHost.Patience), "the fetch");
+        // Waited for, not blocked on: the test runs on the UI thread, and the fetch's write
+        // continues there, as it does in the app.
+        await Wait.UntilAsync(() => fetching.IsSet, "the fetch");
         var before = TestUi.Read(() => detail.Properties.ToList());
         Assert.Equal(["Status", "Kind", "ID"], before.Select(p => p.Label));
 
@@ -489,7 +513,7 @@ public sealed class DelegatesTests : IAsyncLifetime
         Select("del");
         var card = Card("del");
         ui.Post(() => layout.OpenDelegate("suite"));
-        Assert.True(fetched.Wait(FakeHost.Patience), "the fetch");
+        await Wait.UntilAsync(() => fetched.IsSet, "the fetch");
 
         var next = Delegating() with
         {

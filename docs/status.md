@@ -15,6 +15,7 @@ decision made).
 | [parity-checklist.md](parity-checklist.md) | The scripted migrate-and-rollback rehearsal |
 | [rehearsal-2026-10.md](rehearsal-2026-10.md) | The rehearsal's final report and verdict |
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
+| [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
@@ -43,6 +44,16 @@ retirement, not the current G7 migration refusal. Copilot CLI session
 `d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
 
 ## 2. Where things are (2026-11-02)
+
+### Host trusted-peer floor (#402)
+
+An opt-in, default-off host-only authorization foundation is under review. It adds
+full-key person/host/service pins, checks both channel directions and nested
+principals, and binds standing push access to the current grant. See
+[host config](host-config.md#trusted-peers-disposable-host-foundation). Evaluation is
+disposable-host only: no relay enrollment, production enablement or live migration
+is authorized by this slice. Independent implementation review and final-head CI
+remain gates; the wider HA architecture redirect is tracked separately in #388.
 
 ### Built and merged
 
@@ -165,7 +176,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 | Slice | Issue | What | State (2026-11-02, 15:00 PT) |
 |---|---|---|---|
 | S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off | Merged (#187) |
-| S2 | #174 | Sub-agents: Claude and Codex sources | Track A |
+| S2 | #174 | Sub-agents: Claude and Codex sources | Track A, in review (#304) |
 | S5 | #175 | Sub-agents: HA connector and shadow | Track A (#199) |
 | U1 | #164 | Session list keeps the person's order | **Done**: #190 (PWA), #194 (app) |
 | U2 | #165 | "Needs you" lane | **Done**: #202 (PWA), #203 (app); approve-once refuses bidi and invisible characters |
@@ -176,9 +187,10 @@ took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 | U7 | #168 | PWA platform layer | **Done**: #259 |
 | U8 | #176 | Delegates in both clients | PWA part 1 (attribution) done in #230. **App done**: #250 (closed #229), after a clean security re-review. PWA part 2 (strip, tab, inspector) is pushed to `ui/u8-pwa-delegates`, stacked on #252 (in review, security review next). It becomes a PR once #252 merges |
 | U9 | #232 | Motion (ui.md §5.3), signed off 2026-11-02 | Spec and tokens done in #233. In review: #261 (PWA, draft; security review before merge) and #275 (app, draft) |
+| U10 | #253 | One row, one question: Needs you becomes a filter, the question lives only in the conversation, and an approval's notification only opens it. Signed off 2026-11-02 (option A, every recommended answer) | Spec: #302 (ui.md, subagents.md §7, ui-plan.md, boards). Next, three slices, each with a security review: U10a PWA, U10b Windows app (its toasts already done in #377), U10c Apple in #260 (@welshofer) |
 | | #167 | App icon (#167's last deliverable) | **Done**: #278. Windows and the PWA are generated from `tokens.json` `appIcon`. The SVG sources for macOS, iOS and Android are in `design/app-icon`, and their catalogs come with P5 and P8. Three proportions not on the design board need the owner's eye (#170) |
 | | #231 | Settings: each agent's state and "Set up" (UI half) | Not started; waits for the backend half (track A) |
-| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3) |
+| | #181 | Monospace: **Agent Bridge Mono** (our OFL build of Iosevka, `design/fonts/agent-bridge-mono`), decided 2026-11-01 | Bundled in both clients (U3). Rebuilt at a normal 600 width for #295 |
 | | #183 | Light-theme `needs` glyph and `text3` fail contrast | Fixed in #188 |
 | | #240 | The app crashed when high contrast was turned on or off | Fixed in #243. Setting `AppWindow.TitleBar.PreferredTheme` made WinAppSDK repaint the caption buttons off the UI thread. #248 fixed the self-test flake that followed |
 
@@ -222,16 +234,13 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #95: bound the resumable sessions' folder checks;
   - #172: usage per account, shared between hosts (merged in #186; follow-ups #206, #207).
 - **Bugs and follow-ups from live use:**
-  - #101: app test timing races (also #241, a DevBox keep-awake test);
-  - #239: `host.restart` can leave no host running if a probe outlasts 90 s;
+  - #101: app test timing races, fixed by #401 (each app test runs on a UI thread of its own); #241, a DevBox keep-awake fake-time race, is separate;
   - #102 and #150: launch busy wording;
-  - #106: the logon task doesn't restart a crashed host;
   - #110: an HA connector edge case;
   - #118: discovery held 2 min after an npm Copilot start;
   - #122: the Launch page's busy banner;
   - #123: Codex's cached plugin on a migrated machine;
   - #146: no reason given for a missing Other;
-  - #147: a host restart under a held discovery drops a Codex session;
   - #157 and #158: folder-trust follow-ups;
   - #161: remote-update follow-ups;
   - #163: shadow episodes.
@@ -267,7 +276,7 @@ All merged PRs, by area. Each PR describes what it verified.
 - **Discovery and safety:**
   - #59, #62, #66 (discovery holds);
   - #67 (management refused from agent sessions);
-  - #103, #141, #144, #155.
+  - #103, #141, #144, #155, #330.
 - **Hooks and migration:**
   - #65, #68, #116, #117.
 - **HA connector:**
@@ -364,3 +373,5 @@ agent-ha-bridge releases from this work:
 | 11-02 | New layouts merge first and are checked on ULTRA afterwards (the owner's call); a broken build is reverted |
 | 11-02 | Motion (ui.md §5.3, #232) signed off. Native transitions keep their platform timing. The progress ring is the only extra looping animation. Scrolling to a question never jumps the view while the person is reading. Everything honours reduced motion |
 | 11-02 | A delegate's name is untrusted text. The clients clean it, cap its length, show "Main agent" as `Delegate "Main agent"`, keep a fixed Delegate label in the inspector, and name the delegate by id in the stop pre-fill (ui.md §6.3, §8; subagents.md §6) |
+| 11-02 | Monospace width (#295): Agent Bridge Mono's 560 width looked condensed beside the system face, so it is rebuilt at a normal 600 (IoskeleyMono's own, close to Cascadia Mono and Consolas) and is the one face in the app, the PWA and the Apple clients (#260) |
+| 11-02 | Attention (#253), signed off with option A and every recommended answer:<br>• Needs you is a filter of the rows, in their own order, starting off at each launch.<br>• A row says only its status.<br>• The question is drawn and answered only in the conversation. Approve once escapes characters not drawn where they run, and stays offered.<br>• Approving on a phone takes two taps.<br>• An approval's notification only opens its question; other questions keep their buttons.<br>• The macOS menu bar extra names the waiting sessions.<br>Spec in #302; reasoning in docs/design/proposals/253-attention.md |

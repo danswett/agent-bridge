@@ -209,6 +209,18 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 // The host serving a profile, reached on its local pipe (docs/protocol/local-pipe.md).
 public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
 {
+    // How long a restart waits for the old host to be gone. Its shutdown can take minutes while a
+    // usage probe it waits for finishes, which the migration's 45 s VerifyTimeout never allowed
+    // for: a slow shutdown made a migration report failure and undo itself while the replacement
+    // was still to come (#239's review). The 45 s now applies to the new host alone.
+    public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+    // Called before the host is asked to restart, with its pid and when it said it started: what
+    // then waits for that process to end. By handle, so a pid reused once it has gone is never
+    // waited on, and only a process that started before the host said it had: one with that pid
+    // started later is another, and the host already gone.
+    public Func<int, DateTimeOffset, Func<CancellationToken, Task>> Watch { get; init; } = WatchProcess;
+
     public async Task<bool> RunningAsync(CancellationToken cancellationToken)
     {
         try
@@ -220,15 +232,61 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return false; }
     }
 
+    // Null once the host was asked to restart and has gone, so its replacement is on its way.
     public async Task<string?> RestartAsync(CancellationToken cancellationToken)
     {
+        Func<CancellationToken, Task> gone;
         try
         {
             await using var channel = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profileFolder), ct: cancellationToken);
+            var status = await channel.CallAsync<HostStatus>(HostOps.Status, ct: cancellationToken);
+            gone = Watch(status.ProcessId, status.StartedAt);
             await channel.CallAsync(HostOps.Restart, ct: cancellationToken);
-            return null;
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
+        // Given up on by cancelling the wait itself, so nothing is left holding the old host's handle.
+        using var giveUp = new CancellationTokenSource(ShutdownTimeout, Time);
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, giveUp.Token);
+        try { await gone(waiting.Token); }
+        catch (OperationCanceledException) when (giveUp.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            var waited = ShutdownTimeout >= TimeSpan.FromMinutes(1) ? Count(ShutdownTimeout.TotalMinutes, "minute") : Count(ShutdownTimeout.TotalSeconds, "second");
+            return $"it was still stopping after {waited}";
+        }
+        return null;
+    }
+
+    static string Count(double n, string unit) => $"{n:0.#} {unit}{(n == 1 ? "" : "s")}";
+
+    // Best effort: a process that cannot be found or looked at is not waited on, and the
+    // migration's own wait for the new host's heartbeat is all there is, as before.
+    internal static Func<CancellationToken, Task> WatchProcess(int pid, DateTimeOffset startedAt)
+    {
+        Process process;
+        try { process = Process.GetProcessById(pid); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return _ => Task.CompletedTask; }
+        try
+        {
+            if (new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero) > startedAt)
+            {
+                process.Dispose();
+                return _ => Task.CompletedTask;
+            }
+        }
+        // Its start time not to be read: whether it is the host at all cannot be told, so not waited on.
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            process.Dispose();
+            return _ => Task.CompletedTask;
+        }
+        return async ct =>
+        {
+            using (process)
+            {
+                try { await process.WaitForExitAsync(ct); }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            }
+        };
     }
 }
 

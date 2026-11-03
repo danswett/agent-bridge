@@ -127,6 +127,7 @@
                 <!-- What stops the app doing its job, over every page. -->
                 <StackPanel Grid.Row="0">
                     <InfoBar
+                        x:Name="Banner"
                         Margin="24,12,24,0"
                         AutomationProperties.AutomationId="Banner"
                         IsClosable="False"
@@ -134,6 +135,7 @@
                         IsOpen="{x:Bind ViewModel.HasBanner, Mode=OneWay}"
                         Message="{x:Bind ViewModel.Banner, Mode=OneWay}" />
                     <InfoBar
+                        x:Name="DiscoveryHeld"
                         Margin="24,12,24,0"
                         AutomationProperties.AutomationId="DiscoveryHeld"
                         IsClosable="False"

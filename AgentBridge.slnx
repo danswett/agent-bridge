@@ -15,11 +15,13 @@
     <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/AgentBridge.Quality/AgentBridge.Quality.csproj" />
     <Project Path="tools/AgentBridge.Rehearsal/AgentBridge.Rehearsal.csproj" />
     <Project Path="tools/AgentBridge.RelaySmoke/AgentBridge.RelaySmoke.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Benchmarks/AgentBridge.Benchmarks.csproj" />
     <Project Path="tests/AgentBridge.ConsoleEcho/AgentBridge.ConsoleEcho.csproj" />
     <Project Path="tests/AgentBridge.HomeAssistant.Tests/AgentBridge.HomeAssistant.Tests.csproj" />
     <Project Path="tests/AgentBridge.Hooks.Tests/AgentBridge.Hooks.Tests.csproj" />
@@ -27,7 +29,9 @@
     <Project Path="tests/AgentBridge.Host.Delivery.Tests/AgentBridge.Host.Delivery.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj" />
     <Project Path="tests/AgentBridge.Local.Tests/AgentBridge.Local.Tests.csproj" />
+    <Project Path="tests/AgentBridge.PerfHook/AgentBridge.PerfHook.csproj" />
     <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Quality.Tests/AgentBridge.Quality.Tests.csproj" />
     <Project Path="tests/AgentBridge.Rehearsal.Tests/AgentBridge.Rehearsal.Tests.csproj" />
     <Project Path="tests/AgentBridge.Transport.Tests/AgentBridge.Transport.Tests.csproj" />
   </Folder>

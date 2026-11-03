@@ -1,0 +1,320 @@
+{
+  "about": "A machine's updates, seen and asked for from another device.",
+  "spec": "v1-update.md",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "UpdateResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "updated",
+          "json": {
+            "outcome": "updated",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "refused",
+          "json": {
+            "outcome": "refused",
+            "reason": "a session is busy",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-failed",
+          "json": {
+            "outcome": "rolledBack",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "outcome": "failed",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-outcome",
+          "json": {
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "outcome": "failed",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-at",
+          "json": {
+            "outcome": "updated",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+          },
+          "reads": {
+            "outcome": "updated",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "0001-01-01T00:00:00.000Z"
+          }
+        },
+        {
+          "name": "wrong-type-from",
+          "json": {
+            "outcome": "updated",
+            "from": 42,
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "outcome": "updated",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UpdateState": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "downloading",
+          "json": {
+            "current": "0.1.200",
+            "installer": true,
+            "available": "0.1.201",
+            "notes": "Fixes the flaky reconnect.",
+            "checkedAt": "2026-10-28T04:22:43.182Z",
+            "phase": "downloading",
+            "progress": 40,
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "automatic": true,
+            "last": {
+              "outcome": "updated",
+              "from": "0.1.199",
+              "to": "0.1.200",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        },
+        {
+          "name": "waiting",
+          "json": {
+            "current": "0.1.200",
+            "installer": true,
+            "available": "0.1.201",
+            "notes": "Fixes the flaky reconnect.",
+            "checkedAt": "2026-10-28T04:22:43.182Z",
+            "phase": "waiting",
+            "waiting": "a session is busy",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "automatic": true,
+            "last": {
+              "outcome": "updated",
+              "from": "0.1.199",
+              "to": "0.1.200",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        },
+        {
+          "name": "no-app",
+          "json": {
+            "installer": false,
+            "unavailable": "the Windows app is not running",
+            "phase": "idle",
+            "automatic": false
+          }
+        },
+        {
+          "name": "an-unknown-phase-reads-as-idle",
+          "json": {
+            "current": "0.1.200",
+            "installer": true,
+            "phase": "verifying",
+            "automatic": false
+          },
+          "reads": {
+            "current": "0.1.200",
+            "installer": true,
+            "phase": "idle",
+            "automatic": false
+          }
+        },
+        {
+          "name": "wrong-type-current",
+          "json": {
+            "current": 42,
+            "installer": true,
+            "available": "0.1.201",
+            "notes": "Fixes the flaky reconnect.",
+            "checkedAt": "2026-10-28T04:22:43.182Z",
+            "phase": "downloading",
+            "progress": 40,
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "automatic": true,
+            "last": {
+              "outcome": "updated",
+              "from": "0.1.199",
+              "to": "0.1.200",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "reads": {
+            "installer": true,
+            "available": "0.1.201",
+            "notes": "Fixes the flaky reconnect.",
+            "checkedAt": "2026-10-28T04:22:43.182Z",
+            "phase": "downloading",
+            "progress": 40,
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "automatic": true,
+            "last": {
+              "outcome": "updated",
+              "from": "0.1.199",
+              "to": "0.1.200",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        }
+      ],
+      "refused": []
+    },
+    "UpdateCommand": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-press",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-request",
+          "json": {
+            "request": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "UpdateCommandResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "accepted",
+          "json": {
+            "outcome": "accepted",
+            "state": {
+              "current": "0.1.200",
+              "installer": true,
+              "available": "0.1.201",
+              "notes": "Fixes the flaky reconnect.",
+              "checkedAt": "2026-10-28T04:22:43.182Z",
+              "phase": "checking",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "automatic": true,
+              "last": {
+                "outcome": "updated",
+                "from": "0.1.199",
+                "to": "0.1.200",
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          }
+        },
+        {
+          "name": "refused",
+          "json": {
+            "outcome": "refused",
+            "reason": "the machine is read-only"
+          }
+        },
+        {
+          "name": "an-unknown-outcome-reads-as-refused",
+          "json": {
+            "outcome": "maybe"
+          },
+          "reads": {
+            "outcome": "refused"
+          }
+        },
+        {
+          "name": "wrong-type-reason",
+          "json": {
+            "outcome": "accepted",
+            "state": {
+              "current": "0.1.200",
+              "installer": true,
+              "available": "0.1.201",
+              "notes": "Fixes the flaky reconnect.",
+              "checkedAt": "2026-10-28T04:22:43.182Z",
+              "phase": "checking",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "automatic": true,
+              "last": {
+                "outcome": "updated",
+                "from": "0.1.199",
+                "to": "0.1.200",
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "reason": 42
+          },
+          "reads": {
+            "outcome": "accepted",
+            "state": {
+              "current": "0.1.200",
+              "installer": true,
+              "available": "0.1.201",
+              "notes": "Fixes the flaky reconnect.",
+              "checkedAt": "2026-10-28T04:22:43.182Z",
+              "phase": "checking",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "automatic": true,
+              "last": {
+                "outcome": "updated",
+                "from": "0.1.199",
+                "to": "0.1.200",
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          }
+        }
+      ],
+      "refused": []
+    }
+  },
+  "knownDifferences": [
+    {
+      "vector": "UpdateResult/missing-at",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    }
+  ]
+}

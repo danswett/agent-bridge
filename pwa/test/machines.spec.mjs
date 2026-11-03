@@ -176,17 +176,219 @@ test('a machine that can\'t be reached says so in a line of its own, keeps its c
   await expect(page.locator('#host-state')).toBeHidden();
 });
 
-test('a machine that leaves takes its sessions with it, and brings them back when it returns', async ({ page }) => {
+test('a machine that leaves for a moment keeps its rows, offline, beside the other machine\'s, in their places, and they come back current without duplicates', async ({ page }) => {
   await openDemo(page, { machines: 2 });
+  const drawn = () => page.locator('#session-list > .session').evaluateAll((cs) => cs.map((c) => `${c.dataset.hostId}/${c.dataset.id}`));
+  const before = await drawn();
   await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', false));
-  await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
-  await expect(row(page, 'all')).toHaveCount(0);
-  await expect(page.locator('#machine-tabs')).toBeHidden();
-  await expect(page.locator('#sessions-h')).toHaveText('Sessions on Demo machine');
-  await expect(page.locator('.machine-label')).toHaveCount(0);
-  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', true));
-  await expect(page.locator(`.session[data-host-id="${LAPTOP}"]`)).toHaveCount(2);
+  await expect(card(page, LAPTOP, 'laptop-copilot-1')).toHaveAttribute('data-stale', 'offline');
+  await expect(card(page, LAPTOP, 'laptop-ask-1')).toHaveAttribute('data-stale', 'offline');
+  // Read as stale (ui.md §2.2): the failed glyph, "Offline" on line 2, and since when in the header.
+  await expect(card(page, LAPTOP, 'laptop-copilot-1').locator('.row-status')).toHaveText('Offline');
+  await expect(card(page, LAPTOP, 'laptop-copilot-1').locator('.row-glyph .glyph')).toHaveAttribute('data-glyph', 'failed');
+  await expect(sv(page, LAPTOP, 'laptop-copilot-1').locator('.status-text')).toHaveText(/^Offline\s·\s?last seen (just now|\d+s ago)$/);
+  await expect(page.locator('.session[data-host-id="demo"][data-stale]')).toHaveCount(0);
+  expect(await drawn()).toEqual(before);
+  // Still every machine's list, the laptop's tab kept and said to be offline.
   await expect(page.locator('#sessions-h')).toHaveText('Sessions on all machines');
+  await expect(tab(page, LAPTOP)).toHaveAccessibleName('Laptop, offline');
+  await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toContainText('Laptop is offline');
+  // Its question is neither listed nor counted while it may have gone.
+  await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
+
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo-laptop', true));
+  await expect(page.locator('.session[data-stale]')).toHaveCount(0);
+  expect(await drawn()).toEqual(before);
+  await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
+});
+
+test.describe('a machine back from offline', () => {
+  test.use({ viewport: { width: 1440, height: 900 }, hasTouch: false });
+  const ASK = 'laptop-ask-1';
+  const IDLE = 'laptop-copilot-1';
+  const laptop = (page, fn, arg = null) => page.evaluate(([fn, arg]) => { const m = window.agentBridgeDemo.machines['demo-laptop']; return m[fn](arg); }, [fn, arg]);
+  const setOnline = (page, on) => page.evaluate((on) => window.agentBridgeDemo.setOnline('demo-laptop', on), on);
+  const drawn = (page) => page.locator('#session-list > .session').evaluateAll((cs) => cs.map((c) => `${c.dataset.hostId}/${c.dataset.id}`));
+
+  test('takes nothing while it is away, nor until its whole list is in, and then everything again', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    await page.locator('#launch select[name="machine"]').selectOption(LAPTOP);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await go(page, 'sessions');
+    const v = sv(page, LAPTOP, IDLE);
+    await open(page, IDLE, LAPTOP);
+    await v.locator('.reply-input').fill('Push it when done');
+    await expect(v.locator('.reply .send')).toBeEnabled();
+    await expect(v.locator('.end-button')).toBeEnabled();
+    const asked = sv(page, LAPTOP, ASK);
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+
+    await setOnline(page, false);
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(v.locator('.reply .attach')).toBeDisabled();
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is offline. This can\'t be replied to from here until it is back.');
+    await expect(v.locator('.reply-input')).toHaveValue('Push it when done');
+    await expect(v.locator('.end-button')).toBeDisabled();
+    await expect(asked.locator('.question .choice').first()).toBeDisabled();
+    await expect(asked.locator('.question .answer-held')).toHaveText('Laptop is offline. This can\'t be answered from here until it is back.');
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
+    // Launch keeps the laptop picked, held.
+    await go(page, 'launch');
+    await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Laptop');
+    await expect(page.locator('#launch .launch-busy')).toHaveText('Laptop is offline. Sessions can be started on it once it is back.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeDisabled();
+    await go(page, 'sessions');
+
+    // Back in presence, its channel not open yet: reconnecting.
+    await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = 'the handshake timed out'; });
+    await setOnline(page, true);
+    await expect(card(page, LAPTOP, IDLE).locator('.row-status')).toHaveText('Reconnecting…');
+    await expect(v.locator('.reply .send')).toBeDisabled();
+
+    // Open, its snapshot not yet whole: what it sends shows, and still nothing can be sent.
+    await laptop(page, 'holdSnapshot');
+    await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
+    await tab(page, 'all').click();
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'confirming');
+    await expect(card(page, LAPTOP, IDLE).locator('.row-status')).toHaveText('Idle');
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(asked.locator('.question .choice').first()).toBeDisabled();
+    expect(await page.evaluate(() => window.agentBridgeDemo.hosts.route('demo-laptop'))).toBeNull();
+
+    await laptop(page, 'releaseSnapshot');
+    await expect(card(page, LAPTOP, IDLE)).not.toHaveAttribute('data-stale', /./);
+    await expect(v.locator('.reply .send')).toBeEnabled();
+    await expect(v.locator('.end-button')).toBeEnabled();
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
+    await go(page, 'launch');
+    await expect(page.locator('#launch .launch-busy')).toBeHidden();
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeEnabled();
+  });
+
+  test('a machine still in presence whose channel drops reads as reconnecting and takes nothing until its new list is whole', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    await page.locator('#launch select[name="machine"]').selectOption(LAPTOP);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await go(page, 'sessions');
+    const v = sv(page, LAPTOP, IDLE);
+    await open(page, IDLE, LAPTOP);
+    await v.locator('.reply-input').fill('Push it when done');
+    await expect(v.locator('.reply .send')).toBeEnabled();
+    const asked = sv(page, LAPTOP, ASK);
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+
+    await page.evaluate(() => {
+      const m = window.agentBridgeDemo.machines['demo-laptop'];
+      m.failOpen = 'the handshake timed out';
+      m.disconnect();
+    });
+    await tab(page, 'all').click();
+    await expect(card(page, LAPTOP, IDLE).locator('.row-status')).toHaveText('Reconnecting…');
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).not.toHaveAttribute('data-stale', /./);
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(v.locator('.reply .attach')).toBeDisabled();
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is reconnecting. This can be replied to once it has sent its sessions again.');
+    await expect(v.locator('.end-button')).toBeDisabled();
+    await expect(asked.locator('.question .choice').first()).toBeDisabled();
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
+    await go(page, 'launch');
+    await expect(page.locator('#launch .launch-busy')).toHaveText('Laptop is reconnecting. Sessions can be started on it once it has sent its sessions again.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeDisabled();
+    await go(page, 'sessions');
+
+    await laptop(page, 'holdSnapshot');
+    await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
+    // Picked again: tried now rather than at the next retry.
+    await tab(page, 'all').click();
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'confirming');
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is back. This can be replied to once it has sent its sessions again.');
+    await laptop(page, 'releaseSnapshot');
+    await expect(card(page, LAPTOP, IDLE)).not.toHaveAttribute('data-stale', /./);
+    await expect(v.locator('.reply .send')).toBeEnabled();
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
+  });
+
+  test('with every machine shown, a machine away stays in the launch picker, held, though another was picked since', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    const which = page.locator('#launch select[name="machine"]');
+    await which.selectOption('demo');
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await setOnline(page, false);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(which.locator(`option[value="${LAPTOP}"]`)).toHaveCount(1);
+    await which.selectOption(LAPTOP);
+    await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Laptop');
+    await expect(page.locator('#launch .launch-note')).toHaveText('Laptop is offline. Sessions can be started on it once it is back.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeHidden();
+
+    // Back, and its list whole: its choices are asked for, and it launches again.
+    await setOnline(page, true);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeEnabled();
+  });
+
+  test('a machine away, chosen on its own, still offers All to go back to, where it is kept', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await setOnline(page, false);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+    await tab(page, LAPTOP).click();
+    await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).toHaveCount(0);
+    await expect(tab(page, 'all')).toBeVisible();
+    await tab(page, 'all').click();
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).toHaveCount(1);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+  });
+
+  test('ends what ended meanwhile, never offers a question that ended, and keeps the row chosen, its pin and your order', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    const t = new Date().toISOString();
+    // A third laptop session, asking something, that will be answered at the machine while it is away.
+    await page.evaluate((t) => window.agentBridgeDemo.machines['demo-laptop'].upsert({
+      id: 'laptop-gone-q', agent: 'copilot', title: 'Prune old branches', status: 'waiting', statusSince: t, startedAt: t, updatedAt: t, processId: 7400, activity: {},
+      question: { id: 'toolu_gone', kind: 'form', message: 'Delete 12 branches?', askedAt: t, fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }] }] },
+    }), t);
+    await expect(card(page, LAPTOP, 'laptop-gone-q')).toHaveCount(1);
+    const v = await open(page, ASK, LAPTOP);
+    await v.locator('.session-header .pin').click();
+    await expect(card(page, LAPTOP, ASK)).toHaveAttribute('data-pinned', 'true');
+    const before = await drawn(page);
+    const address = await page.evaluate(() => location.hash);
+
+    await setOnline(page, false);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+    // Meanwhile at the laptop: one session ends, and another's question is answered there.
+    await laptop(page, 'remove', IDLE);
+    await page.evaluate(() => { const m = window.agentBridgeDemo.machines['demo-laptop']; const s = m.get('laptop-gone-q'); m.upsert({ ...s, status: 'idle', question: null }); });
+    // Still as it was last sent, offline.
+    await expect(card(page, LAPTOP, IDLE)).toHaveCount(1);
+    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question .choice').first()).toBeDisabled();
+
+    await laptop(page, 'holdSnapshot');
+    await setOnline(page, true);
+    await expect(card(page, LAPTOP, ASK)).toHaveAttribute('data-stale', 'confirming');
+    // The question that ended goes with the session's own new state, never answerable on the way.
+    await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question')).toHaveCount(0);
+    await laptop(page, 'releaseSnapshot');
+    await expect(card(page, LAPTOP, IDLE)).toHaveCount(0);
+    await expect(page.locator('.ended[data-id="laptop-copilot-1"]')).toHaveCount(1);
+    await expect(page.locator('.session[data-stale]')).toHaveCount(0);
+
+    const after = await drawn(page);
+    expect(new Set(after).size).toBe(after.length);
+    expect(after).toEqual(before.filter((k) => k !== `${LAPTOP}/${IDLE}`));
+    await expect(card(page, LAPTOP, ASK)).toHaveClass(/selected/);
+    await expect(card(page, LAPTOP, ASK)).toHaveAttribute('data-pinned', 'true');
+    expect(await page.evaluate(() => location.hash)).toBe(address);
+    expect(await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].answerLog)).toEqual([]);
+  });
 });
 
 test('with every machine shown, the launch panel asks which machine to launch on, and starts from the one last used', async ({ page }) => {
@@ -269,22 +471,30 @@ test('a launch resent when its machine comes back does not take the picker from 
   const which = panel.locator('select[name="machine"]');
   await which.selectOption(LAPTOP);
   await expect(panel.locator('[name="agent"]')).toBeVisible();
-  // The laptop drops away just as Launch is pressed: the launch waits for it.
+  // The laptop drops away just after Launch is pressed, its outcome not yet back: the launch
+  // waits for it, and Launch takes nothing more while the laptop is away (#269).
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].holdResponses());
+  await panel.getByRole('button', { name: 'Launch' }).click();
+  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(1);
   await page.evaluate(() => {
     const laptop = window.agentBridgeDemo.machines['demo-laptop'];
     laptop.failOpen = 'the handshake timed out';
     laptop.disconnect();
   });
   await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toBeAttached();
-  await panel.getByRole('button', { name: 'Launch' }).click();
   await expect(panel).toHaveAttribute('data-launch', 'waiting');
+  await expect(panel.getByRole('button', { name: 'Launch' })).toBeDisabled();
   await which.selectOption('demo');
   await expect(panel.locator('.launch-title')).toHaveText('Start a session on Demo machine');
 
   await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
   await go(page, 'sessions');
   await tab(page, 'all').click();
-  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(1);
+  // Resent, with the same request, once the laptop's new channel has sent its whole list.
+  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(2);
+  const log = await machine(page, LAPTOP, 'launchLog');
+  expect(log[1].request).toBe(log[0].request);
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].releaseResponses());
   await go(page, 'launch');
   // Drawn again, as any later change in the machines would.
   await page.evaluate(() => window.agentBridgeDemo.retarget());

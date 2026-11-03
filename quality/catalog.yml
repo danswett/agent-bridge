@@ -1,0 +1,857 @@
+# The test catalog: every suite this repository runs, or plans to run, and where it runs.
+# quality/README.md explains the rings and the fields. This file is the source of truth for
+# test selection (quality/README.md §4): CI's plan job reads it to choose which jobs run, and fails
+# when a test project, spec folder or workflow job is not listed here, so the catalog cannot
+# silently rot.
+#
+# Fields (R: required on every suite; otherwise optional):
+#   id         R  stable name, used by the selector, reports and issues
+#   kind       R  unit | component | process | integration | e2e | live | ui | perf | security | a11y | static | packaging
+#   ring       R  the earliest ring that runs it (0 inner loop, 1 PR, 2 main, 3 nightly/candidate,
+#                 4 release); every later ring runs it too
+#   select     R  affected: rings 0-1 run it only when a change reaches it; always: every run of its ring
+#   platforms  R  win-x64 | win-arm64 | linux-x64 | linux-arm64 | macos-arm64 | ios-sim | ios-device | browser
+#   runner     R  where the suite's earliest ring runs it: local (a developer machine, and the
+#                 inner loop) | hosted (GitHub-hosted runners) | lab (Azure VMs, quality/README.md §6)
+#                 | staging | device. A local suite runs on hosted runners from ring 1 on (where:
+#                 names the job); lab, staging and device suites run only there
+#   status     R  exists | partial | planned
+#   project       for .NET suites: the directory of the test project, relative to the repository
+#                 root, holding exactly one .csproj (the selector fails if it holds none or more).
+#                 The selector derives what reaches it from ProjectReferences. A perf suite names
+#                 the benchmark or tool project it runs instead, which isn't a test project
+#   triggers      path globs that make it affected (for .NET suites, in addition to the graph)
+#   command       how to run it; required once status is exists. Prose ("see ci.yml ...") marks
+#                 a suite only CI can run
+#   where         the workflow job that runs it today; required once status is exists, unless a
+#                 person runs it (runner lab, staging or device, with a command saying how). In
+#                 ci.yml it also gates the job: on a pull request, a job runs only when a selected
+#                 suite names it here
+#   baseline      measured 2026-11-02 (win-x64, local, Release); any of: tests, skipped, seconds,
+#                 files (for suites counted by spec file rather than test)
+#   security_sensitive
+#                 default false: a change reaching it adds the security suites and the
+#                 security-review label (quality/README.md §2, AGENTS.md rule 5)
+#
+# A suite with select: affected needs project or triggers (or both), or nothing can select it.
+#
+# Test categories (xUnit traits, #375): Category=Process starts real OS processes,
+# Category=Network binds real sockets, ports or pipes, and Category=HomeAssistantIntegration
+# needs a disposable HA. Untagged means in-process. A class is tagged whole only when every test
+# in it qualifies, and a test may carry both Process and Network. Ring 0 runs the .NET suites
+# with --filter "Category!=Process&Category!=Network&Category!=HomeAssistantIntegration".
+
+global_triggers:
+  # A change here can affect any suite, so rings 0-1 run everything they hold.
+  - AgentBridge.slnx
+  - nuget.config
+  - global.json
+  - '**/Directory.Build.*'
+  - '**/Directory.Packages.props'
+  - .config/dotnet-tools.json       # coverage tools (#363)
+  - build/coverage.settings.xml
+  - .github/workflows/**
+  - .github/actions/**              # composite actions the workflows use (#433's install-trivy)
+  - quality/**
+
+no_test_paths:
+  # Changes only here select only suites whose triggers name them: docs-links (below) for
+  # Markdown, nothing for the rest; never the sentinels. docs/protocol/** is not here:
+  # the protocol specs are contracts, and reach protocol, pwa-unit and apple-core.
+  - '*.md'
+  - docs/*.md
+  - docs/design/**
+  - .gitignore
+  - LICENSE
+  - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
+  - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
+
+suites:
+  # ---------------------------------------------------------------- .NET unit and component
+  - id: protocol
+    kind: unit
+    ring: 0
+    select: always            # a sentinel: cheap, and every client depends on it
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Protocol.Tests
+    triggers: [docs/protocol/**]
+    # Replays docs/protocol/vectors, and fails while the committed vectors are stale (#454).
+    command: dotnet test tests/AgentBridge.Protocol.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 571, seconds: 3 }
+    status: exists
+
+  - id: transport
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true  # AGENTS.md rule 5: escalates to the security suites
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Transport.Tests
+    command: dotnet test tests/AgentBridge.Transport.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 122, skipped: 2, seconds: 13 }
+    status: exists
+
+  - id: local-api
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Local.Tests
+    command: dotnet test tests/AgentBridge.Local.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 26, seconds: 1 }
+    status: exists
+
+  - id: host-core
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Host.Core.Tests
+    command: dotnet test tests/AgentBridge.Host.Core.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 402, seconds: 7 }
+    status: exists
+
+  - id: host-delivery
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Host.Delivery.Tests
+    # The slowest project, for its ~3,300 git processes and the injector typing into real
+    # consoles. All are tagged Process (#375): filtered, 152 tests in 2.9 s. Ring 1 runs all of it.
+    command: dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 208, seconds: 106 }
+    status: exists
+
+  - id: host
+    kind: component
+    ring: 0
+    select: affected
+    security_sensitive: true  # signed commands, caller guard, task access
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Host.Tests
+    # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
+    # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**]
+    # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
+    command: dotnet test tests/AgentBridge.Host.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 609, seconds: 30 }
+    status: exists
+
+  - id: hooks
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Hooks.Tests
+    command: dotnet test tests/AgentBridge.Hooks.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 28, seconds: 6 }
+    status: exists
+
+  - id: homeassistant
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.HomeAssistant.Tests
+    # The AuthBackoff classes bound the suite: AuthBackoffTests, AuthBackoffRecordTests,
+    # AuthBackoffBanTests and AuthBackoffCallerTests (#496).
+    command: dotnet test tests/AgentBridge.HomeAssistant.Tests -c Release --filter "Category!=HomeAssistantIntegration"
+    where: ci.yml product
+    baseline: { tests: 520, skipped: 15, seconds: 24 }
+    status: exists
+
+  - id: app-core
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.App.Tests
+    command: dotnet test tests/AgentBridge.App.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 515, seconds: 30 }
+    status: exists
+
+  - id: rehearsal-tool
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Rehearsal.Tests
+    # ChecklistTests reads both docs: every checklist command is one the tool accepts.
+    triggers: [docs/parity-checklist.md, docs/parity.md]
+    command: dotnet test tests/AgentBridge.Rehearsal.Tests -c Release
+    where: ci.yml product
+    baseline: { tests: 72, seconds: 3 }
+    status: exists
+
+  - id: quality-tool
+    kind: unit
+    ring: 0
+    select: affected
+    # The selector and its catalog checks (quality/README.md §4). A change to it can change any
+    # selection, so its own tests run before anything trusts it.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Quality.Tests
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release
+    where: ci.yml product
+    status: exists
+
+  - id: catalog-check
+    kind: static
+    ring: 1
+    select: always
+    # CI's plan job: this catalog is complete (every test project, workflow job and PWA test
+    # folder is in it, and every tracked file is claimed by a rule), then the selection that
+    # gates every other ci.yml job. quality-gate is the one check that sums them up. It runs on
+    # every pull request, docs-only ones too, since nothing else would run without it.
+    platforms: [linux-x64]
+    runner: hosted
+    command: dotnet run --project tools/AgentBridge.Quality -c Release -- check
+    where: ci.yml plan, quality-gate
+    status: exists
+
+  - id: mac-host
+    kind: component
+    ring: 1
+    select: affected
+    # The same .NET test projects on macOS, including ManagedTmux* from codex/mac-tmux-delivery.
+    # It runs the whole solution, so any product or test change reaches it.
+    platforms: [macos-arm64]
+    runner: hosted
+    triggers: [src/**, tests/**, tools/AgentBridge.*/**]
+    command: dotnet test AgentBridge.slnx -c Release
+    status: planned
+
+  # ---------------------------------------------------------------- shipped binaries, as they ship
+  - id: injector-aot
+    kind: process
+    ring: 1
+    select: affected
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    # It runs this project's InjectorIntegrationTests against the published worker, so whatever
+    # reaches the project (its tests, the delivery code, Protocol) reaches this too.
+    project: tests/AgentBridge.Host.Delivery.Tests
+    triggers: [src/AgentBridge.Injector/**, src/AgentBridge.Host.Delivery/**]
+    command: see ci.yml "The NativeAOT injector types into a real console"
+    where: ci.yml product
+    status: exists
+
+  - id: hook-aot
+    kind: process
+    ring: 1
+    select: affected
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    # It runs this project's HookProcessTests against the published hook, so whatever reaches
+    # the project reaches this too.
+    project: tests/AgentBridge.Hooks.Tests
+    triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
+    command: see ci.yml "The NativeAOT hook replies and spools as an agent runs it"
+    where: ci.yml product
+    status: exists
+
+  - id: build-scripts
+    kind: unit
+    ring: 1
+    select: affected
+    platforms: [win-x64]
+    runner: hosted
+    triggers: [build/**]
+    command: pwsh build/test-shadow-week.ps1; pwsh build/test-publish-prerelease.ps1
+    where: ci.yml product
+    status: exists
+
+  - id: relay-container
+    kind: packaging
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, .dockerignore]
+    command: see ci.yml "Relay container builds and serves"
+    where: ci.yml product
+    status: exists
+
+  - id: app-package
+    kind: packaging
+    ring: 1
+    select: affected
+    # Publish, pack, release-vs-dev host identity, the published app's self-test, the
+    # installer's silent per-user install and the installed copy's self-test, publish dry run.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    triggers: [src/**, build/pack-app.ps1, build/app-*.ps1, build/host-identity.ps1, build/publish-prerelease.ps1, build/release-notes.ps1, design/**]
+    command: see ci.yml app job
+    where: ci.yml app
+    status: exists
+
+  - id: app-publish
+    kind: packaging
+    ring: 2
+    select: always
+    # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
+    # packages become one GitHub pre-release, which installed copies update from.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    command: see ci.yml publish-gate and publish (main only)
+    where: ci.yml publish-gate, publish
+    status: exists
+
+  - id: app-upgrade
+    kind: packaging
+    ring: 2
+    select: always
+    # Install the latest published release, then update to this build through Velopack's
+    # delta, then self-test; and uninstall leaves nothing behind. Today only a fresh install
+    # is tested, but every installed copy updates by delta.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    status: planned
+
+  # ---------------------------------------------------------------- integration
+  - id: ha-integration
+    kind: integration
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    project: tests/AgentBridge.HomeAssistant.Tests
+    triggers: [src/AgentBridge.HomeAssistant/**, tools/ha-ci/**]
+    command: see ci.yml ha-integration (disposable HA + Mosquitto containers, Category=HomeAssistantIntegration)
+    where: ci.yml ha-integration
+    baseline: { tests: 15 }
+    status: exists
+
+  - id: ha-contract-drift
+    kind: integration
+    ring: 3
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    command: see ha-contract-drift.yml (daily, against agent-ha-bridge main)
+    where: ha-contract-drift.yml
+    status: exists
+
+  - id: ha-contract-fixtures
+    kind: integration
+    ring: 1
+    select: affected
+    # ha-contract-drift.yml on a pull request: the exporter that records the HA contract
+    # fixtures, run at the fixtures' pinned agent-ha-bridge commit, must reproduce them exactly.
+    platforms: [win-x64]
+    runner: hosted
+    triggers: [tools/ha-contract/**, tests/AgentBridge.HomeAssistant.Tests/Fixtures/**]
+    command: see ha-contract-drift.yml (pull_request)
+    where: ha-contract-drift.yml
+    status: exists
+
+  - id: agent-drift
+    kind: integration
+    ring: 3
+    select: always
+    # The ha-contract-drift idea for the agents themselves: install the newest Copilot CLI,
+    # Claude Code and Codex in a lab VM, record fresh transcripts and hook payloads from a
+    # scripted session, and run host-core's parsers over them. An agent release that changes
+    # its transcript format then fails here, not on a real machine.
+    platforms: [win-x64, linux-x64, macos-arm64]
+    runner: lab
+    status: planned
+
+  # ---------------------------------------------------------------- docs
+  - id: docs-links
+    kind: static
+    ring: 1
+    select: affected
+    # The only suite a docs-only change selects: relative links and anchors in Markdown resolve,
+    # so a renamed doc or heading can't strand AGENTS.md, status.md or the catalog's references.
+    # Offline: web links are not fetched, so a site being down never fails a PR. Advisory for
+    # now: findings are warnings on the run, and the job stays green.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: ['**/*.md']
+    command: lychee --offline --include-fragments --no-progress '**/*.md'
+    where: ci.yml light
+    status: exists
+
+  # ---------------------------------------------------------------- PWA and design
+  - id: design-gen
+    kind: static
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
+    runner: local
+    # Not only what generate.mjs writes (--check compares each with design/: the PWA's design/,
+    # index.html, manifest and icons, the app's Design/ and Assets icons, DesignLayout.cs), but
+    # what the tests in tools/design-gen/test read: the PWA's CSS, scripts and service worker and
+    # the app's XAML and C# (no undefined tokens or hard-coded colours), pack-app.ps1's --icon,
+    # and ui.md's motion section. So all of pwa/ and the app; the job takes under a minute.
+    triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, build/pack-app.ps1, docs/design/ui.md]
+    command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
+    where: ci.yml light
+    status: exists
+
+  - id: pwa-unit
+    kind: unit
+    ring: 0
+    select: affected
+    platforms: [browser]
+    runner: local
+    triggers: [pwa/**, docs/protocol/**]
+    # CI runs it twice: as below, then with Node's coverage for the pwa-coverage artifact (#363).
+    # The coverage run skips only the markdown pathological-input timing test, which coverage
+    # slows past its limit; the first run still enforces it. Both run in light, beside the
+    # Playwright jobs rather than before them (#457).
+    command: cd pwa && node --test "test/unit/*.test.mjs"
+    where: ci.yml light
+    baseline: { files: 27 }
+    status: exists
+
+  - id: pwa-ui
+    kind: ui
+    ring: 1
+    select: affected
+    platforms: [browser]
+    runner: hosted
+    triggers: [pwa/**, design/**]
+    # The e2e specs, which this runs too, skip themselves (and pass) without the dev stack built.
+    # CI splits it (#457): pwa-ui runs Chromium in one job and WebKit in three shards, leaving
+    # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
+    command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+    where: ci.yml pwa-ui
+    baseline: { files: 25 }
+    status: exists
+
+  - id: pwa-e2e
+    kind: e2e
+    ring: 1
+    select: affected
+    platforms: [browser]
+    runner: hosted
+    # The dev stack links files from other spikes into S4.Protocol and S4.Relay: S2's Noise (C#
+    # and the browser's), and S6's device keys. The spikes aren't in AgentBridge.slnx, so the
+    # project graph can't see those links; they're named here.
+    triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
+    command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
+    where: ci.yml pwa-e2e
+    status: exists
+
+  - id: pwa-site-csp
+    kind: security
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [pwa/tools/**, pwa/index.html, .github/workflows/pages.yml]
+    command: see ci.yml light "The Pages build accepts the live relay and its blob store, and refuses bad ones"
+    where: ci.yml light
+    status: exists
+
+  - id: pwa-pages
+    kind: packaging
+    ring: 2
+    select: affected
+    # pages.yml on main: builds the site (the PWA at /app/ and the spikes' pages), checks its CSP
+    # names the relay and blob store, and publishes it to GitHub Pages.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: ['spikes/**/web/**', pwa/**, design/fonts/**, .github/workflows/pages.yml]
+    command: see pages.yml deploy
+    where: pages.yml deploy
+    status: exists
+
+  - id: pwa-iphone
+    kind: e2e
+    ring: 4
+    select: always
+    # The installed PWA on a real iPhone: Web Push on the lock screen, answer from it, back
+    # navigation, safe areas. WebKit in Playwright is not iOS Safari for push and install.
+    platforms: [ios-device]
+    runner: device
+    command: manual checklist, about 10 minutes (to be written in phase 4 as quality/checklists/iphone-pwa.md)
+    status: planned
+
+  # ---------------------------------------------------------------- Apple clients
+  - id: apple-core
+    kind: unit
+    ring: 0
+    select: affected
+    # The SwiftPM package on the codex/apple-* branches: AgentBridgeAppleCoreTests and
+    # AgentBridgeClientStateTests (about 35 files), including the shared Noise vectors. It should
+    # also replay docs/protocol/vectors, as C# and the PWA do (that folder's README says how).
+    platforms: [macos-arm64]
+    runner: local
+    triggers: [apple/**, docs/protocol/**]
+    command: cd apple && swift test
+    status: planned
+
+  - id: apple-build
+    kind: packaging
+    ring: 1
+    select: affected
+    platforms: [macos-arm64, ios-sim]
+    runner: hosted
+    triggers: [apple/**]
+    command: apple/scripts/verify.sh   # swiftformat lint, xcodegen, xcodebuild Mac and iOS simulator
+    status: planned
+
+  - id: apple-ui
+    kind: ui
+    ring: 2
+    select: always
+    platforms: [macos-arm64, ios-sim]
+    runner: hosted
+    command: xcodebuild test (XCUITest) against a demo host, as the Windows app's --self-test does
+    status: planned
+
+  # ---------------------------------------------------------------- relay and infra
+  - id: infra-bicep
+    kind: static
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [infra/**]
+    command: az bicep build -f infra/main.bicep
+    where: relay.yml infra
+    status: exists
+
+  - id: relay-staging-smoke
+    kind: e2e
+    ring: 2
+    select: affected
+    platforms: [linux-x64]
+    runner: staging
+    triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, tools/AgentBridge.RelaySmoke/**, infra/**]
+    # build makes the image staging deploys and smoke-tests.
+    command: see relay.yml build and staging "Smoke test"
+    where: relay.yml build, staging
+    status: exists
+
+  - id: relay-production-smoke
+    kind: e2e
+    ring: 4
+    select: always
+    platforms: [linux-x64]
+    runner: staging
+    # rollback is production's other path: an earlier image, rolled out and smoke-tested the same way.
+    command: see relay.yml production and rollback
+    where: relay.yml production, rollback
+    status: exists
+
+  # ---------------------------------------------------------------- spikes (kept honest, not product)
+  - id: spikes
+    kind: static
+    ring: 1
+    select: affected
+    platforms: [win-x64, linux-x64]
+    runner: hosted
+    triggers: [spikes/**]
+    command: see ci.yml spikes, spikes-linux
+    where: ci.yml spikes, spikes-linux
+    status: exists
+
+  # ---------------------------------------------------------------- live, on disposable machines
+  - id: lab-e2e-simulated
+    kind: e2e
+    ring: 3
+    select: always
+    # The packaged app and host installed on clean lab VMs, driven end to end (launch, ask,
+    # answer from the PWA through the staging relay, reply, attach, stop, transfer between
+    # machines) with simulated agents that write real-format transcripts and run the real hook.
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
+    runner: lab
+    status: planned
+
+  - id: lab-e2e-agents
+    kind: live
+    ring: 3
+    select: always
+    # The same scenarios with the real Copilot CLI, Claude Code and Codex, on test accounts.
+    platforms: [win-x64, linux-x64, macos-arm64]
+    runner: lab
+    command: agent-bridge-rehearsal soak run (tools/AgentBridge.Rehearsal), generalized from shadow-soak-vm.ps1
+    status: partial
+
+  - id: winui-ui
+    kind: ui
+    ring: 2
+    select: always
+    # UI Automation tests of the published WinUI app beyond the self-test's one path: every
+    # page, keyboard-only use, themes and high contrast, pictures compared with a tolerance.
+    platforms: [win-x64]
+    runner: hosted
+    status: planned
+
+  - id: migrate-rollback
+    kind: live
+    ring: 4
+    select: always
+    # docs/parity-checklist.md phases A-G from the S0 snapshot, its automated rows by
+    # agent-bridge-rehearsal, the rest by checklist.
+    platforms: [win-x64]
+    runner: lab
+    command: docs/parity-checklist.md
+    status: partial
+
+  - id: shadow-soak
+    kind: live
+    ring: 4
+    select: always
+    platforms: [win-x64]
+    runner: lab
+    command: build/shadow-soak-vm.ps1 -Status (gate PASS)
+    status: exists
+
+  # ---------------------------------------------------------------- security
+  - id: codeql
+    kind: security
+    ring: 1
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    # Blocking only if the analysis breaks, or (code scanning's own check) on new high or
+    # critical alerts. Swift joins once apple/ lands on main. The workflow runs on every pull
+    # request that isn't a draft (ready for review runs it), but analyses only the languages the
+    # pull request changes (its `languages` job, #459); main pushes and the weekly run analyse all
+    # three.
+    command: see codeql.yml (csharp build-mode none, javascript-typescript, actions)
+    where: codeql.yml languages, analyze
+    status: exists
+
+  - id: dependency-review
+    kind: security
+    ring: 1
+    select: always
+    platforms: [linux-x64]
+    runner: hosted
+    # The review blocks on high or critical vulnerabilities in newly added dependencies, and needs
+    # the repository's dependency graph (on since 2026-11-03). The audit is advisory: existing ones.
+    # Both run in one job, on one runner. Not on a draft: ready for review runs it.
+    command: see dependencies.yml (dependency-review-action; dotnet list package --vulnerable; npm audit --omit=dev)
+    where: dependencies.yml review
+    status: exists
+
+  - id: secret-scan
+    kind: security
+    ring: 0
+    select: always
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
+    runner: local
+    # GitHub secret scanning with push protection is on for the repository; the hook is opt-in
+    # (AGENTS.md, Secrets) and flags 13 known false positives (test keys, Azure role ids) only
+    # when a commit changes those lines.
+    # Install the hook once per clone with `pre-commit install`; the command below scans what is
+    # staged, as the hook does at each commit.
+    triggers: [.pre-commit-config.yaml]
+    command: pre-commit run gitleaks
+    where: GitHub secret scanning with push protection (a repository setting, not a workflow job)
+    status: exists
+
+  - id: container-scan
+    kind: security
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
+    # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
+    # ones go to code scanning from main only. relay.yml scan holds staging and production back.
+    command: see ci.yml product (trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+    where: ci.yml product, relay-image-sarif; relay.yml scan
+    status: exists
+
+  - id: iac-scan
+    kind: security
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [infra/**]
+    # Advisory until #441's findings are fixed or suppressed in infra/ps-rule.yaml.
+    command: see iac-scan.yml (PSRule 2.9.0 and PSRule.Rules.Azure 1.47.0 with infra/ps-rule.yaml)
+    where: iac-scan.yml psrule
+    status: exists
+
+  - id: workflow-lint
+    kind: security
+    ring: 1
+    select: affected
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: [.github/workflows/**, .github/actions/**]
+    # actionlint blocks; shellcheck and zizmor are advisory until their existing findings (#360) are fixed.
+    # Drafts run it too: it's part of the fast ring (quality/README.md §2).
+    command: see workflow-lint.yml (actionlint, shellcheck, zizmor)
+    where: workflow-lint.yml lint
+    status: exists
+
+  - id: fuzz
+    kind: security
+    ring: 3
+    select: always
+    # Coverage-guided fuzzing of everything that parses bytes from another party: protocol
+    # JSON, the local pipe's framing, relay frames, Noise messages, the hook's stdin, transcript
+    # lines, HA MQTT payloads. A crash becomes a committed regression input under quality/fuzz/.
+    platforms: [linux-x64]
+    runner: hosted
+    command: SharpFuzz + libFuzzer, 30 minutes per target nightly
+    status: planned
+
+  - id: relay-dast
+    kind: security
+    ring: 3
+    select: always
+    platforms: [linux-x64]
+    runner: staging
+    command: OWASP ZAP baseline and API scan against the staging relay; the PWA's CSP and headers
+    status: planned
+
+  - id: supply-chain
+    kind: security
+    ring: 2
+    select: always
+    platforms: [win-x64, win-arm64, linux-x64]
+    runner: hosted
+    # CycloneDX SBOMs on every build; provenance and SBOM attestations on main (#433). Still to do:
+    # a check that an installed copy's binaries match them.
+    command: see ci.yml app (trivy fs --format cyclonedx), ci.yml attest and relay.yml scan, attest (actions/attest)
+    where: ci.yml app, attest; relay.yml scan, attest
+    status: partial
+
+  # ---------------------------------------------------------------- accessibility
+  - id: a11y-pwa
+    kind: a11y
+    ring: 1
+    select: affected
+    platforms: [browser]
+    runner: hosted
+    triggers: [pwa/**, design/**]
+    # @axe-core/playwright on every view in light, dark and forced colors, plus keyboard-only and
+    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. Known issues #365,
+    # #366, #369, #370 and #371 are allowlisted by rule, selector and issue.
+    command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
+    where: ci.yml pwa-ui
+    baseline: { files: 3, tests: 58 }
+    status: exists
+
+  - id: a11y-contrast
+    kind: a11y
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
+    runner: local
+    triggers: [design/**, tools/design-gen/**]
+    command: node --test tools/design-gen/test/contrast.test.mjs
+    where: ci.yml light
+    status: exists
+
+  - id: a11y-winui
+    kind: a11y
+    ring: 2
+    select: always
+    platforms: [win-x64]
+    runner: hosted
+    command: Axe.Windows scan of each page from the app's --self-test, failing on new issues
+    status: planned
+
+  - id: a11y-apple
+    kind: a11y
+    ring: 2
+    select: always
+    platforms: [macos-arm64, ios-sim]
+    runner: hosted
+    command: XCUIApplication.performAccessibilityAudit() in each apple-ui test
+    status: planned
+
+  - id: a11y-screen-reader
+    kind: a11y
+    ring: 4
+    select: always
+    platforms: [win-x64, macos-arm64, ios-device]
+    runner: device
+    command: manual checklist with Narrator, and VoiceOver on Mac and iPhone (to be written in phase 4 as quality/checklists/screen-reader.md)
+    status: planned
+
+  # ---------------------------------------------------------------- performance
+  - id: bench-micro
+    kind: perf
+    ring: 2
+    select: always
+    # BenchmarkDotNet: Noise handshake and transport, protocol serialize and parse, upsert
+    # building, transcript tailing, session ordering, markdown (quality/perf.md). Ring 2 records
+    # numbers (perf.yml, main and by hand); ring 3 is to compare on the lab's quiet machine,
+    # since hosted runners vary too much to gate on. A dry run in ring 1 is still to come.
+    platforms: [linux-x64, win-x64]
+    runner: hosted
+    project: tests/AgentBridge.Benchmarks
+    # Prose, so run.ps1 skips it: the <placeholders> would not parse as a command.
+    command: see perf.yml perf (dotnet run -c Release --project tests/AgentBridge.Benchmarks -- --filter '*' --summary <file.json>)
+    where: perf.yml perf
+    status: exists
+
+  - id: perf-hook
+    kind: perf
+    ring: 2
+    select: affected
+    # Every agent waits on the hook at every event: its start-to-reply time, cold and warm,
+    # with the host up and down (quality/perf.md). Recorded on main by perf.yml; the ring 1
+    # budget comes once it is set from these baselines. win-arm64 is not measured yet.
+    platforms: [win-x64, linux-x64]
+    runner: hosted
+    project: tests/AgentBridge.PerfHook
+    triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
+    command: see perf.yml perf (dotnet publish src/AgentBridge.Hook -c Release -r <rid> -o <dir>; dotnet run -c Release --project tests/AgentBridge.PerfHook -- --hook <dir>/agent-bridge-host-hook[.exe] --out <file.json>)
+    where: perf.yml perf
+    status: exists
+
+  - id: perf-host
+    kind: perf
+    ring: 3
+    select: always
+    # Replays the recorded transcript corpus (design.md §5.9: 449 sessions) through the host
+    # and measures start time, idle and busy CPU and memory, discovery time, frames and bytes
+    # per minute against the §5.9 load model, and the 40 KiB upsert budget.
+    platforms: [win-x64, linux-x64, macos-arm64]
+    runner: lab
+    status: planned
+
+  - id: perf-relay-load
+    kind: perf
+    ring: 3
+    select: always
+    # Simulated users at the §5.9 load model, scaled (S9): connections, frames/s, p95 latency,
+    # replica memory, blob throughput, and a rolling restart under load.
+    platforms: [linux-x64]
+    runner: staging
+    status: planned
+
+  - id: perf-clients
+    kind: perf
+    ring: 3
+    select: always
+    # PWA: Lighthouse CI budgets and a 300-session list; WinUI and Apple: cold start and
+    # scrolling a 300-session list (apple-reading-performance.md's fixtures).
+    platforms: [browser, win-x64, macos-arm64, ios-sim]
+    runner: hosted
+    status: planned

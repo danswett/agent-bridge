@@ -42,6 +42,47 @@ current client shows. Its fixtures also feed the shadow gate (#40). If sign-off 
 | U7 | #168 | PWA platform layer: shortcut hints, safe areas, back navigation | U5 | `pwa/js/platform.js` (new) |
 | U8 | #176 | Delegates in both clients: strip, tab, inspector, sheet, attributed questions | S1, U5, U6 | `pwa/`, `src/AgentBridge.App` |
 | U9 | #232 | Motion (ui.md §5.3). Phase 1: the spec, `motion` tokens and the generator's `--ab-motion-*` and `AbMotion*` outputs, unused by either client. Phase 2: the PWA and the app implement the catalogue, one PR each | Phase 1: none. Phase 2: U5 for the PWA, U6 for the app, and the owner's sign-off of §5.3 (given 2026-11-02) | Phase 1: `docs/design/ui.md`, `design/`, `tools/design-gen` and its generated files. Phase 2: `pwa/`; `src/AgentBridge.App` |
+| U10 | #253 | One row, one question (ui.md §6.1, §6.2, §6.3, §6.4, §7, §8, §9; signed off 2026-11-02; reasoning in [proposals/253-attention.md](proposals/253-attention.md)). The Needs you lane becomes a toggle that filters the list. The question is drawn and answered only in the conversation, which keeps resolved questions as history. Tools and the delegate inspector link to it. An approval's notification only opens its question. Three slices, below | The spec (#302). U2, U5 and U8 for the PWA; U2, U6 and U8 for the app; #260 for Apple | `pwa/`; `src/AgentBridge.App`, `src/AgentBridge.App.Core`, `tests/AgentBridge.App.Tests`; `apple/` |
+
+**U10's three slices** (#253). Each is its own PR, and each is security-sensitive under
+AGENTS.md, since it changes what a remote device approves on a machine. So each takes an
+independent security review before it merges.
+- **U10a, PWA:**
+  - the lane (`ui/needs-you-view.js`) becomes the Needs you toggle, with the filter in the
+    view model beside the order;
+  - the count moves to the model, and `AppBadge` reads it;
+  - the question card keeps resolved questions; it already draws approvals as §6.4 says,
+    exactly as written and escaped (#429);
+  - the Now line gives way while the session waits;
+  - Tools and the delegate inspector link to the question.
+- **U10b, Windows app:** the same in `App.Core` and the XAML. The card already draws approvals
+  as §6.4 says (#323), so `NeedsYouEntry`'s inline gate goes with the lane. The toasts already follow the rule:
+  #377 (#372) gave an approval's toast Open only, with no Approve once or Deny
+  (`ToastXml.Question`), while other questions keep their buttons. The
+  tray and the Sessions badge read the model's count.
+- **U10c, Apple (#260, @welshofer):** in #260 if it is still open, else a follow-up PR:
+  - the "Needs you · N" `Section` goes, and the `needsOnly` toggle becomes the sidebar item on
+    macOS and the filter menu's first item on iOS;
+  - the Dock badge, the menu bar extra and the iOS badge read N;
+  - the menu bar extra names the waiting sessions, each opening its question;
+  - the question view follows §6.4;
+  - an approval's notification has no actions.
+- **Tests in every slice:**
+  - U2's refusals carry over as tests of the question card, case for case, each now asserting
+    how the card draws it: bidi controls, zero-width and other default-ignorable characters,
+    controls but newline and tab, a CR, private-use and unassigned code points, U+2028/2029 and
+    variation selectors drawn as visible escapes in the order they run;
+  - right-to-left letters escaped (`\u05D0`), on every line of a multi-line command;
+  - a link, a fence, a table and the fence markers drawn as written, never as Markdown, and
+    the card offering no Copy and still offering Approve once;
+  - nothing in the list or in an approval's notification sends an answer.
+  - Beyond those, the sentences in the proposal's §6, among them:
+    - the count is every machine's;
+    - turning the filter on moves no row;
+    - a waiting row opens at its question with focus on its heading;
+    - the same question id updates its card in place;
+    - a resolved question shows this device's answer record, or "No longer waiting";
+    - the pressed toggle keeps the `needs` glyph visible in high contrast.
 
 **U8 part 1 landed early, in the PWA (#176):** its cards show only the main agent's own
 response and reasoning (`activity.source` and `own`), and a compact Delegates block in today's
@@ -64,6 +105,7 @@ U3 ──► U4 ──┴─► U5 ──► U7
             └─► U6 ──────────────► U8
                  └───────────────► U9 app
 U9 spec ─────────────────────────► U9 PWA, U9 app
+U10 spec (#302) ─────────────────► U10a PWA (after U5, U8), U10b app (after U6, U8), U10c Apple (#260)
 ```
 
 - **S1, U1 and U3 can start together.** They touch different code.
@@ -72,6 +114,8 @@ U9 spec ────────────────────────
   wait for U5 and U6, which rewrite the markup they would animate.
 - **U5 and U6 can run together.** They touch different clients, but each is a large PR, so
   keep each one to its own client.
+- **U10's slices can run together.** They touch different clients. Each lands after the
+  delegate work in its client (U8), since both change the inspector and the question card.
 - **U1 and U2 both touch the list. Do them in order.** Put their logic in the store or view
   model, not the markup, because U5 and U6 rewrite the markup. Keep the visual change in
   the old layout minimal.
@@ -113,7 +157,7 @@ U9 spec ────────────────────────
 
 The track is done when:
 
-- **#164–#168, #173–#180, #232 and #84** are closed.
+- **#164–#168, #173–#180, #232, #253 and #84** are closed.
 - **Both clients** show every surface in ui.md §6, in all three themes, at all three
   widths.
 - **Status in both clients** follows ui.md §2.2, with tests named after each rule.

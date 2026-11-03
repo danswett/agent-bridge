@@ -76,9 +76,9 @@ public static partial class LaunchProtocol
         var prompt = launch.Prompt ?? "";
         if (Encoding.UTF8.GetByteCount(prompt) > MaxPrompt) { return $"the prompt is longer than {MaxPrompt / 1024} KiB; send the rest as an attachment or a reply once it has started"; }
         // The agent takes the prompt as its first input, so the rules for a reply hold: one
-        // beginning with / or ! would run as a command on the machine.
-        var first = prompt.FirstOrDefault(c => !char.IsWhiteSpace(c) && !char.IsControl(c));
-        return first switch
+        // beginning with / or ! would run as a command on the machine, however many invisible
+        // characters come first (Invisible).
+        return Invisible.First(prompt) switch
         {
             '/' => "a prompt cannot start with /, which the agent would run as a command; type commands at the machine",
             '!' => "a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine",
@@ -150,6 +150,7 @@ public sealed record LaunchedWith
     public string? Model { get; init; }
     public string? Effort { get; init; }
     public string? Context { get; init; }
+    [Strict(Strictness.Security)]
     public required string Permissions { get; init; }
     // For a transferred session: where it came from. Resume is its new id here.
     public LaunchedTransfer? Transfer { get; init; }
@@ -157,6 +158,7 @@ public sealed record LaunchedWith
 
 public sealed record LaunchedTransfer
 {
+    [Strict(Strictness.Identity)]
     public required string From { get; init; }
     public required string Session { get; init; }
     public required long Bytes { get; init; }
@@ -179,6 +181,7 @@ public sealed record LaunchOptions
 // agent's own default, which a client offers as well and sends as "".
 public sealed record LaunchAgent
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required string Label { get; init; }
     public required AgentKind Kind { get; init; }
@@ -203,6 +206,8 @@ public sealed record LaunchTuning
 
 public sealed record LaunchWorkspace
 {
+    // What session.launch names it by.
+    [Strict(Strictness.Identity)]
     public required string Label { get; init; }
     public required string Path { get; init; }
     // A new session here starts in a git worktree of its own.
@@ -211,9 +216,11 @@ public sealed record LaunchWorkspace
 
 public sealed record ResumableSession
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required AgentKind Agent { get; init; }
     // The launcher that resumes it.
+    [Strict(Strictness.Identity)]
     public required string Launcher { get; init; }
     public required string Title { get; init; }
     public string? Cwd { get; init; }
@@ -225,5 +232,7 @@ public sealed record LaunchDefaults
 {
     public string? Agent { get; init; }
     public string? Workspace { get; init; }
+    // What a launch runs with unless the person picks otherwise: never guessed.
+    [Strict(Strictness.Security)]
     public required string Permissions { get; init; }
 }

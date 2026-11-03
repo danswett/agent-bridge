@@ -3,7 +3,9 @@
 How much of each coding agent's allowance is gone, and what a client says about a machine
 beside its name. An extension of [v1-sessions.md](v1-sessions.md): the same channel,
 framing and message rules. C# records are in `src/AgentBridge.Protocol/Usage.cs`, and the
-PWA mirrors them in `pwa/js/usage.js`.
+PWA mirrors them in `pwa/js/usage.js`. Test vectors for the records are in
+[`vectors/usage.json`](vectors/README.md); [v1-sessions.md](v1-sessions.md#test-vectors) says
+how to regenerate them.
 
 It carries what agent-ha-bridge's usage sensors and status card show (its
 `hooks/daemon-usage.ps1` and the card's `AgentBridgeUsageCard`), read from the same places

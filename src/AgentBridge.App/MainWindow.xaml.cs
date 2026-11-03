@@ -37,6 +37,8 @@ public sealed partial class MainWindow : Window
         Launch = launch;
         this.placementFile = selfTest ? null : placementFile;
         InitializeComponent();
+        Motion.Banner(Banner);
+        Motion.Banner(DiscoveryHeld);
         Handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
         CurrentHandle = Handle;
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AgentBridge.ico"));
@@ -70,6 +72,7 @@ public sealed partial class MainWindow : Window
         {
             active = e.WindowActivationState != WindowActivationState.Deactivated;
             SyncSessionsOnScreen();
+            if (active) { Reactivated(); }
             if (active && maximizeWhenShown && AppWindow.Presenter is OverlappedPresenter p)
             {
                 maximizeWhenShown = false;
@@ -153,6 +156,10 @@ public sealed partial class MainWindow : Window
     void OnCheckMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Check();
     void OnInstallMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Update?.Install();
     void OnForgetMachine(object sender, RoutedEventArgs e) => RowOf(sender)?.Offline?.Press();
+
+    // A window brought back from behind another (not minimised, so still on screen) shows its
+    // question and Needs you under a pointer aimed at what covered it: they wait (AnswerGuard).
+    internal void Reactivated() { if (SessionsView.Visibility == Visibility.Visible) { SessionsView.Reactivated(); } }
 
     // The Sessions page's tool history is asked for only while it is on screen: its page shown, in
     // a window that is neither hidden in the tray nor minimised.

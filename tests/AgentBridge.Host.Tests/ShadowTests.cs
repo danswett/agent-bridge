@@ -432,6 +432,41 @@ public sealed class ShadowTests : IDisposable
         Assert.Null(Running(null, counted: 2));
     }
 
+    // #174: agent-ha-bridge counts background agents and commands from Copilot's transcript alone,
+    // so a Claude or Codex session's delegates, and a Claude session's background commands, are
+    // ones only the host counts. Labelled intentional; anything else about the counts still counts.
+    [Fact]
+    public void Claude_and_Codex_delegates_and_Claude_commands_the_daemon_never_counts_are_labelled_and_any_other_count_difference_still_counts()
+    {
+        ShadowSession Host(AgentKind agent, int agents, int shells, int listed) => HostSide.From(new Session
+        {
+            Id = Id, Agent = agent, Status = SessionStatus.Idle, StatusSince = Fixture.T0, UpdatedAt = Fixture.T0,
+            Activity = new Activity { Background = Background.Of(agents, shells) },
+            Subagents = listed == 0 ? null : [.. Enumerable.Range(0, listed).Select(i => new Subagent { Id = "a" + i, Kind = SubagentKind.Background, Status = SubagentStatus.Working })],
+        });
+        ShadowSession Daemon(string agent, int agents = 0, int shells = 0) => new()
+        {
+            Id = Id, Agent = agent, Status = "idle", Agents = agents, Shells = shells,
+            AgentIds = [.. Enumerable.Range(0, agents).Select(i => "t" + i)], ShellIds = [.. Enumerable.Range(0, shells).Select(i => "s" + i)],
+        };
+        string? Known(ShadowSession d, ShadowSession h, string kind) =>
+            Assert.Single(ShadowCompare.Compare(View(d), View(h)).Differences, x => x.Kind == kind).Known;
+
+        Assert.Equal(ShadowCompare.CopilotOnlyBackground, Known(Daemon("claude"), Host(AgentKind.Claude, 2, 0, 2), ShadowKinds.BackgroundAgents));
+        Assert.Equal(ShadowCompare.CopilotOnlyBackground, Known(Daemon("codex"), Host(AgentKind.Codex, 1, 0, 1), ShadowKinds.BackgroundAgents));
+        Assert.Equal(ShadowCompare.CopilotOnlyBackground, Known(Daemon("claude"), Host(AgentKind.Claude, 0, 1, 0), ShadowKinds.BackgroundShells));
+        // Copilot's are read on both sides: a difference there is the parser comparison's.
+        Assert.Null(Known(Daemon("copilot"), Host(AgentKind.Copilot, 1, 0, 1), ShadowKinds.BackgroundAgents));
+        Assert.Null(Known(Daemon("copilot"), Host(AgentKind.Copilot, 0, 1, 0), ShadowKinds.BackgroundShells));
+        // A daemon counting any, a count the host's list does not back, and Codex commands the
+        // host does not read either.
+        Assert.Null(Known(Daemon("claude", agents: 1), Host(AgentKind.Claude, 2, 0, 2), ShadowKinds.BackgroundAgents));
+        Assert.Null(Known(Daemon("claude"), Host(AgentKind.Claude, 2, 0, 0), ShadowKinds.BackgroundAgents));
+        Assert.Null(Known(Daemon("codex"), Host(AgentKind.Codex, 0, 1, 0), ShadowKinds.BackgroundShells));
+        // Equal counts are no difference at all.
+        Assert.DoesNotContain(ShadowCompare.Compare(View(Daemon("claude")), View(Host(AgentKind.Claude, 0, 0, 0))).Differences, x => x.Kind.StartsWith("background.", StringComparison.Ordinal));
+    }
+
     // The live shadow's first minutes (#40): a session's subagents' shells counted by the daemon as
     // its own (agent-ha-bridge#261) are a known difference, tallied apart, and never a mismatch.
     [Fact]

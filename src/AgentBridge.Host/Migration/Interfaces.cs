@@ -44,7 +44,8 @@ public interface IMigrationHost
 {
     Task<bool> RunningAsync(CancellationToken cancellationToken);
 
-    // Null once the host has been asked to restart; otherwise why it could not be.
+    // Null once the host has been asked to restart and has gone (its replacement is on its way);
+    // otherwise why it could not be.
     Task<string?> RestartAsync(CancellationToken cancellationToken);
 }
 

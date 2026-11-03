@@ -2,9 +2,10 @@
 #
 # A modified version of Iosevka (SIL OFL 1.1, Copyright (c) 2015-2026 Renzhi Li) built
 # from the IoskeleyMono configuration (SIL OFL 1.1, Copyright (c) 2025 Ahmed Hatem),
-# with our own changes: a tailed lowercase l (to tell l, 1 and I apart in agent IDs and
-# hashes) and a 560 width (between Iosevka's 500 and IoskeleyMono's 600, so tool lists
-# and the inspector fit a little more). Build: see README.md beside this file.
+# with our own change: a tailed lowercase l (to tell l, 1 and I apart in agent IDs and
+# hashes). The width is IoskeleyMono's 600, close to Cascadia Mono's and Consolas'
+# proportions: an earlier 560 build looked condensed beside the system UI face (#295).
+# Build: see README.md beside this file.
 
 [buildPlans.AgentBridgeMono]
 family = "Agent Bridge Mono"
@@ -147,7 +148,7 @@ menu = 700
 css = 700
 
 [buildPlans.AgentBridgeMono.widths.Normal]
-shape = 560
+shape = 600
 menu = 5
 css = "normal"
 

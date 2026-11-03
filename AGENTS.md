@@ -51,9 +51,21 @@ Delegated work: when a coordinating session hands work to delegates, each delega
 opens one PR per slice and reports "#<n> ready at <sha>". **Only the coordinator
 merges.**
 
+### Before each push
+
+**Every push costs every session.** Each push re-runs CI and Copilot's review, which all sessions share from one fixed pool of concurrent runners; when it's full, everyone's jobs and reviews queue, and reviews time out. So before each push:
+- run `pwsh quality/run.ps1` (see Tests);
+- review your own diff locally with a code-review agent, and fix what it finds;
+- batch every fix for a review round into one push, rather than a push per comment.
+
+Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset of CI), and mark it ready when it's done. Never push only to re-trigger CI: re-run the failed job with `gh run rerun <run id> --failed`.
+
 ## Tests
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
+- Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
+- Before a push, `pwsh quality/run.ps1` runs the suites your change reaches on this machine; `-Explain` shows what it chose and why.
+- Where api.nuget.org is blocked, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet mirror's index.json, and run.ps1 restores and audits through it ([quality/README.md §4](quality/README.md#4-choosing-tests-from-what-changed)); never commit the mirror into nuget.config.
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.
 - Never weaken or skip existing tests to get green.
@@ -86,6 +98,8 @@ Never print a key, token, connection string or password into output, logs, commi
 text or issues. If a command would echo one, redirect it to a file you never read back. A
 leaked signing key once forced a production rotation. This repository is public: keep
 home-network details, IP addresses and personal account credentials out of it.
+
+To have gitleaks check each commit for secrets before it is made, run `pre-commit install` once per clone (needs [pre-commit](https://pre-commit.com); see `.pre-commit-config.yaml`).
 
 ## Style
 

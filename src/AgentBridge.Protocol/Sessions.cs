@@ -287,12 +287,13 @@ public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 // design G5), for a client to say so rather than only leave the controls out. Instance: this
 // run of the host, new each time it starts, so a client can tell a reconnect to the same process
 // from a restart.
-public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
+public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
 
-public sealed record HelloResult(int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
+public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
 public sealed record Session
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }
@@ -343,7 +344,9 @@ public sealed record Activity
     public Background? Background { get; init; }
     // Which sub-agent wrote the top-level response and reasoning, each on its own: they stay
     // last-writer-wins for older clients, and a main agent's reply can sit beside a
-    // delegate's reasoning. Absent while both are the main agent's own.
+    // delegate's reasoning. Absent while both are the main agent's own. Strict: read as absent,
+    // a delegate's text would be shown as the main agent's.
+    [Strict(Strictness.Security)]
     public ActivitySource? Source { get; init; }
     // The main agent's own text for each field Source attributes to a sub-agent, so a newer
     // client never loses the main agent's answer. Sent only with Source.
@@ -353,7 +356,9 @@ public sealed record Activity
 // The sub-agent ids that wrote the top-level text; a field left out is the main agent's.
 public sealed record ActivitySource
 {
+    [Strict(Strictness.Security)]
     public string? Response { get; init; }
+    [Strict(Strictness.Security)]
     public string? Reasoning { get; init; }
 }
 
@@ -385,6 +390,7 @@ public enum SubagentOutcome { Done, Failed }
 // agent } adds its own response, reasoning and tool history.
 public sealed record Subagent
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public string? Parent { get; init; }
     public required SubagentKind Kind { get; init; }
@@ -424,6 +430,7 @@ public sealed record Background
 
 public sealed record ToolCall
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required string Name { get; init; }
     public string? Summary { get; init; }
@@ -432,56 +439,74 @@ public sealed record ToolCall
     public DateTimeOffset? EndedAt { get; init; }
 }
 
+// Everything a person decides on is [Strict] (Security): the question this id answers, what it
+// asks, how and with which choices, whether a device can answer it, and who asks. A question
+// any of that cannot be read from is dropped, never shown with part of it guessed or left out.
 public sealed record Question
 {
+    [Strict(Strictness.Security)]
     public required string Id { get; init; }
+    [Strict(Strictness.Security)]
     public required QuestionKind Kind { get; init; }
+    [Strict(Strictness.Security)]
     public required string Message { get; init; }
+    [Strict(Strictness.Security)]
     public IReadOnlyList<Field> Fields { get; init; } = [];
     public required DateTimeOffset AskedAt { get; init; }
     // Set when the host had to cut the message or drop the fields to fit the size budget;
     // a client then says to answer at the machine instead.
+    [Strict(Strictness.Security)]
     public bool? Truncated { get; init; }
     // Set when no host can answer this prompt from another device (a Claude permission
     // prompt, which agent-ha-bridge only ever mirrored; a Copilot permission prompt of a kind
     // the host does not drive, or on a host with remote approval off): a client shows it with
     // no controls and says it is waiting at the machine.
+    [Strict(Strictness.Security)]
     public bool? AnswerAtMachine { get; init; }
     // The sub-agent that asked, when it is not the session's own question (status
     // precedence rule 2). Absent for the main agent's.
+    [Strict(Strictness.Security)]
     public string? Agent { get; init; }
 }
 
 public sealed record Field
 {
+    [Strict(Strictness.Identity)]
     public required string Name { get; init; }
+    [Strict(Strictness.Security)]
     public string? Title { get; init; }
+    [Strict(Strictness.Security)]
     public string? Description { get; init; }
+    [Strict(Strictness.Security)]
     public required FieldType Type { get; init; }
+    [Strict(Strictness.Security)]
     public IReadOnlyList<Option>? Options { get; init; }
+    [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
 }
 
-public sealed record Option(string Value, string? Label = null);
+public sealed record Option([property: Strict(Strictness.Security)] string Value, [property: Strict(Strictness.Security)] string? Label = null);
 
 // One page of sessions.list. Next is absent on the last page. DiscoveryHeld is present while
 // the host's discovery is incomplete (DiscoveryHeld below).
-public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null, DiscoveryHeld? DiscoveryHeld = null);
+public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
 // Why the host's last discovery pass could not account for everything, so it is holding
 // whatever it would decide from a session's absence: removing sessions of those agents,
 // offering or starting resumes of them, and reclaiming worktrees. Agents are the ones held;
 // sessions of the others are removed and resumed as usual. Reason is for a person, in words
 // ("an unrecognised copilot process (pid 4120)"), within MaxReasonBytes.
-public sealed record DiscoveryHeld(string Reason, IReadOnlyList<AgentKind> Agents)
+// Strict where it is held, and its agents whole: read as absent or as fewer agents, a hold the
+// host still has would read as lifted, and a client would take sessions of a held agent as gone.
+public sealed record DiscoveryHeld([property: Strict(Strictness.Identity)] string Reason, [property: Strict(Strictness.Security)] IReadOnlyList<AgentKind> Agents)
 {
     public const int MaxReasonBytes = 512;
 }
 
 // discovery.changed: the hold began, changed or ended (DiscoveryHeld absent).
-public sealed record DiscoveryChanged(DiscoveryHeld? DiscoveryHeld = null);
+public sealed record DiscoveryChanged([property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
 public sealed record ListRequest(string? Cursor = null);
 
@@ -490,9 +515,9 @@ public sealed record ListRequest(string? Cursor = null);
 public sealed record SubscribeResult(long Revision, int Count);
 
 // DiscoveryHeld: as on sessions.list, as of the end of the snapshot.
-public sealed record SessionsSynced(long Revision, DiscoveryHeld? DiscoveryHeld = null);
+public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
-public sealed record SessionRemoved(string Id);
+public sealed record SessionRemoved([property: Strict(Strictness.Identity)] string Id);
 
 // session.answer. Fields holds one value per field name, shaped by the field's type (see
 // the contract); Text answers a question without fields. Request is the client's UUID for

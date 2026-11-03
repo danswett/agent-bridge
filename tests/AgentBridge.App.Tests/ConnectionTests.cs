@@ -14,16 +14,28 @@ public sealed class ConnectionTests : IAsyncLifetime
     HostConnection connection = null!;
     // Snapshots read in full (sessions.synced), counted from the first connection.
     int syncs;
+    // The connection's states and log as they came, timed, for a failure seen only on CI (#465).
+    readonly List<string> seen = [];
+    LinkState? lastState;
 
     public Task InitializeAsync()
     {
         host.Sessions.Add(Make.Session("s1", response: "hello"));
         host.Start();
-        connection = host.Connect(start: false);
+        void See(string what) { lock (seen) { seen.Add($"{DateTime.UtcNow:HH:mm:ss.fff} {what}"); } }
+        connection = host.Connect(start: false, log: See);
         connection.Sessions.Synced += () => Interlocked.Increment(ref syncs);
+        connection.Changed += () =>
+        {
+            if (connection.State == lastState) { return; }
+            lastState = connection.State;
+            See($"{connection.State}: {connection.StateDetail}");
+        };
         connection.Start();
         return Task.CompletedTask;
     }
+
+    string Seen() { lock (seen) { return $"now {DateTime.UtcNow:HH:mm:ss.fff}, {connection.State}, connection {connection.ConnectionNumber}; {string.Join("; ", seen)}"; } }
 
     public async Task DisposeAsync()
     {
@@ -90,6 +102,98 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null && connection.Sessions.Get("s1") is null, "the upsert and removal");
         await Wait.UntilAsync(() => connection.Usage.Agents.Count == 1 && connection.Status!.Relay.State == RelayState.Connected, "usage and status");
+    }
+
+    // #446: a record the app could not read ended the event pump, and the connection with it; the
+    // snapshot after the reconnect sent the same record, so one bad session kept the app
+    // reconnecting for good. Now that message alone is refused, logged once for its kind.
+    [Fact]
+    public async Task A_message_the_app_cannot_read_is_refused_and_the_events_after_it_still_arrive()
+    {
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Get("s1") is not null, "the snapshot");
+        var number = conn.ConnectionNumber;
+
+        await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["agent"] = "copilot" });
+        await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
+        // What the host sent stays out of the log: the time converter's own message quotes it.
+        await host.SendAsync(HostOps.StatusEvent, new System.Text.Json.Nodes.JsonObject { ["startedAt"] = "the owner's 4242" });
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        // Missing a required field other than its id, and one of the wrong type: kept, as the PWA keeps it.
+        var partial = JsonSerializer.SerializeToNode(Make.Session("s3", status: SessionStatus.Working), ProtocolJson.Options)!.AsObject();
+        partial.Remove("status");
+        partial["title"] = 5;
+        await host.SendAsync(Events.SessionUpsert, partial);
+
+        await Wait.UntilAsync(() => conn.Sessions.Get("s2") is not null && conn.Sessions.Get("s3") is not null, "the events after the refused ones");
+        Assert.Equal((number, LinkState.Connected), (conn.ConnectionNumber, conn.State));
+        Assert.Equal((SessionStatus.Idle, (string?)null), (conn.Sessions.Get("s3")!.Status, conn.Sessions.Get("s3")!.Title));
+        Assert.Single(logged, l => l.StartsWith($"refused a {Events.SessionUpsert} ", StringComparison.Ordinal));
+        Assert.Single(logged, l => l.StartsWith($"refused a {HostOps.StatusEvent} ", StringComparison.Ordinal));
+        Assert.DoesNotContain(logged, l => l.Contains("4242", StringComparison.Ordinal));
+    }
+
+    // A sessions.synced read as anything (null, a list) ended the snapshot: the sessions it had not
+    // sent were removed and the discovery hold lifted, on a record the app could not read.
+    [Fact]
+    public async Task A_snapshot_end_the_app_cannot_read_ends_nothing_and_the_real_one_still_does()
+    {
+        await using var slow = new FakeHost();
+        slow.Sessions.Add(Make.Session("s1"));
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        slow.HoldSynced = hold;
+        slow.Start();
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(slow.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Get("s1") is not null, "the snapshot's session");
+
+        await slow.SendAsync(Events.SessionsSynced, new System.Text.Json.Nodes.JsonArray());
+        await slow.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        await Wait.UntilAsync(() => conn.Sessions.Get("s2") is not null, "the event after it");
+
+        Assert.False(conn.Sessions.Complete);
+        Assert.Single(logged, l => l.StartsWith($"refused a {Events.SessionsSynced} ", StringComparison.Ordinal));
+        hold.SetResult();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the snapshot's own end");
+    }
+
+    // The subscribe's own result (revision, count) is not used; read strictly, one the app could not
+    // read ended the connection, and every reconnect asked again and never showed a session.
+    [Fact]
+    public async Task A_subscribe_result_the_app_cannot_read_still_brings_the_sessions()
+    {
+        await using var odd = new FakeHost { SubscribeReply = new System.Text.Json.Nodes.JsonObject { ["revision"] = "seven" } };
+        odd.Sessions.Add(Make.Session("s1"));
+        odd.Start();
+        await using var conn = odd.Connect();
+
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete && conn.Sessions.Get("s1") is not null, "the snapshot");
+        Assert.Equal(1L, conn.ConnectionNumber);
+    }
+
+    // Usage and update state are read on connecting, before the sessions are subscribed. One the
+    // app could not read ended the connection there, and every connection after read the same
+    // thing: it reconnected for good and never showed a session.
+    [Fact]
+    public async Task Usage_or_update_state_the_app_cannot_read_is_refused_and_the_sessions_still_arrive()
+    {
+        await using var odd = new FakeHost();
+        odd.Capabilities.Add(UpdateProtocol.Capability);
+        odd.Sessions.Add(Make.Session("s1"));
+        odd.On(UsageProtocol.Subscribe, _ => "none");
+        odd.On(UpdateProtocol.Subscribe, _ => new System.Text.Json.Nodes.JsonArray());
+        odd.Start();
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(odd.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Get("s1") is not null, "the snapshot");
+        Assert.Equal(1L, conn.ConnectionNumber);
+        Assert.Single(logged, l => l.StartsWith($"refused a {UsageProtocol.Subscribe} ", StringComparison.Ordinal));
+        Assert.Single(logged, l => l.StartsWith($"refused a {UpdateProtocol.Subscribe} ", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -189,11 +293,32 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_the_host_announced_is_still_listed_when_the_app_reads_the_sessions_again()
+    {
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > 0 && connection.Sessions.Get("s1") is not null, "the snapshot");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null, "the announced session");
+        var before = Volatile.Read(ref syncs);
+
+        // As after a gap in the events or a reconnect: a host's snapshot lists what it announced,
+        // and the fake's did not, so a test's announced session went from the app again (#101).
+        connection.Resync();
+
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > before, "the sessions read again");
+        Assert.NotNull(TestUi.Read(() => connection.Sessions.Get("s2")));
+    }
+
+    [Fact]
     public async Task With_no_host_running_the_app_says_so()
     {
+        var stopping = DateTime.UtcNow;
         await host.StopAsync();
+        var stopped = DateTime.UtcNow;
 
-        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running");
+        // Timed out once on Windows CI in a loaded run (#465), and not reproduced since: the timeout
+        // says what the connection went through, so the cause need not be guessed at.
+        await Wait.UntilAsync(() => connection.State == LinkState.NotRunning, "not running",
+            why: () => $"stop asked {stopping:HH:mm:ss.fff}, done {stopped:HH:mm:ss.fff}; {Seen()}");
     }
 
     [Fact]

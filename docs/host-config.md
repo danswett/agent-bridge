@@ -16,7 +16,8 @@ follow.
 {
   "version": 1,
   "permissions": {
-    "remoteApproval": true
+    "remoteApproval": true,
+    "trustedPeers": false
   },
   "push": { "enabled": true },
   "delivery": { "readOnly": false },
@@ -74,6 +75,7 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 |---|---|---|
 | `version` | `1` | The schema. A file with a higher version, written by a newer Agent Bridge, is not guessed at: remote approval and launching are both off until the host is updated |
 | `permissions.remoteApproval` | `true` | Copilot permission prompts may be approved or denied from another device ([host-answers.md](host-answers.md)) |
+| `permissions.trustedPeers` | `false` | Transitional full-key remote authorization floor (#402), for disposable-host evaluation only. Restart-only; requires explicitly seeded pins. See [trusted peers](#trusted-peers-disposable-host-foundation) |
 | `delivery.readOnly` | `false` | A host that only shows sessions: it takes no answer, reply, stop, launch, permission approval or transfer from any device, whatever agent-ha-bridge is doing, and says so in `hello` (`machine.readOnly`, "this is a read-only comparison host"), refusing each with that reason. The shadow host beside agent-ha-bridge sets it ([host-shadow.md](host-shadow.md)), so a daemon restart never leaves it acting. Without it, a host is held only while agent-ha-bridge runs (design G5) |
 | `push.enabled` | `true` | Notifications (Web Push) to the account's phones. `false` sends none and takes no subscription: `hello` leaves `push` out, and `push.subscribe` fails saying the machine doesn't send notifications. For a machine that should be seen but not heard from, as the shadow host beside agent-ha-bridge ([host-shadow.md](host-shadow.md#on-the-phone--relay)) |
 | `launch.enabled` | `true` | Launching from other devices at all. `false` leaves `sessions.launch` out of `hello` |
@@ -124,7 +126,9 @@ Comments and trailing commas are allowed. Absent and `null` mean the default.
 How a file that is wrong is read: one that cannot be read or parsed turns remote approval,
 launching, notifications and agent usage off and makes the host read-only ("this host's config.json has a
 problem"); a `permissions.remoteApproval`, `push.enabled` or `delivery.readOnly` that is not
-`true` or `false` does too. In `usage`, a `publish` that is not `true` or `false`, or a `usage` that is
+`true` or `false` does too. An unreadable, invalid or newer-schema file also enables
+trusted-peer enforcement rather than silently downgrading it; a malformed
+`permissions.trustedPeers` does the same. In `usage`, a `publish` that is not `true` or `false`, or a `usage` that is
 not an object, turns usage off; a pace that is not a number in range keeps its default; and an entry of
 `copilotAccounts` that is not a login, repeats one, or is past the third is left out and keeps its place,
 so the logins after it keep their rows and sensors. An empty string (`""`) is a place kept unused on
@@ -135,6 +139,98 @@ wrong turns launching off. In `homeAssistant`, any value that is wrong turns the
 and is said in the log. In `devBox`, a `keepAwake` that is not `true` or `false`, or a `devBox` that
 is not an object, leaves keep-awake off; an interval that is not a whole number from 1 is 15. A
 setting someone may have meant as off is never read as on.
+
+## Trusted peers: disposable-host foundation
+
+`permissions.trustedPeers` is **off by default** and read only at startup. This
+transitional host-only floor (#402) is for disposable-host evaluation, not production
+enrollment or authorization to migrate a live machine. Disabled mode retains the
+legacy relay-admission authority model and is not suitable for scoped services.
+
+In enforcing mode, relay presence, names, intro kinds and short routing IDs grant
+no authority. Every relay channel, in either handshake direction, needs a locally
+pinned full Noise static public key. Every request is checked again:
+
+| Local role | Allowed remote operations |
+|---|---|
+| `service` | `hello`, `sessions.list`, `session.get`, `sessions.subscribe` |
+| `host` | `hello`, `usage.get` (including shared readings), `session.transfer` |
+| `person` | Existing explicitly registered person operations, except `session.transfer` |
+| Unpinned | None |
+
+Unknown operations are denied. `hello` advertises only the intersection of role and
+host capabilities. All existing read-only, folder approval, MAC and replay checks
+still apply. Transfer carriers and outbound usage/transfer peers need host pins;
+transfer and folder-trust signers independently need person pins at the machine
+whose authority they request. A person's approval at another host is insufficient.
+Historical usage from devices without current host pins is discarded.
+This boundary covers relay channels, not the existing HA MQTT connector or local
+pipe: those retain their own caller and command authorization checks.
+
+Pins are kept in version-1 `trusted-peers.json`, bound to this host's full key and
+signed-in account. Each has a full canonical SEC1 base64url key, role, monotonically
+increasing generation, explicit future expiry and revocation state. There are at most
+256 pins. Missing, invalid, truncated or newer-schema state denies all authority
+until an explicit reset. Before each mutation, including reset, a separate
+`trusted-peers.blocked` marker is durably written. Only a successful commit clears
+it (a blocked store keeps it). A failed or interrupted mutation therefore denies
+all authority across restart, even when the previous grant file remains intact.
+Recovery requires the guarded owner reset, which creates an empty new trust epoch;
+do not delete the marker by hand. If even the marker cannot be written, the API and
+log explicitly report **"revocation NOT durable; do not restart"**: the process
+denies access, but restart safety cannot be promised until a successful owner reset
+after repairing storage. The mode switch is in `config.json`, not the trust store:
+deleting the trust store cannot turn enforcement off.
+
+Pin management is currently an API-only developer foundation through the fresh,
+guarded **app-only local pipe**, not a CLI bypass, remote operation, enrollment UI
+or import from relay presence:
+
+| Operation | Data |
+|---|---|
+| `host.peers.status` | None; returns mode, any store problem and pins |
+| `host.peers.reset` | None; explicit empty trust epoch for the signed-in account |
+| `host.peers.put` | `{publicKey, role, expiresAt}`; full key and explicit UTC expiry |
+| `host.peers.revoke` | `{publicKey}`; full key already pinned here |
+
+Missing or wrongly typed key, role or expiry fields return a field-specific error
+before the requested mutation. Store validation still checks the full curve key,
+known role and future expiry. Expiry timestamps must include `Z` or a numeric UTC
+offset; offset-less timestamps and bare dates are rejected, not interpreted in the
+host's local time zone.
+
+The owner must transfer each full key over an independently authenticated,
+owner-controlled path, including host keys. A key learned from the relay or a
+short fingerprint is not approval. Reset invalidates every old lease. Reapproval
+creates a new generation and requires a new channel; it cannot upgrade an old one.
+
+Open channels and feeds are revalidated on pin-management changes and every 250 ms;
+incoming frames, dispatch and outgoing encrypted sends also check the lease. Active
+expiry has a monotonic deadline. This deliberately strict pilot latches deny-all on
+any observed backward wall-clock movement, including clock corrections, until an
+owner reset. Trust-file edits are not live-reloaded: use the guarded API, not file
+deletion/editing, for revocation. A restarted host reloads and validates the store.
+
+After restart, rollback is detected only relative to the last saved trust mutation
+or recorded expiry, not the most recent access. Ordinary access does not persist
+the clock watermark, even on active hosts. A clock rollback plus restart can
+therefore extend wall-clock expiry without restoring any files; use revocation to
+end access durably. No periodic durable clock checkpoint is implemented.
+
+Saved push subscriptions bind the full person key, trust epoch and generation.
+Enforcing startup drops legacy/unbound subscriptions; an authorized person must
+register again. Enqueue, delivery and retry paths recheck the grant; revocation,
+expiry or reset removes unauthorized subscriptions and queued notices. Reapproval
+cannot revive an old subscription or queue. A push already handed to the sender
+cannot be recalled, nor can a completed action be undone; revalidation does not
+promise transactional cancellation of work already admitted.
+
+This is not a boundary against arbitrary processes running as the same OS user,
+which can read/change that user's files. Full-store or whole-machine rollback
+cannot be detected from those rolled-back files alone. Restoring a backup requires
+owner-controlled reset and reapproval, not automatic old-grant activation. Signed
+account rosters, relay credentials/revocation anchors, HA key storage, recovery,
+enrollment and production enablement remain separately gated.
 
 ## Approving a workspace at the machine
 

@@ -604,7 +604,7 @@ These rows have no step. Each has its reason. A row moves into a step when its i
 | §16 "Dev Box keep-awake" | Implemented (#47), but only a real Dev Box has the Dev Box agent and a pending stop to clear: checked live there, not on a Windows VM ([host-config.md](host-config.md#dev-box-keep-awake)) |
 | §17 "A new machine joins" | Missing (#55) |
 | §17 "Control requests validated" | Intentionally different: covered offline by the request tests |
-| §18 "HA auth backoff" | A step would have to get the VM refused, or banned, by Home Assistant on purpose. Covered offline by `AuthBackoffTests`; the way back from a ban is in [ha-connector.md](ha-connector.md#troubleshooting) |
+| §18 "HA auth backoff" | A step would have to get the VM refused, or banned, by Home Assistant on purpose. Covered offline by `AuthBackoffTests.cs`; the way back from a ban is in [ha-connector.md](ha-connector.md#troubleshooting) |
 | §18 "Generated Lovelace", §18 "Publication authority", §18 "Entity-registry pinning", §18 "255-character text", §18 "HA image store", §18 "HA REST and WebSocket", §18 "Pairing through HA", §18 "Detached-entity repair", §18 "The test runner's HTTP guard" | N/A: Home Assistant plumbing the design replaces. The old dashboard itself is exercised in B and F |
 
 ## The §6.3 invariants, by step

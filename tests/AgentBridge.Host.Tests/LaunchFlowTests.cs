@@ -15,24 +15,27 @@ using Xunit;
 // and real git for isolated workspaces. Starting an agent is the one thing faked: the fake
 // starter plays the agent by writing the session folder and process an agent would have, so
 // no test ever starts Copilot, Claude or Codex. Nothing here is ever typed into a console.
-[Trait("Category", "Network")]
-public sealed partial class LaunchFlowTests : IAsyncLifetime
+// Their fixture; the tests are in LaunchFlowTests and, so that xUnit runs them side by side with it
+// rather than after it, in LaunchTrustFlowTests and LaunchTransferFlowTests (#479).
+public abstract partial class LaunchFlowFixture : IAsyncLifetime
 {
-    static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    private protected static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
 
-    readonly Fixture f = new();
-    readonly FakeProbe probe = new();
-    readonly FakeScreens screens = new();
-    readonly FakeStarter starter;
-    readonly FakeLocator locator = new();
-    readonly FakeRunner agency = new();
-    TestRelay relay = null!;
-    SessionSource source = null!;
-    Device host = null!;
-    Device client = null!;
-    string app = "", api = "", elsewhere = "";
+    private protected readonly Fixture f = new();
+    private protected readonly FakeProbe probe = new();
+    private protected readonly FakeScreens screens = new();
+    private protected readonly FakeStarter starter;
+    private protected readonly FakeLocator locator = new();
+    private protected readonly FakeRunner agency = new();
+    // What the launch service logged, as the host's log would have it.
+    private protected readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
+    private protected TestRelay relay = null!;
+    private protected SessionSource source = null!;
+    private protected Device host = null!;
+    private protected Device client = null!;
+    private protected string app = "", api = "", elsewhere = "";
 
-    public LaunchFlowTests() => starter = new FakeStarter(f);
+    private protected LaunchFlowFixture() => starter = new FakeStarter(f);
 
     public async Task InitializeAsync()
     {
@@ -69,7 +72,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
+    private protected LaunchConfig Config(Func<LaunchConfig, LaunchConfig>? change = null)
     {
         var config = LaunchConfig.Default with
         {
@@ -79,7 +82,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
         CopilotHome = f.CopilotHome,
         ClaudeHome = f.ClaudeHome,
@@ -101,27 +104,27 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         LocalNow = now ?? (() => DateTime.Now),
         Transfers = fetcher ?? transfers,
         TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-    }, attachments: attachments);
+    }, log: logged.Enqueue, attachments: attachments);
 
-    void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
+    private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
 
-    async Task<SecureChannel> OpenAsync()
+    private protected async Task<SecureChannel> OpenAsync()
     {
         await client.Relay.WaitForPeerAsync(p => p.Id == host.Id, Patience);
         return await client.Hub.OpenAsync(host.Id);
     }
 
-    static async Task<JsonElement> RequestAsync(SecureChannel ch, string op, object data)
+    private protected static async Task<JsonElement> RequestAsync(SecureChannel ch, string op, object data)
     {
         var response = await ch.RequestAsync(op, data);
         Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
         return response.GetProperty("result");
     }
 
-    sealed record Outcome(string Outcome_, string? Reason, string? Session, JsonElement Launched);
+    private protected sealed record Outcome(string Outcome_, string? Reason, string? Session, JsonElement Launched);
 
-    static async Task<Outcome> LaunchAsync(SecureChannel ch, object? settings = null, string? request = null)
+    private protected static async Task<Outcome> LaunchAsync(SecureChannel ch, object? settings = null, string? request = null)
     {
         var data = JsonSerializer.SerializeToNode(settings ?? new { }, ProtocolJson.Options)!.AsObject();
         data["request"] = request ?? Guid.NewGuid().ToString();
@@ -130,9 +133,13 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         return new Outcome(S("outcome")!, S("reason"), S("session"), r.TryGetProperty("launched", out var l) ? l.Clone() : default);
     }
 
-    static async Task<string[]> CapabilitiesAsync(SecureChannel ch) =>
+    private protected static async Task<string[]> CapabilitiesAsync(SecureChannel ch) =>
         [.. (await RequestAsync(ch, Ops.Hello, new { })).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()!)];
+}
 
+[Trait("Category", "Network")]
+public sealed partial class LaunchFlowTests : LaunchFlowFixture
+{
     [Fact]
     public async Task Hello_offers_launching_only_while_agent_ha_bridge_is_not_running_and_the_host_can_start_agents_here()
     {
@@ -528,6 +535,9 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "again" })).Outcome_);
         Assert.False(Directory.Exists(first));
         Assert.True(Worktrees.IsManaged(starter.Specs[1].WorkingDirectory));
+        // Unlocked once it registers, as the first was. Until then git is still at work in the
+        // fixture, and its lock file went from under DisposeAsync's sweep (#101).
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(starter.Specs[1].WorkingDirectory)!, "locked"))));
     }
 
     sealed class NoSessions : IWorktreeUsage
@@ -714,8 +724,11 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         Assert.Equal(Id, Assert.Single(source.Snapshot()).Id);
         Assert.DoesNotContain(options.GetProperty("resumable").EnumerateArray(), r => r.GetProperty("id").GetString() == Id);
     }
+}
 
-    void Resumable(string id, string cwd, string summary, DateTimeOffset? updated = null)
+public abstract partial class LaunchFlowFixture
+{
+    private protected void Resumable(string id, string cwd, string summary, DateTimeOffset? updated = null)
     {
         var dir = Directory.CreateDirectory(Path.Combine(f.CopilotHome, "session-state", id)).FullName;
         File.WriteAllText(Path.Combine(dir, "workspace.yaml"), $"id: {id}\ncwd: '{cwd}'\nsummary: {summary}\n"
@@ -724,7 +737,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
 
     // A Claude session as its own store keeps it: a project folder's transcript, named by its
     // first prompt's AI title.
-    void ClaudeResumable(string id, string cwd, string title)
+    private protected void ClaudeResumable(string id, string cwd, string title)
     {
         var project = Directory.CreateDirectory(Path.Combine(f.ClaudeHome, "projects", "-" + Path.GetFileName(cwd))).FullName;
         File.WriteAllText(Path.Combine(project, id + ".jsonl"),
@@ -732,20 +745,20 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
             + JsonSerializer.Serialize(new { type = "ai-title", aiTitle = title }) + "\n");
     }
 
-    void Live(string id, int pid)
+    private protected void Live(string id, int pid)
     {
         f.CopilotSession(id, pid, lockWrite: DateTimeOffset.UtcNow);
         f.Processes.Run(AgentKind.Copilot, pid, $"copilot --session-id {id}", DateTimeOffset.UtcNow.AddSeconds(-5));
         source.RefreshAsync().GetAwaiter().GetResult();
     }
 
-    static void Git(string dir, params string[] args)
+    private protected static void Git(string dir, params string[] args)
     {
         var r = AgentBridge.Host.Delivery.Launch.Git.Run(dir, args);
         Assert.True(r.Ok, $"git {string.Join(' ', args)}: {r.Said}");
     }
 
-    static async Task WaitAsync(Func<Task<bool>> done)
+    private protected static async Task WaitAsync(Func<Task<bool>> done)
     {
         var until = DateTime.UtcNow + Patience;
         while (!await done())
@@ -755,7 +768,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         }
     }
 
-    sealed class FakeProbe : IAgentHaBridgeProbe
+    private protected sealed class FakeProbe : IAgentHaBridgeProbe
     {
         public string? Reason;
 
@@ -763,11 +776,11 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     // Copilot's window ready for a prompt, as 1.0.105 draws it: its input box and key footer.
-    static readonly IReadOnlyList<string> CopilotReady = ["╻▄▄▄▄▄▄▄▄", "┃", "╹▀▀▀▀▀▀▀▀", " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"];
+    private protected static readonly IReadOnlyList<string> CopilotReady = ["╻▄▄▄▄▄▄▄▄", "┃", "╹▀▀▀▀▀▀▀▀", " ← open sidebar · Interactive · Allow All · / commands · ? help · tab next tab"];
 
     // Shows the rows it is given as every session's screen, and records anything typed, which
     // a launch must never do.
-    sealed class FakeScreens : IConsoleInjector
+    private protected sealed class FakeScreens : IConsoleInjector
     {
         public volatile IReadOnlyList<string>? Rows = CopilotReady;
         public readonly List<int> Typed = [];
@@ -804,22 +817,28 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         // A window that cannot be read: one whose process has gone.
         public Func<int, bool>? Unreadable;
 
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        public async Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Reads);
             if (Unreadable?.Invoke(processId) == true) { throw new IOException($"no console for pid {processId}"); }
-            return Task.FromResult(new ConsoleScreen(Rows ?? [], null));
+            // The window as it is when the read begins, returned once the read is done.
+            var rows = Rows ?? [];
+            if (Reading is { } reading) { await reading(); }
+            return new ConsoleScreen(rows, null);
         }
+
+        // Awaited while a read is on its way: where a test holds one.
+        public Func<Task>? Reading;
     }
 
-    sealed class FakeLocator : IAgentLocator
+    private protected sealed class FakeLocator : IAgentLocator
     {
         public readonly Dictionary<string, string> Installed = [];
 
         public string? Find(Launcher launcher, AgentConfig config) => Installed.GetValueOrDefault(launcher.Id);
     }
 
-    sealed class FakeRunner : ICommandRunner
+    private protected sealed class FakeRunner : ICommandRunner
     {
         public string Profiles = "No profiles configured.\n";
         // Runs while the host waits for Agency's session list.
@@ -836,7 +855,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     // Plays the agent: on start, it writes the session an agent would register (a Copilot
     // session folder and its process; for Codex, a registration under a session id of its own),
     // unless told it does not register.
-    sealed class FakeStarter(Fixture f) : IAgentStarter
+    private protected sealed class FakeStarter(Fixture f) : IAgentStarter
     {
         public readonly List<StartSpec> Specs = [];
         public string? Unavailable_;
@@ -864,8 +883,13 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
 
         public bool Running(Started started)
         {
+            Looking?.Invoke();
             lock (Specs) { return running.Contains(started.ProcessId); }
         }
+
+        // Runs as the host asks whether a process still runs: where a test holds the host's
+        // following of a launch between two of its looks.
+        public Action? Looking;
 
         // As the process tree does: the process started, or one under it.
         public bool? Owns(Started started, int processId)
@@ -877,9 +901,14 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
             }
         }
 
+        // As the process goes: for the host's discovery too, which lists the agent's processes. It
+        // was only forgotten here, so discovery still listed the "closed" agent's process: the
+        // host took the launcher to have handed its session on, read the question again from that
+        // session's window, and was busy once more after a Quit had closed the agent (#416).
         public void Exit(int pid)
         {
             lock (Specs) { running.Remove(pid); }
+            foreach (var agent in Enum.GetValues<AgentKind>()) { f.Processes.Exit(agent, pid); }
         }
 
         public void Register(StartSpec spec) => Register(spec, 9000 + Specs.IndexOf(spec));

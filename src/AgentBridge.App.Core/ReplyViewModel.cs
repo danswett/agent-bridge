@@ -56,6 +56,7 @@ public sealed class ReplyViewModel : Observable
     readonly IImageShrinker? shrinker;
     readonly string sessionId;
     readonly string at;
+    readonly Func<bool> current;
     Session session;
     bool attach;
     bool large;
@@ -70,8 +71,9 @@ public sealed class ReplyViewModel : Observable
     bool pausedAfterBusy;
 
     // large: the host takes files up to AttachmentLimits.DirectBytes in chunks over the pipe
-    // (sessions.attach.direct), not only AttachmentLimits.Bytes.
-    public ReplyViewModel(Session session, bool attach, Deliveries deliveries, HostConnection? host = null, IImageShrinker? shrinker = null, string? machineName = null, bool large = false)
+    // (sessions.attach.direct), not only AttachmentLimits.Bytes. current: whether the machine's rows
+    // are its host's word now (Machine.Current, #269); while not, nothing is sent or attached.
+    public ReplyViewModel(Session session, bool attach, Deliveries deliveries, HostConnection? host = null, IImageShrinker? shrinker = null, string? machineName = null, bool large = false, Func<bool>? current = null)
     {
         this.session = session;
         this.attach = attach;
@@ -79,6 +81,7 @@ public sealed class ReplyViewModel : Observable
         this.deliveries = deliveries;
         this.host = host;
         this.shrinker = shrinker;
+        this.current = current ?? (() => true);
         sessionId = session.Id;
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         deliveries.Changed += OnDelivery;
@@ -115,7 +118,7 @@ public sealed class ReplyViewModel : Observable
         }
     }
 
-    public bool CanAttach => attach && !Held && !Pending && Attachments.Count + preparing < AttachmentLimits.PerReply;
+    public bool CanAttach => attach && current() && !Held && !Pending && Attachments.Count + preparing < AttachmentLimits.PerReply;
     public bool ShowAttach => attach;
     public bool Held => session.Question is not null;
     public string? HeldText => session.Question is null ? null : session.Question.AnswerAtMachine == true
@@ -132,8 +135,8 @@ public sealed class ReplyViewModel : Observable
     }
 
     public bool Pending => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
-    public bool CanSend => !Held && !Pending && !pausedAfterBusy && preparing == 0 && (!string.IsNullOrWhiteSpace(text) || Attachments.Count > 0);
-    public bool ShowResend => deliveries.Get(Key)?.State == DeliveryState.Failed;
+    public bool CanSend => current() && !Held && !Pending && !pausedAfterBusy && preparing == 0 && (!string.IsNullOrWhiteSpace(text) || Attachments.Count > 0);
+    public bool ShowResend => current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
@@ -269,7 +272,7 @@ public sealed class ReplyViewModel : Observable
 
     public void Resend()
     {
-        if (deliveries.Get(Key) is not { State: DeliveryState.Failed, Payload: List<ReplyAttachment> files } || sent is null) { return; }
+        if (!ShowResend || deliveries.Get(Key) is not { State: DeliveryState.Failed, Payload: List<ReplyAttachment> files } || sent is null) { return; }
         var sentText = sent.Value.Text;
         deliveries.Resend(Key, Ops.SessionReply, r => Request(r, sentText, files), (call, progress) => UploadAsync(call, files, progress));
     }
@@ -352,7 +355,11 @@ public sealed class ReplyViewModel : Observable
     // How often to ask whether the machine has fetched a blob yet.
     public TimeSpan BlobPoll { get; init; } = TimeSpan.FromMilliseconds(400);
 
-    static AttachmentState Read(JsonElement e) => e.Deserialize<AttachmentState>(ProtocolJson.Options) ?? throw new Local.HostErrorException("the machine's answer about the attachment was empty");
+    // Read as the spec says (v1-sessions.md "Malformed records"): a field the app cannot read is
+    // absent, so an unreadable count reads as 0 received and the file is sent again from the start.
+    static AttachmentState Read(JsonElement e) => e.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+        ? throw new Local.HostErrorException("the machine's answer about the attachment was empty")
+        : Received.Read<AttachmentState>(e);
 
     public void Refresh()
     {

@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // The Launch page (pwa/test/launch.spec.mjs): what a machine offers, every setting and the whole
@@ -402,6 +403,8 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
     // The other machine's deliveries' notices, which a test can hold as a busy UI thread would.
     readonly HoldingDispatcher remoteUi = new();
     readonly FleetTests.FakeFleetLink link = new();
+    // The fleet's clock: a machine that left goes once it has been gone Fleet.OfflineKeep (#269).
+    readonly FakeTimeProvider clock = new(Make.T0);
     HostConnection local = null!;
     MainViewModel main = null!;
     Fleet fleet = null!;
@@ -427,7 +430,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         local = localHost.Connect(ui);
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
         main = new MainViewModel(Build(Machine.LocalKey, local), new UsageViewModel());
-        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, remoteUi));
+        fleet = new Fleet(link, main, ui, h => Build(h.Id, new HostConnection(ct => link.OpenAsync(h.Id, ct), ui) { RetryDelay = TimeSpan.FromMilliseconds(100) }, remoteUi), clock);
         link.Set(FleetState.Connected, ("remote-id", "Build server"));
     }
 
@@ -500,6 +503,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => remote.Deliveries.Get("launch")?.State == DeliveryState.Failed, "the failure");
 
         link.Set(FleetState.Connected);
+        clock.Advance(Fleet.OfflineKeep);
 
         await Wait.UntilAsync(() => launch.State == "failed", "the failure shown");
         Assert.StartsWith("Build server returned an error: ", launch.StatusText);
@@ -862,6 +866,7 @@ public sealed class RemoteLaunchTests : IAsyncLifetime
         await Wait.UntilAsync(() => remoteHost.Sent(LaunchProtocol.Launch).Count == 1, "the launch to go");
 
         link.Set(FleetState.Connected);
+        clock.Advance(Fleet.OfflineKeep);
 
         await Wait.UntilAsync(() => launch.StatusText.StartsWith("Not confirmed: Build server left", StringComparison.Ordinal), "the launch to be called unconfirmed");
         Assert.Equal(Tone.Warn, launch.StatusTone);

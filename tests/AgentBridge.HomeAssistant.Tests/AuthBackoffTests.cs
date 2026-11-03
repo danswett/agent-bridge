@@ -7,22 +7,24 @@ using Xunit;
 // just-migrated machine's connector repeated a rejected token every 30 s until it was banned (#227).
 // These hold the guard to what agent-ha-bridge's test-auth-backoff.ps1 holds its daemon to, and to
 // the stricter rule that a rejected token stops rather than being repeated on a timer for ever.
-public sealed class AuthBackoffTests : IDisposable
+// The tests are in four classes on this fixture, so that xUnit runs them side by side rather than
+// one after another: many simulate days of retries against a record on disk (#480).
+public abstract class AuthBackoffFixture : IDisposable
 {
-    const string Token = "test-token-not-a-secret";
-    static readonly Uri Url = new("http://ha.test:8123");
-    readonly string folder = Path.Combine(Path.GetTempPath(), "abau-" + Guid.NewGuid().ToString("N"));
-    readonly FakeTimeProvider time = new(FakeSessions.T0);
+    private protected const string Token = "test-token-not-a-secret";
+    private protected static readonly Uri Url = new("http://ha.test:8123");
+    private protected readonly string folder = Path.Combine(Path.GetTempPath(), "abau-" + Guid.NewGuid().ToString("N"));
+    private protected readonly FakeTimeProvider time = new(FakeSessions.T0);
 
     public void Dispose()
     {
         if (Directory.Exists(folder)) { Directory.Delete(folder, true); }
     }
 
-    string Record => Path.Combine(folder, HaAuthGuard.FileName);
+    private protected string Record => Path.Combine(folder, HaAuthGuard.FileName);
 
     // Home Assistant answering whatever Status says, and when each request reached it.
-    sealed class Answering(FakeTimeProvider time) : HttpMessageHandler
+    private protected sealed class Answering(FakeTimeProvider time) : HttpMessageHandler
     {
         public HttpStatusCode Status { get; set; } = HttpStatusCode.Unauthorized;
         public Exception? Fail { get; set; }
@@ -36,9 +38,9 @@ public sealed class AuthBackoffTests : IDisposable
         }
     }
 
-    HomeAssistantClient Client(HttpMessageHandler handler, HaAuthGuard guard, string token = Token) => new(Url, token, new HttpClient(handler), auth: guard);
+    private protected HomeAssistantClient Client(HttpMessageHandler handler, HaAuthGuard guard, string token = Token) => new(Url, token, new HttpClient(handler), auth: guard);
 
-    static async Task<Exception?> Publish(HomeAssistantClient client)
+    private protected static async Task<Exception?> Publish(HomeAssistantClient client)
     {
         try
         {
@@ -49,7 +51,7 @@ public sealed class AuthBackoffTests : IDisposable
     }
 
     // A caller retrying every 30 s for as long as it takes, as the connector's startup did.
-    async Task Hammer(HomeAssistantClient client, TimeSpan howLong)
+    private protected async Task Hammer(HomeAssistantClient client, TimeSpan howLong)
     {
         for (var t = TimeSpan.Zero; t < howLong; t += TimeSpan.FromSeconds(30))
         {
@@ -58,6 +60,21 @@ public sealed class AuthBackoffTests : IDisposable
         }
     }
 
+    private protected sealed class Routed(Func<HttpRequestMessage, Task<HttpStatusCode>> answer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(await answer(request));
+    }
+
+    private protected sealed class Waiting(Func<Task<HttpStatusCode>> answer) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            new(await answer());
+    }
+}
+
+public sealed class AuthBackoffTests : AuthBackoffFixture
+{
     [Fact]
     public async Task A_rejected_token_is_sent_at_most_three_times_minutes_apart_and_never_again_until_it_changes()
     {
@@ -138,7 +155,10 @@ public sealed class AuthBackoffTests : IDisposable
 
         Assert.Equal(8 + HaAuthGuard.MaxRejections, ha.Seen.Count);
     }
+}
 
+public sealed class AuthBackoffRecordTests : AuthBackoffFixture
+{
     // A record that cannot be written holds every token not already accepted, rather than letting
     // one try with nothing to remember its refusals by; one already accepted carries on. Once the
     // record can be written again, the rules apply as ever.
@@ -195,7 +215,7 @@ public sealed class AuthBackoffTests : IDisposable
     public async Task A_record_that_cannot_be_locked_is_left_alone_and_a_token_not_yet_accepted_is_held()
     {
         var ha = new Answering(time) { Status = HttpStatusCode.OK };
-        var guard = new HaAuthGuard(Record, time);
+        var guard = new HaAuthGuard(Record, time) { LockWait = TimeSpan.Zero, RetryLockWait = TimeSpan.Zero };
         Assert.Null(await Publish(Client(ha, guard, "other-token-not-a-secret")));
         var before = File.ReadAllText(Record);
         using (new FileStream(Record + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
@@ -536,7 +556,10 @@ public sealed class AuthBackoffTests : IDisposable
         await Hammer(Client(ha, new HaAuthGuard(Record, time)), TimeSpan.FromDays(1));
         Assert.Equal(3, ha.Seen.Count);
     }
+}
 
+public sealed class AuthBackoffBanTests : AuthBackoffFixture
+{
     [Fact]
     public async Task A_403_once_the_token_was_accepted_is_reported_as_a_ban_and_only_looked_at_now_and_then()
     {
@@ -854,7 +877,10 @@ public sealed class AuthBackoffTests : IDisposable
 
         Assert.Equal(3, ha.Seen.Count);
     }
+}
 
+public sealed class AuthBackoffCallerTests : AuthBackoffFixture
+{
     // An upgrade answered 200 or 404 never carried the token, so it says nothing of it: the token is
     // still not known to be accepted, and callers with it still go one at a time.
     [Fact]
@@ -1035,12 +1061,6 @@ public sealed class AuthBackoffTests : IDisposable
         Assert.Equal(1, sent);
     }
 
-    sealed class Routed(Func<HttpRequestMessage, Task<HttpStatusCode>> answer) : HttpMessageHandler
-    {
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            new(await answer(request));
-    }
-
     // One attempt ends without an answer and another process's takes the reservation over: the
     // process still waiting gives the new one its full time, not what was left of the first's.
     [Fact]
@@ -1097,12 +1117,6 @@ public sealed class AuthBackoffTests : IDisposable
         await Hammer(serve, TimeSpan.FromMinutes(10));
 
         Assert.Equal(before, ha.Seen.Count);
-    }
-
-    sealed class Waiting(Func<Task<HttpStatusCode>> answer) : HttpMessageHandler
-    {
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            new(await answer());
     }
 
     // The incident itself: the connector's startup, with a token Home Assistant rejects, retried

@@ -1,7 +1,9 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Xunit;
 
 // A launched agent asking whether to trust its folder, on the Launch page (pwa/test/launch.spec.mjs,
@@ -109,7 +111,60 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.False(card.CanAnswer);
         // Its card arrives after the outcome, and is opened then.
         await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(10)));
+        // Only ever missed on Linux CI, and never reproduced elsewhere: what was seen is said, so
+        // the next one names its cause (#101).
+        await Wait.UntilAsync(() => opened.Contains("there-new"), "the new session's card to open", why: () =>
+        {
+            var there = main.MachineOf("remote-id");
+            var trust = there?.Deliveries.Get("trust:q-1");
+            bool listed;
+            lock (remoteHost.Sessions) { listed = remoteHost.Sessions.Any(s => s.Id == "there-new"); }
+            return $"the link {there?.Host.State}, {there?.Host.Sessions.Snapshots} snapshots begun (complete: {there?.Host.Sessions.Complete}), "
+                + $"{remoteHost.Channels.Distinct().Count()} connections to its host; the session listed by its host {listed}, in the app's list {there?.Host.Sessions.Get("there-new") is not null}, "
+                + $"a card {main.Sessions.Any(c => c.Id == "there-new")}, opened [{string.Join(", ", opened)}]; the answer {trust?.State} {trust?.Outcome}";
+        });
+    }
+
+    // A machine that answers before the press has handed its answer over: the call never waits, so
+    // the outcome is in before Submit returns. It used to be dropped then, as the answer it belonged
+    // to was not known yet, so the session never opened (#476, on most Linux CI runs).
+    [Fact]
+    public async Task A_Trust_answered_before_the_press_has_returned_still_opens_the_session_it_started()
+    {
+        link.Through = (id, ch) => id == "remote-id" ? new AnsweredAtOnce(ch, TrustProtocol.Answer) : ch;
+        var opened = new List<string>();
+        main.OpenRequested += c => opened.Add(c.Id);
+        var (_, card) = await OnRemoteAsync();
+
+        remoteTrust = [];
+        ui.Post(card.Trust);
+
+        Assert.Equal("started", TestUi.Read(() => card.State));
+        await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(10)));
         await Wait.UntilAsync(() => opened.Contains("there-new"), "the new session's card to open");
+    }
+
+    // A channel whose answer to atOnce is back before its call returns, as when the host answers faster
+    // than the caller gets to wait. Waited for off the UI thread: the call's own continuations would
+    // otherwise queue behind this very step.
+    sealed class AnsweredAtOnce(IClientChannel inner, string atOnce) : IClientChannel
+    {
+        public string PeerId => inner.PeerId;
+        public string PeerName => inner.PeerName;
+        public string PeerKind => inner.PeerKind;
+        public bool IsOpen => inner.IsOpen;
+        public Task Closed => inner.Closed;
+        public Exception? CloseReason => inner.CloseReason;
+        public ChannelReader<ChannelEvent> Events => inner.Events;
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => inner.SendEventAsync(name, data, ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+
+        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+        {
+            if (op != atOnce) { return inner.RequestAsync(op, data, timeout, ct); }
+            try { return Task.FromResult(Task.Run(() => inner.RequestAsync(op, data, timeout, ct)).GetAwaiter().GetResult()); }
+            catch (Exception e) { return Task.FromException<JsonElement>(e); }
+        }
     }
 
     [Fact]
@@ -353,6 +408,9 @@ public sealed class TrustTests : IAsyncLifetime
         localTrust = [Question(answerable: false, atMachine: "Answer at the machine.") with { Workspace = "here" }];
         localHost.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [phone]) };
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        // Held before going on: events are pumped apart from replies, so a reply sent after this
+        // event can be read first, and the status checked below was then still the old one.
+        await Wait.UntilAsync(() => local.Status?.Settings.RemoteFolderTrustDevices is [phone], "the status listing the phone");
         // The host saves each change; its status event is not sent.
         localHost.On(HostOps.Settings, d =>
         {

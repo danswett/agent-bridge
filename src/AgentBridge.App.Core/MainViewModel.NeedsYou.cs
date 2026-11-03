@@ -19,8 +19,10 @@ public sealed partial class MainViewModel
     {
         var now = Time.GetUtcNow();
         var several = machines.Count > 1;
+        // Only questions that can be answered now: another machine's kept while it is away, or not
+        // yet confirmed by its snapshot, may be gone, and are not counted as waiting on you (#269).
         var want = byId
-            .Where(p => p.Value.Session.Question is not null && owner.ContainsKey(p.Value))
+            .Where(p => p.Value.Session.Question is not null && owner.TryGetValue(p.Value, out var m) && m.Current)
             .Select(p => (Key: p.Key, Card: p.Value, Machine: owner[p.Value]))
             .OrderBy(e => e.Card.Session.Question!.AskedAt)
             .ThenBy(e => e.Machine.Name, StringComparer.Ordinal)
@@ -34,19 +36,33 @@ public sealed partial class MainViewModel
         {
             var q = card.Session.Question!;
             current.TryGetValue(key, out var existing);
+            // Mid-update, between one question and the next, the card has no question model for a
+            // moment (SessionCardViewModel.Sync): the entry stays as it is until the new one is in,
+            // so the next question arrives once, as itself, rather than as a rebuild of a stand-in.
+            if (card.Question is null)
+            {
+                if (existing is not null) { entries.Add(existing); }
+                continue;
+            }
             // What an entry says is parsed once per message: an upsert that leaves the question's
             // words alone (most are another session's activity) parses nothing. A same-id update
             // that changes them (a budget-trimmed message restored, say) rebuilds the entry, as
             // does a change in what it offers.
             var sameWords = existing is not null && existing.QuestionId == q.Id && string.Equals(existing.Message, q.Message, StringComparison.Ordinal);
             var whole = sameWords ? existing!.Whole : NeedsYouEntry.WholeApproval(q);
+            var rebuilt = false;
             if (existing is not null && (!sameWords || existing.QuestionModel != card.Question || existing.Mode != NeedsYouEntry.ModeOf(q, card.Agent, card.Question, whole)))
             {
                 existing.Detach();
                 NeedsYou.Remove(existing);
+                rebuilt = existing.QuestionId == q.Id;
                 existing = null;
             }
             var entry = existing ?? new NeedsYouEntry(this, key, m.Key, card);
+            // A question a live upsert just asked: its entry's mark fades in. One rebuilt for new
+            // words, listed as a list is read, or back as its machine's rows are confirmed, is not
+            // news. Every entry added still holds the lane's buttons (SessionsPage.GuardLane).
+            if (existing is null && !rebuilt && key == askedNow) { arriving.Add(entry); }
             entry.Refresh(several ? m.Name : null, now);
             entries.Add(entry);
         }
@@ -63,6 +79,7 @@ public sealed partial class MainViewModel
             if (at < 0) { NeedsYou.Insert(i, entries[i]); }
             else { NeedsYou.Move(at, i); }
         }
+        arriving.RemoveWhere(o => o is NeedsYouEntry);
         if (had != NeedsYou.Count)
         {
             Raise(nameof(HasNeedsYou));

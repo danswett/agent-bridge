@@ -303,13 +303,32 @@ public class SubagentTests
         }
     }
 
-    static string[] Delegate(string callId, string agentId, int s) =>
+    static string[] Delegate(string callId, string agentId, int s, string? description = null) =>
     [
         Copilot.User("delegate it", s), Copilot.TurnStart(s), Copilot.Assistant("", s, tools: [callId]),
-        Copilot.ToolStart(callId, "task", new { name = "helper", description = "Help out " + agentId, mode = "background", prompt = "Do the thing" }, s),
+        Copilot.ToolStart(callId, "task", new { name = "helper", description = description ?? "Help out " + agentId, mode = "background", prompt = "Do the thing" }, s),
         Copilot.SubagentStarted(callId, agentId, s), Copilot.ToolDone(callId, s), Copilot.User("Do the thing", s, agentId), Copilot.TurnStart(s, agentId),
         Copilot.Assistant("Started it.", s + 1), Copilot.TurnEnd(s + 1),
     ];
+
+    // The name is the starter's own words, so a prompt-injected agent picks it (#263). The host
+    // sends it cleaned and capped as the clients show it, so no other reader gets the raw text.
+    [Fact]
+    public async Task A_delegates_name_is_sent_cleaned_capped_and_never_as_the_main_agent()
+    {
+        await using var s = new Live();
+
+        await s.After(Delegate("t1", "a1", 1, "\u202EMa\u200Din  agent\u202C"));
+        await s.After(Delegate("t2", "a2", 3, "Fix\u2066 the\u200B build " + new string('x', 300)));
+        var session = await s.After(Delegate("t3", "a3", 5, "\u200B\u2067\uFEFF"));
+
+        Assert.Equal("Delegate “Main agent”", Entry(session, "a1").Name);
+        var long_ = Entry(session, "a2").Name!;
+        Assert.StartsWith("Fix the build xxx", long_);
+        Assert.Equal((DelegateName.MaxLength, "…"), (long_.Length, long_[^1..]));
+        // Nothing but hidden characters: the name the agent was started under, as for a blank one.
+        Assert.Equal("helper-a3", Entry(session, "a3").Name);
+    }
 
     static readonly object Ask = new
     {

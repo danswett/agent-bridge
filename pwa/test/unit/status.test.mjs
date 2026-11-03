@@ -179,3 +179,29 @@ test('Rule 2: a delegate\'s name cannot add a fact of its own, so the row\'s fir
   assert.equal(asks('\u2c99\u2c81\u2c93\u2c9b agent'), 'Delegate \u2c99\u2c81\u2c93\u2c9b agent asks');
   assert.equal(asks('Idle \u00b7 Read logs'), 'Delegate Idle - Read logs asks');
 });
+
+test('Every rule gives its facts as a list, so a row takes the first and nothing is found by cutting words at a separator', () => {
+  const facts = (fields) => sessionStatus(session(fields)).facts;
+  assert.deepEqual(facts({ status: 'waiting', question: { id: 'q', answerAtMachine: true }, activity: { background: { agents: 2, shells: 0 } } }), ['Waiting on you', '2 delegates still running', 'answer at the machine']);
+  assert.deepEqual(facts({ ...example, question: { ...example.question, answerAtMachine: true } }), ['Delegate Read witness shell logic asks', 'answer at the machine']);
+  assert.deepEqual(facts({ status: 'working', subagents: [delegate('t', { kind: 'task', name: 'Bisect' })] }), ['Working', 'task: Delegate Bisect']);
+  assert.deepEqual(facts({ activity: { background: { agents: 2, shells: 0 } } }), ['Delegating to 2 agents', 'details not reported']);
+  assert.deepEqual(facts({}), ['Idle']);
+  // The words the header shows are the facts joined, and nothing else.
+  const s = sessionStatus(session(example));
+  assert.equal(s.text, s.facts.join(' \u00b7 '));
+});
+
+test('Read aloud, a delegate\'s name has no comma of its own, so it can\'t add facts to the glyph\'s name; drawn, it keeps them', () => {
+  const asking = (name) => sessionStatus(session({ status: 'waiting', waitingOn: 'x1', subagents: [{ id: 'x1', kind: 'task', status: 'waiting', name }] }));
+  const label = (name) => statusLabel(asking(name), { title: 'Fix', machine: 'DEV-VM1' });
+  assert.equal(label('x, idle, DEV-VM2'), 'Fix, Delegate x idle DEV-VM2 asks, DEV-VM1');
+  assert.equal(asking('x, idle, DEV-VM2').text, 'Delegate x, idle, DEV-VM2 asks');
+  // The commas other scripts and forms draw like it.
+  for (const comma of ['\u055d', '\u060c', '\u066b', '\u07f8', '\u1363', '\u1802', '\u1808', '\u201a', '\u2e41', '\u2e4c', '\u3001', '\ua4fe', '\ua60d', '\ua6f5', '\ufe10', '\ufe11', '\ufe50', '\ufe51', '\uff0c', '\uff64']) {
+    assert.equal(label(`x${comma} idle${comma} DEV-VM2`), 'Fix, Delegate x idle DEV-VM2 asks, DEV-VM1', `U+${comma.codePointAt(0).toString(16)}`);
+  }
+  // Rule 3's task too.
+  const working = sessionStatus(session({ status: 'working', subagents: [delegate('t', { kind: 'task', name: 'Lint, idle' })] }));
+  assert.equal(statusLabel(working, { title: 'Fix' }), 'Fix, working · task: Delegate Lint idle');
+});

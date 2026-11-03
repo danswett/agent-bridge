@@ -14,7 +14,9 @@ hold here. The bundle travels as a blob ([blobs.md](blobs.md)). C# records are i
 `src/AgentBridge.Protocol/Transfer.cs`, the signature in `src/AgentBridge.Host/SignedCommands.cs`;
 the PWA signs in `pwa/js/transfer.js`, the Windows app in `src/AgentBridge.App.Core/Transfers.cs`, both with the MAC of `src/AgentBridge.Transport/CommandMac.cs`. How a Windows host carries one out, and its settings,
 are [host-transfer.md](../host-transfer.md). Design §9 ("Session transfer", "Fleet secret
-retired"), §5.5.
+retired"), §5.5. Test vectors are in [`vectors/transfer.json`](vectors/README.md) for the records
+and [`vectors/signed-command.json`](vectors/README.md) for signed commands, with fixed keys and
+the MAC each gives; [v1-sessions.md](v1-sessions.md#test-vectors) says how to regenerate them.
 
 **A fork, not a move.** The session arrives under a new id and the original stays where it
 was, untouched, as in agent-ha-bridge. Nothing has to be reserved across machines, and either

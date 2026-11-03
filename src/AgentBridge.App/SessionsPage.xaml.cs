@@ -23,8 +23,31 @@ public sealed partial class SessionsPage : UserControl
     {
         InitializeComponent();
         ListColumn.Width = new GridLength(DesignLayout.List);
+        Motion.Banner(FleetNote);
         SizeChanged += (_, _) => Measure();
-        Loaded += (_, _) => { Measure(); SyncList(); };
+        Loaded += (_, _) => { Measure(); SyncList(); Ready(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
+        // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
+        Unloaded += (_, _) => laneTimer?.Stop();
+        // The list shown for the first time (one column, after a session opened at start).
+        List.SizeChanged += (_, _) => Ready();
+        List.Loaded += (_, _) => WatchListScroll();
+    }
+
+    // Nothing moves as the app starts (ui.md §5.3): not the first rows, not a session a toast
+    // asked for as its card arrives with them, not the first Back to a list never yet shown.
+    // Motion starts once the list has been laid out on screen with rows in it.
+    bool ready;
+    bool readying;
+    void Ready()
+    {
+        if (ready || readying || viewModel is null) { return; }
+        // Not queued (the dispatcher shutting down): the next layout asks again.
+        readying = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            readying = false;
+            ready = IsLoaded && viewModel.Sessions.Count > 0 && ListPane.Visibility == Visibility.Visible && List.ActualHeight > 0;
+            Session.Ready = ready;
+        });
     }
 
     public MainViewModel ViewModel
@@ -36,9 +59,12 @@ public sealed partial class SessionsPage : UserControl
             Layout = new PaneLayoutViewModel(value);
             Session.Layout = Layout;
             InspectorDelegate.Layout = Layout;
+            Layout.Moved += OnMoved;
+            Layout.PropertyChanged += OnLaneShown;
             value.PropertyChanged += OnMain;
             value.Machines.CollectionChanged += (_, _) => BuildMachineTabs();
             value.Sessions.CollectionChanged += OnSessionsChanged;
+            value.NeedsYou.CollectionChanged += OnLaneChanged;
             BuildMachineTabs();
             Bindings.Update();
             Measure();
@@ -81,7 +107,79 @@ public sealed partial class SessionsPage : UserControl
         syncing = true;
         try { List.SelectedItem = want; }
         finally { syncing = false; }
-        if (want is not null) { List.ScrollIntoView(want); }
+        if (want is null) { return; }
+        // The row brought into view moves the list, and Needs you with it (the lane is the list's
+        // header): the second click of a habit that opened this from Needs you must not land on
+        // another entry's Approve once.
+        if (Layout?.ShowList == true) { GuardLane(); }
+        // Scrolled to smoothly (ui.md §5.3, Scroll to a question) when its row is drawn; one far
+        // off screen has no row yet, and the list jumps to it.
+        if (List.ContainerFromItem(want) is ListViewItem row) { row.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = ready && Motion.Scrolls }); }
+        else { List.ScrollIntoView(want); }
+    }
+
+    // --- Motion (ui.md §5.3): what the panes did, and rows and entries arriving. ---
+
+    void OnMoved(PaneMove move)
+    {
+        if (move.Kind == PaneMotion.Settle) { Session.Moved(move); return; }
+        // The list, and its lane, back under a pointer that was on the session, motion or none.
+        if (move.Kind == PaneMotion.Pop) { GuardLane(); }
+        if (!ready) { return; }
+        switch (move.Kind)
+        {
+            case PaneMotion.Push or PaneMotion.Tab:
+                Session.Moved(move);
+                break;
+            case PaneMotion.Pop:
+                // The list's content slides in from the leading side. Its Needs you lane is there at
+                // once: it sits in the list's header, outside the rows' panel, unless a template
+                // puts it inside, when the rows stay still too.
+                var from = -Motion.Trailing(this);
+                foreach (var part in new UIElement[] { ListHead, MachineTabsScroll, ListNotes }) { Motion.Enter(part, "Push", from); }
+                if (List.ItemsPanelRoot is { } panel && !Motion.Within(LaneItems, panel)) { Motion.Enter(panel, "Push", from); }
+                break;
+            case PaneMotion.Inspector:
+                Motion.Enter(InspectorContent, "Pane", Motion.Trailing(this));
+                break;
+        }
+    }
+
+    // A session a host added fades in where it lands; its neighbours take their places at once.
+    void OnArrived(SessionCardViewModel card)
+    {
+        if (!ready || Layout?.ShowList != true) { return; }
+        Motion.AfterLayout(List, card, row => Motion.Enter(row, "ListItem"));
+    }
+
+    // A question asked: only its entry's mark fades in. The entry and an approval's command are
+    // there at once, and never fade or move.
+    void OnLaneChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        // Any change to the lane can put Approve once under a pointer aimed at something else: an
+        // entry appearing, the entries moving, or those after a removed one shifting up into its
+        // place. The lane takes no click for a moment (AnswerGuard).
+        GuardLane();
+        if (!ready || viewModel is null || Layout?.ShowList != true || e.Action != NotifyCollectionChangedAction.Add) { return; }
+        foreach (NeedsYouEntry entry in e.NewItems ?? Array.Empty<object>())
+        {
+            if (!viewModel.IsArriving(entry)) { continue; }
+            Motion.AfterLayout(LaneItems, entry, item =>
+            {
+                if (Glyph(item) is { } mark) { Motion.Enter(mark, "ListItem"); }
+            });
+        }
+    }
+
+    static StatusGlyphView? Glyph(DependencyObject node)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is StatusGlyphView glyph) { return glyph; }
+            if (Glyph(child) is { } found) { return found; }
+        }
+        return null;
     }
 
     void OnRowChosen(object sender, SelectionChangedEventArgs e)
@@ -99,6 +197,8 @@ public sealed partial class SessionsPage : UserControl
     void OnRowRecycled(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
         if (args.ItemContainer?.ContentTemplateRoot is not SessionRow row) { return; }
+        // A row put aside or given to another session shows that one as it is.
+        Motion.Settle(args.ItemContainer);
         if (args.InRecycleQueue) { row.Park(); }
         else { row.Unpark(); }
     }
@@ -107,6 +207,14 @@ public sealed partial class SessionsPage : UserControl
     // list has settled. A session moved (a remove and an insert) is listed again by then.
     void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (!ready) { Ready(); }
+        if (e.Action == NotifyCollectionChangedAction.Add && viewModel is not null)
+        {
+            foreach (SessionCardViewModel card in e.NewItems ?? Array.Empty<object>())
+            {
+                if (viewModel.IsArriving(card)) { OnArrived(card); }
+            }
+        }
         if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Move) { return; }
         DispatcherQueue.TryEnqueue(ReleaseUnlisted);
     }
@@ -230,6 +338,8 @@ public sealed partial class SessionsPage : UserControl
     {
         if (syncing || viewModel is null || sender.SelectedItem?.Tag is not MachineChoice choice) { return; }
         viewModel.SelectedMachine = choice;
+        // A tab chosen: its rows fade in, without sliding (ui.md §5.3, Tab switch).
+        if (ready && List.ItemsPanelRoot is { } panel) { Motion.Enter(panel, "Tab"); }
     }
 
     // --- The sort menu: Your order, Most recent, Machine (#164), the one in force checked. ---
@@ -245,5 +355,67 @@ public sealed partial class SessionsPage : UserControl
             item.Click += (_, _) => viewModel.SortIndex = index;
             SortMenu.Items.Add(item);
         }
+    }
+
+    // Needs you's Approve once and Deny take no click for a moment after an entry appears or the
+    // list comes back (App.Core's AnswerGuard): the lane is out of hit testing meanwhile, while
+    // keyboard focus and keys work as ever.
+    readonly AnswerGuard laneGuard = new();
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? laneTimer;
+
+    // Each step of the list's own scroll, while the lane is held, holds it until the list is still.
+    ScrollViewer? listScroll;
+
+    void WatchListScroll()
+    {
+        if (listScroll is not null || Find<ScrollViewer>(List) is not { } scroll) { return; }
+        listScroll = scroll;
+        scroll.ViewChanged += (_, _) => laneGuard.Scrolled(DateTimeOffset.UtcNow);
+    }
+
+    static T? Find<T>(DependencyObject node) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is T found) { return found; }
+            if (Find<T>(child) is { } deeper) { return deeper; }
+        }
+        return null;
+    }
+
+    // The window activated again (brought back from behind another, not only restored): what it
+    // shows is under a pointer aimed at what was in front of it.
+    internal void Reactivated()
+    {
+        if (Layout is { ShowList: true, OnScreen: true }) { GuardLane(); }
+        Session.Reactivated();
+    }
+
+    // The list back on screen (the Sessions page chosen again, the window shown from the tray, the
+    // list popped back) puts the lane under a pointer aimed at what was there.
+    void OnLaneShown(object? sender, PropertyChangedEventArgs e)
+    {
+        if (Layout is null || e.PropertyName is not (nameof(PaneLayoutViewModel.ShowList) or nameof(PaneLayoutViewModel.OnScreen) or "" or null)) { return; }
+        if (laneGuard.Shown(Layout.ShowList && Layout.OnScreen, DateTimeOffset.UtcNow)) { GuardLane(); }
+    }
+
+    void GuardLane()
+    {
+        laneGuard.Arm(DateTimeOffset.UtcNow);
+        LaneItems.IsHitTestVisible = false;
+        if (laneTimer is null)
+        {
+            laneTimer = DispatcherQueue.CreateTimer();
+            laneTimer.IsRepeating = false;
+            laneTimer.Tick += (t, _) =>
+            {
+                var left = laneGuard.Remaining(DateTimeOffset.UtcNow);
+                if (left > TimeSpan.Zero) { t.Interval = left; t.Start(); return; }
+                LaneItems.IsHitTestVisible = true;
+            };
+        }
+        laneTimer.Interval = laneGuard.Remaining(DateTimeOffset.UtcNow);
+        laneTimer.Start();
     }
 }

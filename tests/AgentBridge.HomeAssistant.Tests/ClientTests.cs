@@ -286,12 +286,46 @@ public class ClientTests
 
     // The headers and the body share the one timeout, as they did read with ResponseContentRead:
     // each in well under it, together over it, the request times out.
+    // Each step moves a fake clock instead of waiting on a real one. On a loaded runner the
+    // body's real delay and the client's real cancellation ran in either order (#413). Here the
+    // body's 700 ms runs past the deadline first, every time. A client that gave the body a
+    // fresh timeout would see the body arrive within it, and the test would fail.
     [Fact]
     public async Task A_publish_whose_headers_and_body_together_outlast_the_timeout_times_out()
     {
-        var handler = new Late(TimeSpan.FromMilliseconds(700),
-            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(TimeSpan.FromMilliseconds(700))) });
-        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) });
+        var clock = new FakeTimeProvider();
+        var step = TimeSpan.FromMilliseconds(700);
+        var handler = new Late(clock, step,
+            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(clock, step)) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) }, time: clock);
+
+        var e = await Record.ExceptionAsync(() => client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true));
+
+        Assert.True(e is TimeoutException or OperationCanceledException, $"expected a timeout, got {e?.GetType().Name ?? "success"}");
+    }
+
+    // The same two steps, together inside the timeout: the publish succeeds.
+    [Fact]
+    public async Task A_publish_whose_headers_and_body_together_arrive_within_the_timeout_succeeds()
+    {
+        var clock = new FakeTimeProvider();
+        var step = TimeSpan.FromMilliseconds(400);
+        var handler = new Late(clock, step,
+            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(clock, step)) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) }, time: clock);
+
+        await client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true);
+    }
+
+    // Headers exactly 1 ms past the timeout leave -1 ms for the body, the same value as
+    // Timeout.InfiniteTimeSpan: the body must still be held to the deadline, not given none.
+    [Fact]
+    public async Task A_publish_whose_headers_arrive_a_millisecond_past_the_timeout_still_times_out()
+    {
+        var clock = new FakeTimeProvider();
+        var handler = new Late(clock, TimeSpan.FromMilliseconds(1001),
+            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(clock, TimeSpan.FromMilliseconds(1))) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) }, time: clock);
 
         var e = await Record.ExceptionAsync(() => client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true));
 
@@ -300,17 +334,26 @@ public class ClientTests
 
     sealed class Late(TimeSpan delay, Func<HttpResponseMessage> respond) : HttpMessageHandler
     {
+        readonly FakeTimeProvider? clock;
+
+        public Late(FakeTimeProvider clock, TimeSpan delay, Func<HttpResponseMessage> respond) : this(delay, respond) => this.clock = clock;
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            await Task.Delay(delay, cancellationToken);
+            if (clock is null) { await Task.Delay(delay, cancellationToken); }
+            else { clock.Advance(delay); }
             return respond();
         }
     }
 
     // A body that sends its first bytes and then nothing more, or nothing more until pause is up.
+    // On a fake clock, the pause moves the clock and the read ends as the deadline then stands.
     sealed class Stalling(TimeSpan? pause = null) : Stream
     {
+        readonly FakeTimeProvider? clock;
         bool sent;
+
+        public Stalling(FakeTimeProvider clock, TimeSpan pause) : this(pause) => this.clock = clock;
 
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
@@ -319,6 +362,12 @@ public class ClientTests
                 sent = true;
                 buffer.Span[0] = 0x89;
                 return 1;
+            }
+            if (clock is not null)
+            {
+                clock.Advance(pause!.Value);
+                cancellationToken.ThrowIfCancellationRequested();
+                return 0;
             }
             await Task.Delay(pause ?? Timeout.InfiniteTimeSpan, cancellationToken);
             return 0;

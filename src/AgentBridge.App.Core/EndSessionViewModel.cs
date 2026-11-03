@@ -16,6 +16,7 @@ public sealed class EndSessionViewModel : Observable
     readonly TimeProvider time;
     readonly string sessionId;
     readonly string at;
+    readonly Func<bool> current;
     Session session;
     (string Request, DateTimeOffset At, int Seconds, string Token)? armed;
     string statusText = "";
@@ -24,10 +25,12 @@ public sealed class EndSessionViewModel : Observable
     string? busyFor;
     ITimer? tick;
 
-    public EndSessionViewModel(Session session, Deliveries deliveries, string? machineName = null)
+    // current: whether the machine's rows are its host's word now (Machine.Current, #269).
+    public EndSessionViewModel(Session session, Deliveries deliveries, string? machineName = null, Func<bool>? current = null)
     {
         this.session = session;
         this.deliveries = deliveries;
+        this.current = current ?? (() => true);
         time = deliveries.Time;
         sessionId = session.Id;
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
@@ -40,8 +43,8 @@ public sealed class EndSessionViewModel : Observable
     public string Key => $"stop|{sessionId}";
     public string StatusText { get => statusText; private set => Set(ref statusText, value); }
     public Tone StatusTone { get => statusTone; private set => Set(ref statusTone, value); }
-    public bool ShowResend => deliveries.Get(Key)?.State == DeliveryState.Failed;
-    public bool CanPress => !Pending && !pausedAfterBusy && session.Status != SessionStatus.Ending;
+    public bool ShowResend => current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
+    public bool CanPress => current() && !Pending && !pausedAfterBusy && session.Status != SessionStatus.Ending;
     public string ButtonName => SecondsLeft is { } left ? $"End session: press again to confirm, {left} seconds left" : "End session";
     bool Pending => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
 
@@ -71,7 +74,11 @@ public sealed class EndSessionViewModel : Observable
         Refresh();
     }
 
-    public void Resend() => deliveries.Resend(Key, Ops.SessionStop, r => new StopRequest { Id = sessionId, Request = r, Confirm = deliveries.Get(Key)?.Payload as string });
+    public void Resend()
+    {
+        if (!ShowResend) { return; }
+        deliveries.Resend(Key, Ops.SessionStop, r => new StopRequest { Id = sessionId, Request = r, Confirm = deliveries.Get(Key)?.Payload as string });
+    }
 
     public void Refresh()
     {

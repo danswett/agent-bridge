@@ -81,6 +81,18 @@ public sealed class HostSettingsTests : IDisposable
         Assert.True(With("{ \"version\": 1 }").Settings.RemoteApproval);
     }
 
+    [Theory]
+    [InlineData("{}", false)]
+    [InlineData("{\"permissions\":{\"trustedPeers\":false}}", false)]
+    [InlineData("{\"permissions\":{\"trustedPeers\":true}}", true)]
+    [InlineData("{\"permissions\":{\"trustedPeers\":\"false\"}}", true)]
+    [InlineData("{\"version\":2}", true)]
+    [InlineData("{", true)]
+    public void Trusted_peer_mode_is_opt_in_but_unreadable_settings_do_not_downgrade_authorization(string text, bool enforcing)
+    {
+        Assert.Equal(enforcing, With(text).Settings.TrustedPeers);
+    }
+
     [Fact]
     public void A_wrong_launch_entry_leaves_remote_approval_and_the_other_workspaces_as_they_were()
     {

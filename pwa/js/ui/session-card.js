@@ -26,7 +26,7 @@ import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.j
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
-import { factsOf, lastSegment, pathView, setFacts } from './meta.js';
+import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
@@ -38,6 +38,18 @@ const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// Why nothing can be given for a session now, for under its controls, or null (#269): its
+// machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
+// sessions. what: 'answered', 'replied to'...
+export function staleNote(stale, machineName, what) {
+  if (!stale) { return null; }
+  const name = machineName || 'The machine';
+  if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
+  if (stale.reason === 'unsupported') { return `${name} doesn't support Agent Bridge sessions now, so this can't be ${what} from here.`; }
+  const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
+  return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
+}
 
 let seq = 0;
 
@@ -58,6 +70,10 @@ export class SessionCard {
   #selected = false;
   #pinned = false;
   #tab = 'conversation';
+  // Why its machine's sessions can't be acted on now ({ reason, since }), or null (#269); and
+  // the words that said so when last drawn, which move on with the clock.
+  #stale = null;
+  #shownStale = null;
   #menu = new RowMenu();
 
   // hostId: the machine the session is on, which everything the view sends goes to.
@@ -67,8 +83,10 @@ export class SessionCard {
   // all. labelled: whether the row names its machine, as it does with every machine shown.
   // onSelect(card): its row was chosen. onPin(card, pinned), onBack(card): the header's Pin and
   // (on a phone) Back. layout() -> { inspector }: whether the inspector is a pane of its own now.
-  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true }) {
+  // stale: why its machine's sessions can't be acted on now ({ reason, since }), or null.
+  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true, stale = null }) {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
+    this.#stale = stale;
     const n = ++seq;
     this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates` };
     this.#buildRow();
@@ -200,25 +218,35 @@ export class SessionCard {
     const title = s.title || 'Untitled session';
     const where = s.repository ?? lastSegment(s.cwd);
     const whereView = () => (s.repository ? h('span', { class: 'repo' }, s.repository) : where ? h('span', { class: 'repo mono' }, where) : null);
+    // Its machine away (#269, ui.md §2.2): none of the rules apply, since what the row last said
+    // may no longer be so. The failed glyph (a host unreachable), and in secondary text that it
+    // is offline and since when, or reconnecting; no driven overlay.
+    const stale = this.#staleText();
+    this.#shownStale = stale?.join(' ') ?? null;
+    for (const el of [this.element, this.view]) {
+      if (this.#stale) { el.dataset.stale = this.#stale.reason; } else { delete el.dataset.stale; }
+    }
+    const away = stale?.join(' \u00b7 ');
+    const words = stale ? { ...state, glyph: 'failed', driven: false, facts: stale, text: away, tone: 'muted', spoken: away.charAt(0).toLowerCase() + away.slice(1) } : state;
 
     // The row.
     e.rowTitle.textContent = title;
-    setGlyph(e.rowGlyph, state.glyph, { size: 16, driven: state.driven, label: statusLabel(state, { title: s.title, machine: this.machineName }) });
-    if (this.#changed('row', [state.text, state.tone, state.driven, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
+    setGlyph(e.rowGlyph, words.glyph, { size: 16, driven: words.driven, label: statusLabel(words, { title: s.title, machine: this.machineName }) });
+    if (this.#changed('row', [words.text, words.tone, words.driven, s.driverPrincipal, where, s.repository, this.labelled ? this.machineName : null])) {
       // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words.
-      const status = state.driven
+      const status = words.driven
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
-        : h('span', { class: 'row-status', dataset: { tone: state.tone } }, factsOf(state.text)[0]);
+        : h('span', { class: 'row-status', dataset: { tone: words.tone } }, words.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
 
     // The header: one meta line, glyph · status · machine · repository.
     e.titleText.textContent = title;
-    setGlyph(e.glyph, state.glyph, { size: 16, driven: state.driven });
-    if (this.#changed('meta', [state.text, state.tone, state.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
-      e.statusText.dataset.tone = state.tone;
-      setFacts(e.statusText, factsOf(state.text));
-      const driver = state.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
+    setGlyph(e.glyph, words.glyph, { size: 16, driven: words.driven });
+    if (this.#changed('meta', [words.text, words.tone, words.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
+      e.statusText.dataset.tone = words.tone;
+      setFacts(e.statusText, words.facts);
+      const driver = words.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
     // The main agent's words dated by when it wrote them, not by a delegate's later update.
@@ -307,6 +335,27 @@ export class SessionCard {
     this.labelled = labelled;
     this.#last = {};
     if (this.#s) { this.update(this.#s); }
+  }
+
+  // Its machine went offline, came back, or sent a whole new list since (#269): what the row and
+  // header say. What it offers to send follows answering(), drawn again by refreshQuestion().
+  setStale(stale) {
+    const same = (a, b) => (a?.reason ?? null) === (b?.reason ?? null) && (a?.since ?? null) === (b?.since ?? null);
+    if (same(stale, this.#stale)) { return; }
+    this.#stale = stale ?? null;
+    if (this.#s) { this.update(this.#s); }
+  }
+
+  // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
+  // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
+  // while its snapshot is still coming (its rows say what that snapshot says, and still take
+  // nothing) and for a machine that no longer offers sessions (its host line says so).
+  #staleText(now = Date.now()) {
+    const stale = this.#stale;
+    if (!stale || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
+    if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
+    const seen = ago(stale.since, now);
+    return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
   }
 
   // Activity since the session was last on screen (session-order.js): semibold, and the 6 px
@@ -443,7 +492,7 @@ export class SessionCard {
       this.#stopHost = hostId;
       this.els.stop.replaceChildren(...(this.#stop ? [this.#stop.element] : []));
     }
-    this.#stop?.update(s);
+    this.#stop?.update(s, { held: staleNote(ctx?.stale, this.machineName, 'ended') });
   }
 
   // The reply box, while the connected machine takes replies.
@@ -463,7 +512,7 @@ export class SessionCard {
       this.#replyHost = hostId;
       this.els.reply.replaceChildren(...(this.#reply ? [this.#reply.element] : []));
     }
-    this.#reply?.update(s, { attach: ctx?.capabilities?.includes('sessions.attach') === true, largeMax: ctx?.largeAttachments?.() ?? 0 });
+    this.#reply?.update(s, { attach: ctx?.capabilities?.includes('sessions.attach') === true, largeMax: ctx?.largeAttachments?.() ?? 0, offline: staleNote(ctx?.stale, this.machineName, 'replied to') });
   }
 
   #renderQuestion(s) {
@@ -475,7 +524,10 @@ export class SessionCard {
     // by the rule Needs you uses, so opening its entry never changes who asks (#249).
     const by = q ? delegateOf(s) : null;
     const asker = q ? (by ? `${by} asks` : 'Main agent asks') : null;
-    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker])) { return; }
+    // Its machine offline, or back without its whole list yet (#269): the form stays, with what
+    // was entered, but takes nothing until the machine says the question is still asked.
+    const held = staleNote(ctx?.stale, this.machineName, 'answered');
+    if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker, held])) { return; }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
     if (old && !sameQuestion) {
@@ -500,6 +552,7 @@ export class SessionCard {
         state: sameQuestion ? old.state : null,
         asker,
       });
+      this.#panel.setHeld(held);
       view = this.#panel.element;
     } else if (q) {
       view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null, asker });
@@ -560,6 +613,8 @@ export class SessionCard {
     e.rowAge.textContent = ago(s.updatedAt, now);
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     this.delegates.refreshTimes(now);
+    // "last seen 2m ago" moves on with nothing from the machine, which is away.
+    if (this.#stale && (this.#staleText(now)?.join(' ') ?? null) !== this.#shownStale) { this.update(s); }
   }
 
   #scheduleHistory() {

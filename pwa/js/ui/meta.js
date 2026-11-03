@@ -21,12 +21,6 @@ export function setFacts(el, facts) {
   return kept.length;
 }
 
-// The words of a status (js/status.js) that are several facts in one ("Waiting on you · 2
-// delegates still running"), with real separators between them.
-export function factsOf(text) {
-  return String(text ?? '').split(' \u00b7 ');
-}
-
 // A path in mono that, too long for its line, gives up its middle rather than breaking mid-word:
 // the start shortens to an ellipsis and the last part stays whole. The whole path is its tooltip.
 export function pathView(path, cls = '') {

@@ -51,6 +51,8 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
   const replyScript = [];
   // push.subscribe and push.unsubscribe requests, in order.
   const push = [];
+  // While set, a subscription's snapshot ends (sessions.synced) only once it is released.
+  let syncGate = null;
 
   const send = (ch, kind, body) => relay.send(ch.peer, concat(new Uint8Array([kind]), ch.id, body));
   const sendJson = (ch, message) => {
@@ -84,6 +86,8 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
         ch.subscribed = true;
         await reply({ revision, count: state.size });
         for (const s of state.values()) { await event(ch, 'session.upsert', listed(s)); }
+        // Held by a test: the list is sent, and not yet said to be whole.
+        if (syncGate) { await syncGate.promise; }
         return event(ch, 'sessions.synced', { revision });
       case 'session.answer':
         if (!answering) { break; }
@@ -197,6 +201,14 @@ export async function startFixtureHost({ base, name = 'fixture-host', sessions =
     // The next replies' outcomes, the same way.
     scriptReplies(...steps) { replyScript.push(...steps); },
     get openChannels() { return subscribers().length; },
+    // Holds the end of every snapshot from now on, so a phone's list is not yet current;
+    // returns the release.
+    holdSnapshots() {
+      let release;
+      const gate = { promise: new Promise((r) => { release = r; }) };
+      syncGate = gate;
+      return () => { if (syncGate === gate) { syncGate = null; } release(); };
+    },
     upsert,
     remove(id) {
       state.delete(id);

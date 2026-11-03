@@ -21,34 +21,24 @@ button,input{font:inherit}
     <input placeholder="Search sessions" style="flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-size: 16px; letter-spacing: 0.5px; color: {{t.on}}">
     <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 15px; background: {{t.primC}}; color: {{t.onPrimC}}; display: grid; place-items: center; font-size: 14px; font-weight: 500; letter-spacing: 0.1px">D</span>
   </label>
-  <div role="group" aria-label="Machine" style="display: flex; gap: 8px; padding: 16px 16px 8px">
-    <button aria-pressed="true" style="height: 32px; padding: 0 16px 0 8px; border-radius: 8px; border: 0; background: {{t.secC}}; color: {{t.onSecC}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; display: flex; align-items: center; gap: 8px"><svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"></path></svg>All</button>
-    <button aria-pressed="false" style="height: 32px; padding: 0 16px; border-radius: 8px; border: 1px solid {{t.outlineV}}; background: transparent; color: {{t.onv}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">ULTRA</button>
-    <button aria-pressed="false" style="height: 32px; padding: 0 16px; border-radius: 8px; border: 1px solid {{t.outlineV}}; background: transparent; color: {{t.onv}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">DEV-VM1</button>
+  <div role="group" aria-label="Session filters" style="display: flex; gap: 8px; padding: 16px 16px 8px; overflow-x: auto; scrollbar-width: none">
+    <button aria-pressed="false" aria-label="Needs you, 1 on every machine" style="flex: none; white-space: nowrap; height: 32px; padding: 0 12px 0 8px; border-radius: 8px; border: 1px solid {{t.outlineV}}; background: transparent; color: {{t.onv}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; display: flex; align-items: center; gap: 8px"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="18" hint-size="18px,18px"></dc-import>Needs you · 1</button>
+    <button aria-pressed="true" style="flex: none; white-space: nowrap; height: 32px; padding: 0 16px 0 8px; border-radius: 8px; border: 0; background: {{t.secC}}; color: {{t.onSecC}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; display: flex; align-items: center; gap: 8px"><svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5l3.5 3.5 7.5-8"></path></svg>All</button>
+    <button aria-pressed="false" style="flex: none; white-space: nowrap; height: 32px; padding: 0 16px; border-radius: 8px; border: 1px solid {{t.outlineV}}; background: transparent; color: {{t.onv}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">ULTRA</button>
+    <button aria-pressed="false" style="flex: none; white-space: nowrap; height: 32px; padding: 0 16px; border-radius: 8px; border: 1px solid {{t.outlineV}}; background: transparent; color: {{t.onv}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">DEV-VM1</button>
   </div>
 
   <div style="flex: 1; overflow: hidden; display: flex; flex-direction: column">
-    <div style="padding: 16px 16px 8px; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; color: {{t.warnHead}}">Needs you</div>
-    <div style="margin: 0 16px 8px; border-radius: 16px; background: {{t.warnC}}; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 12px">
-      <div style="display: flex; gap: 16px; align-items: flex-start">
-        <dc-import name="Glyph" kind="needs" theme="{{theme}}" size="24" hint-size="24px,24px"></dc-import>
-        <div style="flex: 1; min-width: 0">
-          <div>Ship 0.1.691 prerelease</div>
-          <div style="font-size: 14px; line-height: 20px; letter-spacing: 0.25px; color: {{t.onWarnC}}">Approve git push to release/0.1.691</div>
-        </div>
-        <span style="font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; color: {{t.onv}}">2 min</span>
-      </div>
-      <div style="display: flex; gap: 8px; justify-content: flex-end">
-        <button style="height: 40px; padding: 0 12px; border-radius: 20px; border: 0; background: transparent; color: {{t.primary}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">Deny</button>
-        <button style="height: 40px; padding: 0 24px; border-radius: 20px; border: 0; background: {{t.primary}}; color: {{t.onPrimary}}; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px">Approve once</button>
-      </div>
-    </div>
-
     <div style="padding: 16px 16px 8px; font-size: 14px; line-height: 20px; font-weight: 500; letter-spacing: 0.1px; color: {{t.primary}}">Your sessions</div>
     <a href="Android-Session.dc.html" style="display: flex; gap: 16px; align-items: center; min-height: 72px; padding: 8px 24px 8px 16px; text-decoration: none; color: inherit; background: {{t.secC}}; margin: 0 8px; border-radius: 16px; box-sizing: border-box">
       <span style="width: 24px; display: grid; place-items: center"><dc-import name="Glyph" kind="delegating" theme="{{theme}}" size="24" hint-size="24px,24px"></dc-import></span>
       <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: {{t.onSecC}}">Plan Migration to Windows App</div><div style="font-size: 14px; line-height: 20px; letter-spacing: 0.25px; color: {{t.onv}}">3 delegates · DEV-VM1</div></div>
       <span style="color: {{t.onv}}; display: flex"><dc-import name="Icon" icon="pin" size="20" hint-size="20px,20px"></dc-import></span>
+    </a>
+    <a href="#" style="display: flex; gap: 16px; align-items: center; min-height: 72px; padding: 8px 24px; text-decoration: none; color: inherit">
+      <dc-import name="Glyph" kind="needs" theme="{{theme}}" size="24" hint-size="24px,24px"></dc-import>
+      <div style="flex: 1; min-width: 0"><div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">Ship 0.1.691 prerelease</div><div style="font-size: 14px; line-height: 20px; letter-spacing: 0.25px"><span style="color: {{t.onWarnC}}">Waiting on you</span><span style="color: {{t.onv}}">&#160;· ULTRA</span></div></div>
+      <span style="font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.5px; color: {{t.onv}}">2 min</span>
     </a>
     <a href="#" style="display: flex; gap: 16px; align-items: center; min-height: 72px; padding: 8px 24px; text-decoration: none; color: inherit">
       <dc-import name="Glyph" kind="working" theme="{{theme}}" size="24" hint-size="24px,24px"></dc-import>

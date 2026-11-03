@@ -107,7 +107,7 @@ public sealed partial class LaunchViewModel
     // machine, its loopback.
     Machine? TrustVia(Machine m) => m.IsLocal ? watchedLoopback : m;
 
-    bool Answers(Machine? via) => via is not null && main.Fleet is not null && via.Host.Can(TrustProtocol.Capability);
+    bool Answers(Machine? via) => via is not null && main.Fleet is not null && !via.Offline && via.Host.Can(TrustProtocol.Capability);
 
     IEnumerable<TrustQuestion> TrustFor(Machine m)
     {
@@ -200,7 +200,7 @@ public sealed partial class LaunchViewModel
     static TrustAnswerResult? TrustResult(Delivery d)
     {
         if (d.Result.ValueKind != JsonValueKind.Object) { return null; }
-        try { return d.Result.Deserialize<TrustAnswerResult>(ProtocolJson.Options); }
+        try { return Received.Read<TrustAnswerResult>(d.Result); }
         catch (JsonException) { return null; }
     }
 
@@ -246,7 +246,12 @@ public sealed partial class LaunchViewModel
         var sent = via.Deliveries.Submit(TrustKey + question.Id, TrustProtocol.Answer, Data, outcome => outcome != "refused", payload: choice,
             replayAfterRestart: false, timeout: TrustTimeout, resendOnBusy: false);
         trustAnswers[key] = new TrustAnswer(m.Key, via, question, choice, sent.Request, Data);
-        DrawTrust();
+        // The outcome can be in before Submit returns: a host that answers before the call has had
+        // to wait completes it there and then. Its Changed came before the answer above was known,
+        // and found nothing to act on, so the session it started never opened and the prompt that
+        // went with it stayed (#476: seen on Linux CI, where the test host can answer that fast).
+        if (via.Deliveries.Get(TrustKey + question.Id) is { State: DeliveryState.Done } done && done.Request == sent.Request) { OnTrustDelivery(m, done); }
+        else { DrawTrust(); }
     }
 
     // After an error: that same request again, which the machine answers with its first outcome.
@@ -368,7 +373,7 @@ public sealed partial class LaunchViewModel
         {
             await lb.Host.WhenConnectedAsync().WaitAsync(TimeSpan.FromSeconds(20));
             if (!lb.Host.Can(TrustProtocol.Capability)) { return null; }
-            var o = await lb.Host.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout);
+            var o = await lb.Host.ReadAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout);
             return o.Trust ?? [];
         }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }

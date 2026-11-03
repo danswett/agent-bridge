@@ -133,12 +133,18 @@ static partial class SelfTest
             if (movable?.Card is { } moving)
             {
                 bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving);
+                // What was seen when a move's focus did not land, for the failure (#410: twice on
+                // Arm64, with nothing in the log to say which move, or where focus was instead).
+                var seen = new List<string>();
+                string Seen() => $"{FocusedName(window)}; the row {(moving.WantsRowFocus ? "still asking for focus" : "no longer asking for focus")}; the list's item for it {ItemState(window, moving)}";
                 var openBefore = main.Selected;
                 movable.MoveBy(1);
                 var down = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
+                if (!down) { seen.Add($"after the move down: {Seen()}"); }
                 Rows(window).FirstOrDefault(r => r.Card == moving)?.MoveBy(-1);
                 var up = await Until(() => !moving.WantsRowFocus && RowFocused(), TimeSpan.FromSeconds(5));
-                Check(down && up, "keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row");
+                if (!up) { seen.Add($"after the move up: {Seen()}"); }
+                Check(down && up, $"keeps keyboard focus on a row moved down and back up, so the next Alt+Up/Down moves the same row{(seen.Count > 0 ? $" ({string.Join("; ", seen)})" : "")}");
                 await Task.Delay(300);
                 Check(main.Selected == openBefore && openBefore != moving, $"leaves the open session open while another row moves and takes focus ({main.Selected?.Id ?? "none"})");
             }
@@ -147,15 +153,29 @@ static partial class SelfTest
             // off); once an arrow key has moved it there, the row with focus is opened.
             var ordered = Rows(window).OrderBy(Top).ToList();
             var target = ordered.FirstOrDefault(r => r.Card != main.Selected);
-            if (target?.Card is { } reached && Above<ListViewItem>(target, _ => true) is { } targetItem)
+            // The list's own item for the row: a row control just moved can still be in the visual
+            // tree, put aside for reuse in another item (SessionsPage.OnRowRecycled), and focus given
+            // there is not on any row of the list.
+            if (target?.Card is { } reached && window.Sessions.Rows.ContainerFromItem(reached) is ListViewItem)
             {
                 var openNow = main.Selected;
-                targetItem.Focus(FocusState.Keyboard);
+                ListViewItem? Item() => window.Sessions.Rows.ContainerFromItem(reached) as ListViewItem;
+                bool OnItem() => Item() is { } item && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot), item);
+                // Waited for, rather than read a fixed 300 ms later (#410, x64): a row drawn again
+                // as the list settles can take focus from the item given it, and then the arrow
+                // key's FollowFocus below had no row to open. Asked of the list's item each time,
+                // since the row drawn again may be in another one.
+                Task<bool> Focused() => Until(() => OnItem() || Item() is { } item && item.Focus(FocusState.Keyboard) && OnItem(), TimeSpan.FromSeconds(5));
+                var given = await Focused();
+                // Long enough for selection following focus, were it on, to have chosen the row.
                 await Task.Delay(300);
                 var stayed = main.Selected == openNow;
+                // Again just before the key: focus can have moved during that wait too.
+                given = await Focused() && given;
+                var focusedOn = given ? "" : $"; {FocusedName(window)}";
                 window.Sessions.FollowFocus();
                 var opened = await Until(() => main.Selected == reached, TimeSpan.FromSeconds(5));
-                Check(stayed && opened, $"opens nothing for a row only given focus, and the row an arrow key reached (focus alone: {(stayed ? "opened nothing" : "opened its row")}; after the key: {main.Selected?.Id ?? "none"})");
+                Check(given && stayed && opened, $"opens nothing for a row only given focus, and the row an arrow key reached (focus alone: {(stayed ? "opened nothing" : "opened its row")}; after the key: {main.Selected?.Id ?? "none"}{focusedOn})");
             }
             else { Check(false, "finds a row other than the open one"); }            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".window.png"));
             await Picture(window.Sessions, Path.ChangeExtension(outFile, ".sessions.png"));
@@ -349,6 +369,22 @@ static partial class SelfTest
     static List<SessionRow> Rows(MainWindow window) =>
         [.. Find<SessionRow>(window.Sessions.Rows).Where(r => r.Card is { } c && window.ViewModel.Sessions.Contains(c) && r.ActualHeight > 0).DistinctBy(r => r.Card)];
 
+    // What has keyboard focus, for a failure's message: a row's list item by its session, and
+    // whether it is the list's own item for that session or one put aside for reuse.
+    static string FocusedName(MainWindow window) =>
+        Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) switch
+        {
+            ListViewItem { Content: SessionCardViewModel c } item => $"focus on the list item of {c.Id}{(ReferenceEquals(window.Sessions.Rows.ContainerFromItem(c), item) ? "" : ", not the list's own")}",
+            FrameworkElement e => $"focus on {e.GetType().Name} {AutomationProperties.GetAutomationId(e)}".TrimEnd(),
+            { } other => $"focus on {other.GetType().Name}",
+            null => "no focus",
+        };
+
+    static string ItemState(MainWindow window, SessionCardViewModel card) =>
+        window.Sessions.Rows.ContainerFromItem(card) is ListViewItem item
+            ? $"{item.FocusState}, {item.Visibility}, {(item.IsLoaded ? "loaded" : "not loaded")}, {item.ActualHeight:0} px"
+            : "not drawn";
+
     // A TextBlock's words, its runs' included.
     static string Text(TextBlock block) => block.Inlines.Count == 0 ? block.Text : string.Concat(block.Inlines.OfType<Microsoft.UI.Xaml.Documents.Run>().Select(r => r.Text));
 
@@ -536,6 +572,31 @@ static partial class SelfTest
         }
         else { check(false, "finds Back in one column"); }
 
+        // Motion (ui.md §5.3): timed by the generated resources, every entry of them; the list with
+        // none of its own transitions, which slide a row's neighbours; and a push that never holds
+        // the person back, so Back pressed while the session is still sliding in takes them back.
+        var timed = false;
+        try { timed = MotionCatalogue.Names.All(n => Motion.Catalogue[n].Duration > TimeSpan.Zero); }
+        catch (Exception e) when (e is KeyNotFoundException or FormatException) { AppLog.Write($"self-test: motion: {e.Message}"); }
+        check(timed, "times every motion in ui.md's catalogue by the generated AbMotion* resources");
+        check(page.Rows.ItemContainerTransitions is { Count: 0 }, "gives the session list no transitions of its own, so no row's neighbours slide");
+        if (main.Sessions.FirstOrDefault(c => c.Question is null) is { } plain)
+        {
+            main.Selected = plain;
+            await Until(() => Shows(Pane("SessionPane")), TimeSpan.FromSeconds(5));
+            var back = ById<Button>(page.SessionPaneView, "Back");
+            if (back is not null) { ((IInvokeProvider)new ButtonAutomationPeer(back).GetPattern(PatternInterface.Invoke)).Invoke(); }
+            var started = DateTime.UtcNow;
+            // Needs you's buttons take no click for a moment as the list comes back (AnswerGuard).
+            var lane = page.FindName("LaneItems") as UIElement;
+            var held = lane is { IsHitTestVisible: false };
+            var returned = back is not null && await Until(() => main.Selected is null && Shows(Pane("ListPane")), TimeSpan.FromSeconds(5));
+            check(returned, $"goes back to the list at once when Back is pressed while the session slides in ({(DateTime.UtcNow - started).TotalMilliseconds:0} ms)");
+            var released = await Until(() => lane is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3));
+            check(held && released, $"holds Needs you's buttons from the pointer for {AnswerGuard.Window.TotalMilliseconds:0} ms as the list comes back, then takes clicks again (held: {held}, released: {released})");
+        }
+        else { check(false, "finds a session without a question to push"); }
+
         // The session open survives every breakpoint, both ways.
         main.Selected = card;
         var kept = true;
@@ -544,6 +605,27 @@ static partial class SelfTest
             kept &= await At(w, 900, mode) && main.Selected == card && page.Rows.SelectedItem == card && page.SessionPaneView.Card == card && Shows(Pane("SessionPane"));
         }
         check(kept, "keeps the session open, and its row selected, through every breakpoint and back");
+
+        // Needs you is the list's header: it moves as the list scrolls to a session chosen
+        // elsewhere, and it and the question come back under a pointer as the window is activated
+        // again from behind another. Each holds their buttons from the pointer (AnswerGuard).
+        if (page.FindName("LaneItems") is UIElement laneItems && main.Sessions.FirstOrDefault(c => c != card) is { } other)
+        {
+            await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            main.Selected = other;
+            var heldOnScroll = !laneItems.IsHitTestVisible;
+            var releasedAfter = await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            check(heldOnScroll && releasedAfter, $"holds Needs you's buttons from the pointer as the list scrolls to a session chosen elsewhere, then takes clicks again (held: {heldOnScroll}, released: {releasedAfter})");
+
+            main.Selected = card;
+            layout.Tab = SessionTab.Conversation;
+            var settled = await Until(() => page.SessionPaneView.QuestionShown is { IsHitTestVisible: true } && laneItems.IsHitTestVisible, TimeSpan.FromSeconds(5));
+            window.Reactivated();
+            var question = page.SessionPaneView.QuestionShown is { IsHitTestVisible: false };
+            var lane = !laneItems.IsHitTestVisible;
+            check(settled && question && lane, $"holds the question's and Needs you's buttons from the pointer as the window is activated again (question: {question}, Needs you: {lane})");
+        }
+        else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a
@@ -588,7 +670,13 @@ static partial class SelfTest
             check(pill is { ActualWidth: 3, ActualHeight: 16 } && Colour(pill.Fill) == want, $"marks the page shown with a 3×16 Bridge pill in {theme} ({(pill is null ? "none" : $"{pill.ActualWidth}×{pill.ActualHeight} {Colour(pill.Fill)}")}, wanted {want})");
             var caption = window.AppWindow.TitleBar;
             var wanted = MainWindow.CaptionColours(theme);
-            check(wanted is { } c && caption.ButtonForegroundColor == c.Text && caption.ButtonInactiveForegroundColor == c.Inactive && caption.ButtonHoverBackgroundColor == c.Hover && caption.ButtonPressedBackgroundColor == c.Pressed,
+            bool Painted() => wanted is { } c && caption.ButtonForegroundColor == c.Text && caption.ButtonInactiveForegroundColor == c.Inactive && caption.ButtonHoverBackgroundColor == c.Hover && caption.ButtonPressedBackgroundColor == c.Pressed;
+            // #424: painted from Root.ActualThemeChanged, which WinUI raises on a later tick than the
+            // one that sets the theme (about 30 ms later on an x64 desktop). On a busy Arm64 runner
+            // that tick once came after the 300 ms above, and the check read the Light theme's paint
+            // in Dark.
+            await Until(Painted, TimeSpan.FromSeconds(10));
+            check(Painted(),
                 $"draws the caption buttons in the design's {theme} text and fills ({caption.ButtonForegroundColor?.ToString() ?? "system"}, wanted {wanted?.Text.ToString() ?? "none"})");
             // A control that follows WinUI's accent: an accent button.
             var button = new Button { Content = "Bridge", Style = (Style)Application.Current.Resources["AccentButtonStyle"], Opacity = 0, IsHitTestVisible = false };

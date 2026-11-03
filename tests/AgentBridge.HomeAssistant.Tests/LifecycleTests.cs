@@ -279,6 +279,65 @@ public sealed class LifecycleTests : IDisposable
         Assert.Equal("idle", ha.Retained[HaContract.Topics(NodeA).StatusState]);
     }
 
+    // #147: a host restarted while its discovery was held, its Codex session not listed by the first
+    // pass, retired that session's entities while it ran on.
+    [Fact]
+    public async Task A_restart_under_a_hold_keeps_a_live_codex_sessions_entities_and_one_that_ended_is_retired_only_once_the_hold_clears()
+    {
+        static Session Codex(string id) => FakeSessions.Copilot(id) with { Agent = AgentKind.Codex };
+        sessions.Set(Codex(A));
+        sessions.Set(Codex(B));
+        await using (var before = Connector()) { await Run(before, 3); }
+
+        // Neither is listed when the host starts again under a hold, and B has ended meanwhile.
+        sessions.End(A);
+        sessions.End(B);
+        sessions.Held = new DiscoveryHeld("an unrecognised codex process (pid 11136)", [AgentKind.Codex]);
+        await using var after = Connector();
+        await Run(after, 120);
+        Assert.True(ha.Exists($"sensor.{NodeA}_status"));
+        Assert.True(ha.Exists($"sensor.{NodeB}_status"));
+        Assert.Contains(log, l => l.StartsWith("Home Assistant connector retires nothing while session discovery is held (an unrecognised codex process (pid 11136))", StringComparison.Ordinal));
+
+        // A is found while the hold stands, and keeps its entities; B goes once a complete pass agrees.
+        sessions.Set(Codex(A));
+        await Run(after, 60);
+        sessions.Held = null;
+        await Run(after, 31);
+        Assert.False(ha.Exists($"sensor.{NodeB}_status"));
+        Assert.True(ha.Exists($"sensor.{NodeA}_status"));
+        Assert.Equal("idle", ha.Retained[HaContract.Topics(NodeA).StatusState]);
+        Assert.Empty(after.PendingRetirement);
+    }
+
+    // Found in review of #147: what protects a session is looked at again after the dashboard is
+    // read, not only before.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_hold_or_a_listing_that_begins_while_the_dashboard_is_read_keeps_the_entities_it_protects(bool hold)
+    {
+        sessions.Set(FakeSessions.Copilot(B));
+        await using var c = Connector();
+        await Run(c, 3);
+        sessions.End(B);
+        // The first read starts B's grace; the second, once it has passed, would retire it.
+        var reads = 0;
+        ha.DuringDashboardRead = () =>
+        {
+            if (++reads != 2) { return; }
+            if (hold) { sessions.Held = new DiscoveryHeld("an unrecognised codex process (pid 960)", [AgentKind.Codex]); }
+            else { sessions.Set(FakeSessions.Copilot(B)); }
+        };
+        await Run(c, 60);
+
+        Assert.True(reads >= 2);
+        Assert.True(ha.Exists($"sensor.{NodeB}_status"));
+        // Never removed, not even to be published again at once.
+        Assert.DoesNotContain(ha.To(HaContract.DiscoveryTopic("sensor", NodeB, "status")), p => p.Payload.Length == 0);
+        Assert.Equal(hold, c.PendingRetirement.Contains(NodeB));
+    }
+
     [Fact]
     public async Task A_dashboard_that_cannot_be_read_holds_every_retirement()
     {

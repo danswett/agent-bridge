@@ -9,7 +9,9 @@ using Xunit;
 // launch.trust end to end: a person answering a launched agent's folder-trust question from their
 // phone, through the relay, with a command it signed. The agent is played by the fake screens and
 // starter: what it draws, and what it does with keys that reach it.
-public sealed partial class LaunchFlowTests
+// A class of its own beside LaunchFlowTests, on its fixture, so that the two run side by side (#479).
+[Trait("Category", "Network")]
+public sealed class LaunchTrustFlowTests : LaunchFlowFixture
 {
     // Codex's question as 0.165 drew it on the test VM (2026-10-31), blank rows and all.
     string[] CodexAsks(string root) =>
@@ -165,6 +167,59 @@ public sealed partial class LaunchFlowTests
         });
     }
 
+    [Theory]
+    [InlineData(TrustedPeerStore.Person, false, false)]
+    [InlineData(TrustedPeerStore.Service, false, false)]
+    [InlineData(TrustedPeerStore.Host, false, false)]
+    [InlineData(TrustedPeerStore.Person, true, false)]
+    [InlineData(TrustedPeerStore.Person, false, true)]
+    public async Task Folder_trust_requires_a_current_person_pin_for_the_peer_and_signer(string role, bool revoked, bool otherSigner)
+    {
+        locator.Installed["codex"] = @"C:\fake\codex.cmd";
+        starter.Registers = false;
+        screens.Rows = CodexAsks(Path.GetDirectoryName(app)!);
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { agent = "codex", workspace = "App", prompt = "go" })).GetProperty("trust");
+
+        var store = new TrustedPeerStore(Path.Combine(f.Root, "trust"), host.Key.Public, () => host.Relay.AccountId);
+        store.Reset();
+        store.Put(client.Key.Public, role, DateTimeOffset.UtcNow.AddHours(1));
+        using var authorization = new RemoteAuthorization(true, store);
+        authorization.Attach(host.Hub);
+        var answers = new FolderTrustAnswers(host.Key, trustLauncher) { Trust = authorization };
+        answers.Attach(host.Relay);
+        if (revoked) { store.Revoke(client.Key.Public); }
+        using var unapproved = P256KeyPair.Generate();
+        var request = Answer(ch, q.GetProperty("id").GetString()!, "trust", otherSigner ? unapproved : client.Key);
+        screens.OnTyped = _ =>
+        {
+            screens.Rows = ["› go"];
+            starter.RegisterCodex(starter.Specs[0], starter.Pids[0], 7001, starter.CodexId);
+        };
+
+        // Exercise the nested boundary directly; the outer role allowlist must not mask it.
+        var result = await answers.AnswerAsync(client.Id, JsonSerializer.SerializeToElement(request, ProtocolJson.Options));
+
+        if (role == TrustedPeerStore.Person && !revoked && !otherSigner)
+        {
+            Assert.Equal(TrustAnswerOutcome.Started, result.Outcome);
+            Assert.Equal(starter.CodexId, result.Session);
+            Assert.Null(result.Reason);
+            var send = Assert.Single(Assert.Single(screens.Plans).Sends);
+            Assert.Equal(("", true), (send.Text, send.Enter));
+            Assert.Equal(starter.Pids[0], Assert.Single(screens.Typed));
+        }
+        else
+        {
+            Assert.Equal(TrustAnswerOutcome.Refused, result.Outcome);
+            Assert.Equal("only an independently pinned person key may answer folder trust", result.Reason);
+            Assert.Null(result.Session);
+            Assert.Empty(screens.Plans);
+            Assert.Empty(screens.Typed);
+        }
+    }
+
     [Fact]
     public async Task Trusting_from_a_phone_moves_Claudes_highlight_to_trust_and_sees_it_there_before_Enter()
     {
@@ -240,6 +295,59 @@ public sealed partial class LaunchFlowTests
         var after = await RequestAsync(ch, LaunchProtocol.Options, new { });
         Assert.False(after.TryGetProperty("busy", out _));
         Assert.False(after.TryGetProperty("trust", out _));
+
+        // Nor once the host has looked again and let the launch go: it was busy again then, when
+        // it took the closed agent for one that had handed its session on and was still asking
+        // (#416, whenever the question above came after that look).
+        await WaitAsync(() => Task.FromResult(logged.Any(l => l.Contains("closed: a person declined to trust the folder", StringComparison.Ordinal))));
+        var later = await RequestAsync(ch, LaunchProtocol.Options, new { });
+        Assert.False(later.TryGetProperty("busy", out _));
+        Assert.False(later.TryGetProperty("trust", out _));
+    }
+
+    [Fact]
+    public async Task A_look_at_the_window_begun_before_a_Quit_and_done_after_it_does_not_ask_the_question_again()
+    {
+        screens.Rows = CopilotAsks();
+        ServeTrust(Trusting());
+        var ch = await OpenAsync();
+        var q = (await LaunchTrustAsync(ch, new { workspace = "App", prompt = "go" })).GetProperty("trust");
+
+        // The host's next look at the window reads the question, and is still on its way when the
+        // Quit goes, and when the agent is seen to close.
+        var holding = 1;
+        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        screens.Reading = async () =>
+        {
+            if (Interlocked.Exchange(ref holding, 0) == 0) { return; }
+            held.SetResult();
+            await release.Task;
+        };
+        await held.Task.WaitAsync(Patience);
+        screens.OnTyped = _ => starter.Exit(starter.Pids[0]);
+        Assert.Equal("declined", (await AnswerAsync(ch, Answer(ch, q.GetProperty("id").GetString()!, "quit", client.Key))).Outcome);
+
+        // That look comes back with the question it read, and the host's following goes on to its
+        // next look, where it is held while the launch options are asked for.
+        var looking = 1;
+        using var looked = new ManualResetEventSlim();
+        using var resume = new ManualResetEventSlim();
+        starter.Looking = () =>
+        {
+            if (Interlocked.Exchange(ref looking, 0) == 0) { return; }
+            looked.Set();
+            resume.Wait(Patience);
+        };
+        try
+        {
+            release.SetResult();
+            Assert.True(looked.Wait(Patience), "the host's next look");
+            var after = await RequestAsync(ch, LaunchProtocol.Options, new { });
+            Assert.False(after.TryGetProperty("busy", out _));
+            Assert.False(after.TryGetProperty("trust", out _));
+        }
+        finally { resume.Set(); }
     }
 
     [Fact]

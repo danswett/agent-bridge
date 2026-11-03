@@ -71,3 +71,18 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 | [S4](spikes/s4-relay/RESULTS.md) | Can one untrusted relay serve every user, with GitHub sign-in and end-to-end channels from hosts and a PWA? | GO, live on Azure Container Apps. Needs a cross-replica backplane to deploy without splitting. [PWA](https://danswett.github.io/agent-bridge/s4/) |
 | [S5](spikes/s5-web-push/RESULTS.md) | Can a host notify the phone PWA through Web Push without the relay or push service reading it? | GO on a real iPhone: lock-screen notice, tap, answer back at the host in 10 s |
 | [S6](spikes/s6-tpm-keys/RESULTS.md) | Can a device's long-term key live non-exportable in the TPM and still do Noise, the relay proof and the device id? | GO, live with the relay and the iPhone. Needs NCrypt directly; .NET's wrappers fail with the TPM provider |
+
+## License
+
+Copyright (c) 2026 Dan Swett. Licensed under the GNU Affero General Public License,
+version 3 only ([AGPL-3.0-only](LICENSE)), not any later version. Under its section 13, if
+you modify it and users interact with your version remotely through a computer network
+(the relay, for example), you must prominently offer all of those users an opportunity to
+receive the Corresponding Source of your version. For a commercial license on other terms,
+[open an issue](https://github.com/danswett/agent-bridge/issues/new) asking for one.
+
+Versions up to and including commit
+[`05ee682`](https://github.com/danswett/agent-bridge/commit/05ee6828022d1cef73b48d5e323fa405c494568a)
+were released under the MIT License, and stay available under it. Agent Bridge Mono, in
+`design/fonts/agent-bridge-mono/`, is licensed separately under the SIL Open Font License 1.1
+(see its README), not this project's AGPL.

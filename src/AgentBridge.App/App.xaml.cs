@@ -118,7 +118,7 @@ public partial class App : Application
                 BlobsFor = blobs is null ? null : key,
                 FetchDetail = async id =>
                 {
-                    try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
+                    try { return await conn.ReadAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
                     catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }
                 },
                 FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),
@@ -142,7 +142,10 @@ public partial class App : Application
         // Usage kept between runs for the account (#172), beside them too.
         main = self = new MainViewModel(localMachine, new UsageViewModel(cache: new UsageCache(Path.Combine(appData, $"{options.Profile}-usage.json"))), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
-        responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
+        responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id))
+        {
+            SessionOf = (key, id) => main.MachineOf(key)?.Host.Sessions.Get(id),
+        };
         main.MachineRemoved += responder.MachineGone;
 
         // The account's other machines, through the relay as a device of the app's own (the
@@ -379,6 +382,7 @@ sealed class NoLogonTasks : ILogonTasks
     public void Delete(string name) { }
     public void Run(string name) { }
     public bool IsRunning(string name) => false;
+    public void Stop(string name) { }
 }
 
 sealed class NoProcesses : IProcesses

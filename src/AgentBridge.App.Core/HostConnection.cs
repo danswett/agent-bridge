@@ -29,6 +29,8 @@ public sealed class HostConnection : IAsyncDisposable
     long usageEvents;
     long updateEvents;
     long connections;
+    // The kinds of event a message was refused for, each logged once (#446).
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> refusedKinds = new(StringComparer.Ordinal);
 
     sealed record Current(IClientChannel Channel, string? Instance);
 
@@ -83,6 +85,18 @@ public sealed class HostConnection : IAsyncDisposable
 
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
 
+    // The current connection's gap signal, while there is one.
+    SemaphoreSlim? resync;
+
+    // Reads everything again on the connection there is, as after a gap in its events, the
+    // sessions with a new snapshot; nothing without one (the next connection subscribes afresh).
+    // For a machine back in the relay's presence whose channel outlived its absence (#269). One
+    // pending is enough: a recovery reads everything.
+    public void Resync()
+    {
+        if (Volatile.Read(ref resync) is { CurrentCount: 0 } s) { s.Release(); }
+    }
+
     // Waits until there is a connection, for those that have something to send.
     public Task WhenConnectedAsync(CancellationToken ct = default) => Volatile.Read(ref connected).Task.WaitAsync(ct);
 
@@ -108,6 +122,12 @@ public sealed class HostConnection : IAsyncDisposable
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
         (await CallAsync(op, data, timeout, ct)).Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
 
+    // A host record (a session, launch options, a launch's outcome), read as the spec says a client
+    // reads one (Received, v1-sessions.md "Malformed records"): a field it cannot read is absent,
+    // unless it is one the record is filed or decided on, which refuses it (MalformedRecordException).
+    public async Task<T> ReadAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) where T : class =>
+        Received.Read<T>(await CallAsync(op, data, timeout, ct));
+
     async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -122,6 +142,7 @@ public sealed class HostConnection : IAsyncDisposable
                 // Not disposed: the pump may still release it as the connection ends, and a
                 // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
                 var gaps = new SemaphoreSlim(0);
+                Volatile.Write(ref resync, gaps);
                 var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
                 Volatile.Write(ref current, new Current(ch, null));
                 ui.Post(() => Hello = hello);
@@ -145,16 +166,16 @@ public sealed class HostConnection : IAsyncDisposable
                 if (!Subscribes) { }
                 else if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
-                    var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, UsageAsk(hello), ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
+                    var usage = await ExtraAsync<UsageReport>(ch, UsageProtocol.Subscribe, UsageAsk(hello), ct);
+                    if (usage is not null) { ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } }); }
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
                 else { ui.Post(() => Usage = UsageReport.Empty); }
                 var heardUpdate = Interlocked.Read(ref updateEvents);
                 if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability))
                 {
-                    var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } });
+                    var update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
+                    if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } }); }
                 }
                 else { ui.Post(() => Update = null); }
                 if (Subscribes) { await SubscribeSessionsAsync(ch, ct); }
@@ -197,6 +218,7 @@ public sealed class HostConnection : IAsyncDisposable
             }
             finally
             {
+                Volatile.Write(ref resync, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
@@ -210,11 +232,27 @@ public sealed class HostConnection : IAsyncDisposable
         }
     }
 
+    // Usage and update state ride along with the sessions: a reading of either the app cannot read
+    // is refused, and the connection goes on with the one it had. Thrown, it ended the connection
+    // before the sessions were subscribed, and every connection after read the same thing: the app
+    // reconnected for good and showed no sessions (#446).
+    async Task<T?> ExtraAsync<T>(IClientChannel ch, string op, object? data, CancellationToken ct) where T : class
+    {
+        try { return await ch.ReadAsync<T>(op, data, ct: ct); }
+        catch (MalformedRecordException e)
+        {
+            Refused(op, e);
+            return null;
+        }
+    }
+
     async Task SubscribeSessionsAsync(IClientChannel ch, CancellationToken ct)
     {
         // The snapshot is marked before the request goes, so no upsert of it is missed.
         ui.Post(Sessions.BeginSnapshot);
-        await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
+        // Its result (revision, count) is not used: read strictly, a result the app could not read
+        // ended the connection, and every reconnect asked again (#446).
+        await ch.CallAsync(Ops.SessionsSubscribe, ct: ct);
     }
 
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
@@ -242,16 +280,16 @@ public sealed class HostConnection : IAsyncDisposable
         if (hello.Capabilities.Contains(UsageProtocol.Capability))
         {
             var heardUsage = Interlocked.Read(ref usageEvents);
-            var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, UsageAsk(hello), ct: ct);
-            ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
+            var usage = await ExtraAsync<UsageReport>(ch, UsageProtocol.Get, UsageAsk(hello), ct);
+            if (usage is not null) { ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } }); }
         }
         if (hello.Capabilities.Contains(UpdateProtocol.Capability))
         {
             // Subscribed again rather than read: a host first seen without updates was followed
             // only from a refresh, and subscribing where it already is changes nothing there.
             var heardUpdate = Interlocked.Read(ref updateEvents);
-            var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
-            ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } });
+            var update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
+            if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } }); }
         }
         else { ui.Post(() => { if (Update is not null) { Update = null; Changed?.Invoke(); } }); }
         await SubscribeSessionsAsync(ch, ct);
@@ -268,7 +306,7 @@ public sealed class HostConnection : IAsyncDisposable
         var heardUpdate = Interlocked.Read(ref updateEvents);
         if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability) && Hello?.Capabilities.Contains(UpdateProtocol.Capability) != true)
         {
-            update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+            update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
         }
         ui.Post(() =>
         {
@@ -302,33 +340,82 @@ public sealed class HostConnection : IAsyncDisposable
         catch (OperationCanceledException) { }
     }
 
+    // One message the app cannot read is refused, and the pump goes on (#446). Before, the
+    // JsonException ended the pump and the connection with it, and the snapshot after the
+    // reconnect sent the same record again: one malformed session kept the app reconnecting for
+    // good, its other sessions frozen. Logged once per kind of event, without the record itself.
     void Apply(ChannelEvent ev)
+    {
+        try { ApplyOne(ev); }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException) { Refused(ev.Name, e); }
+    }
+
+    // Said once for each kind of message, by the type of failure and where it was, never with the
+    // message's text: a converter's message quotes the value it could not read (UtcTimeConverter
+    // the time string it was given), and what a host sends is not the log's to keep.
+    void Refused(string kind, Exception e)
+    {
+        if (!refusedKinds.TryAdd(kind, 0)) { return; }
+        var where = e is JsonException { Path: { } path } ? $" at {path}" : "";
+        log($"refused a {kind} the app could not read ({e.GetType().Name}{where}); any more are refused without a word");
+    }
+
+    // Host records are read as the spec says (Received): a field that cannot be read is absent,
+    // unless the record is filed or decided on by it. The host's own status, a local-pipe record
+    // the app alone reads, stays strict: its process id and start say which host it is.
+    void ApplyOne(ChannelEvent ev)
     {
         switch (ev.Name)
         {
-            case Events.SessionUpsert when ev.Data.Deserialize<Session>(ProtocolJson.Options) is { } s:
-                ui.Post(() => Sessions.Upsert(s));
-                break;
-            case Events.SessionRemove when ev.Data.Deserialize<SessionRemoved>(ProtocolJson.Options) is { } r:
-                ui.Post(() => Sessions.Remove(r.Id));
-                break;
+            case Events.SessionUpsert:
+                {
+                    Session s;
+                    bool exact;
+                    try { s = Received.Read<Session>(ev.Data, out exact); }
+                    catch (JsonException)
+                    {
+                        // A session the app could not read may be the busy one: the list is not
+                        // the whole word on whether this host may be restarted.
+                        ui.Post(Sessions.Refuse);
+                        throw;
+                    }
+                    ui.Post(() => Sessions.Upsert(s, exact));
+                    break;
+                }
+            case Events.SessionRemove:
+                {
+                    var r = Received.Read<SessionRemoved>(ev.Data);
+                    ui.Post(() => Sessions.Remove(r.Id));
+                    break;
+                }
             case Events.SessionsSynced:
                 {
-                    var held = ev.Data.ValueKind == JsonValueKind.Object ? ev.Data.Deserialize<SessionsSynced>(ProtocolJson.Options)?.DiscoveryHeld : null;
+                    // Read like any other record: one the app cannot read ends no snapshot, so it
+                    // removes no session and lifts no discovery hold.
+                    var held = Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld;
                     ui.Post(() => Sessions.EndSnapshot(held));
                     break;
                 }
-            case Events.DiscoveryChanged when ev.Data.Deserialize<DiscoveryChanged>(ProtocolJson.Options) is { } d:
-                ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
-                break;
-            case UsageProtocol.Update when ev.Data.Deserialize<UsageReport>(ProtocolJson.Options) is { } u:
-                Interlocked.Increment(ref usageEvents);
-                ui.Post(() => { Usage = u; Changed?.Invoke(); });
-                break;
-            case UpdateProtocol.Event when ev.Data.Deserialize<UpdateState>(ProtocolJson.Options) is { } up:
-                Interlocked.Increment(ref updateEvents);
-                ui.Post(() => { Update = up; Changed?.Invoke(); });
-                break;
+            case Events.DiscoveryChanged:
+                {
+                    var d = Received.Read<DiscoveryChanged>(ev.Data);
+                    ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
+                    break;
+                }
+            case UsageProtocol.Update:
+                {
+                    var u = Received.Read<UsageReport>(ev.Data);
+                    Interlocked.Increment(ref usageEvents);
+                    ui.Post(() => { Usage = u; Changed?.Invoke(); });
+                    break;
+                }
+            case UpdateProtocol.Event:
+                {
+                    var up = Received.Read<UpdateState>(ev.Data);
+                    Interlocked.Increment(ref updateEvents);
+                    ui.Post(() => { Update = up; Changed?.Invoke(); });
+                    break;
+                }
             case HostOps.StatusEvent when ev.Data.Deserialize<HostStatus>(ProtocolJson.Options) is { } h:
                 Interlocked.Increment(ref statusEvents);
                 ui.Post(() => { Status = h; Changed?.Invoke(); });
@@ -380,22 +467,46 @@ public sealed class SessionStore
     {
         snapshot = new HashSet<string>(StringComparer.Ordinal);
         Complete = false;
+        refused = false;
+        Snapshots++;
+        SnapshotBegun?.Invoke();
     }
+
+    // How many snapshots have begun: one that began after a moment (Machine.Unconfirm) and has
+    // completed is the host's word on the list since then, not what was kept from before it.
+    public long Snapshots { get; private set; }
+    public event Action? SnapshotBegun;
 
     // Whether the list is the host's whole snapshot: false until a subscribe's sessions.synced, and
     // again from each new subscribe (a reconnect, a gap) until its own. An incomplete list may be
     // missing a busy session.
     public bool Complete { get; private set; }
 
-    public void Upsert(Session s)
+    // Sessions read past a field the app could not read, and whether a session.upsert has been
+    // refused since the snapshot began (Received, #446). What they show is the spec's reading,
+    // not evidence: a session whose status was filled in as idle may be working.
+    readonly HashSet<string> unsure = new(StringComparer.Ordinal);
+    bool refused;
+
+    // Whether anything in the list was read past or refused: the list is not the host's whole word
+    // on which sessions are busy.
+    public bool Unsure => refused || unsure.Count > 0;
+
+    public void Upsert(Session s) => Upsert(s, exact: true);
+
+    public void Upsert(Session s, bool exact)
     {
         snapshot?.Add(s.Id);
         sessions[s.Id] = s;
+        if (exact) { unsure.Remove(s.Id); } else { unsure.Add(s.Id); }
         Upserted?.Invoke(s);
     }
 
+    public void Refuse() => refused = true;
+
     public void Remove(string id)
     {
+        unsure.Remove(id);
         if (sessions.Remove(id)) { Removed?.Invoke(id); }
     }
 

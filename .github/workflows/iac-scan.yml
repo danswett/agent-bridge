@@ -1,0 +1,99 @@
+name: IaC scan
+
+# PSRule for Azure over the relay's stamp in infra/ (quality/README.md §3.3, "Supply chain"; the
+# iac-scan suite), on pull requests that change it. Advisory: main had 32 findings when this was
+# added (#441 lists them, each with its fix or the reason to keep it), so findings are warnings on
+# the run and the job stays green. Only the scan itself failing, so that nothing was checked,
+# fails it. Once those are cleared or suppressed with a reason in infra/ps-rule.yaml, it can fail
+# on a finding as workflow-lint's actionlint does. Not on a draft, which runs only ci.yml's fast
+# ring (quality/README.md §2): ready for review runs it on the same head.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/iac-scan.yml'
+
+permissions: {}
+
+concurrency:
+  group: iac-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  psrule:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Both modules pinned by version and by the SHA-256 of the .nupkg the PowerShell Gallery
+      # serves (it publishes SHA-512s; these were checked against them when pinned). A gallery
+      # version cannot be replaced, but a hash also catches a download that is not it.
+      PSRULE_VERSION: 2.9.0
+      PSRULE_SHA256: 222554e3a04047fdb580720c9275486ca2ec0dd1982fcc1e75c2f6345fd8fa5f
+      PSRULE_AZURE_VERSION: 1.47.0
+      PSRULE_AZURE_SHA256: 4a202b36126c7dfec21906e0cfc5ada67e64eb0c4a2dad3e3a7415f01c8e13c1
+      # The Bicep CLI that expands the templates, pinned the same way (the hash is the release
+      # asset's digest as GitHub reports it). PSRule found neither `az bicep install`'s copy nor
+      # one through `az`, so it gets this one by path.
+      BICEP_VERSION: 0.48.1
+      BICEP_SHA256: b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Bicep and PSRule for Azure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-Pinned([string] $uri, [string] $file, [string] $sha) {
+            Invoke-WebRequest $uri -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5
+            $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $sha) { throw "$uri hashes to $actual, not the pinned $sha" }
+          }
+          $bicep = Join-Path $env:RUNNER_TEMP 'bicep'
+          Get-Pinned "https://github.com/Azure/bicep/releases/download/v${env:BICEP_VERSION}/bicep-linux-x64" $bicep $env:BICEP_SHA256
+          chmod +x $bicep
+          & $bicep --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $modules = Join-Path $env:RUNNER_TEMP 'psrule-modules'
+          foreach ($m in @(@('PSRule', $env:PSRULE_VERSION, $env:PSRULE_SHA256), @('PSRule.Rules.Azure', $env:PSRULE_AZURE_VERSION, $env:PSRULE_AZURE_SHA256))) {
+            $id, $version, $sha = $m
+            $file = Join-Path $env:RUNNER_TEMP "$id.$version.zip"
+            Get-Pinned "https://www.powershellgallery.com/api/v2/package/$id/$version" $file $sha
+            Expand-Archive $file -DestinationPath (Join-Path $modules $id $version)
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_MODULES=$modules"
+          Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_AZURE_BICEP_PATH=$bicep"
+      - name: PSRule for Azure (advisory)
+        shell: pwsh
+        env:
+          # main.bicep leaves production's app and stores out unless asked, as deploy.ps1 does for
+          # a staging deploy; the scan covers both environments.
+          RELAY_DEPLOY_PRODUCTION: 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # A workflow command is one line, so a % or line break in a rule's text could garble or
+          # forge one; GitHub's own escapes keep it inside its message.
+          function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
+          $env:PSModulePath = $env:PSRULE_MODULES + [IO.Path]::PathSeparator + $env:PSModulePath
+          Import-Module PSRule -RequiredVersion $env:PSRULE_VERSION
+          $all = @(Invoke-PSRule -Option infra/ps-rule.yaml -InputPath infra/ -Module PSRule.Rules.Azure -Outcome All -WarningAction Continue)
+          # Nothing analysed means the templates did not expand: that is a broken scan, not a clean one.
+          if (-not $all.Count) { Write-Output '::error title=PSRule::no resources were analysed; did infra/regions/*.bicepparam expand?'; exit 1 }
+          $found = @($all | Where-Object { $_.Outcome -in 'Fail', 'Error' } | Sort-Object RuleName, TargetName)
+          function Get-RuleLink($f) { $f.Info.Annotations['online version'] }
+          foreach ($f in $found) {
+            Write-Output "::warning title=PSRule $($f.RuleName)::$(Format-CommandData "$($f.TargetName) ($($f.TargetType)): $($f.Info.Synopsis) $(Get-RuleLink $f)")"
+          }
+          $targets = @($all | Select-Object -ExpandProperty TargetName -Unique).Count
+          "### PSRule for Azure: $($found.Count) findings over $targets resources (advisory)" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Rule | Pillar, severity | Resource | Outcome |" >> $env:GITHUB_STEP_SUMMARY
+          "|---|---|---|---|" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($f in $found) { "| [$($f.RuleName)]($(Get-RuleLink $f)) | $($f.Info.Annotations['pillar']), $($f.Info.Annotations['severity']) | $($f.TargetName) | $($f.Outcome) |" >> $env:GITHUB_STEP_SUMMARY }
+          exit 0

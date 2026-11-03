@@ -13,6 +13,8 @@ public sealed record UsageWindow
 {
     public required string Key { get; init; }
     public required string Label { get; init; }
+    // A window with no figure has nothing to show.
+    [Strict(Strictness.Identity)]
     public required double Percent { get; init; }
     public double? Used { get; init; }
     public double? Limit { get; init; }
@@ -46,12 +48,14 @@ public sealed record AgentUsage
     // Stable while the list is, so a Home Assistant sensor keeps its account (usage_copilot_<slot>).
     public int? Slot { get; init; }
     // The machine that took the reading, on one a host passes on from another of the account's
-    // machines (usage.shared, #172). Absent on the host's own readings.
+    // machines (usage.shared, #172). Absent on the host's own readings. Strict: read as absent,
+    // another machine's reading would be filed as the passing host's own.
+    [Strict(Strictness.Identity)]
     public UsageReader? ReadBy { get; init; }
 }
 
 // Which machine took a reading: its device id and the name it gave the relay.
-public sealed record UsageReader(string Id, string Name);
+public sealed record UsageReader([property: Strict(Strictness.Identity)] string Id, string Name);
 
 // usage.get's and usage.subscribe's request. shared: the other machines' readings too, where the
 // host offers usage.shared; a host without it ignores the field and sends its own.

@@ -22,7 +22,8 @@ public static class Answers
         if (question.Fields.Count == 0)
         {
             if (answer.Fields is { Count: > 0 }) { return "this question takes a text answer, not fields"; }
-            return TextProblem(answer.Text, "the answer") ?? (string.IsNullOrWhiteSpace(answer.Text) ? "the answer is empty" : null);
+            // Format characters (U+FEFF, the zero-width ones) show as nothing, so are no answer.
+            return TextProblem(answer.Text, "the answer") ?? (Invisible.Blank(answer.Text) ? "the answer is empty" : null);
         }
         if (answer.Text is not null) { return "this question takes fields, not a text answer"; }
         var given = answer.Fields ?? new Dictionary<string, JsonElement>();
@@ -60,7 +61,7 @@ public static class Answers
         if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("other", out var other))
         {
             if (field.AllowOther != true) { return "this choice takes no other answer"; }
-            if (other.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(other.GetString())) { return "the other answer is empty"; }
+            if (other.ValueKind != JsonValueKind.String || Invisible.Blank(other.GetString())) { return "the other answer is empty"; }
             if (value.EnumerateObject().Count() != 1) { return "unexpected properties beside other"; }
             return TextProblem(other.GetString(), "the other answer");
         }

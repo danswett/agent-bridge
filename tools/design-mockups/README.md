@@ -33,6 +33,15 @@ whose source or renderer changed.
 
 Phone boards render at 2×, and everything else at 1×.
 
+## Proposals
+
+Boards named `Proposal-*` belong to a proposal (docs/design/proposals), and `npm run render`
+leaves them out. Render one proposal's boards beside its page by naming their prefix:
+
+```
+node render.js ../../design/canvas ../../docs/design/proposals/253-attention Proposal-253-
+```
+
 ## Motion preview
 
 `npm run motion` records [`docs/design/motion-preview.html`](../../docs/design/motion-preview.html)

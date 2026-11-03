@@ -9,7 +9,9 @@ mirrors them in `pwa/js/launch.js`, and the Windows app's Launch page
 (`src/AgentBridge.App.Core/LaunchViewModel.cs`) uses the records directly. How a Windows host carries a launch out is
 [host-launch.md](../host-launch.md); its settings are [host-config.md](../host-config.md).
 Resuming here a session that ended on another of the account's machines is a launch with a
-`transfer` ([v1-transfer.md](v1-transfer.md)).
+`transfer` ([v1-transfer.md](v1-transfer.md)). Its records' test vectors are in
+[`vectors/launch.json`](vectors/README.md); [v1-sessions.md](v1-sessions.md#test-vectors) says
+how to regenerate them.
 
 Nothing a client sends can widen what a machine allows. A session starts only in a folder a
 person approved **at that machine**, and every value is checked against what the machine
@@ -105,10 +107,12 @@ message: there is no 255-character limit and no second channel. 16 KiB keeps the
 (at most 20 KiB in all) well inside a message. A longer handover goes as an attachment, which
 the agent reads as a file, or as a reply once the session runs. As for a reply, every control
 character, line breaks included, becomes a space (one line on a command line; an Enter would
-cut it), and a prompt whose first character is `/` or `!` is `refused`, since the agent would
-run it as a command. A host also refuses a prompt that does not fit the agent's command line
-on that machine (Windows takes 32,767 characters, and an npm-installed agent, which runs
-through `cmd.exe`, 8,191), saying so.
+cut it), and a prompt whose first visible base character (past white space, control and
+format characters, default-ignorables such as U+3164 and marks with no base; see
+`session.reply`) is `/` or `!` is `refused`, since the agent would run it as a command. A
+host also refuses a prompt that does not fit the agent's command line on that machine
+(Windows takes 32,767 characters, and an npm-installed agent, which runs through `cmd.exe`,
+8,191), saying so.
 
 `LaunchProtocol.Check` in C# is the validation every host applies first. Names are at most
 256 bytes; `model`, `effort` and `context` must look like an agent's own values (letters,

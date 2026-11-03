@@ -53,8 +53,12 @@ export class AnswerService {
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
     // returns the first copy's outcome to a resend, whatever it is, so busy there is the answer.
     resendOnBusy = true,
+    // Whether anything may be given for a host now. A machine whose list may be out of date (it
+    // went offline, #269) takes nothing new: an answer, reply, stop or launch given from what it
+    // showed before it went could act on a question or session that has gone since.
+    accepts = () => true,
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts });
     this.giveUpFor = giveUpFor ?? (() => this.giveUpMs);
   }
 
@@ -73,12 +77,13 @@ export class AnswerService {
   onAny(fn) { this.#any.add(fn); return () => this.#any.delete(fn); }
 
   // Sends an answer: { fields } or { text }. While one is on its way it is returned as is:
-  // a second tap never sends twice.
+  // a second tap never sends twice. Null, with nothing sent, for a host that takes nothing now.
   submit({ hostId, sessionId, questionId, answer }) {
     const key = AnswerService.key(hostId, sessionId, questionId);
     const existing = this.#entries.get(key);
     if (existing && (existing.state === 'sending' || existing.state === 'waiting')) { return this.#snapshot(existing); }
     if (existing && existing.state === 'done' && this.final(existing)) { return this.#snapshot(existing); }
+    if (!this.accepts(hostId)) { return null; }
     const entry = {
       key, hostId, sessionId, questionId, answer,
       request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null,
@@ -92,7 +97,7 @@ export class AnswerService {
   // After 'failed': the same request again, so the host still types it at most once.
   resend(hostId, sessionId, questionId) {
     const entry = this.#entries.get(AnswerService.key(hostId, sessionId, questionId));
-    if (!entry || entry.state !== 'failed') { return null; }
+    if (!entry || entry.state !== 'failed' || !this.accepts(hostId)) { return null; }
     this.#attempt(entry);
     return this.#snapshot(entry);
   }

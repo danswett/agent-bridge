@@ -1,0 +1,12 @@
+# Opt-in hooks for your own clone (AGENTS.md, "Secrets"). Nothing here runs unless you run
+# `pre-commit install` once: from then on, gitleaks scans what each commit stages and refuses
+# the commit if it finds a key or token. GitHub's push protection catches known providers' tokens
+# at push time; this also catches generic ones (private keys, connection strings) before they are
+# in history at all. A leaked signing key once forced a production rotation.
+# Some test fixtures and Azure role IDs look like keys to gitleaks; a commit that changes such a
+# line can end it with a `gitleaks:allow` comment once you have checked it is not a secret.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
+    hooks:
+      - id: gitleaks

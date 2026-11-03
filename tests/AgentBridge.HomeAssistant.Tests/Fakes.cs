@@ -468,8 +468,12 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         return Task.CompletedTask;
     }
 
+    // Something that happens while the dashboard is being read.
+    public Action? DuringDashboardRead { get; set; }
+
     public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default)
     {
+        DuringDashboardRead?.Invoke();
         if (DashboardFails is { } e) { throw e; }
         return Task.FromResult(Dashboard is null ? HaDashboard.NotFound : new HaDashboard(true, Dashboard));
     }
