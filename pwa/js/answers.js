@@ -17,8 +17,9 @@ const encoder = new TextEncoder();
 // UTF-8 bytes, as the host counts them: a lone surrogate counts as U+FFFD (3 bytes) in both.
 export const utf8Bytes = (s) => encoder.encode(s).length;
 
-// C#'s string.IsNullOrWhiteSpace, near enough: \s covers the Unicode spaces it does.
-const blank = (s) => s === null || s === undefined || /^\s*$/u.test(s);
+// C#'s Invisible.Blank: only White_Space and format characters (Cf: U+FEFF, U+200B-U+200D,
+// U+2060), which show as nothing, so are no answer (#448). Every \s is in one or the other.
+const blank = (s) => s === null || s === undefined || /^[\p{White_Space}\p{Cf}]*$/u.test(s);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 

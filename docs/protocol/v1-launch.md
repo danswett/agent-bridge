@@ -107,8 +107,10 @@ message: there is no 255-character limit and no second channel. 16 KiB keeps the
 (at most 20 KiB in all) well inside a message. A longer handover goes as an attachment, which
 the agent reads as a file, or as a reply once the session runs. As for a reply, every control
 character, line breaks included, becomes a space (one line on a command line; an Enter would
-cut it), and a prompt whose first character is `/` or `!` is `refused`, since the agent would
-run it as a command. A host also refuses a prompt that does not fit the agent's command line
+cut it), and a prompt whose first character, after spaces, control characters and invisible
+format characters (Unicode Cf, such as U+FEFF or U+200B; see `session.reply`), is `/` or `!`
+is `refused`, since the agent would run it as a command. A host also refuses a prompt that
+does not fit the agent's command line
 on that machine (Windows takes 32,767 characters, and an npm-installed agent, which runs
 through `cmd.exe`, 8,191), saying so.
 

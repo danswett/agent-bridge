@@ -43,6 +43,30 @@ public class ReplyTests
         Assert.Null(Replies.Check(Reply("use /tmp and run !build later")));
     }
 
+    [Theory]
+    [InlineData("\uFEFF/clear")]
+    [InlineData("\u200B/clear")]
+    [InlineData("\u2060/clear")]
+    [InlineData("\u200C\u200D \uFEFF/exit")]
+    [InlineData("\U000E0001/clear")]
+    public void A_slash_command_behind_invisible_format_characters_is_still_refused(string text) =>
+        Assert.Contains("cannot start with /", Replies.Check(Reply(text)));
+
+    [Theory]
+    [InlineData("\uFEFF!rm -rf build")]
+    [InlineData("\u200B!dir")]
+    [InlineData("\u2060 !dir")]
+    public void A_shell_command_behind_invisible_format_characters_is_still_refused(string text) =>
+        Assert.Contains("cannot start with !", Replies.Check(Reply(text)));
+
+    [Fact]
+    public void A_reply_of_nothing_but_invisible_format_characters_is_empty()
+    {
+        Assert.Equal("the reply is empty", Replies.Check(Reply("\uFEFF")));
+        Assert.Equal("the reply is empty", Replies.Check(Reply("\u200B \u2060\u200D")));
+        Assert.Null(Replies.Check(Reply("\uFEFFplease carry on")));
+    }
+
     const string A = "0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f";
     const string B = "1c8f4d2e-6a3b-4d7f-9eac-2b3c4d5e6f70";
 

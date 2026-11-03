@@ -68,6 +68,14 @@ test('a question without fields takes non-empty text, and one with fields takes 
   assert.match(checkAnswer(plain, { text: 'é'.repeat(Limits.text / 2 + 1) }), /longer than 4 KiB/);
 });
 
+test('an answer of nothing but invisible format characters is empty, as the host finds it', () => {
+  for (const text of ['\uFEFF', '\u200B', '\u2060', ' \u200C\u200D\uFEFF ', '\u0085']) {
+    assert.equal(checkAnswer(form(), { id: 's1', question: 'q1', request: 'r1', text }), 'the answer is empty', JSON.stringify(text));
+    assert.equal(checkAnswer(form(choice('answer', { other: true })), fields({ answer: { other: text } })), '"answer": the other answer is empty', JSON.stringify(text));
+    assert.equal(checkAnswer(form(), { id: 's1', question: 'q1', request: 'r1', text: `${text}ship it` }), null);
+  }
+});
+
 test('a truncated question is never answered remotely', () => {
   const q = { ...form(choice('answer')), truncated: true };
   assert.match(checkAnswer(q, fields({ answer: 'a' })), /answer it at the machine/);

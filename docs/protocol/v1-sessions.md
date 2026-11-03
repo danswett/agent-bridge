@@ -240,6 +240,8 @@ A field's value, by type:
 
 Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
 16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text of nothing but white space and format characters (Unicode Cf, such as U+FEFF or
+U+200B) is empty, and `refused` as such.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -334,9 +336,14 @@ reply path (`Get-CopilotInjectableText`) replaces every control character with a
 because an Enter inside the words would submit part of the reply. A client may let the
 person type several lines, and says they will arrive as one.
 
-A reply whose first character, after spaces and control characters, is `/` or `!` is
+A reply whose first character, after spaces, control characters and invisible format
+characters (Unicode Cf: U+FEFF, U+200B to U+200D, U+2060, the bidi marks), is `/` or `!` is
 `refused`: Copilot CLI and Claude Code would run it as a slash command or a shell command
-on the machine, not give it to the agent, and nothing could confirm it.
+on the machine, not give it to the agent, and nothing could confirm it. Format characters
+count because they show as nothing and an agent may drop them: Copilot CLI trims its input
+with JavaScript's `trim()`, which removes U+FEFF, so `"\uFEFF/clear"` ran as `/clear`
+([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but those
+characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 
