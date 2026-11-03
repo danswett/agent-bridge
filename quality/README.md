@@ -373,9 +373,11 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   each with its run links and counts.
   - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
     #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
-    every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`,
-    each run leaving a TRX file. `agent-bridge-quality flakes` then classifies every test, per
-    OS:
+    every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`.
+    Each run tests the whole solution at once, as `product` does, since the flakes come from CI's
+    own load: a first try that ran one project at a time on a runner of its own saw none in 330
+    runs, on a day CI hit five. Each run leaves a TRX file per project, and
+    `agent-bridge-quality flakes` then classifies every test, per OS:
     - **flaky:** failed some runs and passed others. It gets an issue labelled `flaky` with the
       project, the test, the failures per OS, the first error and the run link. When one is
       already open (marked by the hunt, or filed by hand with `Flaky` in its title and the
@@ -384,8 +386,9 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
       issue labelled `bug`, and the run fails;
     - **passing:** never failed.
 
-    A run that fails outside any test (a crash, or a hang that `--blame-hang` ended) also fails
-    the hunt, and is named in its summary. No more than 10 new issues are opened in one night;
+    A run in which a project leaves no results, or dotnet test fails with no test failed (a
+    crash, or a hang that `--blame-hang` ended), also fails the hunt, and is named in its summary.
+    No more than 10 new issues are opened in one night;
     more than that is something systemic, read once in the summary. Only the `report` job may
     write issues: it runs on `main` only and executes `quality/publish-flakes.ps1` from `main` on
     the plan, read as data. The summary also gives the runner minutes the night cost.

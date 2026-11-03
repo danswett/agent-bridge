@@ -18,8 +18,9 @@ static class Program
               catalog, a catalog project doesn't exist, or a tracked file is claimed by no rule.
           flakes --results DIR [--issues FILE] [--run-url URL] [--commit SHA] [--plan FILE]
                  [--summary FILE] [--dry-run]
-              The flake hunt's reporter: classifies each test in DIR/<os>/<project>/run-<i>.trx
-              as flaky, failing every run or passing, and plans the issues to open or comment
+              The flake hunt's reporter: classifies each test in DIR/<os>/run-<i>/*.trx (a TRX
+              per test project, and the run's exit code in exit) as flaky, failing every run or
+              passing, and plans the issues to open or comment
               on, given the open issues (gh issue list --json number,title,body,labels). Exits 1
               when a test failed every run on some OS, or a run broke outside any test.
         """;

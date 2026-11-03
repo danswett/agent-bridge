@@ -10,60 +10,78 @@ namespace AgentBridge.Quality;
 sealed record TestRun(string Os, string Project, string Test, int Run, bool Passed, string? Message, string? Stack);
 
 /// <summary>
-/// What the flake hunt saw (quality/README.md §5): each test project run N times on each OS,
-/// each run leaving <c>&lt;results&gt;/&lt;os&gt;/&lt;project&gt;/run-&lt;i&gt;.trx</c>, and
-/// <c>run-&lt;i&gt;.exit</c> holding dotnet test's exit code.
+/// What the flake hunt saw (quality/README.md §5): the test projects run N times on each OS, all
+/// at once as CI's product job runs them, so under CI's own load. Each run leaves
+/// <c>&lt;results&gt;/&lt;os&gt;/run-&lt;i&gt;/</c> holding a TRX file per test project and
+/// <c>exit</c>, dotnet test's exit code.
 /// </summary>
 sealed class FlakeHunt
 {
     public required IReadOnlyList<TestRun> Results { get; init; }
 
-    /// <summary>Each OS and project, with the runs started there.</summary>
+    /// <summary>Each OS and project, with the runs that left its results.</summary>
     public required IReadOnlyDictionary<(string Os, string Project), IReadOnlyList<int>> Runs { get; init; }
 
-    /// <summary>Runs whose dotnet test failed with no test failed in their results, or left none: a crash or a hang.</summary>
+    /// <summary>
+    /// Runs that broke outside any test: a project that left no results (its test host crashed,
+    /// or a hang was ended), or dotnet test failing with no test failed.
+    /// </summary>
     public required IReadOnlyList<(string Os, string Project, int Run, string Why)> Broken { get; init; }
 
-    static readonly Regex RunFile = new(@"^run-(\d+)\.(trx|exit)$", RegexOptions.CultureInvariant);
+    public const string WholeRun = "(the run)";
+
+    static readonly Regex RunFolder = new(@"^run-(\d+)$", RegexOptions.CultureInvariant);
 
     public static FlakeHunt Load(string results)
     {
         if (!Directory.Exists(results))
             throw new IOException($"{results} does not exist.");
         var all = new List<TestRun>();
-        var runs = new SortedDictionary<(string, string), IReadOnlyList<int>>();
         var broken = new List<(string, string, int, string)>();
-        // Found wherever they are below results, so the artifacts can be downloaded merged or
-        // each to a folder of its own: a folder of runs is a project's, and its parent an OS.
+        // Found wherever they are below results, so the artifacts can be downloaded merged or each
+        // to a folder of its own: a run's folder is run-<i>, and its parent's name is the OS.
         var folders = Directory.EnumerateDirectories(results, "*", SearchOption.AllDirectories)
-            .Where(d => Directory.EnumerateFiles(d).Any(f => RunFile.IsMatch(Path.GetFileName(f))))
-            .Order(StringComparer.Ordinal);
-        foreach (var projectDir in folders)
+            .Select(d => (Dir: d, Match: RunFolder.Match(Path.GetFileName(d))))
+            .Where(d => d.Match.Success)
+            .Select(d => (d.Dir, Os: Path.GetFileName(Path.GetDirectoryName(d.Dir))!, Run: int.Parse(d.Match.Groups[1].Value, CultureInfo.InvariantCulture)))
+            .OrderBy(d => d.Os, StringComparer.Ordinal).ThenBy(d => d.Run)
+            .ToList();
+        var seen = new Dictionary<(string Os, int Run), HashSet<string>>();
+        foreach (var (dir, os, run) in folders)
         {
-            var os = Path.GetFileName(Path.GetDirectoryName(projectDir))!;
-            var project = Path.GetFileName(projectDir);
-            var files = Directory.EnumerateFiles(projectDir)
-                .Select(f => (Path: f, Match: RunFile.Match(Path.GetFileName(f))))
-                .Where(f => f.Match.Success)
+            var projects = seen[(os, run)] = new HashSet<string>(StringComparer.Ordinal);
+            var these = Directory.EnumerateFiles(dir, "*.trx", SearchOption.AllDirectories).Order(StringComparer.Ordinal)
+                .SelectMany(Trx.Read)
+                .Select(r => new TestRun(os, r.Project, r.Test, run, r.Passed, r.Message, r.Stack))
                 .ToList();
-            var numbers = files.Select(f => int.Parse(f.Match.Groups[1].Value, CultureInfo.InvariantCulture)).Distinct().Order().ToList();
-            runs[(os, project)] = numbers;
-            foreach (var run in numbers)
+            all.AddRange(these);
+            projects.UnionWith(these.Select(t => t.Project));
+            var exit = Path.Combine(dir, "exit");
+            var code = File.Exists(exit) && int.TryParse(File.ReadAllText(exit).Trim(), CultureInfo.InvariantCulture, out var c) ? c : (int?)null;
+            if (these.Count == 0)
+                broken.Add((os, WholeRun, run, $"no results at all (dotnet test exit {code?.ToString(CultureInfo.InvariantCulture) ?? "unknown"})"));
+            else if (code is not (null or 0) && these.All(t => t.Passed))
+                broken.Add((os, WholeRun, run, $"dotnet test exit {code} with no test failed (a crash, a hang or a test host aborting)"));
+        }
+        // A project with results in some of an OS's runs and none in another crashed or hung there.
+        var runs = new SortedDictionary<(string, string), IReadOnlyList<int>>();
+        foreach (var os in seen.Keys.Select(k => k.Os).Distinct())
+        {
+            var osRuns = seen.Where(s => s.Key.Os == os).OrderBy(s => s.Key.Run).ToList();
+            foreach (var project in osRuns.SelectMany(s => s.Value).Distinct().Order(StringComparer.Ordinal))
             {
-                var trx = Path.Combine(projectDir, $"run-{run}.trx");
-                var exit = Path.Combine(projectDir, $"run-{run}.exit");
-                var these = File.Exists(trx) ? Trx.Read(trx).Select(r => new TestRun(os, project, r.Test, run, r.Passed, r.Message, r.Stack)).ToList() : [];
-                all.AddRange(these);
-                var code = File.Exists(exit) && int.TryParse(File.ReadAllText(exit).Trim(), CultureInfo.InvariantCulture, out var c) ? c : (int?)null;
-                if (!File.Exists(trx))
-                    broken.Add((os, project, run, $"no results (dotnet test exit {code?.ToString(CultureInfo.InvariantCulture) ?? "unknown"})"));
-                else if (code is not (null or 0) && these.All(t => t.Passed))
-                    broken.Add((os, project, run, $"dotnet test exit {code} with no test failed (a crash, a hang or the test host aborting)"));
+                runs[(os, project)] = osRuns.Where(s => s.Value.Contains(project)).Select(s => s.Key.Run).ToList();
+                foreach (var missing in osRuns.Where(s => s.Value.Count > 0 && !s.Value.Contains(project)))
+                    broken.Add((os, project, missing.Key.Run, "no results from this project in that run (its test host crashed, or a hang was ended)"));
             }
         }
-        return new FlakeHunt { Results = all, Runs = runs, Broken = broken };
+        return new FlakeHunt
+        {
+            Results = all,
+            Runs = runs,
+            Broken = [.. broken.OrderBy(b => b.Item1, StringComparer.Ordinal).ThenBy(b => b.Item3).ThenBy(b => b.Item2, StringComparer.Ordinal)],
+        };
     }
-
     public IReadOnlyList<Verdict> Classify() =>
         Results.GroupBy(r => (r.Project, r.Test))
             .Select(test => new Verdict(test.Key.Project, test.Key.Test,
@@ -119,17 +137,24 @@ static class Trx
 {
     static readonly XNamespace Ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
 
-    /// <summary>Passed and failed results only: a skipped or not-run test says nothing about flakiness.</summary>
-    public static IEnumerable<(string Test, bool Passed, string? Message, string? Stack)> Read(string path)
+    /// <summary>
+    /// Passed and failed results only: a skipped or not-run test says nothing about flakiness.
+    /// The project is the test assembly's name, from its definition's codeBase (storage is lowercased).
+    /// </summary>
+    public static IEnumerable<(string Project, string Test, bool Passed, string? Message, string? Stack)> Read(string path)
     {
         var doc = XDocument.Load(path);
+        var assemblies = doc.Descendants(Ns + "UnitTest").ToDictionary(
+            u => (string?)u.Attribute("id") ?? "",
+            u => Path.GetFileNameWithoutExtension(((string?)u.Element(Ns + "TestMethod")?.Attribute("codeBase") ?? (string?)u.Attribute("storage") ?? "?").Replace('\\', '/').Split('/')[^1]),
+            StringComparer.OrdinalIgnoreCase);
         foreach (var result in doc.Descendants(Ns + "UnitTestResult"))
         {
             var outcome = (string?)result.Attribute("outcome");
             if (outcome is not ("Passed" or "Failed"))
                 continue;
             var error = result.Element(Ns + "Output")?.Element(Ns + "ErrorInfo");
-            yield return ((string?)result.Attribute("testName") ?? "?", outcome == "Passed",
+            yield return (assemblies.GetValueOrDefault((string?)result.Attribute("testId") ?? "", "?"), (string?)result.Attribute("testName") ?? "?", outcome == "Passed",
                 error?.Element(Ns + "Message")?.Value, error?.Element(Ns + "StackTrace")?.Value);
         }
     }

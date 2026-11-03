@@ -12,17 +12,22 @@ public sealed class FlakesTests : IDisposable
 
     public void Dispose() => Directory.Delete(root, recursive: true);
 
-    // One run's TRX: each test name with Passed, Failed or NotExecuted.
+    // One project's TRX in one run, as dotnet test writes it into the run's folder, and the run's
+    // exit code: each test name with Passed, Failed or NotExecuted.
     void Run(string os, string project, int run, int exit, params (string Test, string Outcome)[] results)
     {
-        var dir = Directory.CreateDirectory(Path.Combine(root, os, project)).FullName;
-        new XDocument(new XElement(Ns + "TestRun", new XElement(Ns + "Results", results.Select(r =>
-            new XElement(Ns + "UnitTestResult", new XAttribute("testName", r.Test), new XAttribute("outcome", r.Outcome),
-                r.Outcome == "Failed"
-                    ? new XElement(Ns + "Output", new XElement(Ns + "ErrorInfo", new XElement(Ns + "Message", $"run {run} failed ```here```"), new XElement(Ns + "StackTrace", "at T.M()")))
-                    : null)))))
-            .Save(Path.Combine(dir, $"run-{run}.trx"));
-        File.WriteAllText(Path.Combine(dir, $"run-{run}.exit"), exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var dir = Directory.CreateDirectory(Path.Combine(root, os, $"run-{run}")).FullName;
+        var ids = results.Select(_ => Guid.NewGuid().ToString()).ToList();
+        new XDocument(new XElement(Ns + "TestRun",
+            new XElement(Ns + "TestDefinitions", ids.Select(id => new XElement(Ns + "UnitTest", new XAttribute("id", id), new XAttribute("storage", $"/x/bin/{project.ToLowerInvariant()}.dll"),
+                new XElement(Ns + "TestMethod", new XAttribute("codeBase", $"/x/bin/{project}.dll"))))),
+            new XElement(Ns + "Results", results.Select((r, i) =>
+                new XElement(Ns + "UnitTestResult", new XAttribute("testId", ids[i]), new XAttribute("testName", r.Test), new XAttribute("outcome", r.Outcome),
+                    r.Outcome == "Failed"
+                        ? new XElement(Ns + "Output", new XElement(Ns + "ErrorInfo", new XElement(Ns + "Message", $"run {run} failed ```here```"), new XElement(Ns + "StackTrace", "at T.M()")))
+                        : null)))))
+            .Save(Path.Combine(dir, $"{project}.trx"));
+        File.WriteAllText(Path.Combine(dir, "exit"), exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     [Fact]
@@ -119,16 +124,20 @@ public sealed class FlakesTests : IDisposable
     public void A_run_that_crashed_with_no_test_failed_or_left_no_results_fails_the_report_and_is_named_in_it()
     {
         Run("windows-latest", "AgentBridge.Host.Delivery.Tests", 1, 0, ("T.A", "Passed"));
-        Run("windows-latest", "AgentBridge.Host.Delivery.Tests", 2, 1, ("T.A", "Passed"));
-        File.WriteAllText(Path.Combine(root, "windows-latest", "AgentBridge.Host.Delivery.Tests", "run-3.exit"), "1");
+        Run("windows-latest", "AgentBridge.Host.Tests", 1, 0, ("T.B", "Passed"));
+        // Host.Delivery's test host died in run 2: nothing from it, and nothing failed.
+        Run("windows-latest", "AgentBridge.Host.Tests", 2, 1, ("T.B", "Passed"));
+        Directory.CreateDirectory(Path.Combine(root, "windows-latest", "run-3"));
+        File.WriteAllText(Path.Combine(root, "windows-latest", "run-3", "exit"), "1");
         var plan = Path.Combine(root, "plan.json");
         var output = new StringWriter();
 
         var code = Program.Run(["flakes", "--results", root, "--plan", plan, "--dry-run"], output);
 
         Assert.Equal(1, code);
-        Assert.Contains("run 2: dotnet test exit 1 with no test failed", output.ToString());
-        Assert.Contains("run 3: no results (dotnet test exit 1)", output.ToString());
+        Assert.Contains("windows-latest (the run) run 2: dotnet test exit 1 with no test failed", output.ToString());
+        Assert.Contains("windows-latest AgentBridge.Host.Delivery.Tests run 2: no results from this project", output.ToString());
+        Assert.Contains("windows-latest (the run) run 3: no results at all (dotnet test exit 1)", output.ToString());
         Assert.Contains("dry run: nothing filed", output.ToString());
         Assert.Equal(0, JsonDocument.Parse(File.ReadAllText(plan)).RootElement.GetArrayLength());
     }

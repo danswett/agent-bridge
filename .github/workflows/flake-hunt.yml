@@ -2,13 +2,13 @@ name: Flake hunt
 
 # Finds flaky tests before they turn a pull request or main red (#509, quality/README.md §5).
 # Each night, in quiet hours, every .NET test project runs N times (10 by default) on each OS
-# CI tests on, with nothing else changing between runs. A test that both passes and fails is
+# CI tests on, all at once as CI runs them, with nothing changed between runs. A test that both passes and fails is
 # flaky; one that fails every run on an OS is a real failure, reported as one. Nothing is retried
 # into green or skipped: this only reports, through issues labelled `flaky`, which are the flake
 # record, and through the run's summary.
 #
 # The jobs, by what they may do:
-#   projects, hunt  read the code and run the tests; no token is kept by the checkout.
+#   hunt            reads the code and runs the tests; no token is kept by the checkout.
 #   classify        reads the open issues (issues: read) and the run's own job times
 #                   (actions: read), and plans what to file with agent-bridge-quality flakes.
 #                   Off main, or with dry-run, it only says what it would file.
@@ -53,44 +53,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  projects:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      projects: ${{ steps.list.outputs.projects }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: The test projects
-        id: list
-        shell: pwsh
-        env:
-          ONLY: ${{ inputs.projects }}
-        # Every project under tests/ that is a test project (the catalog's check keeps each in a
-        # suite), so a new one is hunted from the night it lands.
-        run: |
-          $all = @(Get-ChildItem tests -Directory | Where-Object {
-            $csproj = Join-Path $_.FullName "$($_.Name).csproj"
-            (Test-Path $csproj) -and (Select-String -LiteralPath $csproj -Pattern 'Microsoft.NET.Test.Sdk' -Quiet)
-          } | ForEach-Object Name | Sort-Object)
-          $only = @("$env:ONLY" -split ',' | ForEach-Object Trim | Where-Object { $_ })
-          foreach ($name in $only) { if ($all -cnotcontains $name) { throw "$name is not a test project under tests/" } }
-          $projects = if ($only.Count) { $only } else { $all }
-          Write-Host "Hunting in: $($projects -join ', ')"
-          "projects=$(ConvertTo-Json -Compress -InputObject @($projects))" >> $env:GITHUB_OUTPUT
-
   hunt:
-    needs: projects
     strategy:
       fail-fast: false
-      # 33 jobs at full size: leave runners for anyone else up at this hour.
-      max-parallel: 12
       matrix:
         os: [ubuntu-latest, windows-latest, windows-11-arm]
-        project: ${{ fromJSON(needs.projects.outputs.projects) }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -105,45 +74,64 @@ jobs:
           path: ~/.nuget/packages
           key: nuget-product-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
           restore-keys: nuget-product-${{ runner.os }}-${{ runner.arch }}-
+      - name: What to test
+        shell: pwsh
+        env:
+          ONLY: ${{ inputs.projects }}
+        # The whole solution, as ci.yml's product job tests it on main; or a solution filter of the
+        # projects asked for, as product does on a pull request.
+        run: |
+          $only = @("$env:ONLY" -split ',' | ForEach-Object Trim | Where-Object { $_ })
+          if ($only.Count -eq 0) { $target = 'AgentBridge.slnx' }
+          else {
+            $projects = foreach ($name in $only) {
+              $csproj = "tests/$name/$name.csproj"
+              if (-not (Test-Path -LiteralPath $csproj)) { throw "$name is not a test project under tests/" }
+              $csproj
+            }
+            $target = Join-Path $env:RUNNER_TEMP hunt.slnf
+            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = @($projects) } } | ConvertTo-Json -Depth 3 | Set-Content $target
+          }
+          Write-Host "Hunting in $target"
+          "HUNT_TARGET=$target" | Add-Content $env:GITHUB_ENV
       - name: Build
         shell: pwsh
-        env:
-          PROJECT: ${{ matrix.project }}
-        run: dotnet build "tests/$env:PROJECT" -c Release --nologo
-        timeout-minutes: 15
-      - name: Run it again and again
+        run: dotnet build $env:HUNT_TARGET -c Release --nologo
+        timeout-minutes: 20
+      - name: Run them again and again
         shell: pwsh
         env:
-          PROJECT: ${{ matrix.project }}
           OS: ${{ matrix.os }}
           RUNS: ${{ inputs.runs || 10 }}
           FILTER: ${{ inputs.filter }}
-        # Every run, pass or fail, leaves its TRX and dotnet test's exit code; the step itself
-        # always succeeds, since classify judges the runs. --blame-hang ends a hung run rather
-        # than the job, as in ci.yml. The HA integration tests need a disposable Home Assistant,
-        # which only ci.yml's ha-integration job has.
+        # All the projects at once in each run, as CI runs them: a first try that ran one project
+        # at a time on a runner of its own saw nothing flaky in 330 runs, on a day CI hit five
+        # flakes, since what makes them flake is CI's own load. Every run, pass or fail, leaves a
+        # TRX per project and dotnet test's exit code, and the step always succeeds: classify
+        # judges the runs. --blame-hang ends a hung test host rather than the job, as in ci.yml.
+        # The HA integration tests need a disposable Home Assistant, which only ha-integration has.
         run: |
-          $dir = "flake-results/$env:OS/$env:PROJECT"
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $filter = 'Category!=HomeAssistantIntegration'
           if ($env:FILTER) { $filter = "($env:FILTER)&$filter" }
           for ($i = 1; $i -le [int]$env:RUNS; $i++) {
+            $dir = "flake-results/$env:OS/run-$i"
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
             $started = Get-Date
-            dotnet test "tests/$env:PROJECT" -c Release --no-build --nologo --filter $filter --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $dir --logger "trx;LogFileName=run-$i.trx" --logger "console;verbosity=minimal"
+            dotnet test $env:HUNT_TARGET -c Release --no-build --nologo --filter $filter --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $dir --logger trx --logger "console;verbosity=minimal"
             $code = $LASTEXITCODE
-            Set-Content -LiteralPath "$dir/run-$i.exit" -Value $code
-            Write-Host "$env:PROJECT on $env:OS, run $i of $env:RUNS`: exit $code in $([int]((Get-Date) - $started).TotalSeconds) s"
+            Set-Content -LiteralPath "$dir/exit" -Value $code
+            Write-Host "Run $i of $env:RUNS on $env:OS`: exit $code in $([int]((Get-Date) - $started).TotalSeconds) s"
           }
           exit 0
-        timeout-minutes: 100
+        timeout-minutes: 150
       - name: Keep the runs
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: flake-hunt-${{ matrix.os }}-${{ matrix.project }}
+          name: flake-hunt-${{ matrix.os }}
           path: |
             flake-results/**/*.trx
-            flake-results/**/*.exit
+            flake-results/**/exit
           if-no-files-found: error
           retention-days: 14
 
