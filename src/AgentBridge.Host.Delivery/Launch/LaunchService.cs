@@ -37,6 +37,7 @@ public sealed class LaunchServiceOptions
 {
     public required string CopilotHome { get; init; }
     public required string ClaudeHome { get; init; }
+    public bool? ClaudeConfigDirExplicit { get; init; }
     public required string CodexHome { get; init; }
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
@@ -727,15 +728,16 @@ public sealed partial class LaunchService : ISessionLauncher
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
                 Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
-            var environment = new Dictionary<string, string>
+            var environment = new Dictionary<string, string?>
             {
                 [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",
             };
-            // Even the default CLAUDE_CONFIG_DIR relocates Claude's account file, so leave
-            // inherited homes alone unless this host was configured for a different profile.
+            // CLAUDE_CONFIG_DIR changes the account file even when its path is unchanged.
+            // Restore recorded mode; older records keep the inherited mode when homes match.
             var inherited = SessionSourceOptions.ForCurrentUser();
             if (!Folders.Same(options.CopilotHome, inherited.CopilotHome)) { environment["COPILOT_HOME"] = options.CopilotHome; }
-            if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
+            if (options.ClaudeConfigDirExplicit is { } explicitConfigDir) { environment["CLAUDE_CONFIG_DIR"] = explicitConfigDir ? options.ClaudeHome : null; }
+            else if (!Folders.Same(options.ClaudeHome, inherited.ClaudeHome)) { environment["CLAUDE_CONFIG_DIR"] = options.ClaudeHome; }
             if (!Folders.Same(options.CodexHome, inherited.CodexHome)) { environment["CODEX_HOME"] = options.CodexHome; }
             var spec = new StartSpec(plan.Executable, args, directory, environment);
             if (starter.CommandLine(spec, out var tooLong) is null)

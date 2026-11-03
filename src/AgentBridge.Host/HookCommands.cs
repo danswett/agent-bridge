@@ -29,12 +29,14 @@ public static class HookCommands
         {
             ["--copilot-home"] = defaults.CopilotHome, ["--claude-home"] = defaults.ClaudeHome, ["--codex-home"] = defaults.CodexHome,
         };
+        var claudeConfigDirExplicit = defaults.ClaudeConfigDirExplicit;
         foreach (var option in homes.Keys.ToArray())
         {
             at = rest.IndexOf(option);
             if (at < 0) { continue; }
             if (at + 1 >= rest.Count || !Path.IsPathFullyQualified(rest[at + 1])) { error.WriteLine($"{option} needs an absolute path."); return 2; }
             homes[option] = rest[at + 1];
+            if (option == "--claude-home") { claudeConfigDirExplicit = true; }
             rest.RemoveRange(at, 2);
         }
         var dryRun = rest.Remove("--dry-run");
@@ -49,7 +51,10 @@ public static class HookCommands
         if (!dryRun && refuseWrite()) { return 4; }
         if (!OperatingSystem.IsWindows()) { error.WriteLine("Fresh hook setup is Windows-only for now."); return 2; }
         var folder = Path.Combine(profileRoot, profile);
-        var agentHomes = new IntakeState.AgentHomes(Path.GetFullPath(homes["--copilot-home"]), Path.GetFullPath(homes["--claude-home"]), Path.GetFullPath(homes["--codex-home"]));
+        var agentHomes = new IntakeState.AgentHomes(Path.GetFullPath(homes["--copilot-home"]), Path.GetFullPath(homes["--claude-home"]), Path.GetFullPath(homes["--codex-home"]))
+        {
+            ClaudeConfigDirExplicit = claudeConfigDirExplicit,
+        };
         var environment = new Dictionary<string, string> { ["CODEX_HOME"] = agentHomes.Codex };
         var setup = new StandaloneHooks(folder, agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),

@@ -32,8 +32,13 @@ fallback and Codex removal. Unreadable profile or invalid launch settings refuse
 instead of silently choosing another CLI.
 Saved agent homes are also passed into bridge-launched agents, so an app-started host
 discovers sessions in the same homes where setup registered their hooks and plugins.
-Homes matching the inherited profile are left alone, preserving Claude's default
-account-file location rather than setting `CLAUDE_CONFIG_DIR` unnecessarily.
+Claude's explicit/default configuration-directory mode is saved alongside its home:
+`CLAUDE_CONFIG_DIR` and `--claude-home` select explicit mode, even for the default path.
+Launched agents and usage account lookup restore that mode, so an app restart neither
+switches account files nor inherits the wrong configuration directory. Other matching
+homes remain inherited. Older records without the optional `agentHomes.claudeConfigDirExplicit`
+boolean retain their previous inheritance behavior; rerunning setup in the original
+configuration records the missing mode without replacing a mode already recorded.
 
 Restart the host from the app and **start new agent sessions**: open sessions retain their
 old commands. Start Codex locally and approve its hook trust prompt once; until then Codex

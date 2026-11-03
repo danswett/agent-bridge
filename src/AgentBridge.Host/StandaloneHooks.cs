@@ -158,10 +158,15 @@ public sealed class StandaloneHooks(
             await RunCodexAsync(executable, ["plugin", "add", $"{Marketplace}@{Marketplace}"], ct);
         }
         var (state, _) = IntakeState.Load(profile);
-        (state ?? new IntakeState(Runtime, profile, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow)
+        var savedState = state ?? new IntakeState(Runtime, profile, Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow)
         {
             Standalone = true, Homes = homes,
-        }).Save(profile);
+        };
+        if (savedState.Homes is { ClaudeConfigDirExplicit: null } saved && homes.ClaudeConfigDirExplicit is { } explicitConfigDir)
+        {
+            savedState = savedState with { Homes = saved with { ClaudeConfigDirExplicit = explicitConfigDir } };
+        }
+        savedState.Save(profile);
         output.WriteLine("Registered. Restart the host from the Agent Bridge app, then start new agent sessions to load the hooks.");
         if (agent == "codex") { output.WriteLine("Start Codex at this machine and approve its hook trust prompt once; until then Codex silently skips its hooks."); }
     }

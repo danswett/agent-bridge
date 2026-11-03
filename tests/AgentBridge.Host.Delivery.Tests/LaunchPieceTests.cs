@@ -271,6 +271,27 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    public void A_child_environment_override_can_remove_an_inherited_variable_without_changing_the_host()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var name = "AGENT_BRIDGE_TEST_REMOVED_" + Guid.NewGuid().ToString("N");
+        try
+        {
+            Environment.SetEnvironmentVariable(name, "parent");
+
+            var entries = WindowsAgentStarter.EnvironmentBlock(new Dictionary<string, string?>
+            {
+                [name] = null, [name + "_CHILD"] = "child",
+            }).Split('\0', StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.DoesNotContain(entries, entry => entry.StartsWith(name + "=", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(name + "_CHILD=child", entries);
+            Assert.Equal("parent", Environment.GetEnvironmentVariable(name));
+        }
+        finally { Environment.SetEnvironmentVariable(name, null); }
+    }
+
+    [WindowsFact]
     [Trait("Category", "Process")]
     public void A_started_agent_gets_the_session_variable_on_top_of_the_hosts_own_environment()
     {
@@ -278,7 +299,7 @@ public sealed class LaunchPieceTests : IDisposable
         Environment.SetEnvironmentVariable("AGENT_BRIDGE_TEST_INHERITED", "kept");
         var shim = Path.Combine(root, "env.cmd");
         File.WriteAllText(shim, $"@echo %{Launchers.SessionVariable}% %AGENT_BRIDGE_TEST_INHERITED%> \"{Out("env.txt")}\"\r\n");
-        var started = new WindowsAgentStarter(hidden: true).Start(new StartSpec(shim, [], root, new Dictionary<string, string> { [Launchers.SessionVariable] = "5b0e1f2a" }));
+        var started = new WindowsAgentStarter(hidden: true).Start(new StartSpec(shim, [], root, new Dictionary<string, string?> { [Launchers.SessionVariable] = "5b0e1f2a" }));
 
         Assert.True(started.ProcessId > 0);
         var deadline = DateTime.UtcNow.AddSeconds(20);

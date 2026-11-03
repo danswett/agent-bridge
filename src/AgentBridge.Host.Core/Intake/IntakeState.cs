@@ -17,7 +17,12 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
     // or CODEX_HOME that agent-ha-bridge was installed under. Null in a record without them.
     public AgentHomes? Homes { get; init; }
 
-    public sealed record AgentHomes(string Copilot, string Claude, string Codex);
+    public sealed record AgentHomes(string Copilot, string Claude, string Codex)
+    {
+        // The same home uses different account files with and without CLAUDE_CONFIG_DIR.
+        // Null preserves compatibility with records that did not capture that distinction.
+        public bool? ClaudeConfigDirExplicit { get; init; }
+    }
 
     // Null when the profile has not opted in, or the file cannot be trusted: a file that cannot
     // be read is not taken as permission to consume another program's spool.
@@ -49,7 +54,13 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
                 {
                     return (null, $"{path} has unusable agentHomes; hook intake is off");
                 }
-                homes = new AgentHomes(copilot, claude, codex);
+                bool? explicitConfigDir = null;
+                if (h.TryGetProperty("claudeConfigDirExplicit", out var mode))
+                {
+                    if (mode.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) { return (null, $"{path} has unusable agentHomes; hook intake is off"); }
+                    explicitConfigDir = mode.GetBoolean();
+                }
+                homes = new AgentHomes(copilot, claude, codex) { ClaudeConfigDirExplicit = explicitConfigDir };
             }
             return (new IntakeState(runtime, bridge, id, Json.Time(e, "migratedAt") ?? DateTimeOffset.MinValue)
             {
@@ -84,6 +95,7 @@ public sealed record IntakeState(string RuntimeRoot, string BridgeHome, string I
                 writer.WriteString("copilot", homes.Copilot);
                 writer.WriteString("claude", homes.Claude);
                 writer.WriteString("codex", homes.Codex);
+                if (homes.ClaudeConfigDirExplicit is { } explicitConfigDir) { writer.WriteBoolean("claudeConfigDirExplicit", explicitConfigDir); }
                 writer.WriteEndObject();
             }
             writer.WriteEndObject();

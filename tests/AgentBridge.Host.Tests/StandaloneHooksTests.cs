@@ -158,6 +158,21 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Equal(before, Listing());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Retrying_setup_records_a_previously_unknown_Claude_mode_and_does_not_reset_it(bool explicitConfigDir)
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        var homes = Homes with { ClaudeConfigDirExplicit = explicitConfigDir };
+        var setup = new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+
+        await setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+
+        Assert.Equal(homes, IntakeState.Load(Profile).State!.Homes);
+    }
+
     void ConfigurePath(string agent, string path) => Write(Path.Combine(Profile, HostSettings.FileName),
         new JsonObject { ["launch"] = new JsonObject { ["agents"] = new JsonObject { [agent] = new JsonObject { ["path"] = path } } } }.ToJsonString());
 

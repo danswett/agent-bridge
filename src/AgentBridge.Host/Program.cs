@@ -104,6 +104,8 @@ var options = new SessionSourceOptions
     // A migrated installation's agent homes, where its hooks were re-pointed, unless told otherwise.
     CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
+    ClaudeConfigDirExplicit = Option("--claude-home") is not null ? true
+        : intakeState?.Homes is { } savedHomes ? savedHomes.ClaudeConfigDirExplicit : defaults.ClaudeConfigDirExplicit,
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
@@ -682,6 +684,7 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
+        ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
         WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),

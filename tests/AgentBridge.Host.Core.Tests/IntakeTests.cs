@@ -1866,6 +1866,11 @@ public sealed class IntakeTests : IDisposable
         homes.Save(profile);
         Assert.Equal(homes, IntakeState.Load(profile).State);
         var text = File.ReadAllText(Path.Combine(profile, IntakeState.FileName));
+        var invalidMode = System.Text.Json.Nodes.JsonNode.Parse(text)!;
+        invalidMode["agentHomes"]!["claudeConfigDirExplicit"] = "true";
+        File.WriteAllText(Path.Combine(profile, IntakeState.FileName), invalidMode.ToJsonString());
+        Assert.Null(IntakeState.Load(profile).State);
+        Assert.Contains("unusable agentHomes", IntakeState.Load(profile).Problem);
         File.WriteAllText(Path.Combine(profile, IntakeState.FileName), text.Replace(JsonSerializer.Serialize(Path.Combine(_f.Root, "cx")), "\"relative\""));
         Assert.Contains("unusable agentHomes", IntakeState.Load(profile).Problem);
         Assert.True(IntakeState.Delete(profile));

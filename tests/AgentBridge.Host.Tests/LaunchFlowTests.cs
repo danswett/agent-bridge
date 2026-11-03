@@ -87,6 +87,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     {
         CopilotHome = homes?.Copilot ?? f.CopilotHome,
         ClaudeHome = homes?.Claude ?? f.ClaudeHome,
+        ClaudeConfigDirExplicit = homes?.ClaudeConfigDirExplicit,
         CodexHome = homes?.Codex ?? f.CodexHome,
         Config = config,
         PlatformSupported = true,
@@ -184,6 +185,33 @@ public sealed partial class LaunchFlowTests : LaunchFlowFixture
         Assert.False(environment.ContainsKey("CLAUDE_CONFIG_DIR"));
         Assert.False(environment.ContainsKey("CODEX_HOME"));
         Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [InlineData(null)]
+    public async Task A_restarted_launch_keeps_the_saved_Claude_configuration_mode_even_when_home_paths_match(bool? explicitConfigDir)
+    {
+        var defaults = SessionSourceOptions.ForCurrentUser();
+        var profile = Path.Combine(f.Root, "saved-mode-profile");
+        new IntakeState(Path.Combine(profile, "runtime"), profile, "fixture", DateTimeOffset.UtcNow)
+        {
+            Standalone = true,
+            Homes = new(defaults.CopilotHome, defaults.ClaudeHome, defaults.CodexHome) { ClaudeConfigDirExplicit = explicitConfigDir },
+        }.Save(profile);
+        var saved = IntakeState.Load(profile).State!.Homes!;
+        Assert.Equal(explicitConfigDir, saved.ClaudeConfigDirExplicit);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: saved);
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "claude", Prompt = "go" }, "fixture");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        if (explicitConfigDir is true) { Assert.Equal(saved.Claude, environment["CLAUDE_CONFIG_DIR"]); }
+        else if (explicitConfigDir is false) { Assert.Null(environment["CLAUDE_CONFIG_DIR"]); }
+        else { Assert.False(environment.ContainsKey("CLAUDE_CONFIG_DIR")); }
     }
 
     [Fact]
