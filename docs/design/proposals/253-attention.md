@@ -369,7 +369,10 @@ Choosing the row already lands on the question, and the header isn't the place f
 - **High contrast:**
   - the toggle uses the system's button colours (ButtonFace and ButtonText, with Highlight and
     HighlightText pressed);
-  - the `needs` glyph maps to `Highlight` (`tokens.json` `color.role.needs.hc`);
+  - the `needs` glyph maps to `Highlight` (`tokens.json` `color.role.needs.hc`), its ink to
+    `HighlightText`. On the pressed toggle, whose fill is `Highlight`, the two swap: a
+    `HighlightText` disc with `Highlight` ink, so the filled silhouette stays visible while the
+    filter is on;
   - the escape box uses Danger's high-contrast mapping, and the Tools link is a system
     hyperlink (LinkText; `HyperlinkButton`).
   - The canvas has no high-contrast theme, so these are specified here and checked in each
@@ -679,6 +682,8 @@ before merge.
   - a delegate that asks has a Status link to its question, and its question shows once.
 - **Accessibility:**
   - the toggle is named for its count and scope and reports its pressed state;
+  - in high contrast, the pressed toggle's `needs` glyph is a `HighlightText` disc with
+    `Highlight` ink, so its silhouette shows on the `Highlight` fill;
   - a change in the count is announced once, at most every 5 seconds;
   - every control on a phone is at least 44 px tall.
 
