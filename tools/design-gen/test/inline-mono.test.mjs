@@ -27,8 +27,7 @@ test('Agent Bridge Mono\'s x-height in tokens.json is the bundled font\'s own, m
 // lie end to end in directory order (OS/2 and hhea are never transformed, so they read as
 // they would in the TTF).
 const WOFF2_TAGS = ['cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name', 'OS/2', 'post', 'cvt ', 'fpgm', 'glyf', 'loca'];
-function fontTables(bytes) {
-  const b = Buffer.from(bytes);
+function fontTables(b) {
   if (b.toString('latin1', 0, 4) !== 'wOF2') {
     const at = (tag) => {
       for (let i = 0, r = 12; i < b.readUInt16BE(4); i++, r += 16) {
@@ -37,6 +36,7 @@ function fontTables(bytes) {
     };
     return { os2: at('OS/2'), hhea: at('hhea') };
   }
+  if (b.toString('latin1', 4, 8) === 'ttcf') { throw new Error('a WOFF2 collection: its collection directory is not read here'); }
   let p = 48;
   const base128 = () => { let v = 0; for (;;) { const byte = b[p++]; v = v * 128 + (byte & 0x7f); if (!(byte & 0x80)) return v; } };
   const directory = [];
@@ -53,7 +53,11 @@ function fontTables(bytes) {
   for (let at = 0, i = 0; i < directory.length; at += directory[i++].length) { tables[directory[i].tag] = data.subarray(at, at + directory[i].length); }
   return { os2: tables['OS/2'], hhea: tables.hhea };
 }
-const advances = (bytes) => { const { os2, hhea } = fontTables(bytes); return { average: os2.readInt16BE(2), widest: hhea.readUInt16BE(10) }; };
+const advances = (file) => {
+  const { os2, hhea } = fontTables(readFileSync(file));
+  assert.ok(os2?.length >= 4 && hhea?.length >= 12, `no OS/2 or hhea table read from ${file}`);
+  return { average: os2.readInt16BE(2), widest: hhea.readUInt16BE(10) };
+};
 
 test('every bundled face of Agent Bridge Mono, TTF and WOFF2, is the build plan\'s normal 600-unit width, not the condensed 560 (#295)', () => {
   const font = monoFont(tokens);
@@ -63,7 +67,7 @@ test('every bundled face of Agent Bridge Mono, TTF and WOFF2, is the build plan\
   assert.equal(width, 600);
   for (const face of font.faces) {
     for (const file of [`ttf/${face.file}.ttf`, `woff2/${face.file}.woff2`]) {
-      assert.deepEqual(advances(readFileSync(path.join(repoRoot, font.dir, file))), { average: width, widest: width }, file);
+      assert.deepEqual(advances(path.join(repoRoot, font.dir, file)), { average: width, widest: width }, file);
     }
   }
 });
