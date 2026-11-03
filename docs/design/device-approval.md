@@ -3,7 +3,8 @@
 **Status: proposed design, not built.** It needs the owner's decisions (§11) and an
 independent security review before any slice starts. It refines design.md
 [§5.4](../design.md#54-accounts-devices-and-the-signed-roster). Where the two disagree,
-this note is the newer reasoning; §5.4 will be updated when the decisions are made.
+this note is the newer reasoning; design.md §5.4 will be updated when the decisions are made.
+A bare § number below is a section of this note; design.md's are always named as such.
 
 The aim: a device that signs in with the account's GitHub login can do nothing until a
 person approves it, on a device that is already trusted, by matching a code. Every host
@@ -48,13 +49,15 @@ availability against the relay.
 ### 3.1 Who signs it
 
 **Every approved person's device holds a second key, a P-256 ECDSA signing key**, beside its
-ECDH device key, created on the device and never exported:
+ECDH device key, created on the device. It is non-exportable wherever the platform allows;
+the software fallbacks below can be copied by anything running as the user, and are treated
+as weaker approvers (§4.6):
 
 | Client | Signing key storage |
 |---|---|
-| Windows app | TPM via the Platform Crypto Provider (`ECDSA_P256`, more widely supported than the `ECDH_P256` S6 needs), DPAPI fallback; user verification as in §4.6 |
+| Windows app | TPM via the Platform Crypto Provider (`ECDSA_P256`, more widely supported than the `ECDH_P256` S6 needs); user verification as in §4.6. Without a usable TPM, a DPAPI-protected software key: copyable, so a weaker approver |
 | PWA | WebCrypto `ECDSA` P-256, `extractable: false`, in the same IndexedDB as the device key |
-| iPhone, iPad, Mac app | Secure Enclave `SecureEnclave.P256.Signing`, data-protection Keychain fallback |
+| iPhone, iPad, Mac app | Secure Enclave `SecureEnclave.P256.Signing`; without one, a data-protection Keychain key (`ThisDeviceOnly`), a weaker approver |
 
 **Any approved person's device can append an entry** (multi-approver chain, owner
 decision 1). **Hosts never sign** and are never approvers, so a compromised host's own key
@@ -95,7 +98,7 @@ are, so no end has to serialize JSON identically:
   "by": "<signer's device id>",
   "at": "2026-11-02T22:14:05Z",
   "device": {
-    "id": "<32 hex: first 16 bytes of SHA-256 of dh>",
+    "id": "<32 hex: first 16 bytes of SHA-256 of the 65 decoded bytes of dh>",
     "dh": "<65-byte uncompressed P-256 ECDH key, base64url>",
     "sign": "<65-byte uncompressed P-256 ECDSA key, base64url; absent for a host>",
     "signAlg": "p256-sha256-der",
@@ -113,13 +116,13 @@ are, so no end has to serialize JSON identically:
 | `account` | The account id the relay issued. A roster entry from another account never verifies |
 | `generation` | Chosen at genesis. A reset (§5.5) is a new generation |
 | `seq`, `prev` | `seq` is 0 at genesis and one more than its parent otherwise; `prev` is the parent's **entry hash** (below), not a hash of its signature, so a re-encoded ECDSA signature cannot make a second entry with the same content |
-| `op` | `genesis`, `add`, `remove`, `rename`, `merge` (§3.4; its `prev` is a list). Grants (`set grants` in §5.4) are left for later |
+| `op` | `genesis`, `add`, `remove`, `rename`, `merge` (§3.4; its `prev` is a list). Grants (`set grants` in design.md §5.4) are left for later |
 | `by` | The signer's device id. It must be an active person's device in the state the parent leaves; for `genesis`, the device the entry adds |
 | `at` | When the signer says it signed. Shown to people ("added by Desk app at 14:05"); never used to order or expire anything |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
 | `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `web`. Display only: authorization reads `kind` |
 | `device.signAlg` | With `sign`, and only `p256-sha256-der` in v1 (below). The name is this protocol's, not JOSE's `ES256`, which implies raw `r‖s` signatures and JWK keys. A verifier refuses any other value. It is there so that adding an algorithm later (§4.6) is an explicit, versioned change rather than a guess from the key's length |
-| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden` and `pwa/js/needs-you.js` `HIDDEN`: format characters including bidi controls and zero-width characters, controls, default-ignorables, private-use, unassigned code points and the line and paragraph separators) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, as Needs You does, since which code points are unassigned differs between platforms' Unicode versions. Proposed by the new device, editable by the approver, and signed with the rest |
+| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden` and `pwa/js/needs-you.js` `HIDDEN`: format characters including bidi controls and zero-width characters, controls, default-ignorables, private-use, unassigned code points and the line and paragraph separators) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per Unicode scalar value: `\uXXXX` (four uppercase hex digits) up to U+FFFF and `\u{X…}` (uppercase hex) above it, with an unpaired surrogate as its own `\uXXXX`, the format `NeedsYou.Reveal` already uses. It never refuses those, since which code points are unassigned differs between platforms' Unicode versions. Proposed by the new device, editable by the approver, and signed with the rest |
 | `approval` | How the person approved: `code`, `qr`, `grandfather` (§8.2) or `genesis`, and the enrollment transcript hash, so an entry can be traced to the exchange that produced it |
 
 Kinds: on the wire the kind is the authorization class, and it stays the set every check
@@ -178,7 +181,7 @@ accepted (during a fork, below, one per head), written before it acts on the new
 
 * **Extension only.** An offered roster is accepted only if it contains every pinned entry
   and continues from them. A shorter roster, or one that does not contain a pinned entry,
-  is a rollback: a hard error, as §5.4 says. It is refused; the verifier keeps its own copy
+  is a rollback: a hard error, as design.md §5.4 says. It is refused; the verifier keeps its own copy
   and says so (host log, app and PWA banner).
 * **Fork.** Two valid entries on one parent can only exist if the relay showed two approvers
   the same head at once (it serializes honest appends with conditional writes, §3.5). Both
@@ -360,11 +363,12 @@ is not that property, since malware running as the user can call the key directl
 | Platform | Key-enforced presence |
 |---|---|
 | Apple | Yes: a Secure Enclave key with `.userPresence` access control (Face ID, Touch ID or passcode) |
-| Windows app | Where available: a TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6 verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in v1; adopting it later would add an RSA value to `signAlg` and define the RSA key and signature encodings, a protocol change of its own |
+| Windows app | Where available: a TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6 verified its ECDH. Windows Hello (Passport) key credentials are not used in v1: `KeyCredentialManager`, the API an unpackaged app can reach, creates RSA-2048 keys, and we cannot rely on it to give an ECDSA P-256 key with key-enforced presence on the configurations we support. Adopting such a key later would add a value to `signAlg` and define its key and signature encodings, a protocol change of its own |
 | PWA | Not in v1. A later slice (L1) can make a WebAuthn assertion with user verification over the entry hash part of the approval |
 
 A device without key-enforced presence (a PWA, a Windows machine whose TPM or provider does
-not honour the policy) is a **weaker approver**. It says so on its Devices page, and the
+not honour the policy, any device whose signing key fell back to software storage) is a
+**weaker approver**. It says so on its Devices page, and the
 person's confirmation there is best effort, not a security boundary. What bounds it is that
 every roster change is announced on every other device with a two-press undo (§6.3). The
 residual risk of §2 is therefore: malware on a machine with a weaker approver can approve its
@@ -457,7 +461,8 @@ A device can remove itself ("Remove this device"), which also signs it out.
   Its own app, other hosts' usage exchange (every 5 minutes) and every person's device that
   opens it all carry the head. That needs a dishonest relay **and** a removed device's keys,
   and it ends at the first honest contact. Commands also carry the signer's `rosterHead`
-  (design §5.5), so a host that sees a newer head than its own syncs before acting.
+  ([design.md §5.5](../design.md#55-command-envelope)), so a host that sees a newer head than
+  its own syncs before acting.
 
 ### 6.3 Every change is announced
 
@@ -514,7 +519,7 @@ person types into it.
 
 ### 7.3 The local pipe and the HA connector
 
-The roster governs the relay path (and the LAN path of design §5.2 when it exists). The local
+The roster governs the relay path (and the LAN path of [design.md §5.2](../design.md#52-transport-ladder) when it exists). The local
 pipe keeps its same-user rules ([local-pipe.md](../protocol/local-pipe.md)). The HA connector acts in-process
 for Home Assistant users (§9.5). Neither is a roster device and neither can change the roster.
 
