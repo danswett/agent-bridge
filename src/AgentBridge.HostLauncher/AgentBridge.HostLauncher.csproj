@@ -11,6 +11,13 @@
     <AssemblyName>agent-bridge-hostw</AssemblyName>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <DefineConstants>$(DefineConstants);AGENT_BRIDGE_HOSTW</DefineConstants>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The exit code and variable it shares with the host, as source, so the launcher stays one
+         small assembly. -->
+    <Compile Include="..\AgentBridge.Local\HostLauncherContract.cs" Link="HostLauncherContract.cs" />
+  </ItemGroup>
 
 </Project>

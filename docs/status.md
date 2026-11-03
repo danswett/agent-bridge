@@ -224,9 +224,7 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #172: usage per account, shared between hosts (merged in #186; follow-ups #206, #207).
 - **Bugs and follow-ups from live use:**
   - #101: app test timing races, fixed by #401 (each app test runs on a UI thread of its own); #241, a DevBox keep-awake fake-time race, is separate;
-  - #239: `host.restart` can leave no host running if a probe outlasts 90 s;
   - #102 and #150: launch busy wording;
-  - #106: the logon task doesn't restart a crashed host;
   - #110: an HA connector edge case;
   - #118: discovery held 2 min after an npm Copilot start;
   - #122: the Launch page's busy banner;

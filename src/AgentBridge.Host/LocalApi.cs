@@ -104,13 +104,21 @@ public sealed class HostHandover
     // Asked for by host.restart, before the host is told to stop.
     public void Request() => Volatile.Write(ref requested, 1);
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement)
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false)
     {
         var handover = new HostHandover();
-        try { return await serve(handover); }
+        try
+        {
+            var code = await serve(handover);
+            // Under the logon task's launcher (#106) the launcher starts the replacement, and keeps
+            // watching it: one this host started would be watched by nothing.
+            return handover.Requested && supervised ? HostLauncherContract.Restart : code;
+        }
         finally
         {
-            if (handover.Requested) { startReplacement(); }
+            // A supervised host that fails on its way out ends as a crash instead, which the
+            // launcher starts again too.
+            if (handover.Requested && !supervised) { startReplacement(); }
         }
     }
 }

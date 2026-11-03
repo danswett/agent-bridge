@@ -59,4 +59,36 @@ public sealed class HostHandoverTests : IDisposable
         await Assert.ThrowsAsync<IOException>(() => old);
         Assert.Single(serving);
     }
+
+    [Fact]
+    public async Task A_restart_under_the_logon_tasks_launcher_leaves_the_replacement_to_the_launcher_once_the_host_has_stopped()
+    {
+        var old = HostHandover.RunAsync(async handover =>
+        {
+            using var hostLock = HostLock.TryAcquire(profile, TimeSpan.Zero) ?? throw new InvalidOperationException("the lock was taken");
+            handover.Request();
+            await Task.Yield();
+            return 0;
+        }, StartReplacement, supervised: true);
+
+        Assert.Equal(AgentBridge.Local.HostLauncherContract.Restart, await old);
+        Assert.Empty(serving);
+        // Let go, so the one the launcher starts takes it.
+        using var next = HostLock.TryAcquire(profile, TimeSpan.Zero);
+        Assert.NotNull(next);
+    }
+
+    [Fact]
+    public async Task A_host_under_the_launcher_that_fails_on_its_way_out_of_a_restart_ends_as_a_crash_for_the_launcher_to_recover()
+    {
+        var old = HostHandover.RunAsync(async handover =>
+        {
+            handover.Request();
+            await Task.Yield();
+            throw new IOException("a disposal failed");
+        }, StartReplacement, supervised: true);
+
+        await Assert.ThrowsAsync<IOException>(() => old);
+        Assert.Empty(serving);
+    }
 }

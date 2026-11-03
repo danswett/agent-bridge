@@ -198,7 +198,13 @@ switch (command)
             return 0;
         }
     case "serve":
-        return await HostHandover.RunAsync(ServeAsync, RestartSelf);
+        {
+            // Started by the logon task's launcher (#106), which then starts the replacement after
+            // host.restart. Cleared, so nothing this host starts inherits it.
+            var supervised = Environment.GetEnvironmentVariable(HostLauncherContract.Variable) == "1";
+            Environment.SetEnvironmentVariable(HostLauncherContract.Variable, null);
+            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised);
+        }
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
             await using var source = new SessionSource(options);
@@ -684,7 +690,8 @@ static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
 static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
 // host.restart: the same command again, without a window, started once this process has stopped
-// serving and let go of the profile's lock (HostHandover).
+// serving and let go of the profile's lock (HostHandover). Only for a host the logon task's
+// launcher does not watch; a watched one leaves this to the launcher.
 void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };

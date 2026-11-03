@@ -209,6 +209,16 @@ public sealed class WindowsAgentHaBridgeRuntime(AgentHaBridgeProbe? probe = null
 // The host serving a profile, reached on its local pipe (docs/protocol/local-pipe.md).
 public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
 {
+    // How long a restart waits for the old host to be gone. Its shutdown can take minutes while a
+    // usage probe it waits for finishes, which the migration's 45 s VerifyTimeout never allowed
+    // for: a slow shutdown made a migration report failure and undo itself while the replacement
+    // was still to come (#239's review). The 45 s now applies to the new host alone.
+    public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+    // Called before the host is asked to restart: what then waits for that process to end. By
+    // handle, so a pid reused once it has gone is never waited on.
+    public Func<int, Func<CancellationToken, Task>> Watch { get; init; } = WatchProcess;
+
     public async Task<bool> RunningAsync(CancellationToken cancellationToken)
     {
         try
@@ -220,15 +230,32 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return false; }
     }
 
+    // Null once the host was asked to restart and has gone, so its replacement is on its way.
     public async Task<string?> RestartAsync(CancellationToken cancellationToken)
     {
+        Func<CancellationToken, Task> gone;
         try
         {
             await using var channel = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profileFolder), ct: cancellationToken);
+            var pid = (await channel.CallAsync<HostStatus>(HostOps.Status, ct: cancellationToken)).ProcessId;
+            gone = Watch(pid);
             await channel.CallAsync(HostOps.Restart, ct: cancellationToken);
-            return null;
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
+        try { await gone(cancellationToken).WaitAsync(ShutdownTimeout, Time, cancellationToken); }
+        catch (TimeoutException) { return $"it was still stopping after {ShutdownTimeout.TotalMinutes:0} minutes"; }
+        return null;
+    }
+
+    static Func<CancellationToken, Task> WatchProcess(int pid)
+    {
+        Process process;
+        try { process = Process.GetProcessById(pid); }
+        catch (ArgumentException) { return _ => Task.CompletedTask; }
+        return async ct =>
+        {
+            using (process) { await process.WaitForExitAsync(ct); }
+        };
     }
 }
 
