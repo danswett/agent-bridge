@@ -82,6 +82,8 @@ foreach ($trx in Get-ChildItem $TestResults -Filter *.trx -Recurse -ErrorAction 
             Passed  = [int]$counters.passed
             Failed  = [int]$counters.failed
             Skipped = @($results | Where-Object outcome -eq 'NotExecuted').Count
+            Start   = [datetimeoffset]$run.Times.start
+            Finish  = [datetimeoffset]$run.Times.finish
             Seconds = ([datetimeoffset]$run.Times.finish - [datetimeoffset]$run.Times.start).TotalSeconds
         }
         $testRows = foreach ($r in $results) {
@@ -110,7 +112,11 @@ if ($suites) {
     foreach ($s in $suites | Sort-Object Seconds -Descending) {
         "| $($s.Suite) | $($s.Total) | $($s.Passed) | $($s.Failed) | $($s.Skipped) | $(Format-Seconds $s.Seconds) |"
     }
-    "| **All** | **$(($suites | Measure-Object Total -Sum).Sum)** | | | | |"
+    # The projects run in parallel, so the All row's time is the span from the first start
+    # to the last finish, not the sum.
+    $sum = { param($p) ($suites | Measure-Object $p -Sum).Sum }
+    $span = (($suites.Finish | Measure-Object -Maximum).Maximum - ($suites.Start | Measure-Object -Minimum).Minimum).TotalSeconds
+    "| **All** | **$(& $sum Total)** | **$(& $sum Passed)** | **$(& $sum Failed)** | **$(& $sum Skipped)** | **$(Format-Seconds $span)** wall |"
 } else {
     '_No TRX files: the tests did not get far enough to write them._'
 }

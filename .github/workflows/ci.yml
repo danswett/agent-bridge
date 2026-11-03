@@ -51,7 +51,7 @@ jobs:
       # needs no package in the test projects. Coverage and the TRX timings are only reported
       # (quality/README.md §5): nothing here fails the run but the tests themselves.
       - name: dotnet test, with coverage and per-test times
-        run: dotnet dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test AgentBridge.slnx -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
+        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test AgentBridge.slnx -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -63,7 +63,7 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path TestResults/coverage.cobertura.xml) {
-            dotnet reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge ${{ matrix.os }}"
+            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge ${{ matrix.os }}"
           }
           pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
