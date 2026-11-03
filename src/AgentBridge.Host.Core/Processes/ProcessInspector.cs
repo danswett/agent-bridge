@@ -619,9 +619,9 @@ public static partial class CommandLine
         return null;
     }
 
-    // npx's, pnpm dlx's and bunx's options that take the next argument as their value: the
-    // package to run, which is not the command.
-    static readonly HashSet<string> WrapperValueOptions = new(StringComparer.Ordinal) { "-p", "--package" };
+    // npx's, pnpm's and bunx's options that take the next argument as their value: the package
+    // to run, or the folder to run in (pnpm's `--dir /work/codex dlx`), which is not the command.
+    static readonly HashSet<string> WrapperValueOptions = new(StringComparer.Ordinal) { "-p", "--package", "--dir", "-C" };
 
     // npx's options that take the command to run, as one argument.
     static readonly HashSet<string> WrapperCommandOptions = new(StringComparer.Ordinal) { "-c", "--call" };
