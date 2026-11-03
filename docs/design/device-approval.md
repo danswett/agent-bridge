@@ -40,11 +40,11 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | Party | Assumption | What it must not be able to do |
 |---|---|---|
 | **The account's GitHub sign-in** (a stolen token, a phished device flow, a leaked relay session token) | Can admit new keys to the relay, with any `kind` and `name` | Read or drive a session, pass a person-only check, appear as an approved machine, approve itself, or replace the roster |
-| **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3) |
+| **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host the remover has never had an attestation from until the roster is imported there (§3.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
 | **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs |
 | **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4). Its removals of devices junior to it are not held, and apply at once |
-| **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window; a relay-maintained partition is the stated exception (§6.3) |
+| **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host the remover has never had an attestation from, where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
 | **The local pipe and the HA connector** | Unchanged: same-OS-user trust, and Home Assistant credentials respectively | Out of scope for the roster; see §9.5 |
 
@@ -64,9 +64,9 @@ host can check (§4.6). What a device can offer is recorded in its roster entry 
 
 | `presence` | Meaning | Who |
 |---|---|---|
-| `key` | `sign` itself refuses to sign until the person verifies, enforced outside the app's process | Apple: Secure Enclave `SecureEnclave.P256.Signing` with `.userPresence`. Windows: only once R4 proves its mechanism (§4.6) |
-| `webauthn` | Each presence-proven signature also carries a WebAuthn assertion with user verification from a platform authenticator, over the same message; the credential's public key is in the entry | PWA (R5). Windows may use this route too (§4.6) |
-| `none` | No presence proof | Any device on a software key (DPAPI, a Keychain key without the Secure Enclave), and the Windows app until R4 |
+| `key` | `sign` itself refuses to sign until the person verifies, enforced outside the app's process | Apple: Secure Enclave `SecureEnclave.P256.Signing`, with `.userPresence` on iPhone and iPad and, on a Mac, only `.biometryCurrentSet` with no password fallback. Windows: only once R4 proves its mechanism (§4.6) |
+| `webauthn` | Each presence-proven signature also carries a WebAuthn assertion with user verification from a platform authenticator, over the same message; the credential's public key is in the entry | PWA (R5), recorded only for a device-bound credential on a platform the approver's client counts as proven (§4.6). Windows may use this route too |
+| `none` | No presence proof | Any device on a software key (DPAPI, a Keychain key without the Secure Enclave), a Mac app without a Touch-ID-only key, a PWA whose credential does not qualify, and the Windows app until R4 |
 
 A device declares `presence` when it enrolls, and nothing can raise it later without a new
 enrollment. **The declaration is the enrollee's claim.** Enrollment proves possession of the keys,
@@ -79,8 +79,8 @@ Secure Enclave keys made with CryptoKit have none a third party can check, so fo
 claim stands on the person approving a device they hold. The guarantee is therefore: **presence
 holds for devices that were not compromised when they enrolled.** A device compromised later
 cannot change its declared policy, and that is what the presence proof is for. Under owner
-decision 3(a), only devices with `key`, or `webauthn` on a proven platform (§4.6), can approve or do
-person-only actions.
+decision 3(a), only devices recorded with `key` or `webauthn` (which an approver records only for a
+qualifying credential, §4.6) can approve or do person-only actions.
 
 **Approved person's devices sign entries** (multi-approver roster, owner
 decision 1), within the seniority rules of §3.4. **Hosts never sign** entries and are never
@@ -162,7 +162,7 @@ bytes.
 | `device.presence` | `key`, `webauthn` or `none` (§3.1). A host has none of these fields |
 | `device.webauthn` | With `presence: webauthn` only: the relying party id, the credential id, the credential's P-256 public key as a SEC1 point (converted from COSE at registration), `attested`: whether the approver verified an attestation statement for it (§3.1), and `backupEligible`: the BE flag of the registration, which every assertion must repeat (§4.6) |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
-| `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `android`. For a PWA, the system its browser runs on. Shown to people, and also read for one decision: whether a `presence: webauthn` device's authenticator is on a proven platform (§4.6). Like `presence`, it is the enrollee's claim, which the approver sees beside the device it holds |
+| `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `android`. For a PWA, the system its browser runs on. Shown to people; the approver's client uses it at enrollment to decide which `presence` to record (§4.6), and verifiers never read it for a decision. Like `presence`, it is the enrollee's claim, which the approver sees beside the device it holds |
 | `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden`, `pwa/js/needs-you.js` `HIDDEN`) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, one per scalar value (`\uXXXX`, four uppercase hex digits, up to U+FFFF; `\u{X…}` above; an unpaired surrogate as its own `\uXXXX`), as `NeedsYou.Reveal` does. It never refuses those, since unassigned code points differ between platforms' Unicode versions |
 | `approval` | Exactly one of these member sets, by `method`: `{ "method": "code", "transcript": T }`; `{ "method": "qr", "transcript": T, "shown": "approver" | "joiner" }`, where `shown` says which device displayed the QR (§4.3) and `T` is computed as in §4.2; `{ "method": "grandfather" }` (§8.2), with no transcript, since there was no exchange; `{ "method": "genesis" }`, on the genesis entry only. `T` is 32 bytes, base64url. Any other member, a missing one, or `grandfather` or `genesis` with a transcript, refuses the entry |
 
@@ -214,8 +214,8 @@ history state. It is valid only if:
   (§3.4). Confirmation is: a removal that needs a cosigner is valid only if both signers are
   confirmed in that state (§3.4);
 * every entry needs presence: each signer's presence is proven, by `presence: key` or by
-  `presence: webauthn` with that signer's own `uv` on a proven platform (§3.2, §4.6). That
-  includes a `merge`, since
+  `presence: webauthn` with that signer's own `uv` whose BE flag matches the recorded one, and a
+  recorded `backupEligible` of false (§3.2, §4.6). That includes a `merge`, since
   it can adopt a branch (§3.5). Under decision 3(a) a signer with `presence: none` cannot make
   entries at all;
 * `add`: `device.id` matches `dh`; the id was never added in the parents' history (a removed key is
@@ -239,10 +239,16 @@ history state. It is valid only if:
   sign. What bounds it is that the conflict names H: removing H with the full cascade voids H's
   copy (§3.5), X is no longer conflicted, and it is active again with no new enrollment. So a
   hostile approver can make a device enrolled on a concurrent branch inactive until the person
-  removes that approver, which needs a dishonest relay or a partition, and is attributed to it.
-  Decision 9 states it. Otherwise the person enrolls a conflicted device again with a new key. An
-  honest enrollment makes one add, so a conflict needs a dishonest relay or a device enrolled twice
-  while partitioned. A void add (§3.5), such as
+  removes that approver, and it is attributed to it. It does not need a dishonest relay: an honest
+  relay appends a fork whose parent is at most 8 entries behind its head (§3.5, rule 3), so a
+  hostile approver H can sign, on a parent from before a device's add, a copy of that device's key,
+  and so conflict a device added in the last 8 entries (one junior to H it could remove outright
+  anyway). A device added earlier than that cannot be conflicted without a dishonest relay or a
+  partition. The effect is bounded by the 8 entries and H's budget of 64 adds, announced, and
+  reversed by removing H with the cascade. Decision 9 states it. Otherwise the person enrolls a
+  conflicted device again with a new key. An honest enrollment makes one add, so without a hostile
+  approver a conflict needs a dishonest relay or a device enrolled twice while partitioned. A void
+  add (§3.5), such as
   one a removed device fabricates on an old head from a key it learned, never conflicts with
   anything;
 * `remove`: its `target` names both the device id and **the entry hash of the `add` it revokes**.
@@ -330,17 +336,33 @@ history state. It is valid only if:
     outside T and its subtree, is **refused** at that verifier and reported, never a reason to fail
     closed. A removal refused this way shows as unconfirmed at that host (§6.3), and the import at
     the machine below admits it.
-  * **What the remover's client does.** The cascade with every device ticked is one removal with
-    `voidGrants` (§3.4), which is exactly the removal that can carry the subtree's evidence, so the
-    removal the client offers by default is accepted at every host that holds the target's add,
-    **provided** its evidence fits the limits above and no key outside the target's subtree has
-    also exceeded a budget in its ancestry. A cosigned removal of a device that is not junior cannot
-    carry `voidGrants`. When the person unticks devices to keep, the client signs without the flag.
-    Whenever a host refuses a removal for evidence, the Devices page shows that host as not having
-    confirmed it (§6.3). It offers the full cascade only when that removal's evidence would fit the
-    limits there; otherwise, and for a cosigned removal, it directs the person to the import at the
-    machine (`devices sync`), a local action that admits the evidence it carries without these
-    limits.
+  * **Where the remover's client signs.** The limits above are not what makes a removal reach every
+    host, because the target chooses how much evidence a removal signed on an arbitrary head needs.
+    A single mistakenly approved T, with an honest relay, can add J1 to J6, have each sign about 192
+    entries within its budget, and gossip a different set to each host and another to the relay. A
+    removal signed on the relay's head would then need more than 1,024 evidence entries at every
+    host. So the client signs every `remove` on a parent that **every host already holds**:
+    * it takes the heads each host last attested to this device (§6.3), and the relay's head. A
+      host's set of entries only grows, so an entry under all of those heads is held by every one
+      of those hosts, with all its ancestors;
+    * among the entries under all of them, it picks the **newest** (highest `seq`, then lowest entry hash) that has, among itself and its
+      ancestors, the target's add, the signers' adds and, for a cosigned removal, their `confirm`s,
+      and, when the person unticked devices to keep in the cascade, the adds of those devices;
+    * it signs the removal with that entry as `prev`. Rule 3 of §3.5 accepts a removal however far
+      back it forks, every ancestor is already held at each of those hosts, so none needs evidence,
+      and anything the target signed after that point is concurrent with the removal and void
+      (§3.5), as the cascade intends.
+    If no such entry exists, because a device the person wants to keep is not yet held by every
+    host, the client says so and offers the full cascade, which needs only the target's add and the
+    signers' adds and confirms. If even those are not held everywhere (a signer confirmed minutes
+    ago, say), it signs on the entry that contains them with the fewest ancestors outside the common
+    set, usually the newest of those entries itself, and says which hosts lack it. Those hosts receive
+    the few missing ancestors with the removal. Evidence (above) is then needed only at a host this
+    device has no attestation from, such as one offline since before the target was added, or for
+    entries the target got onto the relay's line ahead of a just-made confirm. Such a host may
+    refuse the removal for evidence; it shows as not having confirmed it (§6.3), and the person
+    imports the roster at that machine (`devices sync`), a local action that admits the evidence
+    without these limits. That is the remaining case, stated in §2 and decision 9.
 
 ### 3.4 Seniority, probation and confirmation
 
@@ -407,8 +429,10 @@ there before it. So:
     also survive a removal of them signed by that device (§3.5, "The other side of that rule").
   Decision 9 states both.
 * **Probation.** A device added in the last **72 hours** cannot add, rename others, confirm or
-  merge, and is not confirmed: an honest client does not let it sign those, and an honest relay
-  refuses to append them by its own clock. A verifier cannot rely on that, and treats what such a
+  merge: an honest client does not let it sign those, and an honest relay refuses to append them
+  by its own clock. An honest approver does not confirm it before then either, but a hostile
+  approver can sign a `confirm` at once, which ends the hold below as early as that approver could
+  have made the grants itself. A verifier cannot rely on any of that, and treats what such a
   device signs in three ways:
   * its **grants** (adds and renames) are **held**: they and everything signed by devices they
     added take effect only when the probation ends by the verifier's clock, or earlier when the
@@ -814,8 +838,9 @@ types into consoles.
 
 | Platform | Presence proof | Status |
 |---|---|---|
-| Apple | Secure Enclave key with `.userPresence` (Face ID, Touch ID or passcode, in the system's own UI) | `presence: key` |
-| PWA | A WebAuthn platform credential (`userVerification: "required"`), registered at enrollment; each proof is an assertion whose challenge is the hash of what is signed. Any host verifies it: `rpIdHash`, the UV flag in the signed `authenticatorData`, `type: webauthn.get`, the origin, the challenge, and the signature under the credential key in the roster | `presence: webauthn`, from R5. It counts only on a **proven platform** (below) |
+| Apple, iPhone and iPad | Secure Enclave key with `.userPresence` (Face ID, Touch ID or the device passcode, in the system's own UI, which other apps cannot drive) | `presence: key` |
+| Apple, Mac app | A Secure Enclave key with `.userPresence` falls back to the login password in a system dialog, the same prompt a macOS PWA would face, which same-user code may reach. So the Mac app declares `key` only for a key made with `.biometryCurrentSet` and no password fallback (Touch ID only); otherwise it declares `none` until L1 proves the macOS prompts | `presence: key` with Touch ID only; else `none` until L1 |
+| PWA | A WebAuthn platform credential (`userVerification: "required"`), registered at enrollment; each proof is an assertion whose challenge is the hash of what is signed. Any host verifies it: `rpIdHash`, the UV flag in the signed `authenticatorData`, `type: webauthn.get`, the origin, the challenge, and the signature under the credential key in the roster | `presence: webauthn` only for a **qualifying** credential (below); otherwise `none` |
 | Windows app | R4 must pick one mechanism and **prove** that same-user code cannot satisfy it. It must hold against `SendInput`, UI Automation and this project's console injector, running unelevated at the same integrity level. The candidates are the Windows WebAuthn API (`webauthn.dll`, Windows Hello, which makes ES256 credentials, unlike `KeyCredentialManager`'s RSA keys) and a TPM key with an NCrypt UI protection policy or PIN | `presence: none` until that proof; then `webauthn` or `key` |
 
 What a presence proof does **not** cover: malware that waits for the person's own approval and
@@ -824,52 +849,51 @@ id, and the signature covers the entry, but on a compromised approver the screen
 cases remain:
 * **Synced passkeys.** A credential that the platform syncs exists on the person's other devices
   in that sync account. Each use still needs the person's verification, but on a device that may
-  not be on the proven list, so synced credentials count only as the rule below allows. The roster
-  records the credential, not which device used it.
+  not be proven, so in v1 a synced credential never qualifies (below).
 * **A script in the PWA's origin.** Any script on the Pages origin (a repository, Actions or
   Pages compromise, a dependency, or XSS in rendered agent output) can ask for an assertion. The
   system's prompt then appears, but it cannot say what is being approved. The PWA's
   content-security policy and the existing rule that agent output is never rendered as HTML are
   what keep such a script out.
 
-**Proven platforms.** A WebAuthn assertion with user verification is only as strong as the
-system prompt that collected it. On a desktop, the browser's prompt is the system's own: Windows
-Hello through `webauthn.dll` on Windows, Touch ID or the login password on macOS, and whatever the
-browser provides on Linux. Same-user code can reach those with `SendInput`, UI Automation or this
-project's injector unless proven otherwise, exactly the question R4 answers for the Windows app.
-The proven list of platforms is:
-* `ios`, `ipados` and `android` from R5: the prompt is the phone's biometric or passcode screen,
-  which other apps cannot drive;
-* `windows` only once R4's proof covers Windows Hello as browsers reach it, not only as the app
-  does. R4 tests both;
-* `macos` and `linux` only after a proof of their own (slice L1).
+**Which credentials qualify, and who decides.** A WebAuthn assertion with user verification is
+only as strong as the system prompt that collected it. On a desktop, the browser's prompt is the
+system's own: Windows Hello through `webauthn.dll` on Windows, Touch ID or the login password on
+macOS, and whatever the browser provides on Linux. Same-user code can reach those with
+`SendInput`, UI Automation or this project's injector unless proven otherwise, exactly the question
+R4 answers for the Windows app. A **synced passkey** can also be asserted from any device its
+provider syncs it to: an iCloud Keychain passkey registered on an iPhone can be used from the
+person's Mac, and a Google Password Manager passkey from Chrome on any desktop.
 
-The platform the PWA ran on is not the whole answer, because a **synced passkey** can be asserted
-from any device its provider syncs it to: an iCloud Keychain passkey registered on an iPhone can be
-used from the person's Mac, and a Google Password Manager passkey from Chrome on any desktop. A
-compromised desktop in the same sync account could then produce an assertion for the phone's
-credential through that desktop's prompt. So the registration's **backup-eligible** flag (BE in
-`authenticatorData`) is recorded in the roster as `device.webauthn.backupEligible`, every assertion
-must carry the same BE, and a `presence: webauthn` device counts as presence-proven only if:
-* its credential is **device-bound** (BE clear) and its `device.platform` is on the proven list;
-  or
-* its credential is synced (BE set) and **every** platform its provider can sync to is on the
-  proven list. iCloud Keychain reaches macOS and Google Password Manager reaches every desktop, so
-  in practice this waits for R4 and L1.
+Verifiers must agree on which devices are presence-proven, and their software versions differ, so
+**no verifier consults a list of platforms**. The decision is made once, by the approver's client
+at enrollment, and recorded: the approver records `presence: webauthn` only for a qualifying
+credential, and `presence: none` for anything else, and nothing can raise it later without a new
+enrollment (§3.1). Verifiers read only the recorded `presence`, and check that every assertion
+carries the registration's backup-eligible (BE) flag, recorded as `device.webauthn.backupEligible`.
+In protocol v1 a credential **qualifies** only if:
+* it is **device-bound** (BE clear); synced credentials (BE set) never qualify in v1, and a verifier
+  refuses an entry or person command from a `webauthn` device whose recorded `backupEligible` is
+  true; and
+* its platform is one of `ios`, `ipados` or `android`, whose prompt is the phone's biometric or
+  passcode screen; or `windows`, once the approver's client ships R4's proof that Windows Hello as
+  browsers reach it cannot be satisfied by same-user code. `macos` and `linux` wait for L1.
 
-Until then the first presence-proven approvers are the Apple native clients, whose Secure Enclave
-`.userPresence` keys never leave the device (`presence: key`), the Windows app once R4 has proven
-its mechanism (Windows Hello credentials through `webauthn.dll` are device-bound, which the BE
-flag confirms), and a PWA whose platform offers a device-bound credential.
+An approver's client applies the list of the version it runs. A device enrolled before its platform
+was proven stays `none` and is enrolled again to gain presence. Admitting synced credentials, or a
+platform this list leaves out, is a later protocol version, not a setting.
 
-A `webauthn` device that does not qualify can be approved and drive sessions, but cannot approve,
-sign roster entries or give person commands; verifiers refuse its signatures for those as they
-refuse `presence: none`. The approver shows this when it enrolls a desktop PWA.
+So the first presence-proven approvers are an iPhone or iPad running the Apple client
+(`presence: key`), the Windows app once R4 has proven its mechanism (Windows Hello credentials
+through `webauthn.dll` are device-bound, which the BE flag confirms), a Mac app with a Touch-ID-only
+key, and a phone PWA whose platform offers a device-bound credential.
 
-Under owner decision 3(a), only `presence: key` devices and `webauthn` devices on a proven
-platform approve or do person-only actions. Option 3(b) is **not specified by this note**: §3.3
-requires presence for every entry, and letting devices without it approve would need its own
-design and review.
+A device recorded as `none` can be approved and drive sessions, but cannot approve, sign roster
+entries or give person commands. The approver says so when it enrolls one, such as a desktop PWA.
+
+Under owner decision 3(a), only `presence: key` and `presence: webauthn` devices approve or do
+person-only actions. Option 3(b) is **not specified by this note**: §3.3 requires presence for
+every entry, and letting devices without it approve would need its own design and review.
 
 ### 4.7 A machine with an app and a host
 
@@ -891,9 +915,8 @@ account's device list"**, typed `NEW`. It is never inferred from finding no rost
 relay can hide one. When the relay says there is a roster, genesis is not offered. When it says
 there is none, the device says that if other devices were ever approved, this one should be
 approved from one of them instead. Under decision 3(a) the first device is a presence-proven one
-(§4.6): an Apple client, the Windows app once R4 has proven its presence, or a PWA with a
-device-bound credential on a proven platform (synced passkeys only once every platform they sync
-to is proven).
+(§4.6): an iPhone or iPad running the Apple client, the Windows app once R4 has proven its
+presence, a Mac app with a Touch-ID-only key, or a phone PWA with a device-bound credential.
 
 ### 5.2 How a host comes to trust a roster
 
@@ -915,8 +938,11 @@ are disjoint (§3.4), typically two devices the lost one approved itself. A pers
 devices are the genesis device plus one other, or whose survivors were all approved through one
 device junior to the lost one, cannot remove it, and that loss means a reset (§5.5). The
 recommended setup is therefore at least three approving devices, two of them approved directly by
-the genesis device and confirmed by it three days later: the Windows app on the main desk machine as genesis, say, approving
-an Apple device and the Windows app on a second machine.
+the genesis device and confirmed by it three days later. Genesis is the most senior device, so
+the best one is the least exposed: an iPhone or iPad running the Apple client as genesis, say,
+approving the Windows apps on two machines. Until an Apple client exists, the Windows app on the
+main desk machine (after R4) is genesis, approving a second machine's app and a phone PWA; that
+puts the most senior key on a machine where agents run (decision 3).
 
 **A stolen senior device** is different from a lost one: its thief holds a head from before the
 removal, and can still revoke, once, every device that was active and junior to it there,
@@ -956,7 +982,7 @@ A token alone never replaces a stored roster or changes admission:
   `{ "v": 1, "op": "veto", "account", "generation", "reset", "by", "at" }`: `generation` is the current
   one, `reset` the entry hash of the held genesis, and `by` the vetoing device. `sig` is by `by`'s
   `sign` key over `F("agent-bridge reset veto v1", bodyBytes)`, and the veto needs a presence proof as
-  any entry does (`uv` over the same bytes for a `webauthn` device on a proven platform, §4.6). The
+  any entry does (`uv` over the same bytes for a `webauthn` device, §4.6). The
   relay accepts it only if `by` is an active person's device in its copy of the current
   generation, the `reset` names the genesis it holds, and the body parses strictly (§3.2).
 * A squatted first genesis (one made with a stolen token before the owner's) never reaches a
@@ -1166,8 +1192,8 @@ nonce?, issuedAt, expiresAt, heads }`. `sig` is by `by`'s `sign` key over
 `presence: webauthn`.
 
 A host acts only if:
-* the body parses strictly, and `sig` and the presence proof verify (`presence: none`, and
-  `webauthn` off a proven platform, never pass under decision 3(a), §4.6);
+* the body parses strictly, and `sig` and the presence proof verify (`presence: none`, and a
+  `webauthn` device recorded as backup-eligible, never pass under decision 3(a), §4.6);
 * `by` is an active, non-probationary person's device, its kind read from the roster;
 * `target.machine` is this host, and the action and its target match the op;
 * the lifetime is at most 10 minutes, it was not issued more than 2 minutes in the host's future,
@@ -1275,14 +1301,14 @@ decision 6): every existing device enrolls with the mutual codes, once, as a new
 
 1. Release the relay, then hosts and clients with roster support in `off`, then `observe` (§8.3).
 2. The owner starts the roster on a device that can approve (§5.1): under decision 3(a), the first
-   presence-proven device available, which for this fleet is the Windows app on one machine once
-   R4 has proven it, or an Apple client.
+   presence-proven device available: an iPhone or iPad running the Apple client when one is
+   available (preferred, §5.4), otherwise the Windows app on one machine once R4 has proven it.
 3. For each other machine, its Windows app shows code 1 and the owner types it on the approving
    device; that device shows code 2 and the owner types it into the app, after checking the
    fingerprint. One exchange
    covers the app and the host there (§4.7). Then any other PWAs, and the Apple clients when they
    ship. Each machine starts its 72-hour probation, which only limits what it can approve. After it,
-   the phone offers "Confirm" for each, so the approving devices among them can later cosign
+   the approving (genesis) device offers "Confirm" for each, so the approving devices among them can later cosign
    the removal of a lost senior device (§3.4).
 4. Every host in `observe` now reports what it would refuse. After a quiet day, the owner switches
    each host to `enforce` (in the app's Settings, or with
@@ -1297,8 +1323,10 @@ a hash of `dh` only, so a dishonest relay could keep a genuine device's id while
 own `sign` key and presence declaration. The fingerprint is the first 128 bits of
 `SHA-256(F("agent-bridge device descriptor v1", dh, sign, signAlg, presence, webauthn rpId,
 credential id and key, attested, backupEligible, kind, platform))`, with empty fields for what a host lacks, so it
-covers every field of the `add` that a verifier reads for a decision. In particular a relay cannot
-relabel a desktop PWA as `android` to put it on a proven platform (§4.6). Each device computes and shows its own locally, from its own keys. The owner ticks
+covers every field of the `add` that matters for a decision. In particular a relay cannot relabel
+a desktop PWA as `android`, or change its backup-eligible flag, so that the approver records
+presence it should not (§4.6). Each device computes and shows its own locally, from its own keys.
+The owner ticks
 each one after comparing the whole fingerprint with the one that device shows (a prefix is not
 enough), and the genesis device signs `add` entries with `approval.method: "grandfather"` for
 exactly the descriptor it showed. Nothing is pre-ticked, including ids from
@@ -1321,8 +1349,8 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
    freshness, person commands, `roster.*` ops, enrollment through the pipe and the CLI, `observe`
    and `enforce`.
 3. **PWA** with its passkey: join, approve, Devices, remove, person commands. Under decision 3(a)
-   it approves only with a credential that qualifies (§4.6): device-bound on a proven platform, or
-   synced once every platform it syncs to is proven.
+   it approves only when recorded with `presence: webauthn`, which in v1 needs a device-bound
+   credential on a phone, or on Windows once R4 has proven it (§4.6).
 4. **Windows app**: join, Devices, and the client rule (§7.4); approving and person commands only
    after R4's proof of presence. For this fleet it is likely the first device that can approve, so
    R4's proof comes before the cutover (R8).
@@ -1348,7 +1376,7 @@ fingerprint locally (in the app or the CLI) before it holds the roster.
 Transfers need a person command (§7.2) from an active, presence-proven person's device, and an
 active host as the asker, `to` and the source. This closes the gap #70 records for a compromised
 machine **only for devices with a presence proof**. A device with `presence: none` cannot sign
-one under decision 3(a), and under 3(b) it is the residual of §4.6. The "What this does not stop
+one under decision 3(a); option 3(b), which would change that, is not specified (§4.6). The "What this does not stop
 yet" paragraphs of [v1-transfer.md](../protocol/v1-transfer.md) and
 [host-transfer.md](../host-transfer.md) are rewritten in R6 to say exactly that.
 
@@ -1388,15 +1416,19 @@ credentials stay a second way in, by design; R6 adds a note saying so to
 ### 9.6 Apple clients (#260, #358)
 
 They enroll like any other client. Each must implement:
-* the signing key (Secure Enclave `P256.Signing` with `.userPresence`, so `presence: key`), created
-  at first run beside the device key. Without a Secure Enclave, a Keychain key, `presence: none`;
+* the signing key (Secure Enclave `P256.Signing`), created at first run beside the device key. On
+  iPhone and iPad it uses `.userPresence`, so `presence: key`. On a Mac, `.userPresence` falls back
+  to the login password in a dialog same-user code may reach, so the Mac app declares `key` only
+  for a key made with `.biometryCurrentSet` and no password fallback (Touch ID only), and otherwise
+  `none` until L1 proves the macOS prompts (§4.6). Without a Secure Enclave, a Keychain key,
+  `presence: none`;
 * strict parsing, the roster state of §3.5 (seniority, probation holds, voiding), gossip in `hello`,
   head attestations, and the shared vectors;
 * **join**: the pending screen, both codes, the genesis fingerprint, the invite hint and both QR
   directions, and verifying the returned roster. This is needed before any host they talk to
   enforces;
 * **approve**, **Devices** (remove, cascade, cosign) and **person commands** (transfer, folder trust,
-  update), each behind Face ID or Touch ID;
+  update), each behind Face ID or Touch ID, and on a Mac only when its key is Touch-ID-only;
 * the client rule of §7.4, and the bound kind for what they show.
 
 The iPhone and iPad client already connects as `phone` and the Mac app as `app`, which are the bound
@@ -1587,6 +1619,21 @@ Each slice adds its own. Together they cover:
   The same removal without `voidGrants` is refused at X and shown as unconfirmed, and the client
   offers the full cascade. A removal whose over-budget ancestors are signed by a device outside the
   target's subtree is refused.
+* **Removals are signed where every host already is.** With an honest relay, T adds J1 to J6; each
+  signs about 192 entries within its budget; T gossips a different set to each of hosts H1 to H4
+  and another to the relay. The person's device, holding attestations from all four, removes T:
+  the client signs on the newest entry under every attested head and the relay's head that holds
+  T's add and the remover's add, so the removal needs no evidence at any of the four, applies at
+  each, and every entry of T and J1 to J6 not an ancestor of it is void. The same removal signed
+  on the relay's head instead needs more than 1,024 evidence entries at each host and is refused:
+  the client never does that. A fifth host the device has no attestation from, holding a sixth
+  set, refuses it, shows as not having confirmed it, and admits it after `devices sync` there.
+* T removes its own juniors with evidence until a host's 1,024 evidence entries are used: a later
+  removal of T, signed on the common parent, needs none and applies there.
+* With an honest relay, H (approved by G) signs on a parent 5 entries back a copy of the key of X,
+  added 3 entries back by a device H is not senior to: the relay appends it, X is conflicted and
+  the conflict names H. The same against a device added 10 entries back, signed on a parent 12
+  entries back: every verifier quarantines the copy, and X stays active.
 * A far fork holding `add(X)` and then `remove(Y)` by an established device: the removal applies,
   `add(X)` stays quarantined and X is not active. A far removal signed by X itself is held until a
   merge adopts that branch.
@@ -1609,15 +1656,19 @@ Each slice adds its own. Together they cover:
 **Person commands and kind spoofing**
 * A transfer, folder-trust answer, Install or forget from an **active `app` channel without a
   presence-proven person command** (the compromised-machine case): refused.
-* A `presence: webauthn` device whose credential is synced (BE set at registration) on `ios`:
-  its roster entries and person commands are refused until every platform its provider syncs to
-  is proven. A device-bound one (BE clear) on `ios` or `android`: accepted. An assertion whose BE
-  differs from the registration's: refused.
-* A person command from a `presence: none` device: refused under 3(a). From a `presence: webauthn`
-  device whose platform is `windows` before R4's proof, or `macos` or `linux` before L1's: refused,
-  as are roster entries it signs; from one on `ios`, `ipados` or `android`: accepted. Without the
-  host's nonce, where one is required: refused. Replayed, expired, for another machine or action:
-  refused.
+* A Mac app whose signing key uses `.userPresence` declares `presence: none`; one with a
+  `.biometryCurrentSet` key and no password fallback declares `key`. An iPhone client declares
+  `key` with `.userPresence`.
+* Enrollment: an approver's client records `presence: none`, not `webauthn`, for a synced
+  credential (BE set), for a credential on `macos` or `linux`, and for one on `windows` before it
+  ships R4's proof; it records `webauthn` for a device-bound credential on `ios`, `ipados` or
+  `android`. A Mac app declares `key` only for a Touch-ID-only key.
+* Verifiers on different versions reach the same verdict: an entry or person command is judged
+  only by the recorded `presence` and `backupEligible`, never by `platform`. One from a `webauthn`
+  device recorded with `backupEligible: true`, or with an assertion whose BE differs from the
+  recorded one: refused.
+* A person command from a `presence: none` device: refused under 3(a). Without the host's nonce,
+  where one is required: refused. Replayed, expired, for another machine or action: refused.
 * A rostered host's key connecting with `hello` kind `pwa`: refused everywhere a person is needed.
   An unrostered key with kind `pwa` or `app`: refused everywhere. A rostered `pwa` connecting as
   `host`: not used as a host-to-host peer.
@@ -1692,21 +1743,30 @@ Each slice adds its own. Together they cover:
    roster of its own. Under (b), a stolen token registers a fake machine that collects what people
    type.
 3. **Who can approve and do person-only actions.**
-   (a) Only presence-proven devices (§4.6): Apple clients with the Secure Enclave; the Windows app,
-   and PWAs in a Windows browser, once R4 proves that same-user code cannot satisfy Windows Hello or
-   the app's mechanism; and PWAs on phones (`ios`, `ipados`, `android`) from R5, but only with a
-   **device-bound** credential. A **synced** passkey (iCloud Keychain, Google Password Manager) can
-   be asserted from any device in its sync account, including the person's desktops, so it counts
-   only once every platform it syncs to is proven, which waits for R4 and for macOS and Linux
-   proofs (L1). Until then other devices can be approved and drive sessions, but cannot approve,
-   sign roster entries or do person-only actions.
+   (a) Only devices recorded with presence (§4.6): an iPhone or iPad running the Apple client
+   (Secure Enclave, `key`); a Mac app only with a Touch-ID-only key, since `.userPresence` falls
+   back to the login password; the Windows app, and PWAs in a Windows browser, once R4 proves that
+   same-user code cannot satisfy Windows Hello or the app's mechanism; and PWAs on phones (`ios`,
+   `ipados`, `android`) from R5. A PWA qualifies only with a **device-bound** credential: in v1 a
+   **synced** passkey (iCloud Keychain, Google Password Manager), which can be asserted from any
+   device in its sync account, never does. The approver's client decides at enrollment and records
+   `key`, `webauthn` or `none`, and verifiers read only that, so hosts on different versions agree.
+   Desktop PWAs on macOS and Linux and Mac apps without Touch ID are recorded `none` until L1.
+   Devices recorded `none` can be approved and drive sessions, but cannot approve, sign roster
+   entries or do person-only actions.
    (b) Also devices without presence. **Not specified by this note**: §3.3 requires presence for
    every entry, and letting devices without it approve would need its own design and security
    review before it could be chosen.
    (c) One code, compared rather than typed, with no presence requirement. This gives up the
    mutual check of §4.2 and the presence proof together, so a relay acting as an approver, or
    same-user malware, could approve devices.
-   **Recommended: (a).** The cutover then starts on the first presence-proven device: for this fleet the Windows app once R4 has proven it (R4 before R8), or an Apple client.
+   **Recommended: (a).** The cutover then starts on the first presence-proven device. Genesis is the
+   most senior device and the hardest to lose (§5.4), so prefer an iPhone or iPad running the Apple
+   client when one exists: its prompt is the phone's own, and it runs no agents. The alternative,
+   the Windows app on the desk machine once R4 has proven it (R4 before R8), keeps the most senior
+   key on the machine where agents run, so a compromise there sits next to it, with only R4's proof
+   between them. A phone PWA is not recommended as genesis, since any script in the Pages origin
+   can ask for its assertions (§4.6).
    Under any option, presence and platform are the enrolling device's own claims, checked by
    attestation where the platform gives one (§3.1). They hold for devices that were not
    compromised when they enrolled.
@@ -1726,8 +1786,9 @@ Each slice adds its own. Together they cover:
 6. **Grandfathering the devices in use now.**
    (a) Enroll each with the mutual codes once (one exchange per machine, about six). Hosts go to
    `observe` first, then `enforce` per host. (b) Bulk-approve the devices online at cutover after
-   comparing whole descriptor fingerprints (covering `dh`, `sign`, presence, kind and platform, not only the
-   id), with nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
+   comparing whole descriptor fingerprints (covering `dh`, `sign`, `signAlg`, presence, `rpId`, the
+   credential id and key, `attested`, `backupEligible`, kind and platform, not only the id), with
+   nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
    look-alikes), and each machine confirming the genesis fingerprint locally. (b) has no mutual
    check.
    **Recommended: (a).**
@@ -1760,9 +1821,10 @@ Each slice adds its own. Together they cover:
      announced on every device;
    * a hostile device, even on probation, removing at once devices junior to it (added after it),
      each removal announced;
-   * a hostile approver, with a dishonest relay or a partition, making a device enrolled on a
-     concurrent branch inactive by adding a copy of its key (a conflict, §3.3). The conflict names
-     it, and removing it with the full cascade makes the device active again;
+   * a hostile approver making a device inactive by adding a copy of its key on a fork (a
+     conflict, §3.3): with an honest relay only a device added in the last 8 entries, with a
+     dishonest relay or a partition one enrolled on any concurrent branch. The conflict names it,
+     and removing it with the full cascade makes the device active again;
    * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
      revoke devices that were active and junior to it there. A confirmed pair approved independently
      can also revoke one device senior to both. They never gain trust, a revoked senior device comes
@@ -1776,7 +1838,12 @@ Each slice adds its own. Together they cover:
      removes them on another branch. The grants are announced; devices senior to the two can then
      remove them, and if none are left it is a reset;
    * a reset when a senior device is lost without two confirmed, independently approved survivors,
-     including when it is lost within three days of approving them.
+     including when it is lost within three days of approving them;
+   * a removal refused for evidence at a host the remover's device has no attestation from (one
+     offline since before the target was added, say), because there a hostile target can make it
+     need more evidence than the limits allow. The client signs every removal on a parent every
+     attested host holds, so elsewhere it needs none (§3.3). That host shows as not having
+     confirmed the removal, and importing the roster at the machine admits it.
    Seniority follows causality (one device's add is an ancestor of the other's), so a relay that
    hides heads cannot make a newer device outrank an older one.
    (b) Seniority without the two-signature removal: a lost senior device then always means a reset.
@@ -1786,7 +1853,9 @@ Each slice adds its own. Together they cover:
 10. **Freshness.**
     (a) A host without an attestation of the current roster from another device for 24 hours
     (counted by the larger of monotonic and wall-clock elapsed time, so a clock change makes it
-    stale sooner, never later) serves relay devices only `hello`, `roster.*` and attestations,
+    stale sooner, never later; and stale at once after any restart, or a wall-clock jump of more
+    than 5 minutes against the monotonic clock, until a new attestation) serves relay devices only
+    `hello`, `roster.*` and attestations,
     with no single-device exception. The local setting `security.roster.selfAttest`, off by default
     and set only at the machine, re-opens exactly that exception for a headless host no other device
     contacts: it then accepts the requester's own presence-proven `attest` command, which can never
@@ -1811,11 +1880,11 @@ Each is one PR, security-reviewed independently before merge.
 | R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, voiding and its limit for removed signers, `voidGrants`, key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine, merges that are never void, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
 | R2 | Relay: store and appends, approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
 | R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync`/`adopt` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
-| R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, which makes `windows` a proven platform for PWAs (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
+| R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, after which its approvers record `webauthn` for device-bound Windows PWA credentials (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: passkey registration (with attestation where offered, and the BE flag recorded so synced passkeys count only as §4.6 allows), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
 | R6 | Person-only actions on person commands: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
 | R7 | Removal end to end: revocation, offline hosts, removed-device experience, Forget/Remove | R5, R6 | Yes |
 | R8 | Owner cutover: runbook and live checks (the issue's "Validate live"), then `enforce` per host | R1-R7, decision 6 | On the owner's machines, with their go-ahead |
 | R9 | `enforce` by default for new installs | R8 | Yes |
 | A1 | Apple: join, then approve, Devices and person commands (contributor) | R1, R2 | For Apple clients |
-| L1 | Later: recovery key if chosen, checkpoints, CPace in place of two codes if wanted, presence-proven Allow-all launches, and the presence proofs that would make `macos` and `linux` desktop PWAs proven platforms | | |
+| L1 | Later: recovery key if chosen, checkpoints, CPace in place of two codes if wanted, presence-proven Allow-all launches, and the presence proofs for `macos` and `linux` prompts (desktop PWAs, and a Mac app without Touch ID), plus synced passkeys in a later protocol version | | |
