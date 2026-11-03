@@ -598,7 +598,9 @@ export function renderMachines(list, { presence, me, current, onSelect, status =
       more: [
         forget ? h('div', { class: 'machine-actions' }, h('button', {
           type: 'button', class: `button secondary small machine-forget${s.armed ? ' armed' : ''}`,
-          'aria-label': s.armed ? `Forget ${name}: press again to confirm` : `Forget ${name}`,
+          // The name starts with the words shown, so a person who says what they see presses it
+          // (WCAG 2.5.3, #356).
+          'aria-label': s.armed ? `Press again to forget ${name}` : `Forget ${name}`,
           // Not disabled while it goes: a disabled button loses focus, and the next draw could not
           // give it back. A press meanwhile does nothing (forget.js).
           'aria-disabled': s.busy ? 'true' : null,
