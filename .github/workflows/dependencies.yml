@@ -53,12 +53,15 @@ jobs:
         # A finding is a warning; only the audit itself failing (a restore that cannot reach
         # nuget.org, say) fails the step, since then nothing was checked.
         run: |
+          # A workflow command is one line, so a % or line break in a tool's text could garble
+          # or forge one; GitHub's own escapes keep it inside its message.
+          function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
           dotnet restore AgentBridge.slnx --nologo -v q
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $json = dotnet list AgentBridge.slnx package --vulnerable --include-transitive --format json
           if ($LASTEXITCODE) { $json; exit $LASTEXITCODE }
           $report = $json | ConvertFrom-Json
-          foreach ($problem in @($report.problems)) { if ($problem) { Write-Output "::warning title=dotnet list package::$($problem.text)" } }
+          foreach ($problem in @($report.problems)) { if ($problem) { Write-Output "::warning title=dotnet list package::$(Format-CommandData $problem.text)" } }
           # One line per package, version and advisory, however many projects and frameworks
           # reach it.
           $found = foreach ($project in @($report.projects)) {
@@ -73,7 +76,7 @@ jobs:
             }
           }
           $found = @($found | Sort-Object Package, Advisory -Unique)
-          foreach ($f in $found) { Write-Output "::warning title=Vulnerable NuGet package::$($f.Package) ($($f.Severity)): $($f.Advisory)" }
+          foreach ($f in $found) { Write-Output "::warning title=Vulnerable NuGet package::$(Format-CommandData "$($f.Package) ($($f.Severity)): $($f.Advisory)")" }
           "### NuGet: $($found.Count) known vulnerabilities (advisory)" >> $env:GITHUB_STEP_SUMMARY
           foreach ($f in $found) { "- $($f.Package), $($f.Severity): $($f.Advisory)" >> $env:GITHUB_STEP_SUMMARY }
           exit 0
@@ -82,13 +85,15 @@ jobs:
         working-directory: pwa
         # npm audit exits 1 for findings; it reads only package-lock.json, so nothing is installed.
         run: |
+          # As in the NuGet step: escape tool text before it goes into a workflow command.
+          function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
           $json = npm audit --omit=dev --json
           $code = $LASTEXITCODE
           $report = $json | ConvertFrom-Json
-          if ($report.error) { Write-Output "::error title=npm audit::$($report.error.summary)"; exit 1 }
+          if ($report.error) { Write-Output "::error title=npm audit::$(Format-CommandData $report.error.summary)"; exit 1 }
           $found = @($report.vulnerabilities.PSObject.Properties | ForEach-Object Value)
           if ($code -and -not $found.Count) { $json; exit $code }
-          foreach ($v in $found) { Write-Output "::warning title=Vulnerable npm package::pwa: $($v.name) $($v.range) ($($v.severity))" }
+          foreach ($v in $found) { Write-Output "::warning title=Vulnerable npm package::$(Format-CommandData "pwa: $($v.name) $($v.range) ($($v.severity))")" }
           "### npm (pwa, runtime): $($found.Count) vulnerable packages (advisory)" >> $env:GITHUB_STEP_SUMMARY
           foreach ($v in $found) { "- $($v.name) $($v.range), $($v.severity)" >> $env:GITHUB_STEP_SUMMARY }
           # Actions ends a pwsh step with `exit $LASTEXITCODE`, which would be npm audit's 1.
