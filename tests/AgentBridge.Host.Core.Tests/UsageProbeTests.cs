@@ -1378,13 +1378,51 @@ public sealed class UsageProbeTests : IDisposable
         Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
 
         // Codex's sessions folder is gone, so no probe can say; a Codex session running here must.
-        Directory.Delete(Path.Combine(f.CodexHome, "sessions"), recursive: true);
+        var sessionsFolder = Path.Combine(f.CodexHome, "sessions");
+        var kept = Path.Combine(f.Root, "kept-sessions");
+        Directory.Move(sessionsFolder, kept);
         codex.Pace(sessionOpen: true, busy: false);
         time.Advance(TimeSpan.FromMinutes(16));
 
         Assert.Null(await codex.CollectAsync());
         Assert.True(codex.TakeWithdrawal());
         Assert.Single(launcher.Started);
+
+        // The folder back, with the transcript measured before the sign-out: never published in its place.
+        Directory.Move(kept, sessionsFolder);
+        Assert.Null(await codex.CollectAsync());
+    }
+
+    [Fact]
+    public async Task A_transcript_written_while_still_signed_out_leaves_the_sign_out_standing_and_the_released_probe_running()
+    {
+        CodexUsed();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+
+        // A Codex session runs on the access token it still has (its refresh token lost), writing
+        // fresh readings, while the probe its arrival released is under way.
+        var later = new TaskCompletionSource();
+        AppServer(s =>
+        {
+            s.Before["account/rateLimits/read"] = later.Task;
+            s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized");
+        });
+        time.Advance(TimeSpan.FromMinutes(16));
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 41.0 } } }, (int)(time.GetUtcNow() - Fixture.T0).TotalSeconds));
+        codex.Pace(sessionOpen: true, busy: true);
+
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+        Assert.False(codex.TakeWithdrawal());
+        await Until(() => launcher.Started.Count == 2);
+
+        later.SetResult();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+        Assert.False(codex.TakeWithdrawal());
     }
     [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()

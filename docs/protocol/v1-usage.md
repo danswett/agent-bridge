@@ -271,8 +271,10 @@ refresh and locking, and runs no model turn.
   until a Codex session next runs here. A session running here lets a probe go ahead at once, and
   the sign-out stands until that probe says otherwise: a reading replaces it, another login (an
   API key) withdraws it, and a sign-out found again, or a probe that fails, leaves it standing. A
-  reading measured since the sign-out ends it too, and where no probe can run (no Codex sessions
-  folder) the session's arrival alone does, with nothing older put back in its place.
+  transcript reading does not end it, however recent: a session whose refresh token is lost still
+  reads its limits on the access token it has. Nor does it put that probe off. Where no probe can
+  run (no Codex sessions folder), the session's arrival alone ends it, with nothing older put
+  back in its place.
   `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application

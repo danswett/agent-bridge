@@ -47,8 +47,9 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         {
             (this.sessionOpen, this.busy) = (sessionOpen, busy);
             // A Codex session running here again ends the hold a sign-out put on the probes: it
-            // may have signed in. The sign-out stands until a probe, or a reading measured since,
-            // says so (ending).
+            // may have signed in. The sign-out stands until a probe says so (ending). Not a
+            // transcript: a session whose refresh token is lost still reads its limits on the access
+            // token it has, and its readings hid a sign-out it was still in (#238 review).
             if (sessionOpen && !wasOpen && signedOutAt is not null)
             {
                 ending = true;
@@ -101,20 +102,21 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         var now = clock.GetUtcNow();
         var transcript = Read(cancellationToken);
         AgentUsage? newest;
+        DateTimeOffset? readingAt;
         lock (gate)
         {
             finished = false;
             newest = Visible(Newer(transcript, probed));
             // No probe can say whether the sign-out has ended: the session's arrival must.
             if (probes is null && ending) { EndSignOut(); }
+            // The probe a session's arrival released runs at once: a fresh transcript, which says
+            // nothing of the sign-out, must not put it off.
+            readingAt = ending ? null : newest?.MeasuredAt;
         }
-        if (probes is not null) { Consider(newest?.MeasuredAt, now); }
+        if (probes is not null) { Consider(readingAt, now); }
         lock (gate)
         {
             newest = Visible(Newer(transcript, probed));
-            // A reading measured since the sign-out was found (the session that arrived, writing
-            // its own) says it has ended.
-            if (ending && signedOutAt is { } since && newest is not null && newest.MeasuredAt > since && !ReferenceEquals(newest, signedOutReading)) { EndSignOut(); }
             // Something to say again replaces what was withdrawn.
             if (newest is not null) { withdrawn = false; }
             if (signedOutAt is { } at)
@@ -218,6 +220,13 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         lock (gate)
         {
             if (probed is null || reading.MeasuredAt > probed.MeasuredAt) { probed = reading; }
+            // The allowance read after all: signed in.
+            if (ending && ReferenceEquals(probed, reading))
+            {
+                signedOutAt = null;
+                signedOutReading = null;
+                ending = false;
+            }
             finished = true;
         }
     }
