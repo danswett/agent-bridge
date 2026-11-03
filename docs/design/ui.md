@@ -667,10 +667,13 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Markdown.
 - **Markdown the parser can't take** (#440): an agent's text that the Markdown parser fails on,
   or could read only slowly, is drawn as written: one paragraph of plain prose, its line breaks
-  kept, never dropped and never read as Markdown. It is such text when it is longer than 64 Ki
+  kept, never dropped and never read as Markdown. Since an agent can send text here on purpose,
+  it is revealed as code is: hidden characters, right-to-left letters and a bare carriage return
+  are drawn as escapes. It is such text when it is longer than 64 Ki
   characters, nests quotes, lists or inlines more than 32 deep (50,000 `[` once crashed the app,
   and 5,000 overflowed its stack), or holds more inline markup than the parser handles quickly in
-  one paragraph (20,000 `[](` took seconds). The limits sit far above what an agent writes: the
+  one paragraph (20,000 `[](` took seconds; every entity, backslash escape and line break counts,
+  as each is a node of its own). The limits sit far above what an agent writes: the
   protocol sends at most 16 KiB of response, and a 16 KiB table of 250 rows, each with code, a
   link and bold, is read as a table. The Windows app does this since #440; the PWA's is #439.
 

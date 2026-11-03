@@ -213,16 +213,21 @@ public static class MarkdownModel
         return deepest + 1;
     }
 
-    // Text the parser is not given, as written: one paragraph of plain words, each line kept.
+    // Text the parser is not given, as written: one paragraph of plain words, each line kept. Drawn
+    // revealed as code is (ui.md §6.4): an agent can send its text here on purpose (33 `>` on a
+    // line), so it must not become a way to draw bidi controls, hidden or right-to-left characters
+    // live. A bare CR is not a line break here, as a shell does not take it as one: it is escaped
+    // with the rest.
     static MdParagraph Literal(string markdown)
     {
         var inlines = new List<MdInline>();
         var first = true;
-        foreach (var line in SourceLines(markdown))
+        foreach (var raw in markdown.Split('\n'))
         {
             if (!first) { inlines.Add(new MdBreak()); }
             first = false;
-            if (line.Length > 0) { inlines.Add(new MdText(line)); }
+            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
+            if (line.Length > 0) { inlines.Add(new MdText(HiddenText.Reveal(line, rightToLeft: true))); }
         }
         return new MdParagraph(inlines);
     }

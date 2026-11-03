@@ -358,11 +358,24 @@ public sealed class MarkdownTests
     [Fact]
     public void Text_drawn_as_written_keeps_its_lines()
     {
-        var text = "\nLook:\r\n" + new string('[', 50000) + "\rend\n";
+        var text = "\nLook:\r\n" + new string('[', 50000) + "\nend\n";
 
         var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
 
         Assert.Equal([new MdBreak(), new MdText("Look:"), new MdBreak(), new MdText(new string('[', 50000)), new MdBreak(), new MdText("end"), new MdBreak()], p.Inlines);
+    }
+
+    [Fact]
+    public void Text_drawn_as_written_shows_hidden_and_right_to_left_characters_and_a_bare_CR_as_escapes()
+    {
+        // Sent there on purpose (33 `>` on a line is past the nesting limit): an override, a line
+        // separator, a bare CR and Hebrew letters, none of which may act on what is drawn.
+        var quotes = Repeat("> ", 33);
+        var text = quotes + "echo safe\u202Eb\u2028c\rrm\r\n\u05D0\u05D1";
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdText(quotes + "echo safe\\u202Eb\\u2028c\\u000Drm"), new MdBreak(), new MdText("\\u05D0\\u05D1")], p.Inlines);
     }
 
     [Theory]
@@ -399,13 +412,19 @@ public sealed class MarkdownTests
     }
 
     [Theory]
-    [InlineData("&gt;", 16384)]
-    [InlineData("\\*", 16384)]
-    [InlineData("\\\\", 16384)]
-    [InlineData("<a>", 16384)]
-    public void Text_of_one_inline_per_token_is_read_in_bounded_time_and_memory(string unit, int count)
+    [InlineData("", "&gt;", 16384)]
+    [InlineData("", "\\\\", 16384)]
+    [InlineData("", "<a>", 16384)]
+    [InlineData("", "\\#", 30000)]
+    [InlineData("", "\\.", 30000)]
+    [InlineData("# ", "\\#", 30000)]
+    [InlineData("", "x\\#", 20000)]
+    [InlineData("", "a&gt;", 13000)]
+    [InlineData("", "&amp;a", 10000)]
+    [InlineData("", "&#33;", 12000)]
+    public void Text_of_one_inline_per_token_is_read_in_bounded_time_and_memory(string prefix, string unit, int count)
     {
-        var text = Repeat(unit, count);
+        var text = prefix + Repeat(unit, count);
         MarkdownModel.Parse("warm");
         var before = GC.GetAllocatedBytesForCurrentThread();
         var clock = System.Diagnostics.Stopwatch.StartNew();
