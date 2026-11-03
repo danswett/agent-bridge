@@ -50,13 +50,14 @@ external GitHub approval, physical-device networking or real agent typing.
    is online and marked **View only**, with the reason:
    `Synthetic transcript fixture: no real agent actions are connected.`
 6. Open **Synthetic Apple interoperability session**. Verify the main response
-   contains `The .NET host parsed this temporary transcript.` Open **Interop
-   helper** under **Background activity** and verify its own detail contains
-   `The delegate is connected through the real .NET host.`
-7. Open **Reply / Actions** for this fixture session. It should offer no reply
-   editor, attachment upload or stop action and should say that remote replies
-   are unavailable. A toolbar button opening this explanatory sheet is expected.
-   A different real host's launch controls do not establish fixture permissions.
+   contains `The .NET host parsed this temporary transcript.` Open **Session
+   inspector** on compact layouts. Wide iPad and Mac layouts show it beside the
+   conversation. Open **Interop helper** under **Background activity** and verify
+   its detail contains `The delegate is connected through the real .NET host.`
+7. Return to **Session details**. Verify that the persistent composer shows the
+   fixture's view-only reason and disables **Send Reply**. File upload controls
+   require an attachment capability. **End Session** is disabled for this host
+   and is absent when viewing an individual delegate.
 
 Keep all three apps connected at the initial response before advancing the run.
 

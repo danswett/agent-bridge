@@ -181,8 +181,13 @@ struct SessionWorkbench: View {
                               // Leaving the detail must not cancel the shared transport.
                               try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
                           }
-                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry), layout: layout)
-            .id(entry.id)
+                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry), layout: layout) {
+            if let host = entry.host, !entry.ended {
+                SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .inspector)
+                    .id(entry.id)
+            }
+        }
+        .id(entry.id)
     }
 
     @ViewBuilder private func detail(_ entry: SessionEntry) -> some View {
@@ -205,11 +210,6 @@ struct SessionWorkbench: View {
                         .accessibilityAddTraits(.isHeader)
                     Divider()
                     reader(entry, layout: .inspector)
-                    if let host = entry.host, !entry.ended {
-                        Divider()
-                        SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .inspector)
-                            .id(entry.id).padding(14).fixedSize(horizontal: false, vertical: true)
-                    }
                 }
                 .frame(minWidth: 270, idealWidth: 320, maxWidth: 460, maxHeight: .infinity, alignment: .topLeading)
             }
