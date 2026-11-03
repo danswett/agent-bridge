@@ -23,8 +23,11 @@ public sealed class UsageProbes
     public required Func<AgentKind, string?> Find { get; init; }
 
     // A folder the host owns and keeps empty, which the probes run in, so neither agent reads a
-    // project's settings or instructions.
+    // project's settings or instructions. Named FolderName, under the host's profile folder:
+    // discovery knows a probe partly by it (ClaudeSessionDiscovery), whichever host started it.
     public required string WorkingDirectory { get; init; }
+
+    public const string FolderName = "usage-probe";
 
     // Codex's managed daemon, over its control socket.
     public ICodexDaemon Daemon { get; init; } = new CodexDaemonSocket();

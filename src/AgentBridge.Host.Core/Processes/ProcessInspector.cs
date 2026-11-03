@@ -24,6 +24,11 @@ public interface IProcessInspector
     // The same, and whether the list is known to be complete. Discovery can live with a
     // process it could not identify; deleting a worktree cannot, so the reclaimer asks this.
     AgentProcessObservation Observe(AgentKind agent) => new(GetAgentProcesses(agent), true);
+
+    // Whether this host started the process itself (#200): its `claude auth status`, which is no
+    // session and must not hold discovery or worktree reclaim, where a person's own run of the same
+    // command still does. False wherever the OS will not say (macOS, for now), so that fails safe.
+    bool IsOwnChild(AgentProcess process) => false;
 }
 
 // Known is false when a process that might be this agent could not be identified, or the
@@ -61,6 +66,32 @@ public sealed class SystemProcessInspector : IProcessInspector
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent) => Scan(agent).Processes;
 
     public AgentProcessObservation Observe(AgentKind agent) => Scan(agent);
+
+    public bool IsOwnChild(AgentProcess process) =>
+        HostStarted.Value is { } started && StartedBy(process, Environment.ProcessId, started, AgentBridge.Hooks.Ancestry.ParentOf);
+
+    static readonly Lazy<DateTimeOffset?> HostStarted = new(() =>
+    {
+        try
+        {
+            using var self = Process.GetCurrentProcess();
+            return new DateTimeOffset(self.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { return null; }
+    });
+
+    // A pid is reused only once its process has gone, so a process started no earlier than the
+    // host whose parent has the host's pid was started by the host. Its grandparent too: an npm
+    // install's claude.cmd runs through cmd.exe (ProbeLauncher), so the claude it starts is the
+    // host's grandchild. The cmd.exe between them may have exited and its pid gone to another of
+    // the host's children; that only takes one more process with these exact arguments for the
+    // host's, which costs a moment of hold it would otherwise have had.
+    internal static bool StartedBy(AgentProcess process, int host, DateTimeOffset hostStarted, Func<int, int?> parentOf)
+    {
+        if (process.StartedAt is not { } started || started < hostStarted) { return false; }
+        if (parentOf(process.Id) is not { } parent || parent <= 0 || parent == process.Id) { return false; }
+        return parent == host || parentOf(parent) == host;
+    }
 
     AgentProcessObservation Scan(AgentKind agent)
     {
@@ -683,6 +714,18 @@ public static partial class CommandLine
         if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
         var arguments = Split(commandLine);
         return arguments.Count > 6 && ProbeOptions(arguments, arguments.Count - 6);
+    }
+
+    // The `claude auth status` the host asks at most hourly before a probe (#200): the program, or
+    // a runtime and its script, then `auth status` and nothing else. Only half the test: a person
+    // checking their own sign-in runs exactly this too, and is held for as any Claude process is,
+    // so discovery and reclaim exempt it only when the host started it (IProcessInspector.IsOwnChild).
+    public static bool IsClaudeAuthStatus(string? commandLine)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
+        var arguments = Split(commandLine);
+        var at = arguments.Count == 4 && IsRuntime(arguments[0]) ? 2 : arguments.Count == 3 ? 1 : -1;
+        return at > 0 && arguments[at] == "auth" && arguments[at + 1] == "status";
     }
 
     // The probe's four options, each once, from first to the end.

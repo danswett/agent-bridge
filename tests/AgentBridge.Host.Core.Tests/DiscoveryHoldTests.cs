@@ -841,6 +841,55 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    public async Task The_claude_auth_status_this_host_started_holds_nothing_but_a_persons_own_still_holds()
+    {
+        using var f = new Fixture();
+        Directory.CreateDirectory(f.ClaudeRegistrations);
+        f.Processes.Run(AgentKind.Claude, 612, @"C:\Users\u\.local\bin\claude.exe auth status");
+        f.Processes.Own.Add(612);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Empty(source.Snapshot());
+
+        f.Processes.Run(AgentKind.Claude, 613, @"C:\Users\u\.local\bin\claude.exe auth status");
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised claude process (pid 613)", source.Held?.Reason);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Users\u\.local\bin\claude.exe auth status", true)]
+    [InlineData("node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js auth status", true)]
+    [InlineData("claude auth status --json", false)]
+    [InlineData("claude auth login", false)]
+    [InlineData("claude explain auth status", false)]
+    [InlineData("claude -p auth status", false)]
+    [InlineData("claude status", false)]
+    public void Claudes_auth_status_is_known_by_its_exact_arguments(string commandLine, bool authStatus)
+    {
+        Assert.Equal(authStatus, CommandLine.IsClaudeAuthStatus(commandLine));
+    }
+
+    [Fact]
+    public void A_process_is_the_hosts_own_only_when_the_host_or_the_cmd_it_started_is_its_parent_and_it_began_after_the_host()
+    {
+        var host = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+        var parents = new Dictionary<int, int> { [10] = 1, [20] = 15, [15] = 1, [30] = 25, [25] = 24, [40] = 1 };
+        int? Parent(int pid) => parents.TryGetValue(pid, out var p) ? p : null;
+        bool Own(int pid, DateTimeOffset? started) => SystemProcessInspector.StartedBy(new AgentProcess(pid, started, null), 1, host, Parent);
+
+        Assert.True(Own(10, host.AddMinutes(1)));
+        Assert.True(Own(20, host.AddMinutes(1)));
+        Assert.False(Own(30, host.AddMinutes(1)));
+        // A parent with the host's pid before the host began was another process that had it.
+        Assert.False(Own(40, host.AddMinutes(-1)));
+        Assert.False(Own(10, null));
+        Assert.False(Own(50, host.AddMinutes(1)));
+    }
+
+    [Fact]
     public async Task A_session_a_hold_kept_unseen_is_listed_before_the_hold_is_said_to_clear()
     {
         using var f = new Fixture();

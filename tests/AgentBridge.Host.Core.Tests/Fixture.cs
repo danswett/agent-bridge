@@ -301,6 +301,11 @@ internal sealed class FakeProcesses : IProcessInspector
             Launchers = launchers,
         };
     }
+
+    // The processes this host started itself (its `claude auth status`), by pid.
+    public HashSet<int> Own { get; } = [];
+
+    public bool IsOwnChild(AgentProcess process) => Own.Contains(process.Id);
 }
 
 // Line builders, one per agent, reproducing each transcript's shape.

@@ -298,7 +298,15 @@ whatever precedes them, since macOS's `ps` splits a path with a space), nor whil
 command line, or a node or bun runtime's, cannot be read to tell. A Claude probe is recognised only by exactly its own
 options, `-p /usage --safe-mode --no-session-persistence --output-format json` after the
 executable (or after a node or bun runtime and its script), so a real prompt that only quotes
-them, even one word long, still holds discovery. After a
+them, even one word long, still holds discovery. Claude Code 2.1.316 writes a probe a
+`sessions/<pid>.json` like any interactive CLI's (`kind: interactive`, only `entrypoint: sdk-cli`
+differing, which nothing promises), so that file is not taken for a session either when its process
+is the probe by those options, or, where `ps` has split the executable's path, ends with them and
+the file's `cwd` is a folder named `usage-probe`. The `claude auth status` that gates a probe is
+neither a session nor a hold on discovery or worktree reclaim when it is exactly `auth status` after
+the executable (or a runtime and its script) and this host started it (its parent, or the `cmd.exe`
+an npm `claude.cmd` runs through, is the host, which began first). Anyone else's `claude auth
+status` holds as before; so does the host's own on macOS, which cannot yet say a process's parent. After a
 failure or a rate-limited answer the next waits 15 minutes, then 30, 60 and at most 2 hours, until
 one works; the last reading stands meanwhile. A finished probe's reading is read at once, not at
 the next turn.

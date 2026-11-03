@@ -207,6 +207,65 @@ public class DiscoveryTests
         Assert.Empty(source.Snapshot());
     }
 
+    // Claude Code 2.1.316's sessions/<pid>.json for the host's /usage probe, as rehearsal-m wrote it
+    // (E11), with its ids and paths replaced: kind interactive, entrypoint sdk-cli, nothing about flags.
+    static void ClaudeUsageProbeFile(Fixture f, int pid, string cwd)
+    {
+        var dir = Path.Combine(f.ClaudeHome, "sessions");
+        Directory.CreateDirectory(dir);
+        var at = Fixture.T0.ToUnixTimeMilliseconds();
+        var json = new System.Text.Json.Nodes.JsonObject
+        {
+            ["pid"] = pid,
+            ["sessionId"] = B,
+            ["cwd"] = cwd,
+            ["startedAt"] = at,
+            ["version"] = "2.1.316",
+            ["peerProtocol"] = 1,
+            ["kind"] = "interactive",
+            ["entrypoint"] = "sdk-cli",
+            ["name"] = "usage-probe-6a8f",
+            ["status"] = "idle",
+            ["updatedAt"] = at + 1400,
+            ["messagingSocketPath"] = @"\\.\pipe\claude-peer-redacted",
+        };
+        File.WriteAllText(Path.Combine(dir, pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json"), json.ToJsonString());
+    }
+
+    [Fact]
+    public async Task The_hosts_usage_probe_is_no_session_though_Claude_Code_records_it_as_interactive()
+    {
+        using var f = new Fixture();
+        ClaudeUsageProbeFile(f, 710, @"C:\Users\u\AppData\Local\AgentBridge\live\usage-probe");
+        f.Processes.Run(AgentKind.Claude, 710, @"C:\Users\u\.local\bin\claude.exe -p /usage --safe-mode --no-session-persistence --output-format json");
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_probe_whose_path_macOS_flattened_is_known_by_its_folder_and_a_session_elsewhere_ending_so_is_still_listed()
+    {
+        using var f = new Fixture();
+        const string flattened = "/Volumes/Agent Tools/claude -p /usage --safe-mode --no-session-persistence --output-format json";
+        ClaudeUsageProbeFile(f, 711, "/Users/u/Library/Application Support/AgentBridge/live/usage-probe/");
+        f.Processes.Run(AgentKind.Claude, 711, flattened);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Empty(source.Snapshot());
+
+        f.ClaudeSessionFile(712, A);
+        f.Processes.Run(AgentKind.Claude, 712, flattened);
+        await source.RefreshAsync();
+
+        Assert.Equal(712, Assert.Single(source.Snapshot()).ProcessId);
+    }
+
     [Fact]
     public async Task An_agent_ha_bridge_registration_wins_over_Claude_Code_s_own_file_for_the_same_session()
     {

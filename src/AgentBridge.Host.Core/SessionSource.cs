@@ -495,10 +495,13 @@ public sealed class SessionSource : ISessionSource
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
             HoldForPidless(observed, accounted, pidless!, holds);
         }
-        // The host's own usage probe is nobody's session (#200).
+        // The host's own usage probe is nobody's session (#200), and nor is the `claude auth status`
+        // it asks before one, though only when this host started it: a person's own run of it holds
+        // as any Claude process does.
         if (agent == AgentKind.Claude)
         {
-            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)).Select(p => p.Id));
+            accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsClaudeUsageProbe(p.CommandLine)
+                || (CommandLine.IsClaudeAuthStatus(p.CommandLine) && _processes.IsOwnChild(p))).Select(p => p.Id));
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);

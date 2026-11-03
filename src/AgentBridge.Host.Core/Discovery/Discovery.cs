@@ -342,11 +342,21 @@ internal static class ClaudeSessionDiscovery
                 continue;
             }
             accounted?.Add(filePid);
-            if (!entry.Interactive) { continue; }
+            if (!entry.Interactive || IsUsageProbe(holder, entry)) { continue; }
             live.Add(new DiscoveredSession(entry.SessionId, AgentKind.Claude, findTranscript(entry.SessionId), null, entry.Pid, ProcessStartedAt: holder.StartedAt));
         }
         return live;
     }
+
+    // A host's /usage probe (#200), which Claude Code 2.1.316 records as kind interactive (entrypoint
+    // sdk-cli, which nothing promises), so it was listed as a session for the second or two it ran.
+    // Told by what the host controls instead: the probe's exact options, or, where macOS's ps has
+    // flattened an install path with a space in it, options that end so and the folder every host
+    // runs it in (<profile>/usage-probe). The folder alone is not enough: anyone may name one so.
+    static bool IsUsageProbe(AgentProcess holder, Entry entry) =>
+        CommandLine.IsClaudeUsageProbe(holder.CommandLine)
+        || (CommandLine.MayBeClaudeUsageProbe(holder.CommandLine) && entry.Cwd is { } cwd
+            && Path.GetFileName(cwd.Replace('\\', '/').TrimEnd('/')).Equals(AgentBridge.Host.Core.Usage.UsageProbes.FolderName, StringComparison.OrdinalIgnoreCase));
 
     static DateTimeOffset? Written(string path)
     {
@@ -354,7 +364,7 @@ internal static class ClaudeSessionDiscovery
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true);
+    internal sealed record Entry(int Pid, string SessionId, DateTimeOffset? StartedAt, DateTimeOffset? UpdatedAt, bool Interactive = true, string? Cwd = null);
 
     internal static Entry? Parse(string path) => Parse(path, out _) is { Interactive: true } entry ? entry : null;
 
@@ -379,7 +389,7 @@ internal static class ClaudeSessionDiscovery
             // Only a CLI at a console can be typed into; an SDK or print-mode run is not
             // a session a person drives.
             var interactive = Json.Str(e, "kind") is not { } kind || kind == "interactive";
-            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive);
+            return new Entry(pid, id, Millis(e, "startedAt"), Millis(e, "updatedAt"), interactive, Json.Str(e, "cwd"));
         }
         catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { pid = 0; return null; }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
