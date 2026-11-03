@@ -49,15 +49,18 @@ action. Session/usage inspection and staged-attachment cleanup remain available.
 
 ## Platform and host dependencies
 
-- **Mac/Linux host actions and local administration:** the host selects
-  unsupported answer/reply/stop/launch implementations off Windows
-  ([Program.cs](../src/AgentBridge.Host/Program.cs)). Mac local host management
-  operations are explicitly unavailable ([local-pipe.md](protocol/local-pipe.md)).
-  Host install/start/stop/restart, remote-approval configuration and approved-device
-  management require host/platform work; the Apple client must not bypass these
-  restrictions. A capable remote Windows host can offer the corresponding
-  session actions. Windows Dev Box keep-awake and Task Scheduler behavior are
-  platform-specific.
+- **Mac host actions:** [Program.cs](../src/AgentBridge.Host/Program.cs) now shares
+  a managed tmux backend for launch, answer, reply and stop. Only panes launched
+  by the current host run can be controlled; existing Terminal sessions are not
+  adopted. Native Codex lock discovery rechecks process ownership and file
+  descriptors. See [Mac host setup](macos-host.md) and the actual acceptance
+  limitations below. Linux delivery remains unsupported.
+- **Mac local administration:** the native socket peer does not yet establish
+  administrative caller identity ([local-pipe.md](protocol/local-pipe.md)), so
+  app-based host configuration/sign-in/stop/restart remain unavailable. The
+  operator CLI supports configuration and sign-in from the owner's Terminal;
+  guard #67 still refuses those from an agent session. Hook takeover, Windows
+  Dev Box keep-awake and Task Scheduler behavior remain platform-specific.
 - **iOS/iPadOS background notifications:** current notices require the app to be
   open. APNs provider, device-token registration, entitlements and lifecycle
   validation are missing. A Windows tray process is not an iOS background
@@ -66,6 +69,7 @@ action. Session/usage inspection and staged-attachment cleanup remain available.
   TestFlight/App Store delivery, Apple self-update policy and bundled host
   installation are deferred by the local-development-build decision. Windows
   Velopack, registry and Task Scheduler code does not supply these Apple pieces.
+  Apple Development signing can be used for local physical-device builds.
   Remote host update controls are already implemented independently.
 
 ## Acceptance still required
