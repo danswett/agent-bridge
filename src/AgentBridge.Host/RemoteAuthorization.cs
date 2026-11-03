@@ -111,7 +111,8 @@ public sealed class RemoteAuthorization : IDisposable
             switch (op)
             {
                 case "host.peers.status":
-                    return new { enabled = Enabled, problem = Store.Problem, pins = Store.Pins };
+                    var pins = Store.Pins;
+                    return new { enabled = Enabled, problem = Store.Problem, pins };
                 case "host.peers.reset":
                     Store.Reset();
                     return new { reset = true };

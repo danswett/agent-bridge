@@ -72,6 +72,46 @@ public class ChannelTests
         Assert.DoesNotContain("gho_", logs);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Revalidation_waits_until_handshake_admission_has_finished(bool outbound)
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        using var release = new ManualResetEventSlim();
+        var admitting = new TaskCompletionSource<SecureChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var checks = 0;
+        host.Hub.PeerAllowed = channel =>
+        {
+            if (Interlocked.Increment(ref checks) == 1)
+            {
+                admitting.TrySetResult(channel);
+                if (!release.Wait(TimeSpan.FromSeconds(10))) { throw new TimeoutException("handshake admission was not released"); }
+            }
+            return true;
+        };
+        var opening = outbound
+            ? host.Hub.OpenAsync(app.Id, TimeSpan.FromSeconds(10))
+            : app.Hub.OpenAsync(host.Id, TimeSpan.FromSeconds(10));
+        SecureChannel atHost;
+        int duringAdmission;
+        try
+        {
+            atHost = await admitting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotNull(atHost.PeerStatic);
+            Assert.False(atHost.IsOpen);
+            host.Hub.RevalidatePeers();
+            duringAdmission = Volatile.Read(ref checks);
+        }
+        finally { release.Set(); }
+        await opening;
+        await Wait.UntilAsync(() => atHost.IsOpen, "handshake admission to finish");
+        Assert.Equal(1, duringAdmission);
+        host.Hub.RevalidatePeers();
+        Assert.Equal(2, Volatile.Read(ref checks));
+    }
+
     [Fact]
     public async Task A_60000_byte_message_crosses_the_relay()
     {

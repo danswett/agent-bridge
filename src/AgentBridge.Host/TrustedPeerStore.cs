@@ -25,6 +25,7 @@ public sealed class TrustedPeerStore
         PropertyNameCaseInsensitive = false,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         AllowDuplicateProperties = false,
+        RespectRequiredConstructorParameters = true,
         MaxDepth = 8,
         WriteIndented = true,
     };

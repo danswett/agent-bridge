@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Transport;
@@ -70,11 +71,14 @@ public sealed class TrustedPeerStoreTests : IDisposable
     [InlineData("wrong-host")]
     [InlineData("unknown-role")]
     [InlineData("duplicate-field")]
+    [InlineData("missing-revoked")]
+    [InlineData("missing-blocked")]
     public void Invalid_state_is_never_recovered_as_authority(string failure)
     {
         var store = Load();
         store.Reset();
         store.Put(person.Public, "person", time.GetUtcNow().AddHours(1));
+        if (failure == "missing-revoked") { store.Revoke(person.Public); }
         var path = Path.Combine(folder, TrustedPeerStore.FileName);
         var json = JsonNode.Parse(File.ReadAllText(path))!;
         switch (failure)
@@ -82,6 +86,8 @@ public sealed class TrustedPeerStoreTests : IDisposable
             case "newer-schema": json["version"] = 2; break;
             case "wrong-host": json["host"] = "not-a-full-key"; break;
             case "unknown-role": json["pins"]![0]!["role"] = "admin"; break;
+            case "missing-revoked": json["pins"]![0]!.AsObject().Remove("revoked"); break;
+            case "missing-blocked": json.AsObject().Remove("blocked"); break;
         }
         var text = failure switch
         {
@@ -95,6 +101,22 @@ public sealed class TrustedPeerStoreTests : IDisposable
         Assert.Null(restarted.Find(person.Public, account));
         Assert.Throws<InvalidOperationException>(() => restarted.Put(person.Public, "person", time.GetUtcNow().AddHours(1)));
         Assert.Equal(text, File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void Status_reports_a_clock_fault_discovered_by_its_first_refresh()
+    {
+        var clock = new Clock(time.GetUtcNow());
+        var store = new TrustedPeerStore(folder, host.Public, () => account, clock);
+        store.Reset();
+        store.Put(person.Public, "person", clock.Now.AddHours(1));
+        using var authorization = new RemoteAuthorization(true, store, time);
+        clock.Now -= TimeSpan.FromSeconds(1);
+
+        var status = JsonSerializer.SerializeToElement(authorization.Manage("host.peers.status", default));
+
+        Assert.Equal("the clock moved backwards", status.GetProperty("problem").GetString());
+        Assert.Null(store.Find(person.Public, account));
     }
 
     [Fact]
@@ -196,6 +218,12 @@ public sealed class TrustedPeerStoreTests : IDisposable
         Assert.NotNull(store.Problem);
         Assert.Equal(original, File.ReadAllText(path));
         Assert.Null(Load().Find(person.Public, account));
+    }
+
+    sealed class Clock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
     }
 
     public void Dispose()

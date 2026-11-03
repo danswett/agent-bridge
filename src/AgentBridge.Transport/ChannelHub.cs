@@ -87,7 +87,8 @@ public sealed class ChannelHub
     {
         foreach (var ch in channels.Values)
         {
-            if (ch.PeerStatic is null) { continue; }
+            // A partial handshake can expose a static key before curve validation completes.
+            if (!ch.IsOpen) { continue; }
             try { RequirePeer(ch); }
             catch (InvalidOperationException) when (ch.Closed.IsCompleted) { }
         }

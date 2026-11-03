@@ -211,6 +211,12 @@ any observed backward wall-clock movement, including clock corrections, until an
 owner reset. Trust-file edits are not live-reloaded: use the guarded API, not file
 deletion/editing, for revocation. A restarted host reloads and validates the store.
 
+After restart, rollback is detected only relative to the last saved trust mutation
+or recorded expiry, not the most recent access. Ordinary access does not persist
+the clock watermark, even on active hosts. A clock rollback plus restart can
+therefore extend wall-clock expiry without restoring any files; use revocation to
+end access durably. No periodic durable clock checkpoint is implemented.
+
 Saved push subscriptions bind the full person key, trust epoch and generation.
 Enforcing startup drops legacy/unbound subscriptions; an authorized person must
 register again. Enqueue, delivery and retry paths recheck the grant; revocation,
