@@ -162,6 +162,20 @@ public sealed class MarkdownTests
     }
 
     [Fact]
+    public void A_bare_carriage_return_ending_a_blocks_last_line_is_drawn_and_copied_as_an_escape_with_its_note()
+    {
+        // Pasted, the CR ends the command; Markdig takes it as the line's end, before the closing fence.
+        const string drawn = @"printf '%s' safe\u000D";
+        Assert.Equal(drawn, CopyOf("```\nprintf '%s' safe\r```\n"));
+        // An unclosed fence that runs to the end of the message.
+        Assert.Equal(drawn, CopyOf("```\nprintf '%s' safe\r"));
+        Assert.True(new CodeCopy(Assert.Single(MarkdownModel.Parse("```\nprintf '%s' safe\r```\n").OfType<MdCode>()), _ => true).Hidden);
+        // Ordinary line endings before the closing fence are still not part of the block.
+        Assert.Equal("printf '%s' safe", CopyOf("```\nprintf '%s' safe\n```\n"));
+        Assert.Equal("printf '%s' safe", CopyOf("```\r\nprintf '%s' safe\r\n```\r\n"));
+    }
+
+    [Fact]
     public void Other_line_separators_a_shell_does_not_break_on_are_drawn_and_copied_as_escapes()
     {
         foreach (var (separator, escape) in new[] { ("\u0085", @"\u0085"), ("\u2028", @"\u2028"), ("\u2029", @"\u2029") })

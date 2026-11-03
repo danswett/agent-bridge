@@ -123,6 +123,10 @@ public static class MarkdownModel
             if (i > 0) { b.Append(lines.Lines[i - 1].NewLine == Markdig.Helpers.NewLine.CarriageReturn ? '\r' : '\n'); }
             b.Append(lines.Lines[i].Slice.ToString());
         }
+        // A code block's last line ends at a bare CR too when the closing fence or the message's end
+        // follows it: `printf '%s' safe\r` drew as `safe` with no escape, and pasted it ends the
+        // command. Its ordinary LF or CRLF ending is the fence's, not the block's.
+        if (block is CodeBlock && lines.Count > 0 && lines.Lines[lines.Count - 1].NewLine == Markdig.Helpers.NewLine.CarriageReturn) { b.Append('\r'); }
         return b.ToString();
     }
 
