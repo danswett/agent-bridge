@@ -489,15 +489,18 @@ public class CopilotTests
         Assert.Null(shown.AtMachine);
     }
 
-    [Fact]
-    public void An_intentions_character_reference_is_shown_as_written_never_decoded()
+    [Theory]
+    [InlineData("Check the tree &#x202E;desrever", "Check the tree \\&\\#x202E;desrever")]
+    [InlineData("Check the tree &#x0000000202E;desrever", "Check the tree \\&\\#x0000000202E;desrever")]
+    [InlineData("Check the tree &#8238desrever", "Check the tree \\&\\#8238desrever")]
+    public void An_intentions_numeric_character_reference_is_shown_as_written_never_decoded(string intention, string shown)
     {
-        // The intention is literal text (#212), so a renderer never decodes "&#x202E;" in it to a
-        // live control.
-        var shown = DescribeCommand("git status", "Check the tree &#x202E;desrever");
+        // The intention is literal text (#212): with its "#" escaped, neither Markdown nor an HTML
+        // renderer reads "&#x202E;" in it as a reference.
+        var prompt = DescribeCommand("git status", intention);
 
-        Assert.Contains("Check the tree \\&\\#x202E;desrever", shown.Message);
-        Assert.Null(shown.AtMachine);
+        Assert.Contains(shown, prompt.Message);
+        Assert.Null(prompt.AtMachine);
     }
 
     // A name is shown escaped and on one line, so a real U+202E and the six characters "\u202E"
