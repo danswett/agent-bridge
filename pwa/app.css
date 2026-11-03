@@ -874,6 +874,7 @@ summary {
   color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
 }
 .delegate-summary:hover { background: var(--ab-selected); }
+@media (pointer: coarse), (max-width: 759px) { .delegate-summary { min-height: var(--tap); } }
 /* The name, "under" its parent and the time flow as text beside the glyph, so in the inspector's
    336 px they wrap at spaces and a separator stays with the fact after it, never starting a
    line (#214); the glyph and the chevron keep to the first line. */

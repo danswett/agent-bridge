@@ -435,6 +435,9 @@ export class DelegateDetail {
     const e = this.els;
     const calls = this.#fetched?.history?.length ? [...this.#fetched.history].reverse() : this.#a.currentTool ? [this.#a.currentTool] : [];
     const shown = calls.slice(0, 50);
+    // How long each took: to its end, or to now while it runs. One that ended with no end time
+    // sent has no clock, rather than one that keeps counting.
+    const took = (t) => (t.endedAt ? clock(t.startedAt, t.endedAt, now) : t.status === 'running' ? clock(t.startedAt, null, now) : '');
     // Drawn again only when the calls change. A running call's clock moves on in its own text,
     // so a tick leaves the list, and whatever has focus or a screen reader's place in it, as it is.
     const key = JSON.stringify(shown.map((t) => [t.id, t.status, t.name, t.summary, t.startedAt, t.endedAt]));
@@ -445,12 +448,12 @@ export class DelegateDetail {
         h('span', { class: 'sr-only' }, `${t.status}: `),
         h('span', { class: 'tool-name' }, t.name),
         t.summary ? h('span', { class: 'tool-summary', title: t.summary }, t.summary) : h('span'),
-        t.startedAt ? h('time', { class: 'tool-time', datetime: t.startedAt, title: localTime(t.startedAt) }, clock(t.startedAt, t.endedAt, now)) : null)));
+        t.startedAt && took(t) ? h('time', { class: 'tool-time', datetime: t.startedAt, title: localTime(t.startedAt) }, took(t)) : null)));
     } else {
       shown.forEach((t, i) => {
-        if (!t.startedAt || t.endedAt) { return; }
+        if (!t.startedAt || t.endedAt || t.status !== 'running') { return; }
         const time = e.tools.children[i]?.querySelector('.tool-time');
-        const text = clock(t.startedAt, null, now);
+        const text = took(t);
         if (time && time.textContent !== text) { time.textContent = text; }
       });
     }

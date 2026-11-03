@@ -421,6 +421,14 @@ test.describe('on a phone', () => {
     await expect(pane(page)).toHaveCount(0);
   });
 
+  test('on a phone each delegate\'s row is a whole tap high', async ({ page }) => {
+    await openDemo(page);
+    await showList(page);
+    const heights = await card(page).locator('.delegates-panel .delegate-summary:visible').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    expect(heights.length).toBeGreaterThan(0);
+    for (const h of heights) { expect(h).toBeGreaterThanOrEqual(44); }
+  });
+
   test('on a phone the Delegates tab holds the block, and it fits', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
@@ -552,6 +560,16 @@ test.describe('at three panes', () => {
     await expect(fact(page, 'model')).not.toHaveText('gpt-9-test');
     await change(page, 'demo-agent-lint', { model: 'gpt-9-test' });
     await expect(fact(page, 'model')).toHaveText('gpt-9-test');
+  });
+
+  test('a delegate\'s tool that finished with no end time sent shows no clock, rather than one that keeps counting', async ({ page }) => {
+    await openDemo(page);
+    const started = new Date(Date.now() - 5 * 60000).toISOString();
+    await change(page, 'demo-agent-suite', { currentTool: { id: 't-done', name: 'powershell', summary: 'dotnet test', status: 'done', startedAt: started } });
+    await card(page).locator('.strip-item[data-id="demo-agent-suite"]').click();
+    const tool = pane(page).locator('.delegate-tools .tool[data-status="done"]').first();
+    await expect(tool.locator('.tool-name')).toHaveText('powershell');
+    await expect(tool.locator('.tool-time')).toHaveCount(0);
   });
 
   test('a delegate\'s running tool keeps its row as its clock moves on, so nothing in the list is drawn again', async ({ page }) => {
