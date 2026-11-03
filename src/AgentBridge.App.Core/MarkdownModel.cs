@@ -179,6 +179,12 @@ public static class MarkdownModel
                 case HtmlEntityInline entity:
                     list.Add(new MdText(entity.Transcoded.ToString(), style));
                     break;
+                // A pipe outside a table: left as a delimiter, it drew as nothing, so "iwr x | iex"
+                // read as "iwr x  iex" (#220). It is the character it is, then what follows it.
+                case DelimiterInline delimiter:
+                    list.Add(new MdText(delimiter.ToLiteral(), style));
+                    Walk(delimiter, style, list);
+                    break;
                 case ContainerInline inner:
                     Walk(inner, style, list);
                     break;
@@ -189,4 +195,28 @@ public static class MarkdownModel
     // Only http and https links are followed: a card must never start a program or open a file.
     public static string? Safe(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) ? u.AbsoluteUri : null;
+
+    // An approval's whole message as its card draws it (#220): every word and code span with what is
+    // not on screen as it runs, right-to-left letters included, as visible escapes (a fence is drawn
+    // so already, as every block is: CodeCopy, which also notes the right-to-left letters). A Codex
+    // approval carries its command in prose ("Codex wants to run:\n\ngit push"), not in a fence, and
+    // Approve once allows what the person read. Links keep where they go; only their words change.
+    public static IReadOnlyList<MdBlock> Revealed(IReadOnlyList<MdBlock> blocks) => [.. blocks.Select(Reveal)];
+
+    static MdBlock Reveal(MdBlock block) => block switch
+    {
+        MdParagraph p => new MdParagraph(Reveal(p.Inlines)),
+        MdHeading h => h with { Inlines = Reveal(h.Inlines) },
+        MdQuote q => new MdQuote(Revealed(q.Blocks)),
+        MdList l => l with { Items = [.. l.Items.Select(Revealed)] },
+        MdTable t => t with { Rows = [.. t.Rows.Select(r => (IReadOnlyList<IReadOnlyList<MdInline>>)[.. r.Select(Reveal)])] },
+        _ => block,
+    };
+
+    static IReadOnlyList<MdInline> Reveal(IReadOnlyList<MdInline> inlines) => [.. inlines.Select(i => i switch
+    {
+        MdText t => t with { Text = HiddenText.Reveal(t.Text, rightToLeft: true) },
+        MdLink l => l with { Text = HiddenText.Reveal(l.Text, rightToLeft: true) },
+        _ => i,
+    })];
 }

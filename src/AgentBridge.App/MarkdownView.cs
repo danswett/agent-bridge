@@ -19,6 +19,7 @@ public sealed class MarkdownView : StackPanel
     // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
     static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
+    bool approval;
 
     public MarkdownView() => Spacing = 8;
 
@@ -64,6 +65,41 @@ public sealed class MarkdownView : StackPanel
         }
     }
 
+    // An approval's message on its card (#220): all of it, prose and code spans as well as fences,
+    // drawn with what is not on screen as it runs (right-to-left letters too) as escapes, and read
+    // left to right. A Codex approval's command is prose, and Approve once allows what was read.
+    public bool Approval
+    {
+        get => approval;
+        set
+        {
+            if (value == approval) { return; }
+            approval = value;
+            if (value) { FlowDirection = FlowDirection.LeftToRight; } else { ClearValue(FlowDirectionProperty); }
+            Render();
+        }
+    }
+
+    static void InOrder(DependencyObject element)
+    {
+        switch (element)
+        {
+            case RichTextBlock rich:
+                rich.FlowDirection = FlowDirection.LeftToRight;
+                rich.TextReadingOrder = TextReadingOrder.UseFlowDirection;
+                break;
+            case Panel panel:
+                foreach (var child in panel.Children) { InOrder(child); }
+                break;
+            case Border { Child: { } child }:
+                InOrder(child);
+                break;
+            case ContentControl { Content: DependencyObject inner }:
+                InOrder(inner);
+                break;
+        }
+    }
+
     // Where Copy puts a block's text. The self-test swaps in its own, so a run never takes the
     // clipboard from the person at the machine.
     internal static Func<string, bool> PutText = text =>
@@ -81,10 +117,12 @@ public sealed class MarkdownView : StackPanel
     {
         Children.Clear();
         if (markdown is null) { return; }
-        foreach (var b in MarkdownModel.Parse(markdown))
+        var blocks = MarkdownModel.Parse(markdown);
+        foreach (var b in Approval ? MarkdownModel.Revealed(blocks) : blocks)
         {
             var element = Block(b);
             if (Reading) { Read(element); }
+            if (Approval) { InOrder(element); }
             Children.Add(element);
         }
     }

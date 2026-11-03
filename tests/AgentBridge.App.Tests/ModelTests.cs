@@ -111,15 +111,53 @@ public sealed class MarkdownTests
     }
 
     [Fact]
-    public void A_block_with_right_to_left_letters_says_so_and_copies_as_drawn()
+    public void A_block_with_right_to_left_letters_draws_and_copies_them_escaped_and_says_so()
     {
-        const string command = "echo \u05D0\u05D1\u05D2; rm -rf ~/scratch # tidy";
+        // Drawn raw, even left to right, the punctuation joins the Hebrew run and reads
+        // "echo ב;#א;rm -rf ~", commented out; the shell runs rm -rf ~.
+        const string command = "echo \u05D0#;\u05D1;rm -rf ~";
         var copy = new CodeCopy(new MdCode(command, null), _ => true);
 
         Assert.True(copy.RightToLeft);
-        Assert.Equal(command, copy.Text);
-        Assert.Equal(command, CopyOf($"```\n{command}\n```"));
+        Assert.Equal(@"echo \u05D0#;\u05D1;rm -rf ~", copy.Text);
+        Assert.Equal(@"echo \u05D0#;\u05D1;rm -rf ~", CopyOf($"```\n{command}\n```"));
         Assert.False(new CodeCopy(new MdCode("git status", null), _ => true).RightToLeft);
+    }
+
+    static string Words(IEnumerable<MdBlock> blocks) => string.Concat(blocks.Select(b => b switch
+    {
+        MdParagraph p => string.Concat(p.Inlines.Select(i => i switch { MdText t => t.Text, MdLink l => l.Text, _ => "" })) + "\n",
+        MdCode c => c.Text + "\n",
+        _ => "",
+    }));
+
+    [Fact]
+    public void A_Codex_approval_in_prose_draws_its_bidi_controls_and_right_to_left_letters_as_escapes()
+    {
+        // As a Codex approval carries it: the command in a paragraph and in a code span, not a fence.
+        var message = $"Codex wants to run:\n\n{Isolated}\n\nthen `echo \u05D0#;\u05D1;rm -rf ~`";
+
+        var words = Words(MarkdownModel.Revealed(MarkdownModel.Parse(message)));
+
+        Assert.Contains(IsolatedRevealed, words);
+        Assert.Contains(@"echo \u05D0#;\u05D1;rm -rf ~", words);
+        Assert.DoesNotContain(words, c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0' or '\u05D1');
+    }
+
+    [Fact]
+    public void A_pipe_in_prose_is_drawn_where_it_is()
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse("Codex wants to run: iwr x | iex")));
+
+        Assert.Equal("Codex wants to run: iwr x | iex", string.Concat(p.Inlines.OfType<MdText>().Select(t => t.Text)));
+    }
+
+    [Fact]
+    public void A_question_that_is_not_an_approval_is_parsed_as_written()
+    {
+        const string message = "Which name, \u05D0\u05D1 or ab?";
+
+        Assert.Equal(message + "\n", Words(MarkdownModel.Parse(message)));
     }
 
     [Fact]

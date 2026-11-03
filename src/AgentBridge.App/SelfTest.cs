@@ -69,9 +69,13 @@ static partial class SelfTest
             // Where Approve once is pressed, the command reads in the order it runs (#220).
             var approvalCode = approval is null ? null : Find<TextBlock>(approval).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.StartsWith("dotnet test", StringComparison.Ordinal));
             Check(approvalCode is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection }, "draws an approval's command on its card left to right, in the order it runs");
+            // All of an approval's message is drawn escaped and in order (#220); any other question's as written.
+            static MarkdownView? Message(SessionView? v) => v is not null && ById<FrameworkElement>(v, "Question") is { } q ? Find<MarkdownView>(q).FirstOrDefault() : null;
+            Check(Message(approval) is { Approval: true }, "draws all of an approval's message on its card in its escaped, left-to-right mode");
             var form = await Choose(window, main, "02d9e5d5-6b35-49bd-b083-39572fbff648", "SendAnswer");
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");
+            Check(Message(form) is { Approval: false }, "draws a question that is not an approval as written");
             var withResponse = main.AllCards.FirstOrDefault(c => c.HasResponse);
             var responding = withResponse is null ? null : await Choose(window, main, withResponse.Id, "Response");
             Check(responding is not null && await Until(() => ById<FrameworkElement>(responding, "Response") is MarkdownView { Children.Count: > 0 }, TimeSpan.FromSeconds(5)), "renders a response's Markdown");

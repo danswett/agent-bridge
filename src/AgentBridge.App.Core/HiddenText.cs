@@ -26,9 +26,11 @@ public static class HiddenText
 
     // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
     // supplementary planes' right-to-left ranges (pwa/js/needs-you.js RTL).
-    public static bool HasRightToLeft(string text) => text.EnumerateRunes().Any(r => r.Value is
+    public static bool HasRightToLeft(string text) => text.EnumerateRunes().Any(RightToLeft);
+
+    static bool RightToLeft(Rune r) => r.Value is
         (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
-        or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF));
+        or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF);
 
     static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
     {
@@ -47,7 +49,12 @@ public static class HiddenText
 
     // Any such character drawn as a visible escape (\u202E), so a line reads in the order it runs:
     // the lane's line, and every code block (#220, #296), whose Copy takes the escapes as drawn.
-    public static string Reveal(string text)
+    // rightToLeft: right-to-left letters too. Even in a left-to-right line, punctuation between two
+    // of them joins their run and is drawn reversed (bidi rules W6, N1, L2): `echo א#;ב;rm -rf ~`
+    // draws as `echo ב;#א;rm -rf ~`, commented out, and runs `rm -rf ~`. The owner's rule (#253,
+    // decision 3) is to escape them and still offer Approve once; Hebrew or Arabic in a code block
+    // or an approval is the harder to read for it.
+    public static string Reveal(string text, bool rightToLeft = false)
     {
         var b = new StringBuilder(text.Length);
         for (var i = 0; i < text.Length;)
@@ -58,7 +65,7 @@ public static class HiddenText
                 i += Math.Max(n, 1);
                 continue;
             }
-            if (Hidden(r)) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            if (Hidden(r) || (rightToLeft && RightToLeft(r))) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
             i += n;
         }
         return b.ToString();
