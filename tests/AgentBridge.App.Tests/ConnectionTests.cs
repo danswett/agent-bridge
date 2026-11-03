@@ -189,6 +189,22 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_session_the_host_announced_is_still_listed_when_the_app_reads_the_sessions_again()
+    {
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > 0 && connection.Sessions.Get("s1") is not null, "the snapshot");
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null, "the announced session");
+        var before = Volatile.Read(ref syncs);
+
+        // As after a gap in the events or a reconnect: a host's snapshot lists what it announced,
+        // and the fake's did not, so a test's announced session went from the app again (#101).
+        connection.Resync();
+
+        await Wait.UntilAsync(() => Volatile.Read(ref syncs) > before, "the sessions read again");
+        Assert.NotNull(TestUi.Read(() => connection.Sessions.Get("s2")));
+    }
+
+    [Fact]
     public async Task With_no_host_running_the_app_says_so()
     {
         await host.StopAsync();
