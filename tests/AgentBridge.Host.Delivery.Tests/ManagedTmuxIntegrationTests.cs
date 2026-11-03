@@ -18,6 +18,49 @@ public sealed class ManagedTmuxFactAttribute : FactAttribute
 public sealed class ManagedTmuxIntegrationTests
 {
     [ManagedTmuxFact]
+    public async Task Terminal_choices_remain_raw_keys_even_when_the_application_enables_bracketed_paste()
+    {
+        var root = "/tmp/abtmux-" + Guid.NewGuid().ToString("N")[..12];
+        var executable = File.Exists("/opt/homebrew/bin/tmux") ? "/opt/homebrew/bin/tmux" : "/usr/local/bin/tmux";
+        var backend = new ManagedTmuxBackend(executable, root);
+        var command = new TmuxCommand(executable, backend.SocketPath);
+        try
+        {
+            foreach (var key in new[] { " ", "y", "n" })
+            {
+                var capture = Path.Combine(root, Guid.NewGuid().ToString("N") + ".txt");
+                // This test-owned program requests bracketed paste, then records exactly
+                // two raw input bytes. With paste-buffer -p they would be ESC,[ instead
+                // of the intended choice and Enter, even though tmux reports success.
+                const string read = "stty raw -echo; printf '\\033[?2004hREADY\\n'; dd bs=1 count=2 2>/dev/null | od -An -tx1 > \"$1\"; sleep 10; :";
+                var started = backend.Start(new("/bin/bash", ["-c", read, "--", capture], root));
+                var timer = Stopwatch.StartNew();
+                while ((await backend.ReadScreenAsync(started.ProcessId)).Rows?.Any(r => r.Contains("READY", StringComparison.Ordinal)) != true)
+                {
+                    Assert.True(timer.Elapsed < TimeSpan.FromSeconds(5), "the test-owned input reader did not become ready");
+                    await Task.Delay(20);
+                }
+                Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(started.ProcessId, new([new(key, true, 0, 0)]))).Status);
+                while (!File.Exists(capture) || new FileInfo(capture).Length == 0)
+                {
+                    Assert.True(timer.Elapsed < TimeSpan.FromSeconds(5), "the test-owned input reader did not record its bytes");
+                    await Task.Delay(20);
+                }
+                var actual = File.ReadAllText(capture).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                Assert.Equal(new[] { ((int)key[0]).ToString("x2"), "0d" }, actual);
+                using var held = Assert.IsAssignableFrom<IHeldProcess>(backend.Open(started.ProcessId, started.StartedAt).Process);
+                Assert.Null(held.Terminate());
+                Assert.True(await held.WaitForExitAsync(TimeSpan.FromSeconds(5)));
+            }
+        }
+        finally
+        {
+            await command.RunAsync(["kill-server"]);
+            Directory.Delete(root, true);
+        }
+    }
+
+    [ManagedTmuxFact]
     public async Task Real_private_pane_delivers_literal_reply_reads_screen_and_stops_only_its_echo()
     {
         var root = "/tmp/abtmux-" + Guid.NewGuid().ToString("N")[..12];
