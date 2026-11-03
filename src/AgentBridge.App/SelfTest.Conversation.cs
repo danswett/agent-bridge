@@ -58,9 +58,10 @@ static partial class SelfTest
                 {
                     divider.Move(x + by);
                     await Task.Delay(300);
-                    if (Math.Abs(scroll2.ViewportWidth - (before - by)) > 1 || Misplaced(shown, scroll2, column2, bubble2, readingMax) is { } misplaced)
+                    var misplaced = Misplaced(shown, scroll2, column2, bubble2, readingMax);
+                    if (Math.Abs(scroll2.ViewportWidth - (before - by)) > 1 || misplaced is not null)
                     {
-                        dragged.Add($"{by:0} px: pane {scroll2.ViewportWidth:0} of {before - by:0}{(Misplaced(shown, scroll2, column2, bubble2, readingMax) is { } m ? $", {m}" : "")}");
+                        dragged.Add($"{by:0} px: pane {scroll2.ViewportWidth:0} of {before - by:0}{(misplaced is not null ? $", {misplaced}" : "")}");
                     }
                 }
                 divider.End();
@@ -95,9 +96,10 @@ static partial class SelfTest
         var measure = Math.Min(scroll.ViewportWidth, readingMax);
         var at = (scroll.ViewportWidth - measure) / 2;
         var columnLeft = column.TransformToVisual(scroll).TransformPoint(default).X;
-        var inner = measure - column.Padding.Left - column.Padding.Right;
+        // The bubble against the column as drawn; the column's own width is checked against the measure.
+        var inner = column.ActualWidth - column.Padding.Left - column.Padding.Right;
         var right = bubble.TransformToVisual(column).TransformPoint(new Windows.Foundation.Point(bubble.ActualWidth, 0)).X;
-        if (Math.Abs(columnLeft - at) > 1 || Math.Abs(column.ActualWidth - measure) > 1 || Math.Abs(right - (measure - column.Padding.Right)) > 1 || bubble.ActualWidth > inner * 0.85 + 1)
+        if (Math.Abs(columnLeft - at) > 1 || Math.Abs(column.ActualWidth - measure) > 1 || Math.Abs(right - (column.ActualWidth - column.Padding.Right)) > 1 || bubble.ActualWidth > inner * 0.85 + 1)
         {
             problems.Add($"column {columnLeft:0}+{column.ActualWidth:0} of {measure:0} at {at:0} in {scroll.ViewportWidth:0}, bubble {bubble.ActualWidth:0} wide ending at {right:0} in it");
         }
