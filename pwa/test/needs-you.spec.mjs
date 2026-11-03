@@ -395,10 +395,20 @@ test.describe('what an entry offers', () => {
     await ask(page, CODEX, permission({ id: 'r2#rli', message: `Codex wants to run:\n\n${ISOLATED}` }));
     const rli = card(page, CODEX).locator('.question[data-question="r2#rli"] .question-message');
     await expect(rli.locator('.md-note')).toHaveText(['Contains hidden characters']);
-    // A message with neither says nothing; its CRLF line endings are ordinary.
-    await ask(page, CODEX, permission({ id: 'r3#plain', message: 'Codex wants to run:\r\n\r\ngit status\r\n' }));
+    // A message with neither says nothing.
+    await ask(page, CODEX, permission({ id: 'r3#plain', message: 'Codex wants to run:\n\ngit status\n' }));
     await expect(card(page, CODEX).locator('.question[data-question="r3#plain"] .question-message .md-literal')).toBeVisible();
     await expect(card(page, CODEX).locator('.question[data-question="r3#plain"] .md-notes')).toHaveCount(0);
+  });
+
+  test('an approval\'s card draws a CRLF as the line ending it is, and says it contains hidden characters for its CR', async ({ page }) => {
+    await openDemo(page);
+    // #423: bash takes the CR as part of the command: `cd` fails on `scratch\r`, and `rm` runs where it is.
+    const e = await ask(page, CODEX, permission({ message: 'Codex wants to run:\r\n\r\ncd /tmp/scratch\r\nrm -rf ./*' }));
+    await e.locator('.needs-title').click();
+    const message = card(page, CODEX).locator('.question-message');
+    expect(await message.locator('.md-literal').textContent()).toBe('Codex wants to run:\n\ncd /tmp/scratch\nrm -rf ./*');
+    await expect(message.locator('.md-note')).toHaveText(['Contains hidden characters']);
   });
 
   test('an approval\'s card has no Copy, while a code block in the conversation still has one', async ({ page }) => {

@@ -208,6 +208,16 @@ test('a bare carriage return in a block is drawn and copied as an escape on its 
   expect(await copies(page)).toEqual([{ via: 'api', text: drawn }]);
 });
 
+// #423: a CR before an LF was left raw in prose, which draws it as a space.
+test('a carriage return before a line feed in an image\'s alt text or a link\'s title is drawn as an escape, never raw', async ({ page }) => {
+  await openDemo(page);
+  const r = await respond(page, 'See ![x\r\r\ny](https://a.example/i.png) and [docs](https://a.example/d "t\r\r\nu").\n\n```\nls\n```', 'ls');
+  const links = r.locator('p a');
+  expect(await links.evaluateAll((as) => as.map((a) => [a.textContent, a.getAttribute('title')])))
+    .toEqual([['x\\u000D\ny', null], ['docs', 't\\u000D\nu']]);
+  expect(await r.evaluate((e) => e.textContent.includes('\r'))).toBe(false);
+});
+
 test('a block with both hidden characters and right-to-left letters says both, beside Copy and above the code', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openDemo(page);

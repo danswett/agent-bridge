@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { codeText, parseApproval, parseMarkdown, revealed, safeHref, textOf } from '../../js/markdown.js';
+import { codeText, parseApproval, parseMarkdown, renderMarkdown, revealed, safeHref, textOf, toDom } from '../../js/markdown.js';
 import { hasRightToLeft, notesFor, revealLineSeparators } from '../../js/hidden-text.js';
 
 // Every element and link the parser would put on the page.
@@ -262,11 +262,48 @@ test('a block holding the private-use characters the parser stands separators in
   assert.equal(blockOf(`\`\`\`\na${held}\rb\u2028c\n\`\`\``), 'a\\u{F0000}\\u{F0001}\\u000Db\\u2028c');
 });
 
-test('an approval says it contains hidden characters for a bare carriage return or an isolate, and a CRLF is none', () => {
-  const noted = (message) => notesFor(textOf(parseApproval(message)[0]));
-  assert.deepEqual(noted('Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN'), ['Contains hidden characters']);
-  assert.deepEqual(noted(`Codex wants to run:\n\n${ISOLATED}`), ['Contains hidden characters']);
-  assert.deepEqual(noted('Codex wants to run:\r\n\r\ngit status\r\n'), []);
+// Just enough of a document for toDom and renderMarkdown in node: elements, attributes and text
+// nodes, a fragment's children taken into what it is appended to.
+const fakeDocument = () => {
+  const node = (tag) => ({
+    tag, attrs: {}, children: [], dataset: {},
+    append(...kids) { for (const k of kids) { if (k.tag === '#fragment') { this.children.push(...k.children); } else { this.children.push(k); } } },
+    prepend(...kids) { this.children.unshift(...kids); },
+    setAttribute(name, value) { this.attrs[name] = String(value); },
+    addEventListener() {},
+    set className(value) { this.attrs.class = value; },
+    set textContent(value) { this.children = [{ text: value }]; },
+  });
+  return { createDocumentFragment: () => node('#fragment'), createElement: node, createTextNode: (text) => ({ text }) };
+};
+const textNodes = (n) => (n.text !== undefined ? [n.text] : n.children.flatMap(textNodes));
+const elements = (n) => (n.text !== undefined ? [] : [n, ...n.children.flatMap(elements)]);
+const cardOf = (message) => renderMarkdown(message, fakeDocument(), { approval: true });
+const cardNotes = (card) => elements(card).filter((e) => e.attrs.class === 'md-note').map((e) => textNodes(e).join(''));
+const cardText = (card) => elements(card).filter((e) => e.attrs.class === 'md-literal').map((e) => textNodes(e).join(''));
+
+test('an approval says it contains hidden characters for a bare carriage return or an isolate', () => {
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN')), ['Contains hidden characters']);
+  assert.deepEqual(cardNotes(cardOf(`Codex wants to run:\n\n${ISOLATED}`)), ['Contains hidden characters']);
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\n\ngit status\n')), []);
+});
+
+// #423: bash takes the CR of a CRLF as part of the command: `cd` fails on `scratch\r`, and `rm` runs here.
+test('an approval\'s card says it contains hidden characters for the CR of a CRLF, which it draws as the line ending it is', () => {
+  const card = cardOf('cd /tmp/scratch\r\nrm -rf ./*');
+  assert.deepEqual(cardNotes(card), ['Contains hidden characters']);
+  assert.deepEqual(cardText(card), ['cd /tmp/scratch\nrm -rf ./*']);
+  // Even one only in the blank lines the card leaves out: the note says what the message holds.
+  assert.deepEqual(cardNotes(cardOf('Codex wants to run:\n\ngit status\r\n')), ['Contains hidden characters']);
+});
+
+// #423: prose drew a CR before an LF raw, though parseMarkdown had made every CRLF an LF already.
+test('a carriage return before a line feed in an image\'s alt text or a link\'s title reaches the page as an escape, never raw', () => {
+  const page = toDom(parseMarkdown('See ![x\r\r\ny](https://a/i.png) and [docs](https://a/d "t\r\r\nu").'), fakeDocument());
+  const links = elements(page).filter((e) => e.tag === 'a');
+  assert.deepEqual(links.map((a) => textNodes(a).join('')), ['x\\u000D\ny', 'docs']);
+  assert.deepEqual(links.map((a) => a.attrs.title), [undefined, 't\\u000D\nu']);
+  assert.doesNotMatch(textNodes(page).join(''), /\r/);
 });
 // #429: lines of only whitespace at a block's end are as blank as empty ones, drawn and copied.
 test('a block ending in a line of spaces copies without the newline, so a paste does not run it', () => {
@@ -329,4 +366,31 @@ test('an approval with 200,000 blank lines before its text is drawn in linear ti
   const [p] = parseApproval('\n'.repeat(200000) + 'echo hi' + '\n \n'.repeat(100000));
   assert.ok(performance.now() - start < 250, `took ${performance.now() - start} ms`);
   assert.equal(textOf(p), 'echo hi');
+});
+// #439: each "[" scanned afresh to its partner, and each destination to the end of the text.
+const parsesQuickly = (text) => {
+  const start = performance.now();
+  const nodes = parseMarkdown(text);
+  const ms = performance.now() - start;
+  assert.ok(ms < 250, `${JSON.stringify(text.slice(0, 12))}… (${text.length} characters) took ${ms.toFixed(0)} ms`);
+  return nodes;
+};
+
+test('a hundred thousand nested link brackets parse in linear time, drawn as written', () => {
+  // 20,000 of each took 1.35 s, and it grew with the square.
+  const text = '['.repeat(100000) + ']'.repeat(100000);
+  assert.equal(textOf({ children: parsesQuickly(text) }), text);
+  assert.equal(textOf({ children: parsesQuickly('!' + text) }), '!' + text);
+});
+
+test('a link\'s opening repeated to 200,000 characters parses in linear time, drawn as written', () => {
+  // "[a](" repeated took 67 s at 200,000 characters: each destination was read to the end of the text.
+  for (const text of ['[a]('.repeat(50000), '[a](<'.repeat(40000), '[a](x'.repeat(30000) + ' '.repeat(50000) + 'y', '[a](x'.repeat(20000) + ' "' + 'x'.repeat(100000)]) {
+    assert.equal(textOf({ children: parsesQuickly(text) }), text);
+  }
+});
+
+test('a link after thousands of unclosed ones is still a link', () => {
+  const nodes = parsesQuickly('[a](('.repeat(20000) + '[b](https://ok.example/)');
+  assert.deepEqual(walk(nodes).hrefs, ['https://ok.example/']);
 });

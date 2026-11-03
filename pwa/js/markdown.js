@@ -334,6 +334,7 @@ export function parseInline(text, depth = 0) {
   // Delimiters known to have no closer from here on: cached so a long run of unmatched
   // "*" or "[" stays linear rather than rescanning the rest of the text each time.
   const noCloser = new Set();
+  let links = null;
   const n = text.length;
   let i = 0;
   while (i < n) {
@@ -371,7 +372,7 @@ export function parseInline(text, depth = 0) {
 
     if ((c === '[' || (c === '!' && text[i + 1] === '[')) && depth < MAX_DEPTH && !noCloser.has('[')) {
       const image = c === '!';
-      const link = parseLink(text, image ? i + 1 : i);
+      const link = parseLink(text, image ? i + 1 : i, links ??= linkIndex(text));
       if (link === null) { noCloser.add('['); } else if (link) {
         const href = safeHref(link.dest);
         const label = parseInline(link.label, depth + 1);
@@ -416,36 +417,77 @@ export function parseInline(text, depth = 0) {
   return out;
 }
 
-// [label](dest "title"). Returns {label, dest, title, end}, false if this "[" is not a
-// link, or null if no "]" follows at all (so the caller stops looking).
-function parseLink(text, open) {
-  let depthB = 0, k = open;
-  for (; k < text.length; k++) {
-    const ch = text[k];
-    if (ch === '\\') { k++; continue; }
-    if (ch === '[') { depthB++; } else if (ch === ']') { depthB--; if (depthB === 0) { break; } }
+// Where a link's scans end, read once for a whole text (#439). Scanning afresh from each "[" was
+// quadratic on agent text: 20,000 nested "[" before as many "]" took 1.35 s, each "[" reading to
+// its partner, and "[a](" repeated took 67 s at 200,000 characters, each destination read to the
+// end of the text. Every scan starts just after a character that is not a backslash, so whether a
+// character is escaped (an odd run of backslashes before it) is the text's, not the scan's; and a
+// scan's depth is the difference of two running counts. So the "]" closing a "[" is the first
+// unescaped "]" after it at the bracket depth just inside it, and a destination ends at the first
+// unescaped whitespace or the first unescaped ")" at the parenthesis depth it starts at.
+function linkIndex(text) {
+  const n = text.length;
+  const live = new Uint8Array(n);
+  const brackets = new Int32Array(n + 1);
+  const parens = new Int32Array(n + 1);
+  for (let p = 0, run = 0; p < n; p++) {
+    const c = text[p];
+    const on = run % 2 === 0;
+    live[p] = on ? 1 : 0;
+    run = c === '\\' ? run + 1 : 0;
+    brackets[p + 1] = brackets[p] + (!on ? 0 : c === '[' ? 1 : c === ']' ? -1 : 0);
+    parens[p + 1] = parens[p] + (!on ? 0 : c === '(' ? 1 : c === ')' ? -1 : 0);
   }
-  if (k >= text.length) { return null; }
+  const close = new Int32Array(n + 1).fill(-1);
+  const destEnd = new Int32Array(n + 1).fill(n);
+  const angle = new Int32Array(n + 1).fill(-1);
+  // The nearest "]" and ")" seen so far at each depth, which runs from -n to n.
+  const closeAt = new Int32Array(2 * n + 1).fill(-1);
+  const parenAt = new Int32Array(2 * n + 1).fill(-1);
+  let space = n;
+  let gt = -1;
+  for (let p = n - 1; p >= 0; p--) {
+    const c = text[p];
+    if (c === '>') { gt = p; }
+    angle[p] = gt;
+    if (live[p]) {
+      if (c === ']') { closeAt[brackets[p] + n] = p; } else if (c === ')') { parenAt[parens[p] + n] = p; } else if (/\s/.test(c)) { space = p; }
+    }
+    close[p] = closeAt[brackets[p] + n];
+    const paren = parenAt[parens[p] + n];
+    destEnd[p] = paren === -1 || space < paren ? space : paren;
+  }
+  // What follows a destination depends only on where it ended, and many "[" can end at one place.
+  return { close, destEnd, angle, after: new Map() };
+}
+
+// [label](dest "title"). Returns {label, dest, title, end}, false if this "[" is not a
+// link, or null if no "]" follows at all (so the caller stops looking). at: linkIndex(text).
+function parseLink(text, open, at) {
+  const k = at.close[open + 1];
+  if (k === -1) { return null; }
   if (text[k + 1] !== '(') { return false; }
-  const label = text.slice(open + 1, k);
   let p = k + 2;
   while (text[p] === ' ' || text[p] === '\n') { p++; }
-  let dest = '';
+  let from;
   if (text[p] === '<') {
-    const end = text.indexOf('>', p);
+    const end = at.angle[p];
     if (end === -1) { return false; }
-    dest = text.slice(p + 1, end);
+    from = [p + 1, end];
     p = end + 1;
   } else {
-    let parens = 0;
-    const start = p;
-    for (; p < text.length; p++) {
-      const ch = text[p];
-      if (ch === '\\' && p + 1 < text.length) { p++; continue; }
-      if (ch === '(') { parens++; } else if (ch === ')') { if (parens === 0) { break; } parens--; } else if (/\s/.test(ch)) { break; }
-    }
-    dest = text.slice(start, p);
+    from = [p, at.destEnd[p]];
+    p = at.destEnd[p];
   }
+  let rest = at.after.get(p);
+  if (rest === undefined) { rest = linkTail(text, p); at.after.set(p, rest); }
+  // Sliced only for a link: the scans were linear, and copying each failed label or destination
+  // out would not be.
+  return rest && { label: text.slice(open + 1, k), dest: text.slice(...from), ...rest };
+}
+
+// A link's optional title and its ")", from where its destination ended.
+function linkTail(text, p) {
   while (text[p] === ' ' || text[p] === '\n') { p++; }
   let title = null;
   if (text[p] === '"' || text[p] === "'") {
@@ -457,7 +499,7 @@ function parseLink(text, open) {
     while (text[p] === ' ') { p++; }
   }
   if (text[p] !== ')') { return false; }
-  return { label, dest, title, end: p + 1 };
+  return { title, end: p + 1 };
 }
 
 function parseEmphasis(text, i, noCloser) {
@@ -544,9 +586,13 @@ export function revealed(nodes) {
   });
 }
 
+const proseText = (s) => revealLineSeparators(String(s).replace(/\r/g, (c) => reveal(c)));
+
 function build(node, doc) {
-  // Prose draws a bare CR, NEL and the line and paragraph separators as escapes in their line.
-  if (typeof node === 'string') { return doc.createTextNode(revealLineSeparators(node)); }
+  // Prose draws every CR, NEL and the line and paragraph separators as escapes in their line. A CR
+  // here is never one of a CRLF (parseMarkdown made those LF), so it is drawn even before an LF:
+  // `\r\r\n` in an image's alt text or a link's title reached the page as a raw `x\r\ny` (#423).
+  if (typeof node === 'string') { return doc.createTextNode(proseText(node)); }
   if (!node || !TAGS.has(node.tag)) { return doc.createTextNode(''); }
   // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
   // reply text can produce one, and the only handler on it is ours.
@@ -574,7 +620,7 @@ function build(node, doc) {
     e.setAttribute('href', href);
     e.setAttribute('target', '_blank');
     e.setAttribute('rel', 'noopener noreferrer nofollow');
-    if (typeof a.title === 'string') { e.setAttribute('title', a.title); }
+    if (typeof a.title === 'string') { e.setAttribute('title', proseText(a.title)); }
   }
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
@@ -698,14 +744,17 @@ export function textOf(node) {
 
 // approval: the text is an approval's message, drawn as its card draws it: exactly as written,
 // revealed, never Markdown (parseApproval), and saying what hidden characters or right-to-left
-// letters it held, as a code block does. It has no Copy: it would take the whole message, prose and
-// fence lines too, and pasted into bash a line of backticks runs as a command substitution. The
-// caller reads its container left to right.
+// letters it held, as a code block does. Its notes are read from the message as it came, not as it
+// is drawn: a CRLF is drawn as the line ending it is, but its CR is still in what runs. Bash fails
+// `cd /tmp/scratch\r` and runs the next line's `rm -rf ./*` where it is, and the card said nothing
+// (#423). The Needs you lane refuses the same message (needs-you.js). It has no Copy: it would take
+// the whole message, prose and fence lines too, and pasted into bash a line of backticks runs as a
+// command substitution. The caller reads its container left to right.
 export function renderMarkdown(text, doc = document, { approval = false } = {}) {
   if (!approval) { return toDom(parseMarkdown(text), doc); }
   const nodes = parseApproval(text);
   const frag = toDom(revealed(nodes), doc);
-  const notes = nodes.length ? notesOf(textOf(nodes[0]), doc) : null;
+  const notes = nodes.length ? notesOf(text, doc) : null;
   if (notes) { frag.prepend(notes); }
   return frag;
 }
