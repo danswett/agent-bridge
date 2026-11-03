@@ -280,10 +280,10 @@ final class HostStore: Identifiable {
         }
     }
 
-    // A relay host's id is the device id its Noise key proves; hello's machine.id is only its
-    // claim. The store groups hosts, routes notification actions and picks "This Mac" for
-    // transfers by machine.id, so a host claiming another machine's id could stand in for it and
-    // receive commands the user signed for that machine (#260 review sec-260).
+    /// A relay host's id is the device id its Noise key proves; hello's machine.id is only its
+    /// claim. The store groups hosts, routes notification actions and picks "This Mac" for
+    /// transfers by machine.id, so a host claiming another machine's id could stand in for it and
+    /// receive commands the user signed for that machine (#260 review sec-260).
     private func checkIdentity(_ greeting: JSONValue) throws {
         guard isLocal || greeting["machine"]?["id"]?.string == id else {
             throw RelayError.refused("This host claims to be a different machine than its key proves.")
