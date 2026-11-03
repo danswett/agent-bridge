@@ -112,10 +112,28 @@ sealed class FakeTasks : ILogonTasks
     public Dictionary<string, string> Registered { get; } = [];
     public List<string> Ran { get; } = [];
     public Action? OnRun;
+    // The last run's instance (agent-bridge-hostw on its way out after its host) reads Running for
+    // this many more looks, and a Run meanwhile is ignored, as the task's IgnoreNew policy does.
+    public int StillRunningLooks;
+    // Or this, asked at each look and run, when set.
+    public Func<bool>? StillRunningWhile;
+    public List<string> Ignored { get; } = [];
     public bool Exists(string name) => Registered.ContainsKey(name);
     public void Register(string name, string xml) => Registered[name] = xml;
     public void Delete(string name) => Registered.Remove(name);
-    public void Run(string name) { Ran.Add(name); OnRun?.Invoke(); }
+    public void Run(string name)
+    {
+        if (StillRunningWhile?.Invoke() ?? StillRunningLooks > 0) { Ignored.Add(name); return; }
+        Ran.Add(name);
+        OnRun?.Invoke();
+    }
+    public bool IsRunning(string name)
+    {
+        if (StillRunningWhile is { } running) { return running(); }
+        if (StillRunningLooks <= 0) { return false; }
+        if (StillRunningLooks != int.MaxValue) { StillRunningLooks--; }
+        return true;
+    }
 }
 
 sealed class FakeProcesses : IProcesses
