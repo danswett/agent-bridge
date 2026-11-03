@@ -123,6 +123,22 @@ public sealed class ManagedSessionDiscoveryTests
     }
 
     [Fact]
+    public void A_native_candidate_missing_from_dotnet_still_participates_in_shared_holder_checks()
+    {
+        var rig = new Rig();
+        rig.Run(101);
+        var nativePids = new[] { 101, 102 };
+        var inspector = new ManagedSessionProcessInspector(rig.Processes, () => [Root],
+            (_, pid) => pid == 101, pid => Identity(pid),
+            (_, pids) => { Assert.Equal(nativePids, pids); return [101, 102]; }, () => nativePids);
+        Assert.Empty(inspector.FileHolders("/test/lock"));
+        var incomplete = new ManagedSessionProcessInspector(rig.Processes, () => [Root],
+            (_, _) => true, pid => Identity(pid),
+            (_, _) => throw new InvalidOperationException("an incomplete native scan must not query holders"), () => null);
+        Assert.Empty(incomplete.FileHolders("/test/lock"));
+    }
+
+    [Fact]
     public void An_unreadable_or_oversized_process_list_never_queries_file_holders()
     {
         var rig = new Rig();
@@ -133,23 +149,6 @@ public sealed class ManagedSessionDiscoveryTests
         rig.Processes.Unreadable(AgentKind.Codex, false);
         for (var i = 0; i < 256; i++) { rig.Run(200 + i); }
         Assert.Empty(rig.Inspector.FileHolders("/test/lock"));
-    }
-
-    [Theory]
-    [InlineData("p101\nf3\np102\nf4\n", true)]
-    [InlineData("p101\nf3\nf4\n", true)]
-    [InlineData("p101\nf3\n", true)]
-    [InlineData("p101\np102\nf3\n", false)]
-    [InlineData("p101\nf3\np999\nf4\n", false)]
-    [InlineData("p101\nf3\nn/private/file\n", false)]
-    [InlineData("f3\np101\nf3\n", false)]
-    [InlineData("p0\n", false)]
-    [InlineData("p+101\n", false)]
-    [InlineData("p101\r\n", false)]
-    public void File_holder_output_is_only_bounded_requested_processes_and_numeric_descriptors(string output, bool valid)
-    {
-        Assert.Equal(valid, MacFileHolders.Parse(output, [101, 102]).Count > 0);
-        Assert.Empty(MacFileHolders.Parse(new string('p', 16 * 1024 + 1), [101]));
     }
 
     [Fact]
@@ -197,7 +196,7 @@ public sealed class ManagedSessionDiscoveryTests
         try
         {
             // This authored shell fixture stands in for an interactive lock holder;
-            // its agent classification is injected, but ownership and lsof are real.
+            // its agent classification is injected, but ownership and native FD enumeration are real.
             var started = backend.Start(new("/bin/bash",
                 ["-c", "exec 3<> \"$1\"; while IFS= read -r line; do :; done", "--", path], runtime));
             var processes = new FakeProcesses();
