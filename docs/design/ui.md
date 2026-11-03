@@ -637,7 +637,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   drawn on one line still reads as a comment, and runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
   line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
   offers no answer (§6.1): an approval is approved on its card, below. The Windows app does
-  this since #296; the PWA follows in #415.
+  this since #296, and the PWA since #429 (#415).
 - **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
   markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
   left to right with its line breaks kept, and escaped as every code block is (hidden characters,
@@ -689,8 +689,8 @@ once, and an answer anywhere withdraws its notification (`docs/protocol/v1-sessi
 Notifications). Opening one opens the session at its question, as choosing its row does.
 - **An approval's notification only opens its question** (#253 decision 7, #372). It never
   offers Approve once or Deny: the OS draws its body as plain text and cuts it short, so it
-  can show neither the whole command nor the escapes and refusals that hidden, bidi and
-  right-to-left characters get in the app (§6.4, #165, #220). Windows toasts, Web Push and the
+  can show neither the whole command nor the escapes and notes that hidden, bidi and
+  right-to-left characters get on its card (§6.4, #165, #220). Windows toasts, Web Push and the
   Apple notifications (#260) follow this, and a button on a toast an older build left in
   Notification Center only opens.
 - **Other questions keep their buttons** where the platform has them and they fit: the options
@@ -876,7 +876,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - In high contrast, the toggle takes the system's button colours (ButtonFace and ButtonText,
     and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
     HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
-    The escape box takes Danger's mapping, and the Tools link is a system hyperlink.
+    The Tools link is a system hyperlink.
 
 ## 10. Mock-up index
 

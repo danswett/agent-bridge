@@ -51,11 +51,12 @@ independent security review before it merges.
   - the lane (`ui/needs-you-view.js`) becomes the Needs you toggle, with the filter in the
     view model beside the order;
   - the count moves to the model, and `AppBadge` reads it;
-  - the question card draws approvals as §6.4 says, and keeps resolved questions;
+  - the question card keeps resolved questions; it already draws approvals as §6.4 says,
+    exactly as written and escaped (#429);
   - the Now line gives way while the session waits;
   - Tools and the delegate inspector link to the question.
-- **U10b, Windows app:** the same in `App.Core` and the XAML. `NeedsYouEntry`'s checks move to
-  an approval-prompt helper the question view model uses. The toasts already follow the rule:
+- **U10b, Windows app:** the same in `App.Core` and the XAML. The card already draws approvals
+  as §6.4 says (#323), so `NeedsYouEntry`'s inline gate goes with the lane. The toasts already follow the rule:
   #377 (#372) gave an approval's toast Open only, with no Approve once or Deny
   (`ToastXml.Question`), while other questions keep their buttons. The
   tray and the Sessions badge read the model's count.
@@ -71,8 +72,9 @@ independent security review before it merges.
     how the card draws it: bidi controls, zero-width and other default-ignorable characters,
     controls but newline and tab, a CR, private-use and unassigned code points, U+2028/2029 and
     variation selectors drawn as visible escapes in the order they run;
-  - right-to-left letters not reordered, on every line of a multi-line command;
-  - a link, a fence or a table drawn as literal text;
+  - right-to-left letters escaped (`\u05D0`), on every line of a multi-line command;
+  - a link, a fence, a table and the fence markers drawn as written, never as Markdown, and
+    the card offering no Copy and still offering Approve once;
   - nothing in the list or in an approval's notification sends an answer.
   - Beyond those, the sentences in the proposal's §6, among them:
     - the count is every machine's;

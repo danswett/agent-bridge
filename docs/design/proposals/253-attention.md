@@ -6,7 +6,11 @@
 > buttons; 8 the menu bar extra names the sessions. The edits in §5 were applied to
 > [ui.md](../ui.md) in #302, which also updated subagents.md §7, ui-plan.md (U10) and
 > status.md. **ui.md is the spec.** This page stays as the reasoning behind it. Where the two
-> differ, ui.md wins.
+> differ, ui.md wins. Since then, answer 3 has shipped on its own: the Windows app (#323) and
+> the PWA (#429) draw an approval exactly as written, never as Markdown, with its hidden
+> characters and right-to-left letters escaped and no Copy. That replaces §4.4's per-line
+> override and its Markdown-or-literal choice (ui.md §6.4, "An approval's card"). Approval
+> toasts went Open only in #377.
 
 *Written as a draft for the owner, from the UI track on 2026-11-02.* Issue:
 [#253](https://github.com/danswett/agent-bridge/issues/253).
