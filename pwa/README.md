@@ -525,8 +525,8 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   through pointercancel, and a mouse resting on it holds it too), and below a longer response that
   comes with it; a click landing on a question's choice as it appears ignored for 500 ms, while a
   key answers at once, and held until a scroll to it comes to rest even where the browser sends no
-  scrollend (a scroll of the person's own after that holding none), or when Sessions shows again
-  after another page; a Needs you mark fading
+  scrollend (a scroll of the person's own after that holding none), or when Sessions or the page
+  shows again after another page or the background; a Needs you mark fading
   in only for an entry that arrives, never again on Back; a session the address names at startup
   shown at once, and a question arriving mid-push stopping the slide; a fill easing back only on a
   press's release (a second press at once; a press taken over by a scroll and an answer's choice never), and a pressed button's

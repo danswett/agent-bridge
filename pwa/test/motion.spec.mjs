@@ -959,6 +959,43 @@ test('a question that arrives while another page is shown takes no click for a m
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });
+test('a question that arrives while the page is in the background takes no click for a moment when the page is shown again', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  const visibility = (state) => page.evaluate((state) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => state === 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, state);
+  await visibility('hidden');
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-hidden', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(view(page, CODEX).locator('.question-slot .choice').first()).toBeAttached();
+  // Long past a wait spent while nobody could see it.
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // Shown again, and a click where the question's first choice is, in one go.
+  const tapped = await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return false; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
 test('a session that goes while its machine is still sending its list leaves at once, with no copy fading', async ({ page }) => {
   await openDemo(page);
   await upsert(page, 'demo-unsettled', { agent: 'copilot', title: 'Goes while unsettled', status: 'idle', startedAt: later(), updatedAt: later() });

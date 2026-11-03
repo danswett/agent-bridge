@@ -95,6 +95,7 @@ export class SessionsPage {
   // The delegate a phone's back stack has an entry for (#168), and the listeners that keep it.
   #delegateShown = null;
   #listening = null;
+  #shown = null;
   #stepping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
@@ -136,8 +137,11 @@ export class SessionsPage {
     this.view = new SessionListView($('session-list'), hosts.sessions, {
       views: $('session-views'),
       layout: () => ({ inspector: this.wide.matches && !this.#inspectorHidden }),
-      // Only while Sessions shows: news that comes while another page does waits for it.
-      viewing: () => (!shell || shell.route === 'sessions') && (!this.phone.matches || this.#open),
+      // Only while Sessions shows, in a page that does: news that comes while another page, or
+      // the tab or app in the background, waits for it, with no scroll and no question's wait
+      // spent unseen.
+      viewing: () => (!shell || shell.route === 'sessions') && (!this.phone.matches || this.#open)
+        && globalThis.document?.visibilityState !== 'hidden',
       fetchDetail: (hostId, id) => {
         const client = hosts.link(hostId)?.client;
         return client ? client.getSession(id) : Promise.reject(new Error('not connected'));
@@ -205,6 +209,19 @@ export class SessionsPage {
           this.view.selected?.reshow();
         }
       });
+      // Back from the background (another tab, the app switcher, the back-forward cache): what
+      // Sessions shows is seen now, and a question in sight waits as one arriving does.
+      const doc = globalThis.document;
+      if (doc) {
+        this.#shown = new AbortController();
+        const back = () => {
+          if (doc.visibilityState === 'hidden' || shell.route !== 'sessions') { return; }
+          this.view.schedule();
+          this.view.selected?.reshow();
+        };
+        doc.addEventListener('visibilitychange', back, { signal: this.#shown.signal });
+        globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
+      }
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
@@ -569,6 +586,8 @@ export class SessionsPage {
     this.#unroute = null;
     this.#listening?.abort();
     this.#listening = null;
+    this.#shown?.abort();
+    this.#shown = null;
     this.#unwatchLane?.();
     this.#unwatchLane = null;
     this.#unwatchNews?.();
