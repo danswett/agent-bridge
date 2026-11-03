@@ -16,7 +16,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, q-tp-after-base]
     types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     # Mondays 13:41 UTC: early morning Pacific, off the hour.

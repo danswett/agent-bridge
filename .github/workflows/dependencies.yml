@@ -12,7 +12,7 @@ name: Dependencies
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, q-tp-after-base]
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions: {}

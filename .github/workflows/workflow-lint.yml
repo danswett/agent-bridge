@@ -13,7 +13,7 @@ name: Workflow lint
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, q-tp-after-base]
     paths:
       - '.github/workflows/**'
       - '.github/actions/**'

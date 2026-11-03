@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, q-tp-after-base]
     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]
@@ -274,7 +274,7 @@ jobs:
       - name: Save NuGet packages to the cache
         # Last, so the AOT checks' runtime packs are in it. Main only, and only when its exact key
         # wasn't there (see the restore step).
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.nuget.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && true && steps.nuget.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
@@ -451,7 +451,7 @@ jobs:
           $dir >> $env:GITHUB_PATH
       # Main only, and only a vpk this run installed, when the cache hasn't one.
       - name: Save vpk to the cache
-        if: github.event_name == 'push' && steps.install-vpk.outputs.installed == 'true' && steps.vpk.outputs.cache-hit != 'true'
+        if: true && steps.install-vpk.outputs.installed == 'true' && steps.vpk.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.vpk-tool
@@ -553,7 +553,7 @@ jobs:
           retention-days: 7
       # Main only, when its exact key wasn't there, as in product.
       - name: Save NuGet packages to the cache
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.nuget.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && true && steps.nuget.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
@@ -759,7 +759,7 @@ jobs:
         working-directory: spikes
         run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
       - name: Save the Playwright browsers to the cache
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.browsers.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && true && steps.browsers.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -942,7 +942,7 @@ jobs:
           path: pwa/test-results
           retention-days: 7
       - name: Save the Playwright browser to the cache
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.browsers.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && true && steps.browsers.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -993,7 +993,7 @@ jobs:
           path: pwa/test-results
           retention-days: 7
       - name: Save the Playwright browsers to the cache
-        if: ${{ !cancelled() && github.event_name == 'push' && steps.browsers.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && true && steps.browsers.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
