@@ -196,6 +196,8 @@ Launch's executable locator and running launch configuration, not an app-side PA
 On Windows, installed executables get `--version` with a three-second timeout each in a
 non-breakaway process job assigned atomically at creation. Success, timeout and cancellation
 all terminate remaining descendants and allow one second for process and pipe cleanup.
+All Windows host subprocess starts share the native launch's inheritable-handle gate so unrelated
+usage, git or injector children cannot retain a probe's pipe writers outside that job.
 The scan waits for cleanup before releasing its gate. Other platforms still detect
 executables and hook ownership, but explicitly report version probing unavailable until
 equivalent process isolation is implemented. A failed version probe does not make an

@@ -291,7 +291,7 @@ public sealed class AttachmentStoreTests : IDisposable
     static void Link(string link, string target)
     {
         if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
-        using var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        using var mklink = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
         mklink.WaitForExit();
         Assert.True(new DirectoryInfo(link).Attributes.HasFlag(FileAttributes.ReparsePoint), "the junction was not made");
     }

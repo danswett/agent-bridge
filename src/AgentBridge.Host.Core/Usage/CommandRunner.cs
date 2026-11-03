@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AgentBridge.Host.Core.Processes;
 
 namespace AgentBridge.Host.Core.Usage;
 
@@ -27,7 +28,7 @@ public sealed class CommandRunner : ICommandRunner
         // Whatever gh would otherwise ask, it must not wait for an answer nobody is there to give.
         start.Environment["GH_PROMPT_DISABLED"] = "1";
         Process process;
-        try { process = Process.Start(start) ?? throw new InvalidOperationException(); }
+        try { process = ProcessLaunch.Start(start) ?? throw new InvalidOperationException(); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { return new CommandResult(false, false, -1, ""); }
         using (process)
         {

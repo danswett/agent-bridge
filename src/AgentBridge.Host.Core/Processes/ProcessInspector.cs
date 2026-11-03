@@ -264,7 +264,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        using var ps = Process.Start(start);
+        using var ps = ProcessLaunch.Start(start);
         if (ps is null) { return null; }
         var text = ps.StandardOutput.ReadToEnd();
         ps.WaitForExit(2000);

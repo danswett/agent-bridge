@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
+using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using Microsoft.Win32.SafeHandles;
 
@@ -15,6 +16,7 @@ public sealed class VersionCommandRunner : ICommandRunner
         if (!OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("Bounded CLI version checks are currently supported on Windows only."); }
         cancellationToken.ThrowIfCancellationRequested();
         var line = WindowsCommandLine.For(program, arguments, out var problem) ?? throw new ArgumentException(problem, nameof(program));
+        using var launch = ProcessLaunch.HoldInheritableHandles();
         using var job = CreateJobObjectW(0, null);
         if (job.IsInvalid) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
         var limits = new JobLimits { Basic = new BasicLimits { Flags = 0x2000 } };
@@ -76,12 +78,12 @@ public sealed class VersionCommandRunner : ICommandRunner
         stdoutWrite.Dispose();
         stderrWrite.Dispose();
         stdinRead.Dispose();
+        launch.Dispose();
         using var output = new StreamReader(new FileStream(stdoutRead, FileAccess.Read), Encoding.UTF8);
         using var errors = new StreamReader(new FileStream(stderrRead, FileAccess.Read), Encoding.UTF8);
         var text = output.ReadToEndAsync();
         var discarded = errors.ReadToEndAsync();
-        using var exited = new EventWaitHandle(false, EventResetMode.AutoReset);
-        exited.SafeWaitHandle = new SafeWaitHandle(process.DangerousGetHandle(), false);
+        using var exited = new ProcessWait(process);
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var registration = ThreadPool.RegisterWaitForSingleObject(exited, (_, _) => completion.TrySetResult(), null, Timeout.Infinite, true);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -158,6 +160,11 @@ public sealed class VersionCommandRunner : ICommandRunner
     sealed class JobHandle() : SafeHandleZeroOrMinusOneIsInvalid(true)
     {
         protected override bool ReleaseHandle() => CloseHandle(handle);
+    }
+
+    sealed class ProcessWait : WaitHandle
+    {
+        public ProcessWait(SafeProcessHandle process) => SafeWaitHandle = new SafeWaitHandle(process.DangerousGetHandle(), false);
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

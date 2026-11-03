@@ -725,7 +725,7 @@ void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
-    using var _ = Process.Start(start);
+    using var _ = ProcessLaunch.Start(start);
 }
 
 // Hook intake (docs/host-hooks.md): only for a profile that has migrated from agent-ha-bridge,

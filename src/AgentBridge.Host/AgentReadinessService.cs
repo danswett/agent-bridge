@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core.Intake;
+using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
@@ -114,11 +115,14 @@ public sealed class AgentReadinessService(
             var executable = locator.Find(launcher, config.Agent(launcher.Id));
             if (executable is null) { return row; }
             row = row with { Executable = executable, Installation = new(ReadinessState.Working, "Executable found using the launch configuration.") };
+            using var launch = ProcessLaunch.HoldInheritableHandles();
+            ct.ThrowIfCancellationRequested();
             if (readOnly() is { } why) { return row with { VersionCheck = new(ReadinessState.Blocked, $"Version command not run while the host is read-only: {why}") }; }
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
             limit.CancelAfter(VersionTimeout);
             CommandResult result;
             var pending = commands.RunAsync(executable, ["--version"], VersionTimeout, limit.Token);
+            launch.Dispose();
             try { result = await pending.WaitAsync(limit.Token); }
             catch (OperationCanceledException) when (limit.IsCancellationRequested)
             {

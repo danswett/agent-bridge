@@ -233,7 +233,7 @@ public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDispos
     [WindowsFact]
     public async Task A_process_that_cannot_be_attached_to_is_reported_as_nothing_typed()
     {
-        using var gone = Process.Start(new ProcessStartInfo("cmd.exe", "/c exit") { UseShellExecute = false, CreateNoWindow = true })!;
+        using var gone = AgentBridge.Host.Core.Processes.ProcessLaunch.Start(new ProcessStartInfo("cmd.exe", "/c exit") { UseShellExecute = false, CreateNoWindow = true })!;
         gone.WaitForExit();
 
         var result = await new WorkerInjector(Worker).InjectAsync(gone.Id, new KeyPlan([new KeySend("x", true, 10, 0)]));

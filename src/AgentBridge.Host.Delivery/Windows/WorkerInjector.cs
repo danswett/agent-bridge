@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using AgentBridge.Host.Core.Processes;
 
 namespace AgentBridge.Host.Delivery.Windows;
 
@@ -60,7 +61,7 @@ public sealed class WorkerInjector : IConsoleInjector
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         start.ArgumentList.Add("--screen");
         Process? process;
-        try { process = Process.Start(start); }
+        try { process = ProcessLaunch.Start(start); }
         catch (Exception e) { return new ConsoleScreen(null, $"the injector could not start: {e.Message}"); }
         if (process is null) { return new ConsoleScreen(null, "the injector could not start"); }
         using (process)
@@ -114,7 +115,7 @@ public sealed class WorkerInjector : IConsoleInjector
         };
         start.ArgumentList.Add(processId.ToString(CultureInfo.InvariantCulture));
         Process? process;
-        try { process = Process.Start(start); }
+        try { process = ProcessLaunch.Start(start); }
         catch (Exception e) { return Nothing($"the injector could not start: {e.Message}"); }
         if (process is null) { return Nothing("the injector could not start"); }
 
