@@ -36,9 +36,11 @@ public sealed record DecisionPlan(
 {
     // Every question with fields is answered through its slots (Set-CopilotMqttDecision).
     public bool UsesFieldSlots => Fields.Count >= 1 && Fields.Count <= HaContract.MaxFields;
-    // A sub-agent's question (Question.Agent): its id and name, published beside the question.
+    // A sub-agent's question (Question.Agent): its id and name, published beside the question,
+    // and the line that says it asks, after the word Delegate (#263), for titles.
     public string? Agent { get; init; }
     public string? AgentName { get; init; }
+    public string? Asker { get; init; }
 }
 
 // One step of arming or clearing, in the order the daemon takes them.
@@ -81,19 +83,20 @@ public static partial class HaDecision
     public static DecisionPlan Plan(Question question, Session session)
     {
         if (question.Agent is not { } agent) { return Plan(question, session.Agent); }
-        var name = Asker(question, session);
-        return Plan(question with { Message = $"{name} asks:\n\n{question.Message}" }, session.Agent) with { Agent = agent, AgentName = name };
+        // The name alone, "" when there is none: "A delegate" is how a line says who asks, not a name.
+        var name = DelegateName.Clean(Name(question, session)) is { } clean ? HaPayloads.NeutraliseTemplates(clean) : "";
+        var asker = Asker(question, session);
+        return Plan(question with { Message = $"{asker} asks:\n\n{question.Message}" }, session.Agent) with { Agent = agent, AgentName = name, Asker = asker };
     }
 
-    // Who asked a sub-agent's question, as a line of plain text: its name from the session's list,
-    // else "A delegate" (one the list no longer carries).
-    public static string Asker(Question question, Session session)
-    {
-        var name = session.Subagents?.FirstOrDefault(a => a.Id == question.Agent)?.Name;
-        name = string.IsNullOrWhiteSpace(name) ? "" : string.Join(' ', name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        name = Limits.KeepStart(name, Limits.SubagentName) ?? "";
-        return name.Length == 0 ? "A delegate" : HaPayloads.NeutraliseTemplates(name);
-    }
+    static string? Name(Question question, Session session) => session.Subagents?.FirstOrDefault(a => a.Id == question.Agent)?.Name;
+
+    // Who asked a sub-agent's question, as a line of plain text: "Delegate" and its name from the
+    // session's list, else "A delegate" (one the list no longer carries). Cleaned again, as in the
+    // subagents attribute, and always after the word Delegate (#263): it leads the question and
+    // titles a push, and a look-alike no check catches must still not read "Main agent asks".
+    public static string Asker(Question question, Session session) =>
+        HaPayloads.NeutraliseTemplates(DelegateName.Titled(Name(question, session)));
 
     // The host's question as the card should show it.
     public static DecisionPlan Plan(Question question, AgentKind agent)

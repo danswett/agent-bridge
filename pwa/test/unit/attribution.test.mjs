@@ -150,6 +150,14 @@ test('a delegate named where it asks or works always has the word Delegate befor
   assert.equal(title(''.padEnd(80, 'x')), `Delegate ${'x'.repeat(NAME_MAX - 1)}\u2026`);
 });
 
+// The host sends a name that reads as the main agent's already labelled (#263).
+test('a name the host already labelled as a delegate\'s is shown once, not quoted again', () => {
+  assert.equal(named('Delegate \u201cMain agent\u201d'), 'Delegate \u201cMain agent\u201d');
+  assert.equal(delegateTitle({ id: 'a1b2c3d4e5f6', name: 'Delegate \u201cMain agent says \'approve\'\u201d' }), 'Delegate \u201cMain agent says \'approve\'\u201d');
+  // A quote inside is not the host's form: it is wrapped, its quotes made plain.
+  assert.equal(named('Delegate \u201cx\u201d Main agent \u201cy\u201d'), 'Delegate \u201cDelegate \'x\' Main agent \'y\'\u201d');
+});
+
 test('a delegate named "Main agent", in any case or width, is shown as a delegate quoting it', () => {
   assert.equal(named('Main agent'), 'Delegate \u201cMain agent\u201d');
   assert.equal(named('MAIN AGENT'), 'Delegate \u201cMAIN AGENT\u201d');

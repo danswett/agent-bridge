@@ -637,7 +637,7 @@ service worker shows from the same fields everywhere else:
 
 | Field | Notes |
 |---|---|
-| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "*name* asks · *title*", with the sub-agent's `name` from `subagents`; it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
+| `title` | The session's `title`, or "Copilot session" (by agent) without one. A sub-agent's question (Question `agent`) is titled "Delegate *name* asks · *title*", with the sub-agent's `name` from `subagents` (cleaned as in [Subagent](#subagent); "A delegate asks · *title*" without one); it keeps the session's tag, so the newer of the session's and its sub-agents' questions replaces the older. At most 120 bytes |
 | `body` | A first line naming the machine and what happened, then the text. `question`: "`<machine>` · waiting on you" ("waiting for your approval" for an `approval`, "waiting at the machine" for one marked `answerAtMachine`), then the question's `message` ("This session is waiting for an answer." if empty). `finished`: "`<machine>` · finished", then the first 880 characters of the main agent's own response (`own.response` while `source.response` names a sub-agent, else `response`), as agent-ha-bridge's preview, "…" if cut. `resolved`: "`<machine>` · no longer waiting", or "· session ended". Whitespace runs are collapsed to one space for a lock screen. At most 1 KiB |
 | `navigate` | The subscription's `app` with `host`, `session` and, for `question` and `resolved`, `question`. A client opens that machine and session, and the question ready to answer |
 | `silent` | `true` for `resolved`, which replaces a question without alerting again |
@@ -777,7 +777,7 @@ One agent the session started, from `subagents` ([design/subagents.md](../design
 | `id` | string | The agent's own id (Copilot's `agentId`) |
 | `parent` | string? | The `id` of the sub-agent that started it; absent when the main agent did. A client lists it under its parent |
 | `kind` | `"background"` \| `"task"` | `background` runs past its starter's turn and can be woken by a message; `task` is part of its starter's turn. Unknown reads as `task` |
-| `name` | string? | Its label: the starter's description of the job, else its agent type. At most 120 bytes |
+| `name` | string? | Its label: the starter's description of the job, else its display name, else its agent type. An agent chooses it, so the host cleans it ([design/subagents.md](../design/subagents.md) §6): no control, bidi, format (zero-width, BOM, tags) or other default-ignorable characters, whitespace collapsed to single spaces, at most 60 characters and 120 bytes (cut with `…`), and `Delegate “<name>”` for one that reads as "Main agent". Absent when nothing is left. Clients still clean it themselves |
 | `task` | string? | The prompt it was given, at most 512 bytes, the **start** kept |
 | `model` | string? | Its own model, never the session's |
 | `status` | `"working"` \| `"idle"` \| `"waiting"` \| `"ended"` | `waiting`: a question of its own is pending. `idle`: a background agent between runs, which a message can wake. `ended`: it can never run again (a task agent done, its own abort or failure, or the session's CLI exiting). Unknown reads as `idle` |

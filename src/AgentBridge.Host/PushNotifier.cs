@@ -570,11 +570,11 @@ public sealed class PushNotifier : IAsyncDisposable
         var title = PushNotice.Flatten(s.Title);
         if (title.Length == 0) { title = $"{AgentName(s.Agent)} session"; }
         // A delegate's question says who asks; it keeps the session's tag, so the newer of the
-        // two questions replaces the older on the device.
+        // two questions replaces the older on the device. Its name cleaned, after the word
+        // Delegate (#263), so no name, however spelt, titles a push "Main agent asks".
         if (kind == NoticeKind.Question && s.Question?.Agent is { } asker)
         {
-            var name = PushNotice.Flatten(s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name);
-            title = $"{(name.Length > 0 ? name : "A delegate")} asks · {title}";
+            title = $"{DelegateName.Titled(s.Subagents?.FirstOrDefault(a => a.Id == asker)?.Name)} asks · {title}";
         }
         var body = kind switch
         {

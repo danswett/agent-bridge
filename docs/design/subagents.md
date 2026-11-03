@@ -34,7 +34,7 @@ of its own.
 | `id` | The agent's own id: Copilot `agentId`, Claude sidechain id, Codex thread id |
 | `parent` | The id of the agent that started it; `null` for the main agent's direct sub-agents |
 | `kind` | `background` (runs past its starter's turn) or `task` (part of its starter's turn) |
-| `name` | Short label: the `task` call's description, else its agent type |
+| `name` | Short label: the `task` call's description, else its agent type; cleaned and capped by the host (§6) |
 | `task` | The prompt it was given |
 | `model` | Its own model, never copied to the session |
 | `status` | `working`, `idle` (a background agent between runs, which a message can wake), `waiting` (its own question) or `ended` (it can never run again) |
@@ -98,7 +98,7 @@ Rules 3–6 are exactly today's behaviour. Rule 2 is new and needs `Session.wait
   "own": { "response": "…", "responseTruncated": true, "reasoning": "…", "at": "…" }
 }
 
-// Subagent (lists): id, parent, kind, name (≤ 120 B), task (≤ 512 B, start kept), model,
+// Subagent (lists): id, parent, kind, name (≤ 60 chars and 120 B, cleaned: §6), task (≤ 512 B, start kept), model,
 // status, outcome?, startedAt, endedAt?, line (latest reasoning or response, ≤ 300 B,
 // end kept), currentTool?, shells
 ```
@@ -164,6 +164,30 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   and `Delegate “<name>”` for a name that reads as "Main agent", look-alike letters included.
   A line that says a sub-agent asks or works always puts the word "Delegate" before its label
   ("Delegate *name* asks"), so no name, however spelt, reads as "Main agent asks".
+- **The host sends `name` already cleaned (#263).** A prompt-injected sub-agent picks its
+  name, and not every reader is a client that cleans it (Home Assistant's `subagents`
+  attribute, its question text and pushes, future clients). So the host applies the clients'
+  rules (ui.md §6.3) once, where it makes the name, for every agent (`DelegateName.Clean`):
+  1. control, bidi (U+202A–202E, U+2066–2069, U+200E/200F, U+061C), format (zero-width
+     space and joiners, BOM, soft hyphen, tags) and other default-ignorable characters
+     (variation selectors, Hangul fillers) go, and any run of whitespace, line and paragraph
+     separators included, becomes one space;
+  2. longer than 60 characters or 120 bytes, it is cut at a whole character with "…";
+  3. with nothing left, the next source is used (display name, then agent type), else
+     `name` is absent and clients name the delegate by its id;
+  4. a name that reads as "Main agent" after folding case, compatibility forms, marks and
+     common look-alike letters is sent as `Delegate “<name>”` (its own quotes made `'`),
+     within the same caps. A name already in that form is left as it is, so cleaning again
+     changes nothing.
+
+  Every line the host or the HA connector writes that says a sub-agent asks (the host's push
+  titles, HA's question text and push titles) puts the word "Delegate" before the cleaned
+  name (`DelegateName.Titled`), as the clients do: the look-alike list cannot be complete
+  ("Ma1n agent" passes it), and the main agent's own lines never have the word. The HA
+  connector cleans again with the same function, and clients keep their own cleaning and
+  their "Delegate" prefix as defence in depth.
+  The shadow (#40) compares no sub-agent names, since agent-ha-bridge lists none, so a cleaned
+  name never reads as a mismatch.
 
 ## 7. Notifications and Home Assistant
 
@@ -181,8 +205,8 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
   limit, and the entries make way for the card's own text within Home Assistant's 16 KiB.
   The card draws neither yet.
 - A sub-agent's question is armed and answered through the session's own question path.
-  Its name leads the question text ("*name* asks:"), and the decision entity gains `agent`
-  and `agent_name` beside it. Its pushes are titled "*name* asks · …" and keep the session's
+  Its name leads the question text ("Delegate *name* asks:"), and the decision entity gains `agent`
+  and `agent_name` beside it. Its pushes are titled "Delegate *name* asks · …" and keep the session's
   tag.
 - **agent-ha-bridge keeps its behaviour** (the owner's decision, 2026-11-01): its card shows
   whichever agent wrote last, a delegate's text included. This is a known, intentional

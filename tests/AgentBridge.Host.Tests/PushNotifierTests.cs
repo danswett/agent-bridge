@@ -273,9 +273,29 @@ public sealed class PushNotifierTests : IDisposable
         await After(TimeSpan.FromSeconds(2));
 
         var n = Assert.Single(Received()).Notification;
-        Assert.Equal("Read witness shell logic asks · Fix the login", n.GetProperty("title").GetString());
+        Assert.Equal("Delegate Read witness shell logic asks · Fix the login", n.GetProperty("title").GetString());
         Assert.Equal($"{Machine}:s1", n.GetProperty("tag").GetString());
         Assert.Equal("question", Kind(n));
+    }
+
+    // #263: the name is the delegate's own words. A look-alike the check misses ("Ma1n agent")
+    // still follows the word Delegate, and a bidi override is gone from the title.
+    [Theory]
+    [InlineData("Ma1n agent", "Delegate Ma1n agent asks · Fix the login")]
+    [InlineData("\u202EMain agent\u202C", "Delegate “Main agent” asks · Fix the login")]
+    [InlineData("\u200B\uFEFF", "A delegate asks · Fix the login")]
+    public async Task A_delegates_question_is_titled_after_the_word_delegate_whatever_its_name(string name, string title)
+    {
+        Start();
+        Subscribe(Phone);
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1", "Allow **gh pr checks**?", QuestionKind.Approval) with { Agent = "agent-c204" }) with
+        {
+            WaitingOn = "agent-c204",
+            Subagents = [new Subagent { Id = "agent-c204", Kind = SubagentKind.Background, Name = name, Status = SubagentStatus.Waiting }],
+        });
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(title, Assert.Single(Received()).Notification.GetProperty("title").GetString());
     }
 
     [Fact]

@@ -161,7 +161,7 @@ parses every append whole and skims a cold start for unanswered questions.
 | Machine topic root | `copilot/cli/machine/<slug>` | |
 | Session node | `agent_bridge_` + the id's letters and digits, at most 16, lowercased; an id with none gets 12 hex digits of its SHA-256 (`Get-CopilotMqttNodeId`) | `6fcbab0c-1d2e-…` → `agent_bridge_6fcbab0c1d2e4f50` |
 | Session topic root | `copilot/cli/<node>` | |
-| Session name (its device, its card title) | `Copilot: <workspace name or id[:8]>`, `Claude: <folder>`, `Codex: <folder>`; at most 120; `{{`, `{%`, `{#` broken with a zero-width space (`Get-*SessionDisplay`, `Remove-CopilotTemplateMarkup`) | `Copilot: Fix the build` |
+| Session name (its device, its card title) | `Copilot: <workspace name or id[:8]>`, `Claude: <folder>`, `Codex: <folder>`; at most 120; `{{`, `{%`, `{#` broken with a zero-width space (`Get-*SessionDisplay`, `Remove-CopilotTemplateMarkup`), after every `{` that a `{`, `%` or `#` follows. The daemon breaks each pair once, so a run of three braces kept a live `{{` there (`{{{` → `{`+ZWSP+`{{`); here no opener survives, and such a name differs from the daemon's | `Copilot: Fix the build` |
 
 `copilot/cli` and `object_id` are kept although they look odd (every agent, and an id Home
 Assistant ignores): the dashboard and the other daemons read exactly these.
@@ -256,8 +256,12 @@ How the host's `Session` maps to what the daemon kept, where the two differ:
   host's list (running first, then the most recently finished), each `{name, status, line}`:
   `status` is `working`, `waiting`, `idle` or `ended`, and `line` is absent until the
   delegate has said something. `subagents_more` counts the entries left out, here or by the
-  host, when there are any. Names keep their first 120 bytes and lines their last 300,
-  whitespace collapsed and template markup broken as in names, so five entries come to a few
+  host, when there are any. A name is a delegate's own words, so it is cleaned again here
+  as the host cleans it (`DelegateName`, [design/subagents.md](design/subagents.md) §6, #263):
+  no bidi, invisible or control characters, at most 60 characters and 120 bytes, and
+  `Delegate “<name>”` for one that reads as "Main agent"; one with nothing left is `""`.
+  Lines keep their last 300 bytes, whitespace collapsed; template markup is broken in both,
+  as in session names, so five entries come to a few
   KiB with any number of delegates. They are also budgeted against the rest of the
   attributes, never at the card text's cost: past 15 KiB in all (Home Assistant keeps 16 KiB
   of a state's attributes, less room for End session's hint and its own), the lines go, then
@@ -326,11 +330,15 @@ empty multi-select options), three clears and the multi-select code table.
 A sub-agent's question (Question `agent`, [design/subagents.md](design/subagents.md) §7) is
 armed, read and answered exactly as the session's own: the card has one question, and it
 answers whichever the host says is pending. Two things differ, both additions. Its `question`
-begins with "*name* asks:" and a blank line, so the card shows whose it is without knowing
+begins with "Delegate *name* asks:" and a blank line, so the card shows whose it is without knowing
 about delegates. The name is added before the length check above, so it can never be what
 makes an answerable question one the card would have to cut. And the decision attributes
 gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
-"*name* asks · *their usual title*" and keep the session's tag.
+"Delegate *name* asks · *their usual title*" and keep the session's tag. *name* is cleaned as in the
+`subagents` attribute (`agent_name` is that alone, `""` without one), and the line is "A delegate asks" when the
+list no longer has it or nothing is left. The word "Delegate" is always there (#263), as in the
+clients (ui.md §6.3): no look-alike check is complete ("Ma1n agent" passes it), and the main
+agent's own lines never have it. A name already starting "Delegate " is not given it twice.
 
 **Reading** an answer. Presses come from one held WebSocket `subscribe_trigger` on every armed
 session's Send button and reply payload sensor (the daemon's `Wait-CopilotHaStateChange`), and
@@ -650,8 +658,8 @@ settings' defaults, read from `decision-bridge-common.ps1`. The drift guard re-r
   starts it again, and a later turn ending in the same words is a finished turn of its own. What sessions already show when the connector starts is not pushed again. A push that
   fails is logged and holds nothing up. The reply is the main agent's own: while a delegate
   wrote last, its words neither finish a turn nor appear in the push (design/subagents.md
-  §7). A delegate's question is pushed as the session's are, titled "*name* asks · " before
-  the usual title, its text led by "*name* asks:". Its answer buttons are titled the same
+  §7). A delegate's question is pushed as the session's are, titled "Delegate *name* asks · " before
+  the usual title, its text led by "Delegate *name* asks:". Its answer buttons are titled the same
   way, under the session's tag. The hooks' pushes carry no tag at all, the session's own
   questions included, exactly as the daemon's hooks send them (`Fixtures/ha-notify.json`),
   so on that path a delegate's question is treated as the session's are and neither
