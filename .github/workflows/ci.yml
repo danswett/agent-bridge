@@ -121,6 +121,18 @@ jobs:
             Write-Host "selected.slnf: $($projects -join ', ')"
           }
           "DOTNET_TARGET=$target" | Add-Content $env:GITHUB_ENV
+      # NuGet's packages, and the local dotnet tools that restore into the same folder, come from a
+      # cache only main writes (#459): a pull request restores main's, never saves, and GitHub keeps
+      # a pull request's caches out of main's reach anyway. On a pull request whose project files
+      # differ, the nearest main cache is a starting point and NuGet fetches the rest; main itself
+      # restores only an exact match, so what it saves never accumulates stale packages.
+      - name: NuGet packages from main's cache
+        id: nuget
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
       - run: dotnet tool restore
         if: env.DOTNET_TARGET != ''
@@ -130,6 +142,12 @@ jobs:
       # pull request, and one broken there would first fail main's build.
       - run: dotnet build AgentBridge.slnx -c Release --nologo
         timeout-minutes: 10
+      - name: Save NuGet packages to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ steps.nuget.outputs.cache-primary-key }}
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
       # and killed, and the run fails naming the test in progress, instead of stalling the job.
       # dotnet-coverage follows every process the test hosts start (the host, hook and injector
@@ -300,7 +318,20 @@ jobs:
           docker network create ha
           docker run -d --name mosquitto --network ha "$MOSQUITTO_IMAGE" mosquitto -c /mosquitto-no-auth.conf
           docker run -d --name homeassistant --network ha -p 127.0.0.1:8123:8123 -e TZ=UTC "$HA_IMAGE"
+      - name: NuGet packages from main's cache
+        id: nuget
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
       - run: dotnet build tests/AgentBridge.HomeAssistant.Tests -c Release --nologo
+      - name: Save NuGet packages to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ steps.nuget.outputs.cache-primary-key }}
       - name: Onboard it, with MQTT
         run: python3 tools/ha-ci/onboard.py
       - name: The connector against it
@@ -319,6 +350,13 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+      - name: NuGet packages from main's cache
+        id: nuget
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.csproj', '**/Directory.*', '**/nuget.config', '.config/dotnet-tools.json', '**/global.json') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('nuget-{0}-{1}-{2}-', github.job, runner.os, runner.arch) || '' }}
       - name: Build spike projects
         shell: pwsh
         run: |
@@ -327,6 +365,12 @@ jobs:
             dotnet build $p.FullName -c Release --nologo
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
+      - name: Save NuGet packages to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.nuget.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ steps.nuget.outputs.cache-primary-key }}
       - name: Parse spike scripts
         shell: pwsh
         run: |
@@ -633,7 +677,25 @@ jobs:
           cp "$RUNNER_TEMP/vectors.json" web/vectors.json
           node js/test-node.mjs
       - run: npm ci
+      # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
+      # npm ci installed (#459). The install below still runs every time: it fetches the browsers
+      # on a miss and installs their system packages either way.
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       - run: npx playwright install --with-deps chromium webkit
+      - name: Save Playwright's browsers to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: node js/test-browsers.mjs
 
   s4-relay:
@@ -660,7 +722,22 @@ jobs:
       - run: dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
       - run: node js/test-sw.mjs
       - run: npm ci
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       - run: npx playwright install --with-deps chromium webkit
+      - name: Save Playwright's browsers to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: node js/test-pwa.mjs
       - name: Container builds
         working-directory: spikes
@@ -761,7 +838,22 @@ jobs:
             echo "::error::build-site.mjs accepted a blob origin that is not an Azure blob store"; exit 1
           fi
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       - run: npx playwright install --with-deps chromium webkit
+      - name: Save Playwright's browsers to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
