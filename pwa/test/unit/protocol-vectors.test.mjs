@@ -222,7 +222,11 @@ const READS = {
 
 // Records the PWA sends that it checks first, mirroring the host's check word for word.
 const CHECKS = {
-  AnswerRequest: (j, context) => checkAnswer(readQuestion(context.question), j),
+  // The PWA answers only the question it shows, by its id.
+  AnswerRequest: (j, context) => {
+    assert.equal(j.question, context.question.id, 'the vector answers another question than its context asks');
+    return checkAnswer(readQuestion(context.question), j);
+  },
   ReplyRequest: (j) => checkReply(j),
   LaunchRequest: (j) => checkLaunch(j),
 };
@@ -245,9 +249,19 @@ const BUILDS = {
   ReplyRequest: { build: (j) => sentBy(ReplyService, 'reply', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, text: j.text, attachments: (j.attachments ?? []).map((a) => UUID_FILE(a.id)) })) },
   StopRequest: { build: (j) => sentBy(StopService, 'stop', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, confirm: j.confirm ?? null })) },
   LaunchRequest: {
+    // From the names LaunchView.settings() (ui/launch-view.js) and its signing give the fields,
+    // never the vector's own keys: a field C# renames is then one the PWA would not send.
     build: (j) => {
-      const { request, ...launch } = j;
-      return sentBy(LaunchService, 'launch', request, (s) => s.submit({ hostId: 'h', launch }));
+      const launch = {};
+      for (const k of ['agent', 'permissions', 'workspace', 'resume', 'profile', 'model', 'effort', 'context', 'prompt']) {
+        if (j[k] !== undefined) { launch[k] = j[k]; }
+      }
+      if (j.transfer) {
+        const c = j.transfer.command;
+        launch.transfer = { from: j.transfer.from, session: j.transfer.session, ...(c ? { command: { body: c.body, by: c.by, mac: c.mac } } : {}) };
+      }
+      if (j.attachments) { launch.attachments = j.attachments.map((a) => ({ id: a.id })); }
+      return sentBy(LaunchService, 'launch', j.request, (s) => s.submit({ hostId: 'h', launch }));
     },
   },
   ListRequest: {

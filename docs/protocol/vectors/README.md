@@ -61,7 +61,8 @@ replay until its entry goes.
   its record and writes back as it `reads`. Each refused vector fails to parse, or its check gives
   its reason. Every record in `AgentBridge.Protocol` has valid vectors.
   `tests/AgentBridge.Host.Tests/SignedCommandVectorTests.cs` verifies every signed command with
-  `SignedCommands.Verify`.
+  `SignedCommands.Verify`, and `PushVectorTests.cs` there holds every valid `push.subscribe` to the
+  host's own check (`PushNotifier.Problem`).
 - **PWA:** `pwa/test/unit/protocol-vectors.test.mjs`. Each host record goes through the PWA's own
   readers (`protocol.js`, `launch.js`, `usage.js`, `update.js`, `host-client.js`, the service
   worker). A valid vector must keep every part the PWA uses, and a refused one must be dropped.

@@ -21,7 +21,7 @@ public static class VectorChecks
     // an answer answers, the most a channel takes, the most a machine takes of a bundle.
     public static string? Run(string check, object record, JsonNode? context) => check switch
     {
-        Answers => AgentBridge.Protocol.Answers.Check(Context<Question>(context, "question"), (AnswerRequest)record),
+        Answers => AnswerCheck(Context<Question>(context, "question"), (AnswerRequest)record),
         Replies => AgentBridge.Protocol.Replies.Check((ReplyRequest)record),
         Stops => AgentBridge.Protocol.Stops.Check((StopRequest)record),
         Launch => LaunchProtocol.Check((LaunchRequest)record),
@@ -36,6 +36,12 @@ public static class VectorChecks
         TransferResult => TransferLimits.CheckResult((AgentBridge.Protocol.TransferResult)record, context?["maxBytes"]?.GetValue<long>() ?? TransferProtocol.DefaultMaxBytes),
         _ => throw new ArgumentException($"no check is called {check}"),
     };
+
+    // A host takes an answer only for the question pending (stale otherwise) before Answers.Check
+    // runs, so a vector answering another question than its context's would say nothing.
+    static string? AnswerCheck(Question question, AnswerRequest answer) =>
+        answer.Question == question.Id ? AgentBridge.Protocol.Answers.Check(question, answer)
+        : throw new InvalidOperationException($"the answer is for question {answer.Question}, but its context asks {question.Id}");
 
     static T Context<T>(JsonNode? context, string name) =>
         (context?[name] ?? throw new ArgumentException($"the vector's context has no {name}")).Deserialize<T>(ProtocolJson.Options)!;
