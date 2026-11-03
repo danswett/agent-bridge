@@ -70,12 +70,17 @@ public sealed class UpdateTests : IDisposable
     }
 
     // The background update has finished what it can do now (a gate holds it, or it is done).
+    // Ends as soon as it has: the time allowed is only for a runner under load, where the update's
+    // own thread can be held up for seconds (a full solution run, #466).
     async Task Settle(HaConnector c, Func<bool> until)
     {
-        for (var i = 0; i < 200 && !until(); i++) { await Task.Delay(10); }
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!until() && DateTime.UtcNow < deadline) { await Task.Delay(10); }
         Assert.True(until(), "the update beside the passes did not get there");
         await Pass(c, 0.01);
     }
+
+    bool Logged(string part) { lock (log) { return log.Any(m => m.Contains(part, StringComparison.Ordinal)); } }
 
     // Passes until what the passes publish shows the update beside them has got there.
     async Task PassUntil(HaConnector c, Func<bool> until)
@@ -559,7 +564,12 @@ public sealed class UpdateTests : IDisposable
         ha.NotifyFailsFor = s => s == "persistent_notification.create";
         await using var c = await Ready();
         await Press(c, "install_update");
-        await Settle(c, () => Stage == "failed");
+        // Until its notice has been tried and refused, not only until the entity says failed, which
+        // is published first. Under load the install's thread could stop between the two while this
+        // went on: the passes below then ran before the notice was waiting (and sent nothing), or its
+        // refusal came after the clock had moved on 16 s and put its retry past the next pass, or it
+        // was first tried once Home Assistant took notices again, and the retry went untested (#466).
+        await Settle(c, () => Stage == "failed" && Logged($"could not send \"Bridge update failed on {Machine}\""));
         Assert.Empty(ha.NotifiedNow());
         ha.NotifyFailsFor = null;
         await Pass(c, 16);

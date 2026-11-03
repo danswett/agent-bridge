@@ -126,9 +126,9 @@ sealed class FakeHost : IAsyncDisposable
 
     // Started at once, unless the test has handlers to attach first: the app constructs its
     // view models before it starts the connection, so none of them misses the first snapshot.
-    public HostConnection Connect(IUiDispatcher? ui = null, bool start = true)
+    public HostConnection Connect(IUiDispatcher? ui = null, bool start = true, Action<string>? log = null)
     {
-        var c = new HostConnection(ct => LocalClient.ConnectAsync(Endpoint, TimeSpan.FromSeconds(1), ct), ui ?? new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        var c = new HostConnection(ct => LocalClient.ConnectAsync(Endpoint, TimeSpan.FromSeconds(1), ct), ui ?? new LockedDispatcher(), log) { RetryDelay = TimeSpan.FromMilliseconds(100) };
         if (start) { c.Start(); }
         return c;
     }
@@ -333,9 +333,21 @@ static class Wait
     public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null)
     {
         var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
+        var last = DateTime.UtcNow;
+        var longest = TimeSpan.Zero;
         while (!TestUi.Read(done))
         {
-            if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}{(why is null ? "" : $": {TestUi.Read(why)}")}"); }
+            var now = DateTime.UtcNow;
+            if (now - last > longest) { longest = now - last; }
+            last = now;
+            // On Windows CI several tests have timed out within the same few milliseconds (#465):
+            // a gap of seconds between two looks says the test itself could not run (the pool or
+            // its UI thread held), not that what it waited for never came.
+            if (now > deadline)
+            {
+                throw new TimeoutException($"timed out waiting for {what} (longest gap between looks {longest.TotalMilliseconds:F0} ms; "
+                    + $"pool threads {ThreadPool.ThreadCount}, queued {ThreadPool.PendingWorkItemCount}){(why is null ? "" : $": {TestUi.Read(why)}")}");
+            }
             await Task.Delay(20);
         }
     }
