@@ -247,6 +247,10 @@ internal sealed class SessionTracker
     // knows it, beside its words, so the same words sent again are another prompt.
     public string? PromptKey => _state.UserMessage is { } text ? (_state.UserMessageKey ?? "") + "\n" + text : null;
 
+    // How many prompts the transcript has had, so the driver can tell when more than one came in one
+    // read, and so cannot know which of them a reply's arm was for.
+    public int Prompts => _state.Prompts;
+
     // The sub-agents with a question pending.
     HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];
 

@@ -136,6 +136,37 @@ public class CopilotTests
         Assert.Equal((whole.Status, whole.Activity.TurnCount, whole.Activity.UserMessage), (windowed.Status, windowed.Activity.TurnCount, windowed.Activity.UserMessage));
     }
 
+    // Memory and a skill's context come within a turn: skimmed, they started no turn of their own,
+    // or a window starting after them counted one more finished turn than a whole read.
+    [Theory]
+    [InlineData("memory", "Remembered: PowerShell.")]
+    [InlineData("skill-docx", "<skill-context name=\"docx\">...</skill-context>")]
+    public async Task Context_within_a_turn_counts_the_same_read_whole_or_from_after_it(string source, string content)
+    {
+        string[] lines =
+        [
+            Copilot.User("go", 1), Copilot.TurnStart(2), Sourced(content, source, 3),
+            .. Enumerable.Range(0, 8).Select(i => Copilot.TurnStart(6 + i)),
+            .. Enumerable.Range(0, 8).Select(i => Copilot.Assistant(new string('x', 1000), 20 + i)),
+        ];
+        async Task<Session> ReadAsync(long tailBytes)
+        {
+            using var f = new Fixture();
+            var events = f.CopilotSession(Id, 100);
+            f.Processes.Run(AgentKind.Copilot, 100);
+            await using var source = f.Source(tailBytes);
+            Fixture.Append(events, lines);
+            await source.RefreshAsync();
+            return source.Get(Id)!;
+        }
+
+        var whole = await ReadAsync(4 * 1024 * 1024);
+        var windowed = await ReadAsync(4096);
+
+        Assert.Equal((SessionStatus.Working, 0), (whole.Status, whole.Activity.TurnCount));
+        Assert.Equal((whole.Status, whole.Activity.TurnCount), (windowed.Status, windowed.Activity.TurnCount));
+    }
+
     [Theory]
     [InlineData("schedule-", null)]
     [InlineData("schedule-4a", null)]

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using AgentBridge.Protocol;
 
@@ -84,7 +84,7 @@ public sealed class SessionDrivers
 
 // One session's driver and the arm left for its next turn. Every member takes the lock, since the
 // connector arms it from its passes while the session source reads it on its own.
-public sealed class SessionDriver
+public sealed partial class SessionDriver
 {
     readonly SessionDrivers owner;
     readonly string id;
@@ -107,6 +107,9 @@ public sealed class SessionDriver
     // that starts with them is the agent's. A prompt the person typed while it was on its way, read
     // in the same refresh, is then theirs rather than taken for the agent's.
     string? expected;
+    // The transcript's prompt count at the last look: more than one new prompt in one read, and which
+    // of them an arm was for cannot be told, so none is taken for the agent's.
+    int? lastPrompts;
     // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and the arm
     // is for that turn alone. The opening turn may be here already (the session registered before
     // its launch was reported), so it is looked for as well as waited for; the turn after it is
@@ -195,9 +198,9 @@ public sealed class SessionDriver
     }
 
     // The driver and its arm as they are, to be put back when an arm turns out to be for nothing.
-    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending);
+    public readonly record struct Saved(string Driver, string? Principal, DateTimeOffset? Pending, string? Expected = null);
 
-    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt); } }
+    public Saved Save() { lock (gate) { return new Saved(driver, principal, pendingAt, expected); } }
 
     public void Restore(Saved saved)
     {
@@ -205,7 +208,7 @@ public sealed class SessionDriver
         lock (gate)
         {
             var before = ShownLocked();
-            (driver, principal, pendingAt) = (saved.Driver, saved.Principal, saved.Pending);
+            (driver, principal, pendingAt, expected) = (saved.Driver, saved.Principal, saved.Pending, saved.Expected);
             generation++;
             changed = before != ShownLocked();
         }
@@ -218,7 +221,8 @@ public sealed class SessionDriver
     // driver changed; it raises nothing, since whoever observes is about to show the session.
     // prompt: which prompt the session's userMessage is (SessionTracker.PromptKey); without one, its
     // words stand for it.
-    public bool Observe(Session full, DateTimeOffset now, TimeSpan arm, string? prompt = null)
+    // prompts: the transcript's prompt count (SessionTracker.Prompts), where the source knows it.
+    public bool Observe(Session full, DateTimeOffset now, TimeSpan arm, string? prompt = null, int? prompts = null)
     {
         // A turn is a prompt started: TurnCount counts those whose turn has finished, one fewer
         // while one is in progress, so an agent's turn ending is no new turn. The count alone: its
@@ -230,6 +234,8 @@ public sealed class SessionDriver
         lock (gate)
         {
             var before = ShownLocked();
+            var added = prompts is { } count && lastPrompts is { } was ? count - was : 0;
+            var waited = awaitingAgentPrompt;
             if (turnKey is not null && turnKey != turn)
             {
                 if (pendingAt is not { } at || now - at >= arm)
@@ -255,17 +261,26 @@ public sealed class SessionDriver
                 var head = opening[..Math.Min(80, opening.Length)];
                 if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && full.Activity.TurnCount >= 1))
                 {
-                    if (driver == SessionDrivers.Agent) { (agentPrompt, awaitingAgentPrompt) = (Prompt(full, prompt), false); }
+                    // Spent either way, but the prompt is the launch's only when it is the one shown:
+                    // the person may have sent another before the launch was reported.
+                    if (driver == SessionDrivers.Agent && message.StartsWith(head, StringComparison.Ordinal))
+                    {
+                        (agentPrompt, awaitingAgentPrompt) = (Prompt(full, prompt), false);
+                    }
                     pendingAt = null;
                     openingPrompt = null;
                 }
             }
             // The agent's turn's own text: the first message it brings that is new.
+            // More than one prompt since the last look (an agent's and the person's in one read), or
+            // another after the one awaited began: which is the arm's cannot be told, so neither is.
+            if (added > 1 || (waited && added > 0)) { awaitingAgentPrompt = false; }
             var said = Prompt(full, prompt);
             if (awaitingAgentPrompt && said is not null && said != lastMessage && Sent(full))
             {
                 (agentPrompt, awaitingAgentPrompt) = (said, false);
             }
+            if (prompts is not null) { lastPrompts = prompts; }
             lastMessage = said;
             turnKey = turn;
             return before != ShownLocked();
@@ -274,9 +289,20 @@ public sealed class SessionDriver
 
     static string Collapse(string text) => Regex.Replace(text, @"\s+", " ").Trim();
 
-    // Whether the prompt shown is the one the arm expected, when it knows what to expect.
-    bool Sent(Session full) =>
-        expected is null || (full.Activity.UserMessage is { } m && Collapse(m).StartsWith(expected[..Math.Min(80, expected.Length)], StringComparison.Ordinal));
+    // Whether the prompt shown is the one the arm expected, when it knows what to expect: the reply's
+    // words exactly, after the attachments delivery puts before them ("@<path>" mentions, Codex's
+    // "[Image #n]" placeholders). Or, where the shown prompt was cut to its limit, their start.
+    bool Sent(Session full)
+    {
+        if (expected is null) { return true; }
+        if (full.Activity.UserMessage is not { } m) { return false; }
+        var words = Attachments().Replace(Collapse(m), "");
+        return words == expected
+            || (System.Text.Encoding.UTF8.GetByteCount(m) >= Limits.UserMessage - 4 && words.Length > 0 && expected.StartsWith(words, StringComparison.Ordinal));
+    }
+
+    [GeneratedRegex(@"^(?:(?:@\S+|\[Image #\d+\])\s*)+")]
+    private static partial Regex Attachments();
 
     static string? Prompt(Session full, string? prompt) =>
         full.Activity.UserMessage is null ? null : prompt ?? Collapse(full.Activity.UserMessage);

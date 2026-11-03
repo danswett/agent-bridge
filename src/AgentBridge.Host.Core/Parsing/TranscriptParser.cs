@@ -82,14 +82,14 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     // from and label: who wrote it, when not the person (#489). injected: context the agent was
     // given rather than a prompt anybody sent, which starts the turn but leaves userMessage alone.
-    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true, UserMessageFrom? from = null, string? label = null, bool injected = false, string? key = null)
+    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true, UserMessageFrom? from = null, string? label = null, bool injected = false, string? key = null, bool notice = false)
     {
         if (injected)
         {
             // No prompt: counted, it moved the turn a driver keys on, and an agent's reply lost its
-            // edge to a skill loaded in the middle of its turn. Arriving while idle (a shell's
-            // notice), it starts a turn that is no prompt's, as Claude's notices do.
-            if (S.Status != SessionStatus.Working)
+            // edge to a skill loaded in the middle of its turn. A notice arriving while idle (a
+            // shell's) starts a turn that is no prompt's, as Claude's notices do.
+            if (notice && S.Status != SessionStatus.Working)
             {
                 S.UncountedTurn = true;
                 S.ForgetReasoning();

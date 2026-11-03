@@ -89,6 +89,9 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
         _ => (UserMessageFrom.Other, null, false),
     };
 
+    // A shell's completion notice Copilot delivered while no turn ran: it starts a turn of its own.
+    static bool Notice(JsonElement data) => Json.Str(data, "source") == "system" && Json.Str(data, "delivery") != "steering";
+
     // The schedule's number as its label, and only a number: the label is shown as it is.
     static string? ScheduleNumber(string n) =>
         n.Length is > 0 and <= Limits.UserMessageLabel && n.All(char.IsAsciiDigit) ? n : null;
@@ -104,10 +107,11 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                     var (from, label, injected) = Source(Json.Str(data, "source"));
                     if (injected)
                     {
-                        // One delivered while no turn ran (not "steering") starts a turn no prompt's:
-                        // kept past the skim, since the window may begin inside it, as Claude's
-                        // notices are. A prompt after it starts a counted turn again.
-                        if (Json.Str(data, "delivery") != "steering") { S.UncountedTurn = true; }
+                        // A notice delivered while no turn ran (not "steering") starts a turn no
+                        // prompt's: kept past the skim, since the window may begin inside it, as
+                        // Claude's notices are. A prompt after it starts a counted turn again.
+                        // Memory and a skill's context come within a turn, and start none.
+                        if (Notice(data)) { S.UncountedTurn = true; }
                         break;
                     }
                     Prompted(text, from, label, Json.Str(e, "id"));
@@ -358,7 +362,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         // "steering" even when no turn is running, and those typed while idle
                         // or sent by the bridge are "idle" and carry parentAgentTaskId.
                         var (from, label, injected) = Source(Json.Str(data, "source"));
-                        UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"));
+                        UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"), notice: injected && Notice(data));
                     }
                     _turnAskedForTools = false;
                     break;

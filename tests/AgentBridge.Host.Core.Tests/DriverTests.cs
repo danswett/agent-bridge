@@ -335,6 +335,111 @@ public class DriverTests
         Assert.Equal(("the agent's words", UserMessageFrom.Agent), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
     }
 
+    // Helpers for a Copilot session observed by a host-wide driver record.
+    sealed class Driven : IAsyncDisposable
+    {
+        public readonly Fixture F = new();
+        public readonly SessionDrivers Drivers = new();
+        readonly string events;
+        public readonly SessionSource Source;
+
+        public Driven()
+        {
+            events = F.CopilotSession(Id, 100);
+            F.Processes.Run(AgentKind.Copilot, 100);
+            Source = F.Source(drivers: Drivers);
+        }
+
+        public async Task<Session> After(params string[] lines)
+        {
+            Fixture.Append(events, lines);
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
+        public async Task ArmAsync(string? words)
+        {
+            F.Time.Advance(TimeSpan.FromSeconds(5));
+            Drivers.For(Id).ArmDriver(SessionDrivers.Agent, F.Time.GetUtcNow(), Principal);
+            if (words is not null) { Drivers.For(Id).Expect(words); }
+            await Until(Source, s => s.Driver == DriverKind.Agent);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Source.DisposeAsync();
+            F.Dispose();
+        }
+    }
+
+    // Delivery puts an attachment's mention before the reply's words; it is still the reply.
+    [Theory]
+    [InlineData("@C:\\staged\\shot.png look at this")]
+    [InlineData("[Image #1] look at this")]
+    public async Task A_reply_delivered_with_its_attachments_before_its_words_is_the_agents(string delivered)
+    {
+        await using var d = new Driven();
+        await d.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await d.ArmAsync("look at this");
+
+        var s = await d.After(Copilot.User(delivered, 10), Copilot.TurnStart(11));
+
+        Assert.Equal(UserMessageFrom.Agent, s.Activity.UserMessageFrom);
+    }
+
+    // Read in one refresh, the agent's "continue" and the person's after it: two prompts, and which
+    // the arm was for cannot be told, so neither is taken for the agent's. Words that only begin
+    // like the reply's are not it.
+    [Fact]
+    public async Task The_same_words_from_both_in_one_refresh_or_words_that_only_begin_like_the_reply_are_not_the_agents()
+    {
+        await using var d = new Driven();
+        await d.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await d.ArmAsync("continue");
+        var both = await d.After(Copilot.User("continue", 10), Copilot.TurnStart(11), Copilot.User("continue", 12));
+        Assert.Null(both.Activity.UserMessageFrom);
+
+        await using var e = new Driven();
+        await e.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await e.ArmAsync("continue");
+        var longer = await e.After(Copilot.User("continue, but do not deploy", 10), Copilot.TurnStart(11));
+        Assert.Null(longer.Activity.UserMessageFrom);
+    }
+
+    // A card's publish arms with its words; an empty Send arms over it and is put back. The words
+    // come back with it, so a person's prompt read with the reply is still theirs.
+    [Fact]
+    public void An_arm_put_back_keeps_the_words_it_expected()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.Observe(At(1, SessionStatus.Idle, "first"), Fixture.T0, drivers.Arm, "k1\nfirst", 1);
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal);
+        d.Expect("the agent's words");
+        var before = d.Save();
+        d.ArmDriver(SessionDrivers.Agent, Fixture.T0, Principal);
+        d.Restore(before);
+
+        d.Observe(At(1, SessionStatus.Working, "mine"), Fixture.T0, drivers.Arm, "k2\nmine", 2);
+
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // A launch's arm is spent on its opening turn, but the prompt shown is the launch's only when it
+    // is the launch's words: the person may already have sent another.
+    [Fact]
+    public void A_launch_spent_on_a_prompt_that_is_not_its_own_leaves_that_prompt_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
+
+        d.Observe(At(1, SessionStatus.Working, "and the tests too"), Fixture.T0, drivers.Arm);
+
+        Assert.Null(d.PendingAt);
+        Assert.False(d.PromptIsAgents);
+    }
+
     [Fact]
     public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
     {
