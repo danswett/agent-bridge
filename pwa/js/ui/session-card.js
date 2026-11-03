@@ -26,7 +26,7 @@ import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.j
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
-import { factsOf, lastSegment, pathView, setFacts } from './meta.js';
+import { lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
@@ -208,7 +208,7 @@ export class SessionCard {
       // Rule 7 on a row: "Driven by an agent" in agent colour, in place of the status words.
       const status = state.driven
         ? h('span', { class: 'row-status driver', dataset: { tone: 'agent' }, title: s.driverPrincipal ?? null }, 'Driven by an agent')
-        : h('span', { class: 'row-status', dataset: { tone: state.tone } }, factsOf(state.text)[0]);
+        : h('span', { class: 'row-status', dataset: { tone: state.tone } }, state.facts[0]);
       setFacts(e.rowFacts, [status, this.labelled && this.machineName ? h('span', { class: 'machine-label' }, this.machineName) : whereView()]);
     }
 
@@ -217,7 +217,7 @@ export class SessionCard {
     setGlyph(e.glyph, state.glyph, { size: 16, driven: state.driven });
     if (this.#changed('meta', [state.text, state.tone, state.driven, s.driverPrincipal, this.machineName, where, s.repository])) {
       e.statusText.dataset.tone = state.tone;
-      setFacts(e.statusText, factsOf(state.text));
+      setFacts(e.statusText, state.facts);
       const driver = state.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
