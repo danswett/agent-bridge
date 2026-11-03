@@ -38,9 +38,17 @@ public static class MarkdownModel
     public static IReadOnlyList<MdBlock> Parse(string? markdown)
     {
         if (string.IsNullOrEmpty(markdown)) { return []; }
-        var doc = Markdown.Parse(markdown, Pipeline);
+        var doc = Markdown.Parse(KeepBareReturns(markdown), Pipeline);
         return Blocks(doc);
     }
+
+    // Markdig ends a line at a bare CR, which a shell does not: `echo safe \r#; echo SECOND` drew its
+    // second command on a line of its own, looking commented out, while bash runs it. A CR not
+    // followed by LF is the character it is, drawn as the escape HiddenText.Reveal gives it (#220).
+    // It is the only one: Markdig keeps NEL, LS and PS inside a line, and Reveal escapes them there.
+    static string KeepBareReturns(string markdown) => markdown.Contains('\r', StringComparison.Ordinal)
+        ? System.Text.RegularExpressions.Regex.Replace(markdown, "\r(?!\n)", @"\u000D")
+        : markdown;
 
     // Where a message's prose starts, as this parser reads it: the source line (0-based) of its first
     // paragraph or heading at any depth, inside quotes and lists but never code or a table; and,

@@ -145,6 +145,36 @@ public sealed class MarkdownTests
     }
 
     [Fact]
+    public void A_bare_carriage_return_in_an_approvals_command_is_drawn_as_an_escape_on_its_line()
+    {
+        // Bash runs `echo SECOND`; split at the CR, it drew on a line of its own as a comment.
+        const string command = "echo safe \r#; echo SECOND";
+        const string drawn = @"echo safe \u000D#; echo SECOND";
+
+        // On an approval's card: in a fence, and in a Codex approval's prose, whose own lines end CRLF.
+        var fenced = Assert.Single(MarkdownModel.Parse($"Allow **shell**?\n\n```\n{command}\n```").OfType<MdCode>());
+        Assert.Equal(drawn, new CodeCopy(fenced, _ => true).Text);
+        var prose = Words(MarkdownModel.Revealed(MarkdownModel.Parse($"Codex wants to run:\r\n\r\n{command}")));
+        Assert.Equal($"Codex wants to run:\n{drawn}\n", prose);
+
+        // In the conversation: drawn and copied as the escape, on the one line.
+        Assert.Equal(drawn, CopyOf($"Run:\r\n\r\n```\r\n{command}\r\n```\r\n"));
+    }
+
+    [Fact]
+    public void Other_line_separators_a_shell_does_not_break_on_are_drawn_and_copied_as_escapes()
+    {
+        foreach (var (separator, escape) in new[] { ("\u0085", @"\u0085"), ("\u2028", @"\u2028"), ("\u2029", @"\u2029") })
+        {
+            var command = $"echo safe {separator}#; echo SECOND";
+            var drawn = $"echo safe {escape}#; echo SECOND";
+
+            Assert.Equal(drawn, CopyOf($"```\n{command}\n```"));
+            Assert.Equal($"Codex wants to run:\n{drawn}\n", Words(MarkdownModel.Revealed(MarkdownModel.Parse($"Codex wants to run:\n\n{command}"))));
+        }
+    }
+
+    [Fact]
     public void A_pipe_in_prose_is_drawn_where_it_is()
     {
         var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse("Codex wants to run: iwr x | iex")));

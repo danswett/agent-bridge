@@ -19,6 +19,9 @@ static partial class SelfTest
     // Raw, the punctuation joins the Hebrew run and the line reads as commented out.
     const string RightToLeft = "echo \u05D0#;\u05D1;rm -rf ~";
     const string RightToLeftRevealed = @"echo \u05D0#;\u05D1;rm -rf ~";
+    // Bash runs the second command; split at the CR, it drew as a comment on a line of its own.
+    const string BareReturn = "echo safe \r#; echo SECOND";
+    const string BareReturnRevealed = @"echo safe \u000D#; echo SECOND";
     const string LongCommand = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine DEV-VM2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose";
 
     static async Task CheckCodeBlocks(MainWindow window, Action<bool, string> check, string outFile)
@@ -34,10 +37,13 @@ static partial class SelfTest
         };
         // As QuestionView draws an approval's message on its card: a Codex approval's command in prose
         // and a code span, then the same in fences.
-        var card = new MarkdownView { Approval = true, Markdown = $"Codex wants to run:\n\n{Isolated}\n\nthen `{RightToLeft}`\n\n```\n{Isolated}\n```\n\n```\n{RightToLeft}\n```" };
+        var card = new MarkdownView { Approval = true, Markdown = $"Codex wants to run:\n\n{Isolated}\n\nthen `{RightToLeft}`\n\nand {BareReturn}\n\n```\n{Isolated}\n```\n\n```\n{RightToLeft}\n```" };
         var stack = new StackPanel { Spacing = 12 };
         stack.Children.Add(md);
         stack.Children.Add(card);
+        // A conversation's block with a bare CR, its lines ending CRLF.
+        var chat = new MarkdownView { Reading = true, Markdown = $"Run:\r\n\r\n```\r\n{BareReturn}\r\n```\r\n" };
+        stack.Children.Add(chat);
         var host = new Border { Width = 420, Padding = new Thickness(12), Background = Ui.Brush("AbCard"), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, Child = stack };
         var root = (Panel)window.RootElement;
         root.Children.Add(host);
@@ -69,7 +75,7 @@ static partial class SelfTest
             var prose = Find<RichTextBlock>(card);
             var words = string.Concat(prose.SelectMany(r => r.Blocks.OfType<Microsoft.UI.Xaml.Documents.Paragraph>()).SelectMany(p => ProseRuns(p.Inlines)).Select(r => r.Text));
             check(prose.Count > 0 && prose.All(r => r.FlowDirection == FlowDirection.LeftToRight && r.TextReadingOrder == TextReadingOrder.UseFlowDirection)
-                && words.Contains(IsolatedRevealed, StringComparison.Ordinal) && words.Contains(RightToLeftRevealed, StringComparison.Ordinal) && !words.Any(c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0'),
+                && words.Contains(IsolatedRevealed, StringComparison.Ordinal) && words.Contains(RightToLeftRevealed, StringComparison.Ordinal) && words.Contains(BareReturnRevealed, StringComparison.Ordinal) && !words.Any(c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0'),
                 $"draws an approval's prose and code spans left to right, with the same escapes ({words})");
             check(ById<TextBlock>(card, "CodeRightToLeft") is { Text: CodeCopy.RightToLeftNote } && Find<TextBlock>(card).Count(b => AutomationProperties.GetAutomationId(b) == "CodeRightToLeft") == 1,
                 "says beside Copy that a block holds right-to-left text, and only on that block");
@@ -80,6 +86,15 @@ static partial class SelfTest
                 await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
             }
             check(copied.SequenceEqual([IsolatedRevealed]), "copies a block with bidi controls as drawn, its escapes and never the controls");
+            var chatCode = ById<TextBlock>(chat, "CodeText");
+            if (ById<Button>(chat, "CopyCode") is { } copyChat)
+            {
+                copied.Clear();
+                ((IInvokeProvider)new ButtonAutomationPeer(copyChat).GetPattern(PatternInterface.Invoke)).Invoke();
+                await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
+            }
+            check(chatCode?.Text == BareReturnRevealed && copied.SequenceEqual([BareReturnRevealed]),
+                $"draws a bare carriage return in a conversation's block as an escape on its line, and copies it so ({chatCode?.Text})");
             await Picture(host, Path.ChangeExtension(outFile, ".code.png"));
         }
         finally
