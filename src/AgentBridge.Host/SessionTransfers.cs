@@ -66,6 +66,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
 
     // Set once the launcher exists: the source's half asks it what is offered.
     public LaunchService? Launcher { get; set; }
+    public RemoteAuthorization? Trust { get; init; }
 
     // How long a source may take to pack and seal a bundle, and the target to fetch it.
     public TimeSpan SourceWait { get; init; } = TimeSpan.FromMinutes(10);
@@ -103,6 +104,11 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
 
     public async Task<FetchedBundle> FetchAsync(LaunchTransfer transfer, string peer, long maxBytes, CancellationToken cancellationToken)
     {
+        if (Trust is { } trust && (!trust.HasRole(peer, TrustedPeerStore.Person)
+            || !trust.PersonKey(transfer.Command?.By) || !trust.HasRole(transfer.From, TrustedPeerStore.Host)))
+        {
+            throw new TransferRefusedException("a transfer requires independently pinned source-host and signing-person keys");
+        }
         var l = Volatile.Read(ref link) ?? throw new TransferRefusedException("this machine is not connected to the relay now");
         if (l.Relay.BlobMaxBytes <= 0) { throw new TransferRefusedException("the relay has no blob store, which a transfer goes through"); }
         // This machine cannot check the MAC (it is for the source), but it can refuse to carry a
@@ -127,6 +133,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
         TransferResult result;
         try
         {
+            if (Trust?.HasRole(ch, TrustedPeerStore.Host) == false) { throw new TransferRefusedException("the source key is not a pinned host"); }
             var response = await ch.RequestAsync(TransferProtocol.Op, new TransferRequest { Command = transfer.Command! }, SourceWait, cancellationToken);
             if (!response.GetProperty("ok").GetBoolean())
             {
@@ -221,6 +228,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
 
     public async Task<TransferResult> ServeAsync(SecureChannel channel, JsonElement data)
     {
+        if (Trust?.HasRole(channel, TrustedPeerStore.Host) == false) { throw new InvalidOperationException("only a pinned host may carry a transfer"); }
         if (Launcher is not { } launcher) { throw new InvalidOperationException("this machine does not hand its sessions to other machines"); }
         if (launcher.ServeUnavailable is { } off) { throw new InvalidOperationException(off); }
         var l = Volatile.Read(ref link) ?? throw new InvalidOperationException("this machine is not connected to the relay now");
@@ -235,6 +243,7 @@ public sealed class SessionTransfers : ISessionFetcher, IDisposable
             log($"transfer refused from {channel.PeerId[..8]}: {problem}");
             throw new InvalidOperationException(problem);
         }
+        if (Trust?.PersonKey(request.Command.By) == false) { throw new InvalidOperationException("the signing person is not independently pinned at this host"); }
         // Only the machine the person chose may receive it: the one asking.
         if (c.To != channel.PeerId) { throw new InvalidOperationException("the command is for another machine to receive the session"); }
         // The MAC proves only that the key named in the command made it. Any machine of the

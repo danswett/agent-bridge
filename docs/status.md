@@ -45,6 +45,16 @@ retirement, not the current G7 migration refusal. Copilot CLI session
 
 ## 2. Where things are (2026-11-02)
 
+### Host trusted-peer floor (#402)
+
+An opt-in, default-off host-only authorization foundation is under review. It adds
+full-key person/host/service pins, checks both channel directions and nested
+principals, and binds standing push access to the current grant. See
+[host config](host-config.md#trusted-peers-disposable-host-foundation). Evaluation is
+disposable-host only: no relay enrollment, production enablement or live migration
+is authorized by this slice. Independent implementation review and final-head CI
+remain gates; the wider HA architecture redirect is tracked separately in #388.
+
 ### Built and merged
 
 The work has been built phone-first. All merged PRs are listed in §7.

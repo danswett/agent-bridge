@@ -25,7 +25,7 @@ public static class LocalApi
     // What an agent's hello offers: reading only.
     static readonly HashSet<string> AgentCapabilities = [Capabilities.SessionsRead, UsageProtocol.Capability];
 
-    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null) => async (channel, op, data) =>
+    public static Func<IProtocolChannel, string, JsonElement, Task<object?>> Handler(SessionService sessions, HostControl control, ICallerGuard callers, Action<string>? log = null, RemoteAuthorization? authorization = null) => async (channel, op, data) =>
     {
         if (op.StartsWith("host.", StringComparison.Ordinal))
         {
@@ -38,6 +38,7 @@ public static class LocalApi
                     ? "stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app"
                     : "only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", log);
             }
+            if (authorization is not null && op.StartsWith("host.peers.", StringComparison.Ordinal)) { return authorization.Manage(op, data); }
             return await control.HandleAsync(channel, op, data);
         }
         if (Acts.Contains(op) && callers.Classify(channel) is { Kind: CallerKind.Agent } agent)

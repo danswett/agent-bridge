@@ -684,9 +684,19 @@ endpoint at some time, and the push's `Topic`, `TTL` and `Urgency` headers: the 
 hash, which names no session. The subscription's keys reach only the host, over the
 end-to-end channel. The device shows the notice on its lock screen.
 
-A relay is not trusted to tell the truth about who is in an account. A hostile one could
-present its own device as the account's and register a subscription, but it could equally
-open a channel and read `sessions.list`, so `push` gives it nothing more.
+A relay is not trusted to tell the truth about who is in an account. In legacy mode,
+a hostile one could present its own device as the account's, register a subscription
+or open a channel and read `sessions.list`. This is a baseline exposure, not a safe
+authorization model for scoped clients.
+
+The default-off [trusted-peer floor](../host-config.md#trusted-peers-disposable-host-foundation)
+also authorizes standing push access. Enforcing mode binds subscriptions to a full
+person key, trust epoch and grant generation, and rechecks at enqueue, delivery and
+retry. Revocation, expiry and reset remove unauthorized subscriptions and queued
+notices; old subscriptions cannot be revived by reapproval. Enforcing startup drops
+legacy subscriptions without that binding, requiring authorized re-registration.
+A push already handed to its sender cannot be recalled. This host-only foundation
+is for disposable evaluation, not production service enrollment.
 
 ## Types
 

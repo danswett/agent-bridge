@@ -5,7 +5,8 @@ namespace AgentBridge.Host;
 
 // A device this host notifies: its browser's push subscription, which only that browser
 // can decrypt for, and where a tap should open the app.
-public sealed record PushSubscriber(string Device, string Name, string Endpoint, string P256dh, string Auth, string App, DateTimeOffset Since)
+public sealed record PushSubscriber(string Device, string Name, string Endpoint, string P256dh, string Auth, string App, DateTimeOffset Since,
+    TrustedPeerLease? Grant = null)
 {
     public PushSubscription Subscription => new(Endpoint, P256dh, Auth);
 }

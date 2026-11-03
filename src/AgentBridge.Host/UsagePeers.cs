@@ -84,7 +84,15 @@ public sealed class UsagePeers : IAsyncDisposable
                 try { await wake.WaitAsync(Tick, stop.Token); }
                 catch (OperationCanceledException) { break; }
             }
+
         });
+    }
+
+    public RemoteAuthorization? Trust { get; init; }
+
+    public void RevalidateTrust()
+    {
+        if (Trust is { Enabled: true } trust) { store.Forget(id => id == me || trust.HasRole(id, TrustedPeerStore.Host)); }
     }
 
     // Asks every other host that is due, one at a time. Returns how many were asked.
@@ -94,13 +102,15 @@ public sealed class UsagePeers : IAsyncDisposable
         try
         {
             store.Prune();
+            RevalidateTrust();
             if (Volatile.Read(ref link) is not { } l) { return 0; }
             // A new link (a reconnect): every host on it has appeared anew, so each is asked once
             // the minimum gap since it was last asked allows, not at the next five minutes.
             if (!ReferenceEquals(seenOn, l)) { seen.Clear(); seenOn = l; }
             ForgetGone(l.Relay);
             var now = time.GetUtcNow();
-            var hosts = l.Relay.Presence.Where(p => p.Kind == HostKind && p.Id != me && p.Id != l.Relay.DeviceId).ToList();
+            var hosts = l.Relay.Presence.Where(p => p.Kind == HostKind && p.Id != me && p.Id != l.Relay.DeviceId
+                && Trust?.HasRole(p.Id, TrustedPeerStore.Host) != false).ToList();
             // When each came into presence, by this clock: the relay's own stamp (Since) is another
             // clock, and a few minutes' skew between the two would read as a host appearing anew.
             foreach (var gone in seen.Keys.Where(id => hosts.All(p => p.Id != id)).ToList()) { seen.Remove(gone); }
@@ -185,6 +195,7 @@ public sealed class UsagePeers : IAsyncDisposable
         // The handshake proved the key behind the device id; a device that does not call itself a
         // host on the channel either is not asked.
         if (ch.PeerKind != HostKind) { return "is not a host"; }
+        if (Trust?.HasRole(ch, TrustedPeerStore.Host) == false) { return "is not a pinned host"; }
         var hello = Read<HelloResult>(await ch.RequestAsync(Ops.Hello, new { }, Wait, cancellationToken));
         if (hello.Machine?.Id != peer.Id) { return "answered as another machine"; }
         if (hello.Capabilities?.Contains(UsageProtocol.Capability) != true) { return "reports no usage"; }
@@ -193,9 +204,14 @@ public sealed class UsagePeers : IAsyncDisposable
         // Still a host of the account now: one that left, or connected again as something else,
         // while it was being asked is not believed.
         if (l.Relay.Presence.FirstOrDefault(p => p.Id == peer.Id) is not { Kind: HostKind } now) { return "left while being asked"; }
+        if (Trust?.HasRole(ch, TrustedPeerStore.Host) == false) { return "is no longer a pinned host"; }
         // Nor what it passes on from a machine the account has since forgotten (it may not have
         // heard yet). Machines that are only offline are still the account's.
         var agents = (IEnumerable<AgentUsage>)(report.Agents ?? []);
+        if (Trust is { Enabled: true } trust)
+        {
+            agents = agents.Where(a => a?.ReadBy is not { } by || by.Id == me || trust.HasRole(by.Id, TrustedPeerStore.Host));
+        }
         if (Members(l.Relay) is { } members) { agents = agents.Where(a => a?.ReadBy is not { } by || members.Contains(by.Id)); }
         // For the account this connection was signed in as: an answer that arrives after the host
         // signed in to another one is not taken for it.

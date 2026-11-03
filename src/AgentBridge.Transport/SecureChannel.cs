@@ -135,6 +135,8 @@ public sealed class SecureChannel : IProtocolChannel
             // and leaves the channel usable.
             await hub.SendAsync(this, ChannelKind.Transport, () =>
             {
+                hub.RequirePeer(this);
+                ThrowIfClosed();
                 encrypted = true;
                 return send.EncryptWithAd([], plain);
             }, ct);

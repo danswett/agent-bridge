@@ -24,11 +24,13 @@ public sealed class PushNotifierTests : IDisposable
     readonly string folder = Path.Combine(Path.GetTempPath(), "abpush-" + Guid.NewGuid().ToString("N"));
     PushNotifier notifier = null!;
     PushStore store = null!;
+    RemoteAuthorization? trust;
 
     public PushNotifierTests() => Directory.CreateDirectory(folder);
 
     public void Dispose()
     {
+        trust?.Dispose();
         foreach (var b in browsers.Values) { b.Key.Dispose(); }
         try { Directory.Delete(folder, recursive: true); } catch (IOException) { }
     }
@@ -39,7 +41,8 @@ public sealed class PushNotifierTests : IDisposable
     {
         source.Sessions.AddRange(existing);
         store = PushStore.Load(StorePath, Account);
-        notifier = new PushNotifier(source, new MachineInfo(Machine, "DEV", "windows", "0.1.0"), store, options, logs.Add, time);
+        notifier = new PushNotifier(source, new MachineInfo(Machine, "DEV", "windows", "0.1.0"), store, options, logs.Add, time, trust);
+        if (trust is not null) { trust.Changed += notifier.RevalidateTrust; notifier.RevalidateTrust(); }
         notifier.Attach(sender);
         return notifier;
     }
@@ -658,6 +661,118 @@ public sealed class PushNotifierTests : IDisposable
         // The same browser endpoint registered by a new device key (the app was reinstalled).
         Subscribe(Laptop, endpoint: "https://web.push.apple.com/renewed");
         Assert.Equal(Laptop, Assert.Single(store.All).Device);
+    }
+
+    RemoteAuthorization Enforce(P256KeyPair host, P256KeyPair person)
+    {
+        var pins = new TrustedPeerStore(folder, host.Public, () => Account, time);
+        pins.Reset();
+        pins.Put(person.Public, TrustedPeerStore.Person, time.GetUtcNow().AddHours(1));
+        return trust = new RemoteAuthorization(true, pins, time);
+    }
+
+    static PushPeer PinnedPeer(P256KeyPair key) => new(Wire.DeviceId(key.Public), "Person", Account, true, key.Public);
+
+    [Fact]
+    public async Task Enforcing_restart_drops_legacy_subscriptions_even_for_a_currently_pinned_device()
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var peer = PinnedPeer(person);
+        Start();
+        Subscribe(peer.Device, peer: peer);
+        await notifier.DisposeAsync();
+        Enforce(host, person);
+        Start();
+        Assert.Empty(store.All);
+        Assert.Equal(0, PushStore.Load(StorePath, Account).Count);
+        source.Upsert(S("old", SessionStatus.Waiting, question: Q("q")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Empty(sender.Sent);
+
+        Subscribe(peer.Device, peer: peer);
+        var saved = Assert.Single(PushStore.Load(StorePath, Account).All);
+        Assert.Equal(B64Url.Encode(person.Public), saved.Grant!.PublicKey);
+        source.Upsert(S("new", SessionStatus.Waiting, question: Q("q")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Single(sender.Sent);
+    }
+
+    [Theory]
+    [InlineData("revoke")]
+    [InlineData("expire")]
+    [InlineData("reset")]
+    public async Task Losing_a_person_grant_removes_queued_pushes_and_reapproval_cannot_revive_them(string change)
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var pins = Enforce(host, person).Store;
+        Start();
+        var peer = PinnedPeer(person);
+        Subscribe(peer.Device, peer: peer);
+        sender.Connected = false;
+        source.Upsert(S("old", SessionStatus.Waiting, question: Q("q")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, notifier.Pending);
+        if (change == "revoke") { pins.Revoke(person.Public); }
+        else if (change == "expire") { time.Advance(TimeSpan.FromHours(1)); }
+        else { pins.Reset(); }
+        trust!.Revalidate();
+        Assert.Empty(store.All);
+        Assert.Equal(0, notifier.Pending);
+        Assert.Equal(0, PushStore.Load(StorePath, Account).Count);
+
+        pins.Put(person.Public, TrustedPeerStore.Person, time.GetUtcNow().AddHours(1));
+        Subscribe(peer.Device, peer: peer);
+        sender.Connected = true;
+        await notifier.PumpAsync();
+        Assert.Empty(sender.Sent);
+        source.Upsert(S("new", SessionStatus.Waiting, question: Q("q")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Single(sender.Sent);
+    }
+
+    [Fact]
+    public async Task A_push_in_flight_at_revocation_cannot_reinsert_a_retry_for_a_new_generation()
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var pins = Enforce(host, person).Store;
+        Start();
+        var peer = PinnedPeer(person);
+        Subscribe(peer.Device, peer: peer);
+        sender.Respond = _ =>
+        {
+            pins.Revoke(person.Public);
+            trust!.Revalidate();
+            return new PushResult(503, "unreachable");
+        };
+        source.Upsert(S("old", SessionStatus.Waiting, question: Q("q")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(1, sender.Attempts);
+        Assert.Equal(0, notifier.Pending);
+        Assert.Empty(store.All);
+        pins.Put(person.Public, TrustedPeerStore.Person, time.GetUtcNow().AddHours(1));
+        Subscribe(peer.Device, peer: peer);
+        await After(TimeSpan.FromMinutes(1));
+        Assert.Equal(1, sender.Attempts);
+    }
+
+    [Fact]
+    public void Nonperson_pins_and_a_claimed_device_id_cannot_register_standing_access()
+    {
+        using var host = P256KeyPair.Generate();
+        using var person = P256KeyPair.Generate();
+        var pins = Enforce(host, person).Store;
+        Start();
+        var peer = PinnedPeer(person);
+        Assert.Throws<InvalidOperationException>(() => Subscribe(Phone, peer: peer with { Device = Phone }));
+        foreach (var role in new[] { TrustedPeerStore.Host, TrustedPeerStore.Service })
+        {
+            pins.Put(person.Public, role, time.GetUtcNow().AddHours(1));
+            Assert.Throws<InvalidOperationException>(() => Subscribe(peer.Device, peer: peer));
+        }
+        Assert.Empty(store.All);
     }
 
     sealed class FakeSource : ISessionSource

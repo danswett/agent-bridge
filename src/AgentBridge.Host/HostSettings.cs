@@ -78,6 +78,7 @@ public sealed record HostSettings(bool RemoteApproval)
     public bool Push { get; init; } = true;
 
     public bool ReadOnly { get; init; }
+    public bool TrustedPeers { get; init; }
 
     // Why a read-only host takes nothing, said to devices; and why one whose file has a problem doesn't.
     public const string ReadOnlyReason = "this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
@@ -88,7 +89,7 @@ public sealed record HostSettings(bool RemoteApproval)
     static HostSettings Off => Default with
     {
         RemoteApproval = false, Launch = LaunchConfig.Default with { Enabled = false }, Push = false, ReadOnly = true,
-        Usage = UsageSettings.Default with { Publish = false },
+        Usage = UsageSettings.Default with { Publish = false }, TrustedPeers = true,
     };
 
     public static (HostSettings Settings, string? Problem) Load(string folder)
@@ -174,6 +175,18 @@ public sealed record HostSettings(bool RemoteApproval)
             }
             if (!root.TryGetProperty("permissions", out var permissions)) { return (settings, null); }
             if (permissions.ValueKind != JsonValueKind.Object) { throw new JsonException("permissions is not an object"); }
+            if (permissions.TryGetProperty("trustedPeers", out var trusted))
+            {
+                settings = settings with
+                {
+                    TrustedPeers = trusted.ValueKind switch
+                    {
+                        JsonValueKind.True => true,
+                        JsonValueKind.False => false,
+                        _ => throw new JsonException("permissions.trustedPeers is not true or false"),
+                    },
+                };
+            }
             if (!permissions.TryGetProperty("remoteApproval", out var remote)) { return (settings, null); }
             return remote.ValueKind switch
             {

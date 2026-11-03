@@ -66,9 +66,12 @@ public sealed class UsageSharingTests : IAsyncLifetime
     // its own folder (null: memory only), and its UsagePeers to ask the others.
     sealed record HostUnderTest(Device Device, UsageMonitor Monitor, PeerUsage Store, UsageService Usage, UsagePeers Peers);
 
-    async Task<HostUnderTest> HostAsync(string name, IEnumerable<Func<AgentUsage?>> readings, string? store = null, string kind = "host", string? tokenFor = null)
+    async Task<HostUnderTest> HostAsync(string name, IEnumerable<Func<AgentUsage?>> readings, string? store = null, string kind = "host", string? tokenFor = null,
+        Func<Device, RemoteAuthorization>? policy = null)
     {
         var device = await relay.ConnectAsync(tokenFor ?? token, name, kind);
+        var trust = policy?.Invoke(device);
+        trust?.Attach(device.Hub);
         var monitor = new UsageMonitor([.. readings.Select(r => new Collector(r))], source,
             new UsageOptions { CopilotHome = f.CopilotHome, ClaudeHome = f.ClaudeHome, CodexHome = f.CodexHome }, time);
         owned.Add(monitor);
@@ -78,7 +81,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
         var service = new SessionService(source, new MachineInfo(device.Id, name, "windows", "0.1.0"), usage: usage);
         device.Hub.JsonOptions = ProtocolJson.Options;
         device.Hub.Handler = service.HandleAsync;
-        var asking = new UsagePeers(peers, device.Id, time: time);
+        var asking = new UsagePeers(peers, device.Id, time: time) { Trust = trust };
         owned.Add(asking);
         asking.Attach(device.Relay, device.Hub);
         return new HostUnderTest(device, monitor, peers, usage, asking);
@@ -104,6 +107,35 @@ public sealed class UsageSharingTests : IAsyncLifetime
     {
         var ch = await OpenAsync(phone, host);
         return Report(await ch.RequestAsync(UsageProtocol.Get, shared ? new { shared = true } : new { }));
+    }
+
+    [Fact]
+    public async Task An_enforcing_host_asks_only_pinned_hosts_and_drops_historical_readings_when_their_authority_goes()
+    {
+        RemoteAuthorization? authorization = null;
+        var desk = await HostAsync("Desk", [], policy: device =>
+        {
+            var store = new TrustedPeerStore(folder, device.Key.Public, () => device.Relay.AccountId, time);
+            store.Reset();
+            return authorization = new RemoteAuthorization(true, store, time);
+        });
+        using var trust = authorization!;
+        var pins = trust.Store;
+        var vm = await HostAsync("Other", [() => Claude(41.3, Now)]);
+        var unapproved = await relay.ConnectAsync(token, "Unapproved reader", "host");
+        vm.Store.Take([Copilot(80, Now)], new UsageReader(unapproved.Id, "Unapproved reader"));
+        await SeeAsync(desk.Device, vm.Device.Id);
+        await SeeAsync(desk.Device, unapproved.Id);
+        Assert.Equal(0, await desk.Peers.PassAsync());
+        Assert.Empty(desk.Store.Entries);
+        pins.Put(vm.Device.Key.Public, TrustedPeerStore.Host, Now.AddHours(1));
+        Assert.Equal(1, await desk.Peers.PassAsync());
+        Assert.Equal(vm.Device.Id, Assert.Single(desk.Store.Entries).ReadBy!.Id);
+        Assert.Equal(AgentKind.Claude, Assert.Single(desk.Store.Entries).Agent);
+        pins.Revoke(vm.Device.Key.Public);
+        desk.Peers.RevalidateTrust();
+        Assert.Empty(desk.Store.Entries);
+        Assert.Equal(0, await desk.Peers.PassAsync());
     }
 
     [Fact]
