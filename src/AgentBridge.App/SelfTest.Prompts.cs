@@ -1,0 +1,138 @@
+using AgentBridge.App.Core;
+using AgentBridge.Protocol;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
+
+namespace AgentBridge.App;
+
+// A prompt the person didn't type (#489, ui.md §6.4): a schedule's or an agent's prompt is drawn
+// as a collapsed line at the conversation column's start in agent colour, with a clock or the
+// driven diamond, never as the person's bubble; Show prompt opens it inside a thin agent rule; a
+// schedule's repeat folds to "same as last time". The demo sends none on its own, so the check
+// sends them, and puts the session back as it was afterwards.
+static partial class SelfTest
+{
+    const string PromptSession = "019a1b2c-codex-example";
+    const string Monitor = "Check the deploy pipeline for agent-bridge. If the last run on main failed, find the failing job,\nread its log, and say which test failed and why. If it passed, say nothing new and stop.\nThen look at the open pull requests: for each one whose checks are red, name the check.\nKeep the answer under ten lines. Do not change any file.";
+
+    static async Task CheckPrompts(MainWindow window, MainViewModel main, DemoHost demo, Action<bool, string> check, string outFile)
+    {
+        if (main.AllCards.FirstOrDefault(c => c.Id == PromptSession) is not { } card) { check(false, "finds a session to send a scheduled prompt to"); return; }
+        var original = card.Session;
+        var turns = original.Activity.TurnCount ?? 0;
+        static string Colour(object? b) => b is SolidColorBrush s ? s.Color.ToString() : "none";
+        static bool Shown(FrameworkElement? e)
+        {
+            for (DependencyObject? at = e; at is not null; at = VisualTreeHelper.GetParent(at))
+            {
+                if (at is UIElement { Visibility: Visibility.Collapsed }) { return false; }
+            }
+            return e is { ActualHeight: > 0 };
+        }
+        Resize(window, 1440, 900);
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            await demo.Upsert(original with { Status = SessionStatus.Idle, StatusSince = now, UpdatedAt = now, Question = null, Activity = original.Activity with { UserMessage = Monitor, UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = turns } });
+            var arrived = await Until(() => card.HasPrompt, TimeSpan.FromSeconds(10));
+            var view = arrived ? await Choose(window, main, PromptSession, "Prompt") : null;
+            var line = view is null ? null : ById<StackPanel>(view, "Prompt");
+            var scroll = view is null ? null : ById<ScrollViewer>(view, "Conversation");
+            var column = scroll is null ? null : Find<StackPanel>(scroll).FirstOrDefault(s => s.Name == "Conversation");
+            if (view is null || line is null || column is null || !await Until(() => Shown(line), TimeSpan.FromSeconds(5))) { check(false, "draws a scheduled prompt's line in the conversation"); return; }
+            await Task.Delay(300);
+
+            var label = ById<TextBlock>(view, "PromptLabelText");
+            var at = line.TransformToVisual(column).TransformPoint(default).X;
+            var inner = column.ActualWidth - column.Padding.Left - column.Padding.Right;
+            var problems = new List<string>();
+            if (Shown(ById<Border>(view, "YourMessage"))) { problems.Add("your bubble shown"); }
+            if (label is null || Text(label) != "Scheduled prompt · #4") { problems.Add($"label \"{(label is null ? "none" : Text(label))}\""); }
+            if (label is not null && Colour(label.Foreground) != Colour(Themed(label, "AbAgentText"))) { problems.Add($"label in {Colour(label?.Foreground)}"); }
+            if (!Shown(ById<ContentControl>(view, "PromptClock")) || Shown(ById<ContentControl>(view, "PromptDiamond"))) { problems.Add("no clock"); }
+            if (Math.Abs(at - column.Padding.Left) > 1 || Math.Abs(line.ActualWidth - inner) > 1) { problems.Add($"line at {at:0}+{line.ActualWidth:0} in a column {column.Padding.Left:0}+{inner:0}"); }
+            check(problems.Count == 0, $"draws a scheduled prompt as a line at the column's start, a clock and \"Scheduled prompt · #4\" in agent colour, not your bubble{(problems.Count > 0 ? $": not {string.Join(", ", problems)}" : "")}");
+
+            var preview = ById<TextBlock>(view, "PromptPreview");
+            check(preview is { MaxLines: 2 } && Shown(preview) && preview.ActualHeight <= preview.LineHeight * 2 + 2 + (preview.LineHeight == 0 ? 40 : 0),
+                $"shows two lines of it under the label ({preview?.ActualHeight:0} px)");
+
+            var expander = ById<Expander>(view, "ShowPrompt");
+            var header = expander is null ? null : Find<ToggleButton>(expander).FirstOrDefault();
+            var peer = expander is null ? null : (IExpandCollapseProvider)new ExpanderAutomationPeer(expander).GetPattern(PatternInterface.ExpandCollapse);
+            check(expander is not null && peer?.ExpandCollapseState == ExpandCollapseState.Collapsed && AutomationProperties.GetName(expander) == "Scheduled prompt 4, Show prompt" && header is { IsTabStop: true },
+                $"offers Show prompt collapsed, a control Tab reaches, named \"{(expander is null ? "" : AutomationProperties.GetName(expander))}\"");
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".prompt.collapsed.png"));
+
+            peer?.Expand();
+            // The Expander builds its content the first time it opens: looked up once it has.
+            Border? rule = null;
+            var opened = await Until(() => card.PromptOpen && (rule = ById<Border>(view, "PromptRule")) is not null && Shown(rule), TimeSpan.FromSeconds(5));
+            await Task.Delay(400);
+            var full = ById<TextBlock>(view, "PromptText");
+            var wrongOpen = new List<string>();
+            if (!opened) { wrongOpen.Add("not opened"); }
+            if (rule is not { BorderThickness: { Left: 2, Top: 0, Right: 0, Bottom: 0 } }) { wrongOpen.Add($"rule {rule?.BorderThickness}"); }
+            if (rule?.Background is not null) { wrongOpen.Add("a filled card"); }
+            if (rule is not null && Colour(rule.BorderBrush) != Colour(Themed(rule, "AbAgent"))) { wrongOpen.Add($"rule in {Colour(rule.BorderBrush)}, not {Colour(Themed(rule, "AbAgent"))}"); }
+            if (Shown(preview)) { wrongOpen.Add("the preview still shown"); }
+            if (full is null || full.Text != Monitor) { wrongOpen.Add("not all of it"); }
+            if (expander is null || AutomationProperties.GetName(expander) != "Scheduled prompt 4, Hide prompt") { wrongOpen.Add($"named \"{(expander is null ? "" : AutomationProperties.GetName(expander))}\""); }
+            check(wrongOpen.Count == 0, $"opens Show prompt on all of it inside a thin agent rule on the leading edge, not a filled card, named Hide prompt{(wrongOpen.Count > 0 ? $": not {string.Join(", ", wrongOpen)}" : "")}");
+            foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+            {
+                window.RootElement.RequestedTheme = theme;
+                await Task.Delay(300);
+                await Picture(window.RootElement, Path.ChangeExtension(outFile, $".prompt.expanded.{theme.ToString().ToLowerInvariant()}.png"));
+            }
+            window.RootElement.RequestedTheme = ElementTheme.Default;
+            peer?.Collapse();
+            await Until(() => !card.PromptOpen, TimeSpan.FromSeconds(5));
+
+            // The schedule fires again with the same words (the host counts one more prompt): it folds,
+            // and has no preview. Sent as finished, since the demo ends a working turn on its own and
+            // would send it again over what comes next.
+            await demo.Upsert(card.Session with { UpdatedAt = DateTimeOffset.UtcNow, Activity = card.Session.Activity with { UserMessage = Monitor, TurnCount = turns + 1 } });
+            var folded = await Until(() => label is not null && Text(label) == "Scheduled prompt · #4 · same as last time" && !Shown(preview), TimeSpan.FromSeconds(10));
+            check(folded, $"folds a schedule's repeat to \"same as last time\" with no preview ({(label is null ? "" : Text(label))})");
+            foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
+            {
+                window.RootElement.RequestedTheme = theme;
+                await Task.Delay(300);
+                await Picture(window.RootElement, Path.ChangeExtension(outFile, $".prompt.repeat.{theme.ToString().ToLowerInvariant()}.png"));
+            }
+            window.RootElement.RequestedTheme = ElementTheme.Default;
+
+            // An agent's prompt: the driven diamond, "Sent by an agent" and who, in secondary text.
+            await demo.Upsert(card.Session with { UpdatedAt = DateTimeOffset.UtcNow, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Activity = card.Session.Activity with { UserMessage = "Run the nightly check and post the result.", UserMessageFrom = UserMessageFrom.Agent, UserMessageLabel = null, TurnCount = turns + 2 } });
+            var sent = await Until(() => label is not null && Text(label) == "Sent by an agent" && Shown(ById<ContentControl>(view, "PromptDiamond")), TimeSpan.FromSeconds(10));
+            check(sent && !Shown(ById<ContentControl>(view, "PromptClock")) && ById<TextBlock>(view, "PromptBy") is { Text: "homeassistant:0f1e2d3c" } by && Shown(by) && expander is not null && AutomationProperties.GetName(expander) == "Prompt sent by an agent, Show prompt",
+                "draws an agent's prompt with the driven diamond and \"Sent by an agent\", the agent in secondary text");
+            await Picture(window.RootElement, Path.ChangeExtension(outFile, ".prompt.agent.png"));
+
+            // The person's own again: the bubble, as before.
+            await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow });
+            check(await Until(() => !card.HasPrompt && Shown(ById<Border>(view, "YourMessage")) == card.HasUserMessage && !Shown(line), TimeSpan.FromSeconds(10)),
+                "draws the person's own prompt as their bubble again, and no prompt line");
+        }
+        finally
+        {
+            window.RootElement.RequestedTheme = ElementTheme.Default;
+            if (card.HasPrompt) { await demo.Upsert(original with { UpdatedAt = DateTimeOffset.UtcNow }); }
+        }
+    }
+
+    // A brush as the element's theme has it in the generated design dictionary: ThemeResources
+    // follow the theme, so the app-wide lookup would give the default theme's.
+    static object? Themed(FrameworkElement e, string key)
+    {
+        var design = Application.Current.Resources.MergedDictionaries.FirstOrDefault(d => d.Source?.ToString().EndsWith(Design.DesignKeys.Source["ms-appx:///".Length..], StringComparison.OrdinalIgnoreCase) == true);
+        var theme = new Windows.UI.ViewManagement.AccessibilitySettings().HighContrast ? "HighContrast" : e.ActualTheme.ToString();
+        return design?.ThemeDictionaries.TryGetValue(theme, out var d) == true && d is ResourceDictionary r && r.TryGetValue(key, out var b) ? b : null;
+    }
+}

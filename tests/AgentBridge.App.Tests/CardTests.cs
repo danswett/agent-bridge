@@ -777,6 +777,63 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_prompt_the_person_didnt_type_is_not_their_bubble_but_a_collapsed_line_Show_prompt_opens()
+    {
+        var scheduled = Make.Session(turns: 3) with { Activity = new Activity { UserMessage = "Check the build.\nThen stop.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 } };
+        var card = new SessionCardViewModel(scheduled, Context());
+        Assert.False(card.HasUserMessage);
+        Assert.True(card.HasPrompt);
+        Assert.Equal((true, false), (card.PromptIsSchedule, card.PromptIsDriven));
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        Assert.Equal(("Check the build. Then stop.", true), (card.PromptPreview, card.HasPromptPreview));
+        Assert.Equal((false, "Show prompt", "Scheduled prompt 4, Show prompt"), (card.PromptOpen, card.PromptToggleText, card.PromptToggleName));
+        // Seen first after its turn: the protocol doesn't date a prompt, so it has no age.
+        Assert.False(card.HasPromptAge);
+
+        card.PromptOpen = true;
+        Assert.Equal((false, "Hide prompt", "Scheduled prompt 4, Hide prompt"), (card.HasPromptPreview, card.PromptToggleText, card.PromptToggleName));
+        Assert.Equal("Check the build.\nThen stop.", card.PromptText);
+        // An update to the same prompt leaves it as the person left it.
+        card.Update(scheduled with { UpdatedAt = Make.T0.AddMinutes(1), Activity = scheduled.Activity with { Response = "Green." } });
+        Assert.True(card.PromptOpen);
+
+        var agent = Make.Session() with { Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Activity = new Activity { UserMessage = "Run it.", UserMessageFrom = UserMessageFrom.Agent, TurnCount = 1 } };
+        var sent = new SessionCardViewModel(agent, Context());
+        Assert.Equal((true, "Sent by an agent", "homeassistant:0f1e2d3c", true), (sent.PromptIsDriven, sent.PromptLabel, sent.PromptBy, sent.HasPromptBy));
+        Assert.Equal("Prompt sent by an agent, Show prompt", sent.PromptToggleName);
+    }
+
+    [Fact]
+    public void A_schedule_firing_again_with_the_same_words_folds_to_same_as_last_time_dated_by_its_turn_and_collapsed()
+    {
+        var idle = Make.Session(turns: 3) with { Activity = new Activity { UserMessage = "Check the build.", UserMessageFrom = UserMessageFrom.Schedule, UserMessageLabel = "4", TurnCount = 3 } };
+        var card = new SessionCardViewModel(idle, Context());
+        card.PromptOpen = true;
+        var began = Make.T0.AddMinutes(2);
+        card.Update(idle with { Status = SessionStatus.Working, StatusSince = began, UpdatedAt = began });
+        // The same words while its turn runs: nothing to tell from a turn of the same prompt yet.
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        card.Update(idle with { UpdatedAt = began.AddSeconds(30), Activity = idle.Activity with { TurnCount = 4 } });
+        Assert.Equal("Scheduled prompt · #4 · same as last time", card.PromptLabel);
+        Assert.Equal(("", false), (card.PromptPreview, card.HasPromptPreview));
+        Assert.False(card.PromptOpen);
+        Assert.Equal((true, "3m"), (card.HasPromptAge, card.PromptAgeText));
+
+        card.Update(idle with { Status = SessionStatus.Working, StatusSince = began, Activity = idle.Activity with { UserMessage = "Check the relay.", TurnCount = 4 } });
+        Assert.Equal("Scheduled prompt · #4", card.PromptLabel);
+        Assert.Equal("Check the relay.", card.PromptPreview);
+    }
+
+    [Fact]
+    public void A_prompt_from_a_host_that_doesnt_say_who_sent_it_or_from_the_person_keeps_the_bubble()
+    {
+        var card = new SessionCardViewModel(Make.Session() with { Activity = new Activity { UserMessage = "Ship it.", TurnCount = 1 } }, Context());
+        Assert.Equal((true, "Ship it.", false), (card.HasUserMessage, card.UserMessage, card.HasPrompt));
+        card.Update(Make.Session() with { Activity = new Activity { UserMessage = "Stop that.", UserMessageFrom = UserMessageFrom.Person, TurnCount = 2 } });
+        Assert.Equal((true, "Stop that.", false), (card.HasUserMessage, card.UserMessage, card.HasPrompt));
+    }
+
+    [Fact]
     public void A_folded_card_stays_folded_across_restarts_until_a_new_question_opens_it_once()
     {
         var card = new SessionCardViewModel(Make.Session(), Context()) { Folded = true };
