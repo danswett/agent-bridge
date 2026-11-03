@@ -15,6 +15,7 @@
     <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/AgentBridge.Learning/AgentBridge.Learning.csproj" />
     <Project Path="tools/AgentBridge.Quality/AgentBridge.Quality.csproj" />
     <Project Path="tools/AgentBridge.Rehearsal/AgentBridge.Rehearsal.csproj" />
     <Project Path="tools/AgentBridge.RelaySmoke/AgentBridge.RelaySmoke.csproj" />
@@ -28,6 +29,7 @@
     <Project Path="tests/AgentBridge.Host.Core.Tests/AgentBridge.Host.Core.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Delivery.Tests/AgentBridge.Host.Delivery.Tests.csproj" />
     <Project Path="tests/AgentBridge.Host.Tests/AgentBridge.Host.Tests.csproj" />
+    <Project Path="tests/AgentBridge.Learning.Tests/AgentBridge.Learning.Tests.csproj" />
     <Project Path="tests/AgentBridge.Local.Tests/AgentBridge.Local.Tests.csproj" />
     <Project Path="tests/AgentBridge.PerfHook/AgentBridge.PerfHook.csproj" />
     <Project Path="tests/AgentBridge.Protocol.Tests/AgentBridge.Protocol.Tests.csproj" />
