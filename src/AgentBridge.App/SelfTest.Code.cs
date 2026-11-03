@@ -80,15 +80,12 @@ static partial class SelfTest
                 && cardText.Contains(BareReturnRevealed, StringComparison.Ordinal) && cardText.Contains(Linked, StringComparison.Ordinal) && cardText.EndsWith(Fenced, StringComparison.Ordinal)
                 && !cardText.Any(c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0' or '\r'),
                 $"draws an approval's whole message exactly as written, fence markers included, in one left-to-right block with its hidden characters and right-to-left letters as escapes ({cardText})");
-            check(ById<TextBlock>(card, "CodeRightToLeft") is { Text: CodeCopy.RightToLeftNote } && ById<TextBlock>(md, "CodeRightToLeft") is null,
-                "says beside Copy that a block holds right-to-left text, and only on that block");
-            if (ById<Button>(card, "CopyCode") is { } copyCard)
-            {
-                copied.Clear();
-                ((IInvokeProvider)new ButtonAutomationPeer(copyCard).GetPattern(PatternInterface.Invoke)).Invoke();
-                await Until(() => copied.Count == 1, TimeSpan.FromSeconds(2));
-            }
-            check(cardText.Length > 0 && copied.SequenceEqual([cardText]), "copies an approval as drawn, its escapes and never the controls");
+            check(ById<TextBlock>(card, "CodeRightToLeft") is { Text: CodeCopy.RightToLeftNote } && ById<TextBlock>(card, "CodeHidden") is { Text: CodeCopy.HiddenNote }
+                && ById<TextBlock>(chat, "CodeHidden") is { Text: CodeCopy.HiddenNote } && ById<TextBlock>(chat, "CodeRightToLeft") is null
+                && ById<TextBlock>(md, "CodeHidden") is null && ById<TextBlock>(md, "CodeRightToLeft") is null,
+                "says a block contains hidden characters, or right-to-left text, or both, and says nothing of a plain block");
+            check(ById<Button>(card, "CopyCode") is null && ById<Button>(chat, "CopyCode") is not null,
+                "offers no Copy on an approval's card, and still on a conversation's block");
             var chatCode = ById<TextBlock>(chat, "CodeText");
             if (ById<Button>(chat, "CopyCode") is { } copyChat)
             {

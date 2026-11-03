@@ -32,6 +32,7 @@ public sealed class CodeCopy : Observable
     {
         Text = HiddenText.Reveal(code.Text, rightToLeft: true).TrimEnd('\n');
         RightToLeft = HiddenText.HasRightToLeft(code.Text);
+        Hidden = HiddenText.HasHidden(code.Text);
         this.put = put;
         this.ui = ui ?? InlineDispatcher.Instance;
         this.time = time ?? TimeProvider.System;
@@ -45,6 +46,12 @@ public sealed class CodeCopy : Observable
     // escaped too (HiddenText.Reveal), and the block says it held them (RightToLeftNote).
     public bool RightToLeft { get; }
     public const string RightToLeftNote = "Contains right-to-left text";
+
+    // Characters drawn as escapes (HiddenText.HasHidden), which the block says it held: an escape can
+    // be read past, and its character still acts. PowerShell ends a `#` comment at a bare CR, so
+    // `# just a note\u000D Write-Output RAN` on one line still reads as a comment, and runs.
+    public bool Hidden { get; }
+    public const string HiddenNote = "Contains hidden characters";
 
     public string Label { get => label; private set => Set(ref label, value); }
 

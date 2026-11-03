@@ -204,22 +204,19 @@ public sealed class MarkdownView : StackPanel
         var head = new Grid();
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        if (copy.RightToLeft)
+        // What the block held that its escapes stand for, said in words beside Copy: both if both.
+        var notes = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        if (copy.Hidden) { notes.Children.Add(Note(CodeCopy.HiddenNote, "CodeHidden")); }
+        if (copy.RightToLeft) { notes.Children.Add(Note(CodeCopy.RightToLeftNote, "CodeRightToLeft")); }
+        head.Children.Add(notes);
+        // An approval's card has no Copy: its block is the whole message, prose and fence lines too,
+        // and pasted into bash a line of backticks runs as a command substitution.
+        if (!Approval)
         {
-            var note = new TextBlock
-            {
-                Style = (Style)Application.Current.Resources["AbTypeMeta"],
-                Foreground = Ui.Brush("AbText2"),
-                Text = CodeCopy.RightToLeftNote,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            AutomationProperties.SetAutomationId(note, "CodeRightToLeft");
-            head.Children.Add(note);
+            var button = CopyButton(copy);
+            Grid.SetColumn(button, 1);
+            head.Children.Add(button);
         }
-        var button = CopyButton(copy);
-        Grid.SetColumn(button, 1);
-        head.Children.Add(button);
         Grid.SetRow(text, 1);
         var grid = new Grid { RowSpacing = 2 };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -234,6 +231,19 @@ public sealed class MarkdownView : StackPanel
             Padding = new Thickness(10, 4, 4, 8),
             Child = grid,
         };
+    }
+
+    static TextBlock Note(string text, string id)
+    {
+        var note = new TextBlock
+        {
+            Style = (Style)Application.Current.Resources["AbTypeMeta"],
+            Foreground = Ui.Brush("AbText2"),
+            Text = text,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        AutomationProperties.SetAutomationId(note, id);
+        return note;
     }
 
     // A block's Copy button, as the PWA's: its icon and "Copy", then "Copied" (or "Copy failed")
