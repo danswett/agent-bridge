@@ -143,6 +143,31 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_agent_check_button_is_notified_as_soon_as_a_Settings_action_becomes_busy()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Agents = Readiness("1.2.3") });
+        using var release = new ManualResetEventSlim();
+        host.On(HostOps.AgentsRefresh, _ => { release.Wait(); return host.Status.Agents; });
+        var enabled = new List<bool>();
+        settings.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(settings.CanCheckAgents)) { enabled.Add(settings.CanCheckAgents); }
+        };
+
+        var pending = settings.CheckAgentsAsync();
+        try
+        {
+            Assert.False(settings.CanCheckAgents);
+            Assert.Contains(false, enabled);
+        }
+        finally { release.Set(); await pending; }
+
+        Assert.False(settings.HasError);
+        Assert.True(settings.CanCheckAgents);
+        Assert.Contains(true, enabled);
+    }
+
+    [Fact]
     public async Task An_older_host_is_explained_and_never_sent_a_readiness_request()
     {
         await using var older = new FakeHost();

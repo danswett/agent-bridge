@@ -200,8 +200,14 @@ public sealed class ConnectionTests : IAsyncLifetime
     public async Task A_newer_status_event_wins_over_a_manual_read_waiting_for_the_UI()
     {
         var ui = new HoldingDispatcher();
-        await using var watching = host.Connect(ui);
-        await Wait.UntilAsync(() => watching.State == LinkState.Connected && watching.Status is not null, "the status");
+        await using var watching = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), ui)
+        {
+            CapabilityRefresh = TimeSpan.FromHours(1),
+        };
+        var synced = false;
+        watching.Sessions.Synced += () => synced = true;
+        watching.Start();
+        await Wait.UntilAsync(() => watching.State == LinkState.Connected && watching.Status is not null && synced, "the initial snapshot");
         var shown = new List<int>();
         watching.Changed += () => shown.Add(watching.Status!.ProcessId);
         ui.Hold();
@@ -209,8 +215,9 @@ public sealed class ConnectionTests : IAsyncLifetime
         {
             host.Status = host.Status with { ProcessId = 111 };
             await watching.RefreshStatusAsync();
+            Assert.Equal(1, ui.QueuedCount);
             await host.SendAsync(HostOps.StatusEvent, host.Status with { ProcessId = 222 });
-            await watching.CallAsync<HostStatus>(HostOps.Status);
+            await Wait.UntilAsync(() => ui.QueuedCount == 2, "the newer status callback queued");
         }
         finally { ui.Release(); }
 

@@ -313,6 +313,8 @@ sealed class HoldingDispatcher : IUiDispatcher
     readonly Queue<Action> held = new();
     bool holding;
 
+    public int QueuedCount => ui.Invoke(() => held.Count);
+
     public void Hold() => ui.Invoke(() => holding = true);
 
     public void Release()

@@ -376,7 +376,11 @@ public sealed class SettingsViewModel : Observable
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
-    public bool Busy { get => busy; private set => Set(ref busy, value); }
+    public bool Busy
+    {
+        get => busy;
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); } }
+    }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
     public string Log { get => log; private set => Set(ref log, value); }
