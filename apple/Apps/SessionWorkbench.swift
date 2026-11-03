@@ -101,7 +101,7 @@ struct SessionWorkbench: View {
                             Button("Connection Settings", systemImage: "network") { showingConnection = true }
                             Button("Reconnect", systemImage: "arrow.clockwise", action: store.connect).disabled(store.isSample || store.isFixture)
                             Button("Launch or Resume", systemImage: "plus") { showingLaunch = true }
-                                .disabled(!store.hosts.contains { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil })
+                                .disabled(!store.canOpenLauncher)
                         } label: { Image(systemName: "line.3.horizontal.decrease") }
                             .accessibilityLabel("Session filters and connections")
                     }
@@ -268,10 +268,16 @@ struct SessionWorkbench: View {
         } description: {
             if store.account == nil, !store.isSample, let status = store.signInStatus {
                 Text(status)
+            } else if store.isLive, !store.canOpenLauncher, let reason = store.canonicalHosts.compactMap(\.readOnlyReason).first {
+                Text("This machine is read-only: \(reason)")
             } else {
                 Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
             }
         } actions: {
+            if store.isLive, store.canOpenLauncher {
+                Button("Launch or Resume", systemImage: "plus") { showingLaunch = true }
+                    .buttonStyle(.borderedProminent)
+            }
             if !store.isSample, !store.isFixture, store.account == nil {
                 Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
                     showingConnection = true

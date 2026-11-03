@@ -73,6 +73,10 @@ final class BridgeStore {
     @ObservationIgnored private var canPollGitHub = true
     @ObservationIgnored private var hostRelays: [String: ObjectIdentifier] = [:]
 
+    var canOpenLauncher: Bool {
+        hosts.contains { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil }
+    }
+
     var isLive: Bool {
         hosts.contains { $0.isLive }
     }
