@@ -183,7 +183,9 @@ public sealed class HostManager
     public TimeSpan StartTimeout { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan StopTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan Poll { get; init; } = TimeSpan.FromMilliseconds(250);
-    // The clock a start through the logon task is timed by; tests step it.
+    // The clock every start and stop timeout is measured on; tests step or hold it. The stop's
+    // once read the wall clock, so a test holding a host mid-stop raced it: on a busy Arm64
+    // runner the stop gave up after its 1 s before the test let the host go (#425).
     public TimeProvider Time { get; init; } = TimeProvider.System;
     // Whether this app runs elevated; tests pretend.
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
@@ -437,8 +439,8 @@ public sealed class HostManager
             await WaitAsync(running: false, StopTimeout, ct);
         }
         // Its pipe is gone; wait for the process too, so its files can be replaced (an update).
-        var deadline = DateTime.UtcNow + StopTimeout;
-        while (pid is { } p && processes.IsRunning(p) && DateTime.UtcNow < deadline) { await Task.Delay(Poll, ct); }
+        var deadline = Time.GetUtcNow() + StopTimeout;
+        while (pid is { } p && processes.IsRunning(p) && Time.GetUtcNow() < deadline) { await Task.Delay(Poll, ct); }
     }
 
     // The launcher (agent-bridge-hostw) outlives a host it is about to start again: between crash
@@ -483,10 +485,10 @@ public sealed class HostManager
 
     async Task WaitAsync(bool running, TimeSpan timeout, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = Time.GetUtcNow() + timeout;
         while (await IsRunningAsync(ct) != running)
         {
-            if (DateTime.UtcNow > deadline) { throw new TimeoutException(running ? "the host did not start; see its log" : "the host did not stop"); }
+            if (Time.GetUtcNow() > deadline) { throw new TimeoutException(running ? "the host did not start; see its log" : "the host did not stop"); }
             await Task.Delay(Poll, ct);
         }
     }
