@@ -1119,6 +1119,33 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_new_sign_out_found_without_a_reading_is_a_failure_of_its_own_not_the_last_sign_outs_reading()
+    {
+        CodexUsed();
+        AppServer(s => s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account())
+            : FakeAppServer.Error("Your access token could not be refreshed. Please log out and sign in again."));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal((23.0, CodexUsageProbe.SignedOutError), ((await codex.CollectAsync())!.Windows[0].Percent, (await codex.CollectAsync())!.Error));
+
+        // A Codex session here ends that sign-out; later a probe finds another, reading nothing first.
+        codex.Pace(sessionOpen: true, busy: false);
+        codex.Pace(sessionOpen: false, busy: false);
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        time.Advance(TimeSpan.FromMinutes(16));
+        var asked = time.GetUtcNow();
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        var failure = (await codex.CollectAsync())!;
+        Assert.Equal(CodexUsageProbe.SignedOutError, failure.Error);
+        Assert.Empty(failure.Windows);
+        Assert.InRange(failure.MeasuredAt, asked, time.GetUtcNow());
+    }
+
+    [Fact]
     public async Task A_sign_out_Codex_reports_after_the_probe_stopped_waiting_still_holds_the_probes_off()
     {
         CodexUsed();

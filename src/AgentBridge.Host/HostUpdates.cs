@@ -224,7 +224,10 @@ static class HostUpdateGate
                 string? path;
                 try { path = p.MainModule?.FileName; }
                 catch (InvalidOperationException) { continue; }
-                catch (System.ComponentModel.Win32Exception) { return $"agent-bridge-host (pid {p.Id}) runs and cannot be looked at"; }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                    return $"agent-bridge-host (pid {p.Id}) runs and cannot be looked at";
+                }
                 if (path is not null && path.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 {
                     return $"another profile's host (pid {p.Id}) runs from this installation";

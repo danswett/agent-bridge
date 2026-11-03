@@ -19,7 +19,8 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     readonly object gate = new();
     AgentUsage? probed;
     DateTimeOffset? signedOutAt;
-    // The reading taken by the probe that found the sign-out (its second account/read), if any.
+    // The reading taken by a probe that found the current sign-out (its second account/read), if
+    // any; forgotten with that sign-out, so a later one is never shown as an old reading.
     AgentUsage? signedOutReading;
     // A login no probe reads replaced one whose reading or sign-out was published (TakeWithdrawal).
     bool withdrawn;
@@ -43,6 +44,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             if (sessionOpen && !wasOpen && signedOutAt is not null)
             {
                 signedOutAt = null;
+                signedOutReading = null;
                 pace.Release();
                 nextDue = null;
             }
@@ -202,6 +204,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                 case CodexProbeKind.Reading:
                     pace.Succeeded();
                     signedOutAt = null;
+                    signedOutReading = null;
                     line = null;
                     break;
                 case CodexProbeKind.SignedOut:
@@ -219,6 +222,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     // the transcripts stand alone.
                     withdrawn |= probed is not null || signedOutAt is not null;
                     signedOutAt = null;
+                    signedOutReading = null;
                     probed = null;
                     pace.Hold(now);
                     line = $"usage: Codex is not asked for its allowance ({outcome.Why}); its transcripts are read";
