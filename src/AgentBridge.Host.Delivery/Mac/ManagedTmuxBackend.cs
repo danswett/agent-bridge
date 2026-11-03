@@ -226,7 +226,7 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!StillTarget(entry, target)) { return false; }
                     IReadOnlyList<string> args = buffer is not null
-                        ? ["paste-buffer", "-d", "-p", "-b", buffer, "-t", entry.Session.PaneId]
+                        ? ["paste-buffer", "-d", "-b", buffer, "-t", entry.Session.PaneId]
                         : ["send-keys", "-t", entry.Session.PaneId, "--", text];
                     // Loading alone cannot type anything. From paste/key dispatch onward
                     // every failure is uncertain, including a lost command response.
