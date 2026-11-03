@@ -83,7 +83,7 @@ U9 spec ────────────────────────
 2. **Read the spec sections the issue names, and nothing else, as the source of truth.**
    The owner's design canvas is private and is not the spec: if you can't find something
    in ui.md, subagents.md or `design/`, ask on the issue rather than guessing from
-   screenshots.
+   screenshots. [handoff.md](handoff.md) describes how studio work becomes spec.
 3. **Values come from `design/tokens.json`.** Until U3 lands, copy a value by hand and
    leave a `TODO(#177)` beside it. After U3, never write a colour, size or radius that the
    generator owns.

@@ -162,3 +162,11 @@ Change `tokens.json` or an SVG, run the generator, and update `docs/design/ui.md
 PR. Any change
 to a status glyph or colour also needs the status table in ui.md §2.2 checked, because the
 glyphs must stay distinguishable in greyscale.
+
+A change to the language is a material design change. It starts as a proposal and waits for
+the owner's approval before it reaches this folder. [docs/design/handoff.md](../docs/design/handoff.md)
+covers the whole process: private studio work, the proposal, approval, the spec, then
+implementation.
+`node tools/design-gen/export-context.mjs --out <folder outside the repo>` builds a local
+reference packet of these sources, pinned to the current commit, for a design studio. It is a
+one-way copy, not a sync.
