@@ -200,6 +200,12 @@ The spec text goes into `docs/protocol/v1-sessions.md` in the same PR as the hos
 - "Finished" fires on the main agent's turn only.
 - "Question" fires for the session's and a sub-agent's questions alike. The title names the
   sub-agent, and both use the same tag, so the newer replaces the older.
+- A notification opens the session at its question. An approval's notification only opens it,
+  with no Approve once or Deny ([ui.md §7](ui.md#7-platform-shells), #253). A sub-agent's
+  `ask_user` is `answerAtMachine`, so it has no buttons either.
+- The question's words are drawn once, in the conversation, under "Delegate *name* asks". The
+  delegate's inspector links to it with Status "Asks you", and never repeats it
+  ([ui.md §6.3, §6.4](ui.md#64-conversation)).
 
 **HA connector (single-slot entity attributes, 16 KB limit):**
 - `response` and `reasoning` publish the main agent's own text (`own` for a field `source`

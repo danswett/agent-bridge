@@ -19,9 +19,11 @@ Some boards are shared components or thin wrappers:
   its `theme` prop flipped;
 - `PWA-Desktop.dc.html` imports `Windows.dc.html` with `chrome="web"`.
 
-`Proposal-<issue>-*.dc.html` boards are drafts for a proposal in
-[docs/design/proposals](../../docs/design/proposals), not part of the signed-off design. They
-render beside the proposal, not into `docs/design/mockups`, and go once the owner has decided.
+`Proposal-<issue>-*.dc.html` boards belong to a proposal in
+[docs/design/proposals](../../docs/design/proposals). They render beside the proposal, not
+into `docs/design/mockups`. Once the owner has decided, they stay as the record of the
+decision and as the reference for states the platform boards don't draw. #253's are decided,
+and ui.md §10 points to them.
 
 Colours and glyph paths inside these files are copies of
 [`design/tokens.json`](../tokens.json) and [`design/glyphs`](../glyphs). If they drift,

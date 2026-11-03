@@ -35,7 +35,7 @@ Phone boards render at 2×, and everything else at 1×.
 
 ## Proposals
 
-Boards named `Proposal-*` are a proposal's drafts, awaiting the owner, and `npm run render`
+Boards named `Proposal-*` belong to a proposal (docs/design/proposals), and `npm run render`
 leaves them out. Render one proposal's boards beside its page by naming their prefix:
 
 ```

@@ -3,8 +3,8 @@
 // DCLogic class with props, state and renderVals().
 // Usage: node render.js <projectDir> <outDir> [prefix]
 // With a prefix, only the boards whose file names start with it are rendered. Without one, every
-// board but a proposal's (Proposal-*): those are drafts awaiting the owner, and their images live
-// beside the proposal (docs/design/proposals), not among the signed-off mock-ups.
+// board but a proposal's (Proposal-*): their images live beside the proposal
+// (docs/design/proposals), not among the platform mock-ups.
 const fs = require('fs'), path = require('path');
 const { chromium } = require('playwright');
 const [projectDir, outDir, only] = process.argv.slice(2);

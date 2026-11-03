@@ -1,13 +1,21 @@
 # Proposal #253: one row, one question
 
-*Status: a draft for the owner, from the UI track on 2026-11-02. Nothing here is the spec yet:
-[ui.md](../ui.md) stays as it is until the owner signs this off, and §5 lists the exact edits that
-sign-off would make.* Issue: [#253](https://github.com/danswett/agent-bridge/issues/253).
+> **Decided 2026-11-02.** The owner signed off **option A with every recommended answer** (§7):
+> 1 A; 2 two taps are fine; 3 escape and still allow; 4 your order; 5 start off; 6 status only;
+> 7 (a): an approval's notification only opens its question, and other questions keep their
+> buttons; 8 the menu bar extra names the sessions. The edits in §5 were applied to
+> [ui.md](../ui.md) in #302, which also updated subagents.md §7, ui-plan.md (U10) and
+> status.md. **ui.md is the spec.** This page stays as the reasoning behind it. Where the two
+> differ, ui.md wins.
+
+*Written as a draft for the owner, from the UI track on 2026-11-02.* Issue:
+[#253](https://github.com/danswett/agent-bridge/issues/253).
 
 The mock-ups are in [253-attention/](253-attention/), drawn from boards in
 [`/design/canvas`](../../../design/canvas) (`Proposal-253-*.dc.html`) with
 [tools/design-mockups](../../../tools/design-mockups/README.md). Like every mock-up, they are
-reference: where they and this page disagree, this page wins.
+reference: where they and ui.md disagree, ui.md wins. The *after* boards and the states board
+remain the reference for the states the signed-off boards don't draw.
 
 ## 1. The problem
 
@@ -420,7 +428,9 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
 | PWA phone session, after | [dark](253-attention/proposal-253-phone-session.png) | [light](253-attention/proposal-253-phone-session-light.png) |
 | States | [dark](253-attention/proposal-253-states.png) | [light](253-attention/proposal-253-states-light.png) |
 
-## 5. The ui.md edits sign-off would make (not applied)
+## 5. The ui.md edits, as proposed
+
+Applied in #302 with the owner's answers. The applied text in ui.md is fuller and wins; for example, it adds the notification rules to §7 and §8's words.
 
 ```diff
  ## 1. Principles
@@ -577,7 +587,7 @@ its date, as it does for #183 and #232.
 | Slice | What | Touches |
 |---|---|---|
 | **0. This PR** | The proposal and its boards. No client code | `docs/design/proposals/`, `design/canvas/Proposal-253-*`, `tools/design-mockups/render.js` (renders proposals apart) |
-| **1. Spec** (after sign-off) | Apply §5 to ui.md. Redraw the Windows, PWA desktop, PWA phone, macOS, iOS and Android boards without the lane. Re-render `docs/design/mockups`. Retire the proposal boards. Add U10 (#253) to ui-plan.md | `docs/design/ui.md`, `ui-plan.md`, `design/canvas`, `docs/design/mockups` |
+| **1. Spec** (after sign-off; done in #302 with this page) | Apply §5 to ui.md. Redraw the Windows, PWA desktop, PWA phone, macOS, iOS and Android boards without the lane. Re-render `docs/design/mockups`. Keep the proposal boards as the reference for the new states. Add U10 (#253) to ui-plan.md | `docs/design/ui.md`, `ui-plan.md`, `design/canvas`, `docs/design/mockups` |
 | **2. PWA** | Below | `pwa/` |
 | **3. App** | Below | `src/AgentBridge.App`, `src/AgentBridge.App.Core`, `tests/AgentBridge.App.Tests` |
 | **4. Apple** | §4.10, in @welshofer's clients: in #260 if it hasn't merged, else a follow-up PR of theirs. Owned and scheduled by them and the coordinator, not by this track | `apple/` |
@@ -687,7 +697,9 @@ before merge.
   - a change in the count is announced once, at most every 5 seconds;
   - every control on a phone is at least 44 px tall.
 
-## 7. Questions for the owner
+## 7. Questions for the owner, and the answers
+
+Answered 2026-11-02: every recommendation was taken (1 A, 2 yes, 3 escape and allow, 4 your order, 5 start off, 6 status only, 7 (a), 8 names).
 
 1. **Which option:** A (a Needs you filter, and the question only in the conversation), B (a
    one-line lane) or C (A, plus a review sheet on the row)? Recommended: A.
