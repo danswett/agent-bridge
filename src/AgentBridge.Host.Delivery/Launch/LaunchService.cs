@@ -43,6 +43,9 @@ public sealed class LaunchServiceOptions
     public LaunchConfig Config { get; init; } = LaunchConfig.Default;
     public bool PlatformSupported { get; init; } = OperatingSystem.IsWindows();
 
+    // Installed CLI flag validation for the managed Mac backend; null preserves other platforms.
+    public MacLaunchCompatibility? MacCompatibility { get; init; }
+
     // How long a launch request waits for the session to register before it answers
     // unconfirmed. Copilot registers in seconds; a first launch that has to sign in can take
     // minutes, and is followed on after the answer.
@@ -209,7 +212,7 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // The options, with what a launch needs that a client is not sent: each launcher's
     // executable and each resumable session's entry.
-    sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable);
+    sealed record Resolved(LaunchOptions Options, IReadOnlyDictionary<string, string> Executables, IReadOnlyList<ResumeEntry> Resumable, IReadOnlyDictionary<string, MacLaunchCompatibility.Compatibility> Compatibility);
 
     async Task<Resolved> ResolveAsync(CancellationToken ct)
     {
@@ -218,11 +221,20 @@ public sealed partial class LaunchService : ISessionLauncher
         {
             if (locator.Find(l, Config.Agent(l.Id)) is { } exe) { executables[l.Id] = exe; }
         }
+        var compatibility = new Dictionary<string, MacLaunchCompatibility.Compatibility>(StringComparer.Ordinal);
         var live = source.Snapshot();
         var agents = new List<LaunchAgent>();
         foreach (var l in Launchers.All.Where(l => executables.ContainsKey(l.Id)))
         {
+            var supported = options.MacCompatibility is { } mac
+                ? await mac.InspectAsync(l, executables[l.Id], Config.Agent(l.Id).ExtraArgs, ct) : new MacLaunchCompatibility.Compatibility();
+            compatibility[l.Id] = supported;
             var (models, efforts, contexts, defaults) = Tuning(l, live);
+            if (supported.Efforts is { } accepted)
+            {
+                efforts = [.. efforts.Where(e => accepted.Contains(e, StringComparer.Ordinal))];
+                defaults = defaults with { Effort = defaults.Effort is { } d && efforts.Contains(d) ? d : null };
+            }
             IReadOnlyList<string>? profiles = null;
             string? profile = null;
             if (l.TakesProfile)
@@ -281,7 +293,7 @@ public sealed partial class LaunchService : ISessionLauncher
         {
             result = result with { Agents = [.. result.Agents.Select(a => a with { Models = [.. a.Models.Take(Math.Max(8, a.Models.Count - 8))] })] };
         }
-        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)]);
+        return new Resolved(result, executables, [.. entries.Select(e => e.Entry)], compatibility);
     }
 
     // Model, effort and context for a launcher, as agent-ha-bridge's Get-BridgeTuningOptions
@@ -492,7 +504,7 @@ public sealed partial class LaunchService : ISessionLauncher
 
     // Everything a launch was settled on before it starts.
     sealed record Plan(Launcher Launcher, string Executable, string Directory, string? Workspace, WorkspaceConfig? Isolated, ResumeEntry? Resume,
-        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, LaunchTransfer? Transfer = null);
+        string Where, string Profile, string Model, string Effort, string Context, bool AllowAll, string Prompt, MacLaunchCompatibility.Compatibility Compatibility, LaunchTransfer? Transfer = null);
 
     async Task<LaunchResult> RunAsync(LaunchRequest request, Guid key, string peer)
     {
@@ -640,6 +652,8 @@ public sealed partial class LaunchService : ISessionLauncher
             }
         }
 
+        var compatibility = resolved.Compatibility[launcher.Id];
+        if (compatibility.Refusal is { } incompatible) { return (null, incompatible); }
         var agent = o.Agents.First(a => a.Id == launcher.Id);
         var profile = "";
         if (launcher.TakesProfile && agent.Profiles is { } profiles)
@@ -670,7 +684,7 @@ public sealed partial class LaunchService : ISessionLauncher
         var allowAll = (r.Permissions ?? Config.Permissions) == LaunchProtocol.AllowAll;
 
         return (new Plan(launcher, resolved.Executables[launcher.Id], directory, workspace?.Label, workspace?.Isolate == true ? workspace : null, resume, where,
-            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), r.Transfer), null);
+            profile, model, effort, context, allowAll, LaunchProtocol.Flatten(r.Prompt), compatibility, r.Transfer), null);
     }
 
     async Task<LaunchResult> StartAsync(Plan plan, Claim? claim, Guid key, StrongBox<bool> handed, FetchedBundle? fetched)
@@ -695,6 +709,7 @@ public sealed partial class LaunchService : ISessionLauncher
             // discovery held, one that was running unseen could appear first and be taken for it.
             if (HeldFor(plan) is { } held) { return new LaunchResult(LaunchOutcome.Busy, HeldReason(held)); }
 
+            if (!MacLaunchCompatibility.IsCurrent(plan.Executable, plan.Compatibility)) { return Refused("the agent executable changed after its launch flags were checked; try again"); }
             var directory = plan.Directory;
             string? worktree = null;
             if (plan.Isolated is { } isolated)
@@ -735,7 +750,7 @@ public sealed partial class LaunchService : ISessionLauncher
             var newId = fetched is not null ? Guid.NewGuid().ToString() : null;
             var sessionId = newId ?? plan.Resume?.Id ?? (plan.Launcher.ChoosesOwnSessionId ? "" : Guid.NewGuid().ToString());
             var args = Launchers.Arguments(plan.Launcher, sessionId, plan.Resume is not null || newId is not null, plan.Model, plan.Effort, plan.Context, plan.AllowAll,
-                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt);
+                Config.Agent(plan.Launcher.Id).ExtraArgs, plan.Profile, prompt, plan.Compatibility.CodexNoDaemon);
             var environment = new Dictionary<string, string?>
             {
                 [Launchers.SessionVariable] = sessionId.Length > 0 ? sessionId : "launched",
@@ -791,6 +806,7 @@ public sealed partial class LaunchService : ISessionLauncher
             var tuning = string.Join(" / ", new[] { plan.Model, plan.Effort, plan.Context, plan.AllowAll ? "allow all" : "" }.Where(x => x.Length > 0));
             log($"launch {Short(key)}: {(plan.Resume is null ? "new" : "resuming")} {plan.Launcher.Label} session in '{plan.Where}' ({directory}){(plan.Profile.Length > 0 ? $" profile '{plan.Profile}'" : "")}{(tuning.Length > 0 ? $" [{tuning}]" : "")}");
 
+            if (!MacLaunchCompatibility.IsCurrent(plan.Executable, plan.Compatibility)) { return Refused("the agent executable changed after its launch flags were checked; try again"); }
             Started started;
             try { started = starter.Start(spec); }
             catch (ManagedTmuxStartUnconfirmedException e)
