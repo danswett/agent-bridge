@@ -54,11 +54,16 @@ const TRUST = {
   answerable: true,
 };
 
-async function openDemo(page, query) {
+// Records the page's CSP violations, which afterEach expects none of.
+async function trackCsp(page) {
   await page.addInitScript(() => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
+}
+
+async function openDemo(page, query) {
+  await trackCsp(page);
   await page.goto(`?demo=1&static=1${query}`);
   await page.waitForSelector('html[data-demo-ready]');
 }
@@ -194,10 +199,7 @@ for (const layout of LAYOUTS) {
       });
 
       test('the sign-in page has no serious or critical violations', async ({ page }) => {
-        await page.addInitScript(() => {
-          window.__cspViolations = [];
-          document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
-        });
+        await trackCsp(page);
         await page.goto('./');
         await expect(page.locator('#signin')).toBeVisible();
         await check(page, 'sign-in');

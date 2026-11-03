@@ -64,10 +64,10 @@ function moving({ crossFade, animated }) {
     }
   }
   for (const a of document.getAnimations()) {
-    if (a.playState !== 'running') { continue; }
-    const t = a.effect?.getTiming();
-    const opacityOnly = a.transitionProperty === 'opacity' && typeof t?.duration === 'number' && t.duration <= crossFade;
-    if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty}`); }
+    if (a.playState !== 'running' || !a.effect?.target) { continue; }
+    const t = a.effect.getTiming();
+    const opacityOnly = a.transitionProperty === 'opacity' && typeof t.duration === 'number' && t.duration <= crossFade;
+    if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty ?? 'animation'}`); }
   }
   return { found: [...found], shown: animated.filter((sel) => document.querySelector(sel)) };
 }
