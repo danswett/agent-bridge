@@ -3,26 +3,36 @@
 # test selection (quality/README.md §4); once the selector lands, a CI check fails when a test
 # project, spec folder or workflow job is not listed here, so the catalog cannot silently rot.
 #
-# Fields:
-#   id         stable name, used by the selector, reports and issues
-#   kind       unit | component | process | integration | e2e | live | ui | perf | security | a11y | static | packaging
-#   ring       the earliest ring that runs it (0 inner loop, 1 PR, 2 main, 3 nightly/candidate, 4 release);
-#              every later ring runs it too
-#   select     affected: rings 0-1 run it only when a change reaches it; always: every run of its ring
-#   platforms  win-x64 | win-arm64 | linux-x64 | linux-arm64 | macos-arm64 | ios-sim | ios-device | browser
-#   runner     local | hosted | lab (Azure VMs, quality/README.md §6) | staging | device
-#   project    for .NET suites: the test project; the selector derives what reaches it from ProjectReferences
-#   triggers   for everything else: path globs that make it affected
-#   command    how to run it
-#   where      the workflow job that runs it today
-#   baseline   measured 2026-11-02 (win-x64, local, Release); any of: tests, skipped, seconds,
-#              files (for suites counted by spec file rather than test)
+# Fields (R: required on every suite; otherwise optional):
+#   id         R  stable name, used by the selector, reports and issues
+#   kind       R  unit | component | process | integration | e2e | live | ui | perf | security | a11y | static | packaging
+#   ring       R  the earliest ring that runs it (0 inner loop, 1 PR, 2 main, 3 nightly/candidate,
+#                 4 release); every later ring runs it too
+#   select     R  affected: rings 0-1 run it only when a change reaches it; always: every run of its ring
+#   platforms  R  win-x64 | win-arm64 | linux-x64 | linux-arm64 | macos-arm64 | ios-sim | ios-device | browser
+#   runner     R  local | hosted | lab (Azure VMs, quality/README.md §6) | staging | device
+#   status     R  exists | partial | planned
+#   project       for .NET suites: the directory of the test project, relative to the repository
+#                 root, holding exactly one .csproj (the selector fails if it holds none or more).
+#                 The selector derives what reaches it from ProjectReferences
+#   triggers      path globs that make it affected (for .NET suites, in addition to the graph)
+#   command       how to run it; required once status is exists. Prose ("see ci.yml ...") marks
+#                 a suite only CI can run
+#   where         the workflow job that runs it today; required once status is exists, unless a
+#                 person runs it (runner lab, staging or device, with a command saying how)
+#   baseline      measured 2026-11-02 (win-x64, local, Release); any of: tests, skipped, seconds,
+#                 files (for suites counted by spec file rather than test)
 #   security_sensitive
-#              optional, default false: a change reaching it adds the security suites and the
-#              security-review label (quality/README.md §2, AGENTS.md rule 5)
-#   status     exists | partial | planned
+#                 default false: a change reaching it adds the security suites and the
+#                 security-review label (quality/README.md §2, AGENTS.md rule 5)
 #
 # A suite with select: affected needs project or triggers (or both), or nothing can select it.
+#
+# Test categories (xUnit traits, #375): Category=Process starts real OS processes,
+# Category=Network binds real sockets, ports or pipes, and Category=HomeAssistantIntegration
+# needs a disposable HA. Untagged means in-process. A class is tagged whole only when every test
+# in it qualifies, and a test may carry both Process and Network. Ring 0 runs the .NET suites
+# with --filter "Category!=Process&Category!=Network&Category!=HomeAssistantIntegration".
 
 global_triggers:
   # A change here can affect any suite, so rings 0-1 run everything they hold.
@@ -35,8 +45,8 @@ global_triggers:
   - quality/**
 
 no_test_paths:
-  # Changes only here run nothing but the docs checks. docs/protocol/** is not here: the
-  # protocol specs are contracts, and reach protocol, pwa-unit and apple-core.
+  # Changes only here select no suite but docs-links (below). docs/protocol/** is not here:
+  # the protocol specs are contracts, and reach protocol, pwa-unit and apple-core.
   - '*.md'
   - docs/*.md
   - docs/design/**
@@ -102,8 +112,8 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Delivery.Tests
-    # The slowest project: InjectorIntegrationTests type into real consoles. Ring 0 runs it
-    # without them (Category!=Process) once they are tagged; ring 1 runs all of it.
+    # The slowest project, for its ~3,300 git processes and the injector typing into real
+    # consoles. All are tagged Process (#375): filtered, 152 tests in 2.9 s. Ring 1 runs all of it.
     command: dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release
     where: ci.yml product
     baseline: { tests: 208, seconds: 106 }
@@ -117,6 +127,7 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Tests
+    # The filter doesn't help here: two AgentReplyFlowTests wait 34 s and 17 s of real time (#390).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
     baseline: { tests: 605, seconds: 66 }
@@ -285,6 +296,19 @@ suites:
     # its transcript format then fails here, not on a real machine.
     platforms: [win-x64, linux-x64, macos-arm64]
     runner: lab
+    status: planned
+
+  # ---------------------------------------------------------------- docs
+  - id: docs-links
+    kind: static
+    ring: 1
+    select: affected
+    # The only suite a docs-only change selects: relative links and anchors in Markdown resolve,
+    # so a renamed doc or heading can't strand AGENTS.md, status.md or the catalog's references.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: ['**/*.md']
+    command: lychee --offline --include-fragments '**/*.md'
     status: planned
 
   # ---------------------------------------------------------------- PWA and design
