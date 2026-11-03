@@ -23,7 +23,9 @@ internal sealed class ClaudeSubagents
     // By file name: its stamp when read, and what it said (null: not a nested agent, or unreadable).
     readonly Dictionary<string, (DateTime Written, long Length, Record? Record)> _read = new(StringComparer.Ordinal);
 
-    // The nested agents recorded beside a transcript, parents first.
+    // The nested agents recorded beside a transcript, parents first. Past the most that are
+    // read, the earliest written: the same ones on every read, whatever order the folder lists
+    // them in, and an agent's parent (written before it) kept before it.
     public IReadOnlyList<Record> Read(string transcript)
     {
         var dir = Path.Combine(Path.GetDirectoryName(transcript) ?? "", Path.GetFileNameWithoutExtension(transcript), "subagents");
@@ -31,7 +33,8 @@ internal sealed class ClaudeSubagents
         try
         {
             if (!Directory.Exists(dir)) { return []; }
-            files = [.. Directory.EnumerateFiles(dir, Prefix + "*" + MetaSuffix).Take(MaxRecords)];
+            files = [.. new DirectoryInfo(dir).EnumerateFiles(Prefix + "*" + MetaSuffix)
+                .OrderBy(f => f.CreationTimeUtc).ThenBy(f => f.Name, StringComparer.Ordinal).Take(MaxRecords).Select(f => f.FullName)];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Known(); }
         var names = new HashSet<string>(StringComparer.Ordinal);
@@ -75,7 +78,8 @@ internal sealed class ClaudeSubagents
     }
 
     // When the agent started and what it was asked: its transcript's first entry, the prompt,
-    // stamped with its agentId. One too long to read whole is dated by the file instead.
+    // stamped with its agentId. One too long to read whole is dated by the file instead; one
+    // with no newline yet is read whole, and again later if it is not complete.
     static (DateTimeOffset? At, string? Prompt) Head(string path, string id)
     {
         byte[] bytes;
@@ -91,9 +95,12 @@ internal sealed class ClaudeSubagents
         var newline = Array.IndexOf(bytes, (byte)'\n');
         if (newline < 0)
         {
-            if (length <= MaxHeadBytes) { return (null, null); }
-            try { return (new DateTimeOffset(File.GetCreationTimeUtc(path), TimeSpan.Zero), null); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, null); }
+            if (length <= MaxHeadBytes) { newline = bytes.Length; }
+            else
+            {
+                try { return (new DateTimeOffset(File.GetCreationTimeUtc(path), TimeSpan.Zero), null); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, null); }
+            }
         }
         try
         {
@@ -115,6 +122,7 @@ internal sealed class ClaudeSubagents
         return bytes;
     }
 
-    // Claude's agent ids are short hex; anything else is not a name to build a path from.
+    // Claude's agent ids are short hex. Letters, digits, '-' and '_' are allowed; anything else
+    // is not a name to build a path from.
     static bool IsId(string id) => id.Length is > 0 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 }

@@ -90,6 +90,17 @@ public class ClaudeSubagentTests
             return Source.Get(Id)!;
         }
 
+        // A delegate's record and its transcript's first line, the newline not written yet.
+        public async Task<Session> FirstLineOnly(string agent)
+        {
+            var (meta, lines) = _agents["agent-" + agent];
+            Directory.CreateDirectory(_beside);
+            File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".meta.json"), meta);
+            File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".jsonl"), lines[0]);
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
         // Entries beyond the recording, in the session's own transcript.
         public async Task<Session> Append(params string[] lines)
         {
@@ -377,6 +388,46 @@ public class ClaudeSubagentTests
         var s = await r.Release(Nested, 10.3);
 
         Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_whose_transcript_has_one_line_with_no_newline_yet_has_its_start_and_prompt()
+    {
+        // Found in review: a first line was read only once a newline followed it.
+        await using var r = new Replay();
+        r.Held.Add("agent-" + Nested);
+        await r.Through(7);
+
+        var nested = Entry(await r.FirstLineOnly(Nested), Nested);
+
+        Assert.Equal(Fixture.T0.AddMilliseconds(6943), nested.StartedAt);
+        Assert.Equal("Show the latest three commits in this folder and reply with them.", nested.Task);
+    }
+
+    [Fact]
+    public void Past_the_most_records_read_the_earliest_written_are_read_whatever_order_the_folder_lists_them_in()
+    {
+        // Found in review: the first the folder listed were read, and a folder lists by name here.
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
+        Directory.CreateDirectory(beside);
+        var count = AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords + 4;
+        for (var i = 0; i < count; i++)
+        {
+            // Written later, named earlier.
+            var file = Path.Combine(beside, $"agent-a{count - i:x4}.meta.json");
+            File.WriteAllText(file, $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
+            // Where a file system keeps no creation time, it is read from these.
+            File.SetLastWriteTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i));
+            File.SetCreationTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i));
+        }
+
+        var read = new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript);
+
+        Assert.Equal(AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords, read.Count);
+        Assert.DoesNotContain(read, r => r.Id == $"a{4:x4}");
+        Assert.Contains(read, r => r.Id == $"a{count:x4}");
     }
 
     // A message to an agent from the main agent, at a time after Fixture.T0.
