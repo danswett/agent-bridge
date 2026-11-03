@@ -47,6 +47,9 @@ work only when the connected host offers them.
   state, recently ended sessions, Markdown, reasoning and recent tools. Delegate
   details show task/latest text, reasoning, tool durations, nesting and finished
   groups; a stop request prepares an ID-only reply without sending it.
+- The Mac workbench keeps the reply or question editor below the conversation. A
+  resizable right pane shows details and tools; selecting a delegate opens its
+  activity in that pane while the conversation and composer stay visible.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
   sends a fresh press. A delivered composer reply removes only its sent prefix
