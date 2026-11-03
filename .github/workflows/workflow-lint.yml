@@ -21,8 +21,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: workflow-lint-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request cancels its older run (as in ci.yml, #431).
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
