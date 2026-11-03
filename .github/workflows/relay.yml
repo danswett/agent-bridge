@@ -16,8 +16,11 @@ on:
       - 'infra/**'
       - 'nuget.config'
       - '.github/workflows/relay.yml'
+  # Not on a draft, which runs only ci.yml's fast ring (quality/README.md §2): ready for review
+  # runs it on the same head. Skipping infra skips build, and with it scan and staging.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/AgentBridge.Relay/**'
       - 'src/AgentBridge.Transport/**'
@@ -49,7 +52,8 @@ env:
 
 jobs:
   infra:
-    # The templates compile, on every change, before anything is deployed.
+    # The templates compile, on every change, before anything is deployed. Not on a draft (above).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

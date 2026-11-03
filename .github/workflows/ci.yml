@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
+    # marking it ready must run the PR gate on the same head without waiting for another push.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -33,23 +36,25 @@ jobs:
     # What this run tests (quality/README.md §4): the selector reads quality/catalog.yml and the
     # change, and each job below runs on a pull request only when a suite it runs is selected.
     # A push to main is ring 2, which selects everything, so every job runs before a release
-    # publishes. First, the catalog must be complete, or the selection could be silently wrong.
+    # publishes. A draft pull request is the fast ring: ring 0 on Linux, so a work in progress
+    # holds one or two runners, not a dozen; ready for review runs ring 1 on the same head.
+    # First, the catalog must be complete, or the selection could be silently wrong.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       product: ${{ steps.select.outputs.product }}
       ha-integration: ${{ steps.select.outputs.ha-integration }}
       spikes: ${{ steps.select.outputs.spikes }}
+      spikes-linux: ${{ steps.select.outputs.spikes-linux }}
       app: ${{ steps.select.outputs.app }}
-      s2-noise-interop: ${{ steps.select.outputs.s2-noise-interop }}
-      s4-relay: ${{ steps.select.outputs.s4-relay }}
-      design: ${{ steps.select.outputs.design }}
-      pwa: ${{ steps.select.outputs.pwa }}
-      docs-links: ${{ steps.select.outputs.docs-links }}
+      light: ${{ steps.select.outputs.light }}
+      pwa-ui: ${{ steps.select.outputs.pwa-ui }}
+      pwa-e2e: ${{ steps.select.outputs.pwa-e2e }}
       suites: ${{ steps.select.outputs.suites }}
       test-projects: ${{ steps.select.outputs.test-projects }}
       whole-solution: ${{ steps.select.outputs.whole-solution }}
       product-os: ${{ steps.select.outputs.product-os }}
+      test-filter: ${{ steps.select.outputs.test-filter }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -70,10 +75,16 @@ jobs:
         shell: pwsh
         env:
           EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
         # The jobs listed here are the ones gated below; plan.ps1 gives each a true or false output.
         run: |
-          $ring = if ($env:EVENT -eq 'pull_request') { 1 } else { 2 }
-          ./quality/plan.ps1 -Ring $ring -Base HEAD^1 -Head HEAD -CompareRing1:($ring -gt 1) -Jobs product, ha-integration, spikes, app, s2-noise-interop, s4-relay, design, pwa, docs-links
+          $jobs = 'product', 'ha-integration', 'spikes', 'spikes-linux', 'app', 'light', 'pwa-ui', 'pwa-e2e'
+          if ($env:EVENT -eq 'pull_request' -and $env:DRAFT -eq 'true') {
+            ./quality/plan.ps1 -FastRing -Base HEAD^1 -Head HEAD -Jobs $jobs
+          } else {
+            $ring = if ($env:EVENT -eq 'pull_request') { 1 } else { 2 }
+            ./quality/plan.ps1 -Ring $ring -Base HEAD^1 -Head HEAD -CompareRing1:($ring -gt 1) -Jobs $jobs
+          }
 
   product:
     # The product itself (src/, tests/), separate from the spikes. Windows and Linux,
@@ -95,6 +106,7 @@ jobs:
       SUITES: ${{ needs.plan.outputs.suites }}
       TEST_PROJECTS: ${{ needs.plan.outputs.test-projects }}
       WHOLE_SOLUTION: ${{ needs.plan.outputs.whole-solution }}
+      TEST_FILTER: ${{ needs.plan.outputs.test-filter }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -153,11 +165,14 @@ jobs:
       # dotnet-coverage follows every process the test hosts start (the host, hook and injector
       # run as real processes in several tests), which a per-project collector would miss, and
       # needs no package in the test projects. Coverage and the TRX timings are only reported
-      # (quality/README.md §5): nothing here fails the run but the tests themselves.
+      # (quality/README.md §5): nothing here fails the run but the tests themselves. TEST_FILTER is
+      # ring 0's in-process filter on a draft (the fast ring), and empty otherwise: every test runs.
       - name: dotnet test, with coverage and per-test times
         if: env.DOTNET_TARGET != ''
         shell: pwsh
-        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
+        run: |
+          $filter = if ($env:TEST_FILTER) { " --filter `"$env:TEST_FILTER`"" } else { '' }
+          dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx$filter"
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
@@ -650,15 +665,17 @@ jobs:
           subject-path: ${{ runner.temp }}/release/win-arm64/*
           sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
 
-  s2-noise-interop:
-    # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
-    # Node, Chromium and WebKit (Safari's engine), and live over a WebSocket.
+  spikes-linux:
+    # The spikes' Linux checks, on one runner since both install the same Playwright browsers
+    # (they were two jobs, s2-noise-interop and s4-relay, until #459):
+    #  - S2: the .NET and WebCrypto Noise implementations must keep agreeing byte for byte, in
+    #    Node, Chromium and WebKit (Safari's engine), and live over a WebSocket;
+    #  - S4: the relay's security and routing checks against a fake GitHub, then the PWA in
+    #    Chromium and WebKit through the same relay, then the container build.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.s2-noise-interop == 'true'
+    if: github.event_name != 'pull_request' || needs.plan.outputs.spikes-linux == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: spikes/s2-noise-interop
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -669,87 +686,81 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - run: dotnet build dotnet/S2.Noise.csproj -c Release --nologo
-      - run: dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
-      - name: Fresh vectors from .NET, replayed in Node
+      - name: S2 builds and checks its vectors
+        working-directory: spikes/s2-noise-interop
+        run: |
+          dotnet build dotnet/S2.Noise.csproj -c Release --nologo
+          dotnet dotnet/bin/Release/net10.0/s2-noise.dll check
+      - name: S2 fresh vectors from .NET, replayed in Node
+        working-directory: spikes/s2-noise-interop
         run: |
           dotnet dotnet/bin/Release/net10.0/s2-noise.dll vectors "$RUNNER_TEMP/vectors.json"
           cp "$RUNNER_TEMP/vectors.json" web/vectors.json
           node js/test-node.mjs
-      - run: npm ci
+      - name: S4 builds and checks the relay against a fake GitHub
+        working-directory: spikes/s4-relay
+        run: |
+          dotnet build src/S4.DevStack -c Release --nologo
+          dotnet build src/S4.Host -c Release --nologo
+          dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
+          node js/test-sw.mjs
+      - name: npm ci, for both
+        run: |
+          npm ci --prefix spikes/s2-noise-interop
+          npm ci --prefix spikes/s4-relay
+      - name: Which Playwright
+        id: playwright
+        working-directory: spikes/s4-relay
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
       # Playwright's browsers come from a cache only main writes, keyed by the Playwright version
       # npm ci installed (#459). The install below still runs every time: it fetches the browsers
       # on a miss and installs their system packages either way.
-      - name: Which Playwright
-        id: playwright
-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Playwright's browsers from main's cache
         id: browsers
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
-      - run: npx playwright install --with-deps chromium webkit
+      # In each spike, so a spike that moves to another Playwright still gets its own browsers;
+      # the second is quick while they agree.
+      - name: Playwright's browsers, for both
+        run: |
+          (cd spikes/s2-noise-interop && npx playwright install --with-deps chromium webkit)
+          (cd spikes/s4-relay && npx playwright install --with-deps chromium webkit)
       - name: Save Playwright's browsers to main's cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
-      - run: node js/test-browsers.mjs
-
-  s4-relay:
-    # The relay's security and routing checks against a fake GitHub, then the PWA in
-    # Chromium and WebKit through the same relay, then the container build.
-    needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.s4-relay == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - name: S2 in Chromium and WebKit
+        working-directory: spikes/s2-noise-interop
+        run: node js/test-browsers.mjs
+      - name: S4 the PWA through the relay
         working-directory: spikes/s4-relay
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
-        with:
-          dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22'
-      - run: dotnet build src/S4.DevStack -c Release --nologo
-      - run: dotnet build src/S4.Host -c Release --nologo
-      - run: dotnet src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll check
-      - run: node js/test-sw.mjs
-      - run: npm ci
-      - name: Which Playwright
-        id: playwright
-        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Playwright's browsers from main's cache
-        id: browsers
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-chromium-webkit
-      - run: npx playwright install --with-deps chromium webkit
-      - name: Save Playwright's browsers to main's cache
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ steps.browsers.outputs.cache-primary-key }}
-      - run: node js/test-pwa.mjs
-      - name: Container builds
+        run: node js/test-pwa.mjs
+      - name: S4 container builds
         working-directory: spikes
         run: docker build -f s4-relay/Dockerfile -t agent-bridge-relay-s4 .
 
-  design:
-    # The design language (design/README.md): every client's generated copy matches design/,
-    # so a token or SVG changed without regenerating fails here, and every theme meets the
-    # contrast rules in design/tokens.json.
+  light:
+    # The small Linux checks, on one runner instead of one each (#459): each step runs when its
+    # suite is selected, and every selected one runs even after another fails. On main, ring 2
+    # selects them all.
+    #  - design-gen, a11y-contrast: every client's generated copy matches design/, so a token or
+    #    SVG changed without regenerating fails here, and every theme meets the contrast rules in
+    #    design/tokens.json (design/README.md);
+    #  - pwa-unit: the PWA's unit tests in Node, then again for coverage, beside the Playwright
+    #    jobs rather than before them (#457);
+    #  - pwa-site-csp: the Pages build's CSP;
+    #  - docs-links: relative links and their #anchors in every Markdown file resolve.
+    # Not in plan's own runner: a failing check there would skip every job that needs the plan.
     needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.design == 'true'
+    if: github.event_name != 'pull_request' || needs.plan.outputs.light == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUITES: ${{ needs.plan.outputs.suites }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -758,33 +769,20 @@ jobs:
         with:
           node-version: '22'
       - name: Every generated file matches design/
+        if: ${{ !cancelled() && (contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node tools/design-gen/generate.mjs --check
       - name: Contrast, the SVG subset and the generated files
+        if: ${{ !cancelled() && (contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node --test "tools/design-gen/test/*.test.mjs"
-
-  pwa:
-    # The product PWA: unit tests in Node, then Chromium and WebKit against the published
-    # build (with its CSP) in demo mode and end to end through the dev stack's relay.
-    needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.pwa == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      # Plain Node: the unit tests and build-site.mjs import nothing from node_modules.
+      - name: PWA unit tests
+        id: pwa-unit
+        if: ${{ !cancelled() && contains(fromJSON(env.SUITES), 'pwa-unit') }}
         working-directory: pwa
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
-        with:
-          dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22'
-      - run: dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
-      - run: npm ci
-      - run: node --test "test/unit/*.test.mjs"
-      - name: Unit test coverage
+        run: node --test "test/unit/*.test.mjs"
+      - name: PWA unit test coverage
+        if: ${{ !cancelled() && steps.pwa-unit.outcome == 'success' }}
+        working-directory: pwa
         # A second run, since V8's precise coverage makes code several times slower: markdown's
         # 1.5 s budget for pathological input took 2.0 s covered on the runner (0.7 s plain, 2.3 s
         # covered, on a dev box), so that one timing check is left to the run above, which counts.
@@ -815,13 +813,15 @@ jobs:
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: success() || failure()
+        if: ${{ !cancelled() && steps.pwa-unit.outcome != 'skipped' }}
         with:
           name: pwa-coverage
           path: ${{ runner.temp }}/pwa-coverage
           if-no-files-found: ignore
           retention-days: 14
       - name: The Pages build accepts the live relay and its blob store, and refuses bad ones
+        if: ${{ !cancelled() && contains(fromJSON(env.SUITES), 'pwa-site-csp') }}
+        working-directory: pwa
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
           grep -q "connect-src 'self' https://relay.example wss://relay.example;" "$RUNNER_TEMP/site/index.html"
@@ -838,6 +838,122 @@ jobs:
             echo "::error::build-site.mjs accepted a blob origin that is not an Azure blob store"; exit 1
           fi
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
+      # Relative links and their anchors (quality/catalog.yml, docs-links), so renaming a doc or a
+      # heading can't strand the links to it. Offline: web links are not fetched, so a site being
+      # down never fails a run. Advisory for now: a broken link is a warning on the run.
+      - name: Links and anchors in Markdown resolve
+        id: lychee
+        if: ${{ !cancelled() && contains(fromJSON(env.SUITES), 'docs-links') }}
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: --offline --include-fragments --no-progress '**/*.md'
+          fail: false
+      - name: Broken links are warnings, for now
+        if: ${{ !cancelled() && steps.lychee.outcome == 'success' && steps.lychee.outputs.exit_code != '0' }}
+        env:
+          EXIT_CODE: ${{ steps.lychee.outputs.exit_code }}
+        run: echo "::warning title=docs-links::lychee found broken links or anchors (exit $EXIT_CODE); the job summary lists them."
+
+  pwa-ui:
+    # The product PWA in Chromium and WebKit against the published build (with its CSP), in demo
+    # mode. Split over runners (#457): one run of every spec took 11 to 16 minutes on one, and set
+    # the wall time of every PWA change. WebKit takes about twice Chromium's time, so it has three
+    # shards. Playwright's --shard splits what --project selects, so together the four run every
+    # spec in both browsers. --fully-parallel lets a shard split by test rather than by file: by
+    # file, the first WebKit shard got axe, delegates and answer, and ran 5 minutes to the others'
+    # 2 (no spec shares state between its tests; each has its own page). Two workers, as before: a
+    # third made WebKit slower on these 4-CPU runners, not faster. test/e2e is pwa-e2e's
+    # (PWA_SKIP_E2E): left out here, not left to skip itself for want of the dev stack.
+    name: pwa-ui (${{ matrix.name }})
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.pwa-ui == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chromium
+            project: chromium
+            shard: 1/1
+          - name: webkit 1/3
+            project: webkit
+            shard: 1/3
+          - name: webkit 2/3
+            project: webkit
+            shard: 2/3
+          - name: webkit 3/3
+            project: webkit
+            shard: 3/3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: pwa
+    env:
+      PWA_SKIP_E2E: '1'
+      PROJECT: ${{ matrix.project }}
+      SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Which Playwright
+        id: playwright
+        run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
+      # Playwright's browser from main's cache, as in spikes-linux, keyed by browser so each leg
+      # restores only the one it runs.
+      - name: Playwright's browsers from main's cache
+        id: browsers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}-${{ matrix.project }}
+      - run: npx playwright install --with-deps "$PROJECT"
+      - name: Save Playwright's browsers to main's cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.browsers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.browsers.outputs.cache-primary-key }}
+      - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: pwa-test-results-${{ matrix.project }}-${{ strategy.job-index }}
+          path: pwa/test-results
+          retention-days: 7
+
+  pwa-e2e:
+    # The PWA end to end through the spike dev stack's relay, in Chromium and WebKit
+    # (test/e2e/e2e.spec.mjs). The only job that needs the dev stack, so the only one that builds
+    # it (#457): built once, here, rather than in every shard or passed round as an artifact.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.pwa-e2e == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: pwa
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Build the dev stack
+        # The specs skip themselves without it, and pass, so its absence must fail here instead.
+        run: |
+          dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
+          test -f ../spikes/s4-relay/src/S4.DevStack/bin/Release/net10.0/s4-devstack.dll || { echo "::error::the dev stack built no s4-devstack.dll, so the e2e specs would skip"; exit 1; }
+      - run: npm ci
       - name: Which Playwright
         id: playwright
         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
@@ -854,39 +970,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
-      - run: npx playwright test
+      - run: npx playwright test test/e2e
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
-          name: pwa-test-results
+          name: pwa-test-results-e2e
           path: pwa/test-results
           retention-days: 7
-
-  docs-links:
-    # Relative links and their #anchors in every Markdown file resolve (quality/catalog.yml,
-    # docs-links), so renaming a doc or a heading can't strand the links to it. Offline: web links
-    # are not fetched, so a site being down never fails a run. Advisory for now: a broken link is
-    # a warning on the run, and the job stays green.
-    needs: plan
-    if: github.event_name != 'pull_request' || needs.plan.outputs.docs-links == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - name: Links and anchors in Markdown resolve
-        id: lychee
-        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
-        with:
-          lycheeVersion: v0.24.2
-          args: --offline --include-fragments --no-progress '**/*.md'
-          fail: false
-      - name: Broken links are warnings, for now
-        if: steps.lychee.outputs.exit_code != '0'
-        env:
-          EXIT_CODE: ${{ steps.lychee.outputs.exit_code }}
-        run: echo "::warning title=docs-links::lychee found broken links or anchors (exit $EXIT_CODE); the job summary lists them."
 
   quality-gate:
     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
@@ -895,7 +985,12 @@ jobs:
     # fails every other job is skipped. publish-gate, publish, attest and relay-image-sarif are
     # not: they deliver rather than check, and run only on main, where a superseded publish is
     # cancelled by design.
-    needs: [plan, product, ha-integration, spikes, app, s2-noise-interop, s4-relay, design, pwa, docs-links]
+    # A draft's gate has another name, so the required check, quality-gate, only ever comes from
+    # ring 1 or 2. Ready for review reruns this workflow on the same head, and GitHub creates the
+    # new gate's check only once every job it needs is done; under the same name, the draft's
+    # green gate would stand for the whole head until then, and a merge could go through on it.
+    name: ${{ github.event.pull_request.draft && 'quality-gate (fast ring)' || 'quality-gate' }}
+    needs: [plan, product, ha-integration, spikes, spikes-linux, app, light, pwa-ui, pwa-e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -910,3 +1005,10 @@ jobs:
             echo "::error title=quality-gate::failed or cancelled: $bad"
             exit 1
           fi
+      # A green draft is a green fast ring, not a green PR gate; its check is named apart (above).
+      - name: A draft's result is partial
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft
+        run: |
+          msg="Draft: only the fast ring ran (ring 0 on Linux, in-process tests). Ready for review runs ring 1, everything it selects."
+          echo "::notice title=quality-gate (partial)::$msg"
+          echo "### quality-gate: partial. $msg" >> "$GITHUB_STEP_SUMMARY"

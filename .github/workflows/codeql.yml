@@ -14,13 +14,15 @@ name: CodeQL
 # pull request's "CodeQL" check reports that configuration as not found on the pull request
 # ("Code scanning cannot determine the alerts introduced by this pull request, because ... was
 # not found"): it never claims that language has no alerts. Nothing on main is closed either,
-# because main's own runs still upload every language.
+# because main's own runs still upload every language. A draft runs nothing; ready for review
+# runs it on the same head (ci.yml's fast ring, quality/README.md §2).
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     # Mondays 13:41 UTC: early morning Pacific, off the hour.
     - cron: '41 13 * * 1'
@@ -35,6 +37,8 @@ concurrency:
 
 jobs:
   languages:
+    # Skipped on a draft, and analyze with it.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

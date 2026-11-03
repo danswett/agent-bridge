@@ -23,8 +23,11 @@ on:
   # A change to the guard or the fixtures is checked against the commit the fixtures are pinned
   # at, not main: that proves the committed fixtures are exactly what the exporter records there,
   # and exercises the guard itself, without opening issues about upstream moving meanwhile.
+  # Not on a draft, which runs only ci.yml's fast ring (quality/README.md §2): ready for review
+  # runs it on the same head.
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - tools/ha-contract/**
       - tests/AgentBridge.HomeAssistant.Tests/Fixtures/**
@@ -42,7 +45,8 @@ concurrency:
 
 jobs:
   record:
-    # Windows, where the exporter is developed and run by hand.
+    # Windows, where the exporter is developed and run by hand. Not on a draft (above).
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     permissions:
       contents: read

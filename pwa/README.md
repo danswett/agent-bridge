@@ -444,7 +444,9 @@ Locally, if the public registry is blocked:
 Every Playwright test serves the output of `tools/build-site.mjs` under
 `/agent-bridge/app/`, so the published CSP is in force and a violation fails the test.
 `PWA_TEST_PORT` (8790) and `PWA_E2E_PORT` (8800) move the servers' ports, for a machine
-running another checkout's tests at the same time.
+running another checkout's tests at the same time. CI splits the run over several jobs
+(quality/README.md §4.7): Chromium, three WebKit shards (`--shard`), and `test/e2e` alone in
+the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
   kind, defaults, required fields, the byte limit, every outcome, a resend after a lost

@@ -5,11 +5,13 @@ name: IaC scan
 # added (#441 lists them, each with its fix or the reason to keep it), so findings are warnings on
 # the run and the job stays green. Only the scan itself failing, so that nothing was checked,
 # fails it. Once those are cleared or suppressed with a reason in infra/ps-rule.yaml, it can fail
-# on a finding as workflow-lint's actionlint does.
+# on a finding as workflow-lint's actionlint does. Not on a draft, which runs only ci.yml's fast
+# ring (quality/README.md §2): ready for review runs it on the same head.
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'infra/**'
       - '.github/workflows/iac-scan.yml'
@@ -22,6 +24,7 @@ concurrency:
 
 jobs:
   psrule:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
