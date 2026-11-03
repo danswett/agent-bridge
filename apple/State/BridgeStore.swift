@@ -706,7 +706,7 @@ final class BridgeStore {
         onOpenSession?()
     }
 
-    private func registerSessions(_ sessions: [BridgeSession], host: HostStore) {
+    func registerSessions(_ sessions: [BridgeSession], host: HostStore) {
         let machineID = host.hello?["machine"]?["id"]?.string ?? host.id
         let orderMembership = Set(manualOrder)
         let newSessions = sessions.filter { !orderMembership.contains(machineID + ":" + $0.id) }.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
@@ -721,7 +721,6 @@ final class BridgeStore {
         }
         let kept = Set(manualOrder)
         readVersions = readVersions.filter { kept.contains($0.key) }
-        pinned.formIntersection(kept)
         UserDefaults.standard.set(manualOrder, forKey: preferenceScope + ".order")
         UserDefaults.standard.set(readVersions, forKey: preferenceScope + ".read")
         UserDefaults.standard.set(Array(pinned), forKey: preferenceScope + ".pins")
