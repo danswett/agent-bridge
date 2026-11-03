@@ -12,13 +12,16 @@
     <Window.SystemBackdrop>
         <MicaBackdrop />
     </Window.SystemBackdrop>
-    <Grid x:Name="Root" AutomationProperties.AutomationId="Shell">
+    <Grid x:Name="Root" AutomationProperties.AutomationId="Shell" KeyboardAcceleratorPlacementMode="Hidden">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <Grid.KeyboardAccelerators>
-            <!-- Ctrl+K focuses search (ui.md §9). -->
+            <!-- Ctrl+K focuses search (ui.md §9). Hidden placement (#256): WinUI otherwise gives the
+                 accelerator's element a "Ctrl+K" tooltip, and this one is the whole window's, so it
+                 opened on keyboard focus anywhere and as the pointer moved in or between controls.
+                 The search box's own tooltip names the shortcut. -->
             <KeyboardAccelerator Modifiers="Control" Key="K" Invoked="OnFocusSearch" />
         </Grid.KeyboardAccelerators>
 

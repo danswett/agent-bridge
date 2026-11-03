@@ -661,7 +661,10 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
   instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
-  menu key opens a row's menu, and Ctrl/⌘+K focuses search.
+  menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
+  search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
+  else: no shortcut hint opens because the window was activated, a click landed or Ctrl+K was
+  pressed (#256).
 
 ## 10. Mock-up index
 

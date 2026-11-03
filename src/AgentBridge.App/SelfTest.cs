@@ -560,6 +560,7 @@ static partial class SelfTest
         check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
         check(window.Search.XamlRoot is not null && window.Search.ActualWidth > 100 && FindAncestor<TitleBar>(window.Search) == bar, $"puts the search box in the title bar ({window.Search.ActualWidth:0} px wide)");
         check(window.RootElement is Grid { KeyboardAccelerators: var keys } && keys.Any(k => k.Key == Windows.System.VirtualKey.K && k.Modifiers == Windows.System.VirtualKeyModifiers.Control), "focuses search with Ctrl+K");
+        await CheckNoShortcutTooltip(window, check);
         // #240: with any other theme, Windows App SDK repaints the caption buttons from a thread-pool
         // thread on every colour change, and a high-contrast switch crashed the app in dcomp.dll.
         check(window.AppWindow.TitleBar.PreferredTheme == Microsoft.UI.Windowing.TitleBarTheme.Legacy,
@@ -613,6 +614,38 @@ static partial class SelfTest
         check(window.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { PreferredMinimumWidth: var mw, PreferredMinimumHeight: var mh } && mw == w && mh == h,
             $"lets the window be resized down to 360×600 and no smaller ({w}×{h} px at {scale:0.##}×)");
         check(main.Machines.Count > 0, "keeps the machine picker's choices");
+    }
+
+    // #256: no tooltip comes unasked. Ctrl+K was a KeyboardAccelerator on the root grid, and WinUI
+    // gives an accelerator's element a "Ctrl+K" tooltip of its own; the root's opened for every
+    // control without one, on keyboard focus anywhere in the window and as the pointer came in.
+    // Ctrl+K itself put focus in search as the keyboard, which opened the box's tooltip under it.
+    static async Task CheckNoShortcutTooltip(MainWindow window, Action<bool, string> check)
+    {
+        var xamlRoot = window.RootElement.XamlRoot;
+        List<string> Open() => VisualTreeHelper.GetOpenPopupsForXamlRoot(xamlRoot).Select(p => p.Child).OfType<ToolTip>()
+            .Select(t => t.Content switch { TextBlock b => b.Text, var c => c?.ToString() ?? "" }).ToList();
+        static string Said(List<string> tips) => tips.Count == 0 ? "none open" : string.Join(", ", tips.Select(t => $"\"{t}\""));
+        // A row has no tooltip of its own, as most controls don't.
+        var item = Rows(window).Select(r => Above<ListViewItem>(r, _ => true)).FirstOrDefault(i => i is not null);
+        var focused = item?.Focus(FocusState.Keyboard) == true;
+        await Task.Delay(1500);
+        var afterFocus = Open();
+        check(focused && !afterFocus.Any(t => t.Contains("Ctrl+K", StringComparison.Ordinal)), $"opens no Ctrl+K tooltip when a control in the window takes keyboard focus ({Said(afterFocus)})");
+
+        var searched = window.FocusSearch();
+        await Task.Delay(1500);
+        var afterSearch = Open();
+        var inSearch = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(xamlRoot) is DependencyObject f && Above<AutoSuggestBox>(f, b => b == window.Search) is not null;
+        check(searched && inSearch && afterSearch.Count == 0, $"puts focus in search for Ctrl+K without opening a tooltip ({(inSearch ? "in search" : "not in search")}, {Said(afterSearch)})");
+        // The hint stays where it belongs: on the search box, for a person who tabs to it.
+        item?.Focus(FocusState.Programmatic);
+        await Task.Delay(300);
+        window.Search.Focus(FocusState.Keyboard);
+        var hinted = await Until(() => Open().Any(t => t.Contains("Ctrl+K", StringComparison.Ordinal)), TimeSpan.FromSeconds(3));
+        check(hinted, $"names Ctrl+K in the search box's tooltip when Tab reaches it ({Said(Open())})");
+        window.Search.Text = "";
+        item?.Focus(FocusState.Programmatic);
     }
 
     // The Machines page (#180, #213): a row per machine, its icon and status on line 1 with its

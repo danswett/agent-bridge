@@ -173,8 +173,13 @@ public sealed partial class MainWindow : Window
     void OnFocusSearch(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        SearchBox.Focus(FocusState.Keyboard);
+        FocusSearch();
     }
+
+    // Programmatic, not Keyboard (#256): WinUI opens a control's tooltip when it takes keyboard
+    // focus, so Ctrl+K opened "Search sessions (Ctrl+K)" under the box, naming the keys just
+    // pressed. The box still shows it has focus and takes typing; Tab into it still shows the hint.
+    internal bool FocusSearch() => SearchBox.Focus(FocusState.Programmatic);
 
     void OnSearchChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
     {
