@@ -34,10 +34,11 @@ permissions:
   contents: read
 
 # Every run that may write the issue shares one group, so two can never both find no issue open
-# and both open one. Pull requests, which never write it, queue only behind themselves.
+# and both open one: never cancelled, a newer one waits. A pull request never writes it, so it has
+# a group of its own, and a newer push to it cancels the older run, whose result nobody reads.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ha-contract-drift-pr-{0}', github.ref) || 'ha-contract-drift' }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('ha-contract-drift-pr-{0}', github.event.pull_request.number) || 'ha-contract-drift' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   record:

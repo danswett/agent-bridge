@@ -9,6 +9,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels that pull request's older run: only the latest head's
+# result counts, and a superseded run only holds runners other work is queued for. Anything else,
+# a push to main above all (it publishes), is grouped by its own run id, so it is never grouped
+# with another run and never cancelled, exactly as before.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # The app's version. The run number only grows, for pull requests and main alike, and a re-run
   # keeps it, so every push to main packs a version above the last one published. Renaming this
