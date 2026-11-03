@@ -246,6 +246,23 @@ public sealed class MarkdownTests
         Assert.Equal(drawn, CopyOf($"```\n{code}\n```"));
     }
 
+    // A backtracking trim of trailing blank lines takes seconds on long runs of them, a stall on the
+    // UI thread; a linear one takes well under a millisecond.
+    [Fact]
+    public void A_block_with_long_runs_of_blank_lines_is_trimmed_quickly()
+    {
+        var inside = "x" + new string('\n', 50000) + "y";
+        var trailing = "echo\n" + string.Concat(Enumerable.Repeat(" \n", 50000));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var kept = new CodeCopy(new MdCode(inside, null), _ => true).Text;
+        var trimmed = new CodeCopy(new MdCode(trailing, null), _ => true).Text;
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
+        Assert.Equal(inside, kept);
+        Assert.Equal("echo", trimmed);
+    }
+
     [Fact]
     public void A_pipe_in_prose_is_drawn_where_it_is()
     {

