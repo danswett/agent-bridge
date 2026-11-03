@@ -30,7 +30,11 @@ const WOFF2_TAGS = ['cmap', 'head', 'hhea', 'hmtx', 'maxp', 'name', 'OS/2', 'pos
 function fontTables(bytes) {
   const b = Buffer.from(bytes);
   if (b.toString('latin1', 0, 4) !== 'wOF2') {
-    const at = (tag) => { for (let i = 0; i < b.readUInt16BE(4); i++) { if (b.toString('latin1', 12 + i * 16, 16 + i * 16) === tag) return b.subarray(b.readUInt32BE(20 + i * 16)); } };
+    const at = (tag) => {
+      for (let i = 0, r = 12; i < b.readUInt16BE(4); i++, r += 16) {
+        if (b.toString('latin1', r, r + 4) === tag) { const offset = b.readUInt32BE(r + 8); return b.subarray(offset, offset + b.readUInt32BE(r + 12)); }
+      }
+    };
     return { os2: at('OS/2'), hhea: at('hhea') };
   }
   let p = 48;
@@ -46,7 +50,7 @@ function fontTables(bytes) {
   }
   const data = brotliDecompressSync(b.subarray(p, p + b.readUInt32BE(20)));
   const tables = {};
-  for (let at = 0, i = 0; i < directory.length; at += directory[i++].length) { tables[directory[i].tag] = data.subarray(at); }
+  for (let at = 0, i = 0; i < directory.length; at += directory[i++].length) { tables[directory[i].tag] = data.subarray(at, at + directory[i].length); }
   return { os2: tables['OS/2'], hhea: tables.hhea };
 }
 const advances = (bytes) => { const { os2, hhea } = fontTables(bytes); return { average: os2.readInt16BE(2), widest: hhea.readUInt16BE(10) }; };

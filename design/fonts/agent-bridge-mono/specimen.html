@@ -1,5 +1,7 @@
 <!doctype html>
 <!-- The source of specimen.png: open it beside woff2/ and capture the whole page, 1000 CSS px wide, at 2× (see README.md). -->
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <title>Agent Bridge Mono</title>
 <style>
@@ -25,6 +27,7 @@
   .symbols { font-size: 10px; }
   b { font-weight: 600; }
 </style>
+</head>
 <body>
   <section class="panel dark"></section>
   <section class="panel light"></section>
@@ -52,3 +55,4 @@ if (Json.Str(e, "agentId") is { Length: &gt; 0 } id)
     for (const panel of document.querySelectorAll('.panel')) { panel.append(document.getElementById('specimen').content.cloneNode(true)); }
   </script>
 </body>
+</html>
