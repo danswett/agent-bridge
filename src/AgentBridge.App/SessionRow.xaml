@@ -101,7 +101,7 @@
             FontWeight="{x:Bind local:SessionRow.Weight(Card.Unread), Mode=OneWay}"
             Text="{x:Bind Card.Title, Mode=OneWay}" />
         <!-- The same line height as the title, so the two share line 1's baseline. -->
-        <Grid Grid.Row="1" Grid.Column="2" Height="20">
+        <Grid Grid.Row="1" Grid.Column="2" Height="20" VerticalAlignment="Top">
             <!-- Fades in, and out where it was as a copy that is only drawn (ui.md §5.3, Activity dot), both at
                  the trailing edge, which stays put as the age takes the cell. -->
             <Ellipse
