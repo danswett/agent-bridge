@@ -602,7 +602,8 @@ public sealed class SettingsTests : IAsyncLifetime
 
         try
         {
-            settings.TrustDevices.Single(d => d.Id == b).Approved = true;
+            // A click runs on the UI thread, not concurrently with a posted redraw.
+            ui.Post(() => settings.TrustDevices.Single(d => d.Id == b).Approved = true);
             await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the phone's approval sent");
             // This app approved at the machine's terminal meanwhile: its box says so at once.
             host.Status = host.Status with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [a]) };

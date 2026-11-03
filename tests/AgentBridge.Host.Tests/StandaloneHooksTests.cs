@@ -216,6 +216,18 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
+    public async Task Codex_marketplace_errors_identify_the_target_without_echoing_private_CLI_output()
+    {
+        codex.FailMarketplace = true;
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
+        Assert.Contains($"plugin marketplace add {codex.Root}", error.Message);
+        Assert.DoesNotContain("private-cli-output", error.Message);
+        Assert.Contains("hook operation is incomplete", error.Message);
+    }
+
+    [Fact]
     public async Task A_foreign_Codex_marketplace_is_not_claimed()
     {
         Directory.CreateDirectory(Homes.Codex);
@@ -296,6 +308,7 @@ public sealed class StandaloneHooksTests : IDisposable
         public string Root = "";
         public bool Present;
         public bool FailPlugin;
+        public bool FailMarketplace;
         public readonly List<string[]> Calls = [];
         public Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
         {
@@ -307,7 +320,11 @@ public sealed class StandaloneHooksTests : IDisposable
                 return Task.FromResult(new CommandResult(true, false, 0,
                     new JsonObject { ["marketplaces"] = Present ? new JsonArray(entry) : new JsonArray() }.ToJsonString()));
             }
-            if (arguments[1] == "marketplace") { Present = arguments[2] == "add"; }
+            if (arguments[1] == "marketplace")
+            {
+                if (FailMarketplace) { return Task.FromResult(new CommandResult(true, false, 1, "private-cli-output")); }
+                Present = arguments[2] == "add";
+            }
             return Task.FromResult(new CommandResult(true, false, FailPlugin && arguments[1] == "add" ? 1 : 0, ""));
         }
     }

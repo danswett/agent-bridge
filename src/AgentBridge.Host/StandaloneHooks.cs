@@ -299,7 +299,7 @@ public sealed class StandaloneHooks(
         var result = await codex.RunAsync(executable, args, TimeSpan.FromSeconds(30), ct);
         if (!result.Ran || result.TimedOut || result.ExitCode != 0)
         {
-            throw new InvalidOperationException($"Codex {string.Join(' ', args.Take(3))} failed ({(result.TimedOut ? "timed out" : $"exit {result.ExitCode}")}); the hook operation is incomplete; fix the Codex installation and retry");
+            throw new InvalidOperationException($"Codex {string.Join(' ', args)} failed ({(result.TimedOut ? "timed out" : $"exit {result.ExitCode}")}); the hook operation is incomplete; fix the Codex installation and retry");
         }
         return result.Output;
     }
