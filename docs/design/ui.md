@@ -642,11 +642,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   harder to read, so that what is read is what runs. **A block says what its escapes stand for,**
   beside Copy: "Contains hidden characters" when it holds any, and "Contains right-to-left text"
   when it holds right-to-left letters, both if both. An escape can be read past while its
-  character still acts: PowerShell ends a `#` comment at a bare CR, so `# just a note\u000D Write-Output RAN`
-  drawn on one line still reads as a comment, and runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
-  line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
-  offers no answer (§6.1): an approval is approved on its card, below. The Windows app does
-  this since #296, and the PWA since #429 (#415).
+  character still acts: PowerShell ends a `#` comment at a bare CR, so
+  `# just a note\u000D Write-Output RAN` drawn on one line still reads as a comment, and runs.
+  **Copy takes exactly what is drawn,** escapes included, every space, tab and line break, never
+  the lines it wraps into, and not the whitespace-only lines a block may end with (pasted, they
+  would run the last line; #429). Needs you offers no answer (§6.1): an approval is approved on
+  its card, below. The Windows app does this since #296, and the PWA since #429 (#415).
 - **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
   markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
   left to right with its line breaks kept, and escaped as every code block is (hidden characters,

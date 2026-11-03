@@ -230,6 +230,22 @@ public sealed class MarkdownTests
         Assert.False(new CodeCopy(Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval("Allow shell?\r\n\r\n```\r\ngit status\r\n```"))), _ => true).Hidden);
     }
 
+    [Theory]
+    // A trailing line of spaces or tabs pasted after the command ends its line and runs it (#429).
+    [InlineData("echo safe\n    ", "echo safe")]
+    [InlineData("echo safe\n\t\n  \n", "echo safe")]
+    // The last line's own trailing space stays; a no-break space alone on a line goes.
+    [InlineData("echo safe \n\u00a0", "echo safe ")]
+    // An all-whitespace block keeps only its first line, which has no line break to run.
+    [InlineData("  \n\t\n ", "  ")]
+    public void A_block_ending_in_whitespace_only_lines_draws_and_copies_without_them(string code, string drawn)
+    {
+        var copy = new CodeCopy(new MdCode(code, null), _ => true);
+
+        Assert.Equal(drawn, copy.Text);
+        Assert.Equal(drawn, CopyOf($"```\n{code}\n```"));
+    }
+
     [Fact]
     public void A_pipe_in_prose_is_drawn_where_it_is()
     {
