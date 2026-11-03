@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+#Requires -Version 7.4
 <#
 .SYNOPSIS
   Ring 0, the inner loop: run the suites a change reaches, on this machine (quality/README.md §2, §4).
@@ -110,7 +110,8 @@ foreach ($s in $selection.suites) {
     Push-Location $root
     try {
         # A child shell, so a "cd" in the command stays there, and so a failing program in
-        # "a; b" fails the suite rather than being masked by b's success.
+        # "a; b" fails the suite rather than being masked by b's success. That preference needs
+        # pwsh 7.4, hence the #Requires.
         pwsh -NoProfile -NonInteractive -Command "`$ErrorActionPreference = 'Stop'; `$PSNativeCommandUseErrorActionPreference = `$true; $command" | Out-Host
         $exit = $LASTEXITCODE
     }
