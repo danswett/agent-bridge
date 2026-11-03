@@ -247,4 +247,14 @@ public class SelectorTests
         Assert.Equal(["protocol"], ci.GetProperty("product").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal(["ha-integration"], ci.GetProperty("ha-integration").EnumerateArray().Select(e => e.GetString()));
     }
+
+    [Fact]
+    public void The_json_gives_ring_zero_its_in_process_test_filter_and_ring_one_none()
+    {
+        using var ring0 = JsonDocument.Parse(Program.ToJson(Fixture.Selector().Select(["src/HomeAssistant/Mqtt.cs"], ring: 0), "test"));
+        using var ring1 = JsonDocument.Parse(Program.ToJson(Fixture.Selector().Select(["src/HomeAssistant/Mqtt.cs"], ring: 1), "test"));
+
+        Assert.Equal("Category!=Process&Category!=Network&Category!=HomeAssistantIntegration", ring0.RootElement.GetProperty("testFilter").GetString());
+        Assert.Equal(JsonValueKind.Null, ring1.RootElement.GetProperty("testFilter").ValueKind);
+    }
 }

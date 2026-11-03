@@ -145,10 +145,10 @@ suites:
     # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
     # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
     triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**]
-    # The filter doesn't help here: MigrationTests bounds the suite (#390 follow-up).
+    # Bounded by the MigrationTests and LaunchFlow classes, each split for parallelism (#496).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
-    baseline: { tests: 609, seconds: 55 }
+    baseline: { tests: 609, seconds: 30 }
     status: exists
 
   - id: hooks
@@ -170,10 +170,11 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.HomeAssistant.Tests
-    # AuthBackoffTests bounds the suite.
+    # The AuthBackoff classes bound the suite: AuthBackoffTests, AuthBackoffRecordTests,
+    # AuthBackoffBanTests and AuthBackoffCallerTests (#496).
     command: dotnet test tests/AgentBridge.HomeAssistant.Tests -c Release --filter "Category!=HomeAssistantIntegration"
     where: ci.yml product
-    baseline: { tests: 520, skipped: 15, seconds: 69 }
+    baseline: { tests: 520, skipped: 15, seconds: 24 }
     status: exists
 
   - id: app-core
@@ -185,7 +186,7 @@ suites:
     project: tests/AgentBridge.App.Tests
     command: dotnet test tests/AgentBridge.App.Tests -c Release
     where: ci.yml product
-    baseline: { tests: 514, seconds: 30 }
+    baseline: { tests: 515, seconds: 30 }
     status: exists
 
   - id: rehearsal-tool
@@ -390,7 +391,7 @@ suites:
     runner: hosted
     triggers: ['**/*.md']
     command: lychee --offline --include-fragments --no-progress '**/*.md'
-    where: ci.yml docs-links
+    where: ci.yml light
     status: exists
 
   # ---------------------------------------------------------------- PWA and design
@@ -407,7 +408,7 @@ suites:
     # and ui.md's motion section. So all of pwa/ and the app; the job takes under a minute.
     triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, build/pack-app.ps1, docs/design/ui.md]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
-    where: ci.yml design
+    where: ci.yml light
     status: exists
 
   - id: pwa-unit
@@ -419,9 +420,10 @@ suites:
     triggers: [pwa/**, docs/protocol/**]
     # CI runs it twice: as below, then with Node's coverage for the pwa-coverage artifact (#363).
     # The coverage run skips only the markdown pathological-input timing test, which coverage
-    # slows past its limit; the first run still enforces it.
+    # slows past its limit; the first run still enforces it. Both run in light, beside the
+    # Playwright jobs rather than before them (#457).
     command: cd pwa && node --test "test/unit/*.test.mjs"
-    where: ci.yml pwa
+    where: ci.yml light
     baseline: { files: 27 }
     status: exists
 
@@ -433,8 +435,10 @@ suites:
     runner: hosted
     triggers: [pwa/**, design/**]
     # The e2e specs, which this runs too, skip themselves (and pass) without the dev stack built.
+    # CI splits it (#457): pwa-ui runs Chromium in one job and WebKit in three shards, leaving
+    # test/e2e out (PWA_SKIP_E2E) for pwa-e2e, the one job that builds the dev stack.
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
-    where: ci.yml pwa
+    where: ci.yml pwa-ui
     baseline: { files: 25 }
     status: exists
 
@@ -449,7 +453,7 @@ suites:
     # project graph can't see those links; they're named here.
     triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
-    where: ci.yml pwa
+    where: ci.yml pwa-e2e
     status: exists
 
   - id: pwa-site-csp
@@ -459,8 +463,8 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     triggers: [pwa/tools/**, pwa/index.html, .github/workflows/pages.yml]
-    command: see ci.yml pwa "The Pages build accepts the live relay and its blob store, and refuses bad ones"
-    where: ci.yml pwa
+    command: see ci.yml light "The Pages build accepts the live relay and its blob store, and refuses bad ones"
+    where: ci.yml light
     status: exists
 
   - id: pwa-pages
@@ -563,8 +567,8 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: hosted
     triggers: [spikes/**]
-    command: see ci.yml spikes, s2-noise-interop, s4-relay
-    where: ci.yml spikes, s2-noise-interop, s4-relay
+    command: see ci.yml spikes, spikes-linux
+    where: ci.yml spikes, spikes-linux
     status: exists
 
   # ---------------------------------------------------------------- live, on disposable machines
@@ -628,8 +632,9 @@ suites:
     runner: hosted
     # Blocking only if the analysis breaks, or (code scanning's own check) on new high or
     # critical alerts. Swift joins once apple/ lands on main. The workflow runs on every pull
-    # request, but analyses only the languages the pull request changes (its `languages` job,
-    # #459); main pushes and the weekly run analyse all three.
+    # request that isn't a draft (ready for review runs it), but analyses only the languages the
+    # pull request changes (its `languages` job, #459); main pushes and the weekly run analyse all
+    # three.
     command: see codeql.yml (csharp build-mode none, javascript-typescript, actions)
     where: codeql.yml languages, analyze
     status: exists
@@ -640,10 +645,11 @@ suites:
     select: always
     platforms: [linux-x64]
     runner: hosted
-    # review blocks on high or critical vulnerabilities in newly added dependencies, and needs the
-    # repository's dependency graph (on since 2026-11-03). audit is advisory: existing ones.
+    # The review blocks on high or critical vulnerabilities in newly added dependencies, and needs
+    # the repository's dependency graph (on since 2026-11-03). The audit is advisory: existing ones.
+    # Both run in one job, on one runner. Not on a draft: ready for review runs it.
     command: see dependencies.yml (dependency-review-action; dotnet list package --vulnerable; npm audit --omit=dev)
-    where: dependencies.yml review, dependencies.yml audit
+    where: dependencies.yml review
     status: exists
 
   - id: secret-scan
@@ -695,6 +701,7 @@ suites:
     runner: hosted
     triggers: [.github/workflows/**, .github/actions/**]
     # actionlint blocks; shellcheck and zizmor are advisory until their existing findings (#360) are fixed.
+    # Drafts run it too: it's part of the fast ring (quality/README.md §2).
     command: see workflow-lint.yml (actionlint, shellcheck, zizmor)
     where: workflow-lint.yml lint
     status: exists
@@ -744,7 +751,7 @@ suites:
     # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. Known issues #365,
     # #366, #369, #370 and #371 are allowlisted by rule, selector and issue.
     command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
-    where: ci.yml pwa
+    where: ci.yml pwa-ui
     baseline: { files: 3, tests: 58 }
     status: exists
 
@@ -756,7 +763,7 @@ suites:
     runner: local
     triggers: [design/**, tools/design-gen/**]
     command: node --test tools/design-gen/test/contrast.test.mjs
-    where: ci.yml design
+    where: ci.yml light
     status: exists
 
   - id: a11y-winui
