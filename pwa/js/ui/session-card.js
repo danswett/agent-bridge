@@ -94,12 +94,13 @@ export class SessionCard {
   #pressing = false;
   // A mouse or pen over the conversation: someone reading it, perhaps about to click.
   #hovering = false;
-  // Whether the conversation is read to its end (ui.md §5.3, Scroll to a question): measured when
-  // first seen on screen and again whenever it scrolls, and kept while only its content changes,
-  // since a response growing below isn't followed and so doesn't take the reader from its end.
-  // Forgotten (null) while it isn't on screen, and when it may come back, where the browser can
-  // have moved it without a scroll event.
+  // Whether the conversation is read to its end (ui.md §5.3, Scroll to a question), and where it
+  // was scrolled to when that was measured: kept while only its content changes, since a response
+  // growing below isn't followed and so doesn't take the reader from its end; measured again once
+  // it has scrolled since (read from scrollTop, before its scroll event has come). Forgotten (null)
+  // while it isn't on screen, and when it may come back, where the browser can have moved it.
   #readToEnd = null;
+  #readAt = 0;
   // Until when the question's controls ignore a pointer's click (QUESTION_ARRIVAL_GUARD_MS).
   #guardUntil = 0;
   // The question's view the guard covers, and the question it was armed for.
@@ -664,10 +665,17 @@ export class SessionCard {
     const opened = !this.#guardedAnswerable && answerable;
     this.#guarded = view || null;
     const same = view && q.id === this.#guardedId;
+    let armed = false;
     if (view && (!same || unheld || opened)) {
       this.#guardedId = q.id;
-      if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
+      if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) {
+        this.#guard();
+        armed = true;
+      }
     }
+    // The same question redrawn while its wait still runs: the new view says so for what is left
+    // of it, no longer.
+    if (view && !armed) { this.#mark(); }
     this.#guardedHeld = view ? held : null;
     this.#guardedAnswerable = !!(view && answerable);
     this.#arrived = arrived && view ? view : null;
@@ -675,11 +683,17 @@ export class SessionCard {
 
   #guard() {
     this.#guardUntil = (globalThis.performance?.now() ?? Date.now()) + QUESTION_ARRIVAL_GUARD_MS;
-    // Said on the question while it lasts (data-arriving), so what waits on it can tell.
+    this.#mark();
+  }
+
+  // Said on the question while the wait lasts (data-arriving), so what waits on it can tell.
+  #mark() {
     const view = this.#guarded;
-    view?.setAttribute?.('data-arriving', '');
+    const left = this.#guardUntil - (globalThis.performance?.now() ?? Date.now());
     clearTimeout(this.#guardTimer);
-    this.#guardTimer = setTimeout(() => view?.removeAttribute?.('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
+    if (left <= 0) { return; }
+    view?.setAttribute?.('data-arriving', '');
+    this.#guardTimer = setTimeout(() => view?.removeAttribute?.('data-arriving'), left);
   }
 
   // A click from a pointer (detail > 0) on the question's own controls during the guard is
@@ -701,11 +715,15 @@ export class SessionCard {
   }
 
   #reading() {
-    if (!this.els.scroll.getClientRects().length) {
+    const sc = this.els.scroll;
+    if (!sc.getClientRects().length) {
       this.#readToEnd = null;
       return this.#atEnd();
     }
-    this.#readToEnd ??= this.#atEnd();
+    if (this.#readToEnd === null || sc.scrollTop !== this.#readAt) {
+      this.#readToEnd = this.#atEnd();
+      this.#readAt = sc.scrollTop;
+    }
     return this.#readToEnd;
   }
 
@@ -769,7 +787,9 @@ export class SessionCard {
   // is still down. A mouse button holds it until released, wherever that is, and a mouse or pen
   // holds it while it is over it.
   #watchHold(scroller) {
-    scroller.addEventListener('scroll', () => { this.#readToEnd = this.#atEnd(); }, { passive: true });
+    // Any scroll: measured afresh at the next update (a scroll away and back to the same place
+    // included). Not measured here: an update can come before this event does.
+    scroller.addEventListener('scroll', () => { this.#readToEnd = null; }, { passive: true });
     // What the person opens or presses in it (Show reasoning, a disclosure in a response) can
     // grow it with no scroll: where they are is measured afresh at the next update.
     for (const type of ['toggle', 'click']) { scroller.addEventListener(type, () => { this.#readToEnd = null; }, true); }

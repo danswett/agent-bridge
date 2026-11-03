@@ -576,6 +576,106 @@ test('a question that arrives after the reader opened the reasoning leaves the c
   await page.waitForTimeout(400);
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
 });
+
+test('where the reader is is read when a question comes, though the scroll that took them there has yet to send its event', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  // A scroll's event comes at the browser's next frame: held back here, as if it hadn't come yet.
+  await page.evaluate(() => document.addEventListener('scroll', (e) => e.stopPropagation(), true));
+  const ask = (id, top, ms) => page.evaluate(({ id, top, ms }) => {
+    const el = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .stream-scroll');
+    el.scrollTop = top === 'end' ? el.scrollHeight : top;
+    const d = window.agentBridgeDemo;
+    const question = { id, kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question, status: 'waiting', updatedAt: new Date(Date.now() + ms).toISOString() });
+  }, { id, top, ms });
+  const clear = (ms) => page.evaluate((ms) => window.agentBridgeDemo.upsert({ ...window.agentBridgeDemo.host.get('019a1b2c-codex-example'), question: null, updatedAt: new Date(Date.now() + ms).toISOString() }), ms);
+  // At the top when last measured; at the end, just now, when a question comes: brought into sight.
+  await scroller.evaluate((el) => { el.scrollTop = 0; });
+  await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.` }, updatedAt: later(2000) });
+  await expect(scroller).toContainText('One more.');
+  await ask('q-race-end', 'end', 3000);
+  await expect(v.locator('.question-slot .question')).toBeInViewport();
+  // At the end when last measured; back at the top, just now, when a question comes: left there.
+  await clear(4000);
+  await expect(v.locator('.question-slot .question')).toHaveCount(0);
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more, and another.` }, updatedAt: later(5000) });
+  await expect(scroller).toContainText('and another.');
+  await settle();
+  await ask('q-race-top', 0, 6000);
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('a reader who scrolls back and returns to the same place, with the response grown below, is left there when a question comes', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long, reasoning: null, userMessage: null, currentTool: null }, question: null, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  const settle = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  // At the end, as an update reads it; then the response grows below, with no scroll.
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await settle();
+  await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.` }, updatedAt: later(2000) });
+  await expect(scroller).toContainText('One more.');
+  const more = Array.from({ length: 20 }, (_, i) => `Later line ${i + 1}.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: `${long}\n\nOne more.\n\n${more}` }, updatedAt: later(3000) });
+  await expect(scroller).toContainText('Later line 20.');
+  // A page back and a page forward, as keys do: the same place, now well above the end.
+  const at = await scroller.evaluate((el) => el.scrollTop);
+  await scroller.evaluate((el) => { el.scrollTop -= 300; });
+  await settle();
+  await scroller.evaluate((el, at) => { el.scrollTop = at; }, at);
+  await settle();
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const question = { id: 'q-same-place', kind: 'form', message: 'Carry on?', askedAt: new Date().toISOString(), fields: [] };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question, status: 'waiting', updatedAt: new Date(Date.now() + 6000).toISOString() });
+  });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(at);
+});
+
+test('the same question redrawn while its wait runs says so on the new drawing, for what is left of the wait and no longer', async ({ page }) => {
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  await holdClock(page);
+  const draw = (message) => page.evaluate((message) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-redrawn', kind: 'form', message, askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: new Date(Date.now() + 60_000 + message.length).toISOString(), question });
+  }, message);
+  const marked = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  await draw('Which?');
+  await page.clock.runFor(20);
+  expect(await marked()).toBe(true);
+  const first = await v.locator('.question-slot .question').elementHandle();
+  // 300 ms in, reworded: a new drawing of the same question.
+  await page.clock.runFor(280);
+  await draw('Which one, now?');
+  await page.clock.runFor(20);
+  expect(await first.evaluate((q) => q.isConnected)).toBe(false);
+  expect(await marked()).toBe(true);
+  // 550 ms in: the wait ran out at 500, and the mark with it; a click counts.
+  await page.clock.runFor(230);
+  expect(await marked()).toBe(false);
+  const before = await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  await v.locator('.question-slot .choice').first().evaluate((c) => c.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+  await page.clock.runFor(50);
+  expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBeGreaterThan(before);
+});
 test('a session the address names at startup, or after a reload, is there at once on a phone: nothing slides in', async ({ page }) => {
   await openDemo(page, { width: 390, height: 844 });
   const host = await row(page, CLAUDE).getAttribute('data-host-id');
