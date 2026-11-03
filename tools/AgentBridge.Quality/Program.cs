@@ -163,6 +163,8 @@ static class Program
                 s.Suite.Platforms,
                 s.Suite.Project,
                 s.Suite.Command,
+                // What run.ps1 runs: the command with this ring's test filter, if any.
+                RunCommand = RingCommand.For(s.Suite.Command, selection.Ring),
                 s.Suite.SecuritySensitive,
                 Reasons = s.Reasons.Select(r => new { r.Rule, r.Files }),
             }),
