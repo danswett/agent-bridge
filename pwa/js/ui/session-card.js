@@ -99,6 +99,9 @@ export class SessionCard {
   // The question's view the guard covers, and the question it was armed for.
   #guarded = null;
   #guardedId = null;
+  // How the guarded question was last drawn: held (a #269 note, or null) and answerable here.
+  #guardedHeld = null;
+  #guardedAnswerable = false;
   #guardTimer = null;
   // Listening for the end of a smooth scroll to the question, until it ends or is replaced.
   #scrollEnd = null;
@@ -442,9 +445,11 @@ export class SessionCard {
   }
 
   // Its view is on screen again with nothing of its own changed (Sessions back from another
-  // page): a question it shows waits as one arriving does, where it is.
+  // page, the page back from the background): a question it shows waits as one arriving does,
+  // where it is. Whether the conversation shows is read from the page, not from the tab picked:
+  // with the inspector beside it, Tools picked earlier leaves the conversation on screen.
   reshow() {
-    if (this.#selected && this.#tab === 'conversation' && this.#guarded?.isConnected && this.viewing()) { this.#guard(); }
+    if (this.#selected && this.#guarded?.isConnected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
   }
 
   // The inspector became a pane of its own, or stopped being one.
@@ -643,12 +648,19 @@ export class SessionCard {
       enter(this.#receipt.element, 'acknowledge', { dy: 1 });
     }
     // A question newly drawn where the person can see it: its controls wait before a click counts.
-    // Not the same question redrawn (reworded, or its machine's capabilities changed).
+    // Not the same question redrawn (reworded, or its machine's capabilities changed), unless it
+    // has just become answerable: its hold lifted (#269) or its machine now taking answers. The
+    // note that said why goes, and Send or Approve once moves up under the pointer as it does.
+    const unheld = !!this.#guardedHeld && !held;
+    const opened = !this.#guardedAnswerable && answerable;
     this.#guarded = view || null;
-    if (view && q.id !== this.#guardedId) {
+    const same = view && q.id === this.#guardedId;
+    if (view && (!same || unheld || opened)) {
       this.#guardedId = q.id;
       if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
     }
+    this.#guardedHeld = view ? held : null;
+    this.#guardedAnswerable = !!(view && answerable);
     this.#arrived = arrived && view ? view : null;
   }
 
@@ -693,10 +705,11 @@ export class SessionCard {
   }
 
   // The question brought into sight on purpose (a notification, a Needs you entry): its controls
-  // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump.
-  revealQuestion(behavior = scrollBehavior()) {
+  // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump. el: the
+  // part of it to bring into sight (a notification's focused answer), the whole question if not.
+  revealQuestion(behavior = scrollBehavior(), el = null) {
     const view = this.#guarded?.isConnected ? this.#guarded : null;
-    if (view) { this.#scrollTo(view, behavior); }
+    if (view) { this.#scrollTo(el && view.contains(el) ? el : view, behavior); }
   }
 
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere

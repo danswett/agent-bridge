@@ -7,7 +7,7 @@
 // the usage bars still taking each reading at once.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
-import { go, open, row } from './nav.mjs';
+import { go, motionsDone, open, row } from './nav.mjs';
 
 const tokens = JSON.parse(readFileSync(new URL('../../design/tokens.json', import.meta.url), 'utf8'));
 // The PWA inherits Windows' timings (ui.md §5.3).
@@ -91,7 +91,11 @@ async function walk(page, { phone }) {
   const steps = [];
   const seen = new Set();
   const look = async (label) => {
-    const { found, shown } = await page.evaluate(moving, { crossFade: CROSS_FADE_MS, animated: ANIMATED });
+    // What moves is read at once, while it moves; what is shown once every motion with an end
+    // has reached it, since an element still fading in from nothing isn't drawn yet.
+    const { found } = await page.evaluate(moving, { crossFade: CROSS_FADE_MS, animated: ANIMATED });
+    await motionsDone(page);
+    const { shown } = await page.evaluate(moving, { crossFade: CROSS_FADE_MS, animated: ANIMATED });
     steps.push({ label, found });
     for (const s of shown) { seen.add(s); }
   };

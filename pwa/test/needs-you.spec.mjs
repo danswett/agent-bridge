@@ -54,8 +54,13 @@ async function ask(page, id, question, { host = 'demo', extra = {} } = {}) {
     m.upsert({ ...m.get(id), status: 'waiting', statusSince: t, updatedAt: t, ...extra, question: { kind: 'form', askedAt: t, fields: [], ...question } });
   }, { id, host, question, extra, t: later() });
   await expect(entryFor(page, id, host)).toHaveCount(1);
+  await still(page);
   return entryFor(page, id, host);
 }
+
+// The lane takes no click for a moment after it changes or comes back on screen (ui.md §5.3,
+// Scroll to a question): a test that clicks next clicks as a person would, once it has.
+const still = (page) => expect(lane(page).locator('.needs-you-list[data-arriving]')).toHaveCount(0);
 
 test.afterEach(async ({ page }) => {
   expect(await page.evaluate(() => window.__cspViolations ?? [])).toEqual([]);
@@ -488,3 +493,51 @@ for (const width of [390, 900, 1440]) {
     });
   });
 }
+
+// Needs you's answers take no pointer click for a moment after the lane changes or comes back on
+// screen, as a question's do (ui.md §5.3, Scroll to a question): an entry arriving, going or
+// moving can put Approve once under a click aimed at what was there. A key acts at once.
+test.describe('a moment before the lane takes a click', () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test('Approve once takes no click as another entry comes, nor as Sessions comes back, and a key acts at once', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    const answers = async () => (await log(page)).length;
+    const before = await answers();
+    const press = (land, { detail = 1, change = null } = {}) => page.evaluate(async ({ land, detail, change }) => {
+      const d = window.agentBridgeDemo;
+      if (change === 'ask') {
+        const t = new Date(Date.now() + 5000).toISOString();
+        d.host.upsert({ ...d.host.get('6f1c2b7e-claude-example'), status: 'waiting', statusSince: t, updatedAt: t,
+          question: { id: 'q-lane-2', kind: 'form', message: 'Which?', askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] } });
+      } else if (change === 'sessions') {
+        document.querySelector('#nav [data-nav="sessions"]').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      }
+      await new Promise((r) => setTimeout(r, 0));
+      const b = document.querySelector(`#needs-you .needs-entry[data-id="${land}"] .needs-approve`);
+      if (!b || b.disabled) { return null; }
+      const armed = b.closest('.needs-you-list').hasAttribute('data-arriving');
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+      return armed;
+    }, { land, detail, change });
+
+    // Another question asks, its entry joins the lane, and a click lands on Approve once.
+    expect(await press(LAND, { change: 'ask' })).toBe(true);
+    await expect(entryFor(page, CLAUDE)).toHaveCount(1);
+    await page.waitForTimeout(100);
+    expect(await answers()).toBe(before);
+    // Back on Sessions from another page, a click already on its way.
+    await page.locator('#nav [data-nav="settings"]').click();
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    await page.waitForTimeout(600);
+    expect(await press(LAND, { change: 'sessions' })).toBe(true);
+    await page.waitForTimeout(100);
+    expect(await answers()).toBe(before);
+    // A key's press (detail 0) is meant for what has focus, and acts at once, guard or none.
+    await page.locator('#nav [data-nav="settings"]').click();
+    await expect(page.locator('[data-route="settings"]')).toBeVisible();
+    expect(await press(LAND, { detail: 0, change: 'sessions' })).toBe(true);
+    await expect.poll(answers).toBe(before + 1);
+  });
+});

@@ -4,7 +4,7 @@
 // tracks it. A rule is never turned off: a new element breaking a known rule still fails.
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { go, open, row, view } from './nav.mjs';
+import { go, motionsDone, open, row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const LAND = '8c4e1f20-5a7b-4d3c-9e61-0b2f7d9a1c35';
@@ -71,6 +71,9 @@ async function openDemo(page, query) {
 // The serious and critical violations on the page as it is, less the known ones, as
 // "rule: selector: what to fix" lines.
 async function scan(page) {
+  // At rest: a fade still under way draws its text paler than it will be, which isn't the
+  // contrast anyone reads (ui.md §5.3's fades last a few frames).
+  await motionsDone(page);
   const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   const nodes = violations.filter((v) => FAILING.has(v.impact)).flatMap((v) => v.nodes.map((node) => ({ v, node })));
   // Whether each is a known one, in one call. A node has one selector, unless it is inside a frame
@@ -138,6 +141,8 @@ for (const layout of LAYOUTS) {
         const land = await open(page, LAND);
         await check(page, 'a session asking for approval');
         await land.getByRole('button', { name: /^Approve once/ }).click();
+        // Answered: its outcome in, not still on its way, so nothing new rises in mid-scan.
+        await expect(land.locator('.answer-status.progress, .answer-receipt.progress')).toHaveCount(0);
         await expect(land.locator('.answer-receipt, .answer-status').filter({ hasText: /\S/ }).first()).toBeVisible();
         await check(page, 'an approval answered');
 

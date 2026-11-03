@@ -166,7 +166,8 @@ function focusLinked() {
   const el = card.view;
   const target = el.querySelector('.question-slot button:not([disabled]):not(.md-copy), .question-slot input:not([disabled]), .question-slot textarea:not([disabled])');
   target?.focus({ preventScroll: true });
-  target?.scrollIntoView({ block: 'nearest' });
+  // Brought into sight as Needs you brings a question, so its answers wait before a click counts.
+  if (target) { card.revealQuestion('auto', target); }
 }
 
 // A tap on a notification while the app is open: the worker says where to go.

@@ -25,6 +25,39 @@ import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
+import { QUESTION_ARRIVAL_GUARD_MS } from './session-card.js';
+
+// Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
+// change to the lane can put Approve once under a pointer aimed at something else (an entry
+// appearing, the entries moving, those after a removed one shifting up into its place), and so
+// can the lane coming back on screen. For QUESTION_ARRIVAL_GUARD_MS after either, a pointer's
+// click on them is dropped before any handler sees it; a key's (detail 0) goes through. The lane
+// says so (data-arriving) while it lasts. The Windows app's lane does the same (GuardLane).
+const LANE_ANSWERS = '.needs-approve, .needs-deny, .needs-resend';
+function guardLane(list) {
+  const now = () => globalThis.performance?.now() ?? Date.now();
+  let until = 0;
+  let timer = 0;
+  const arm = () => {
+    until = now() + QUESTION_ARRIVAL_GUARD_MS;
+    list.setAttribute('data-arriving', '');
+    clearTimeout(timer);
+    timer = setTimeout(() => list.removeAttribute('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
+  };
+  // The entries themselves coming, going or moving; not what changes inside one (its age).
+  const changes = typeof MutationObserver === 'function' ? new MutationObserver(arm) : null;
+  changes?.observe(list, { childList: true });
+  const click = (e) => {
+    if (e.detail === 0 || now() >= until || !e.target.closest?.(LANE_ANSWERS)) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  list.addEventListener('click', click, true);
+  return {
+    arm,
+    stop() { changes?.disconnect(); clearTimeout(timer); list.removeEventListener('click', click, true); },
+  };
+}
 
 // The machine last launched on, or picked to launch on, with every machine shown.
 export const LAUNCH_HOST = 'agent-bridge.app.launchHost';
@@ -96,6 +129,7 @@ export class SessionsPage {
   #delegateShown = null;
   #listening = null;
   #shown = null;
+  #laneGuard = null;
   #stepping = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
@@ -188,6 +222,7 @@ export class SessionsPage {
     });
     this.#unwatchNews = () => { unwatchSessions(); unwatchHosts?.(); };
     this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) && !returned.has(el.dataset.hostId) });
+    this.#laneGuard = this.lane.list ? guardLane(this.lane.list) : null;
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -216,8 +251,9 @@ export class SessionsPage {
           this.view.schedule();
           this.view.layoutChanged();
           // A question that came while another page was shown is in sight now, where a click
-          // may already be headed: the same wait as a question arriving.
+          // may already be headed: the same wait as a question arriving. So is the lane.
           this.view.selected?.reshow();
+          this.#laneGuard?.arm();
         }
       });
       // Back from the background (another tab, the app switcher, the back-forward cache): what
@@ -229,6 +265,7 @@ export class SessionsPage {
           if (doc.visibilityState === 'hidden' || shell.route !== 'sessions') { return; }
           this.view.schedule();
           this.view.selected?.reshow();
+          this.#laneGuard?.arm();
         };
         doc.addEventListener('visibilitychange', back, { signal: this.#shown.signal });
         globalThis.addEventListener?.('pageshow', (e) => { if (e.persisted) { back(); } }, { signal: this.#shown.signal });
@@ -443,6 +480,8 @@ export class SessionsPage {
       const was = this.#open;
       this.#want = null;
       this.#open = false;
+      // On a phone the list, and its lane, are back under a pointer that was on the session.
+      if (was && this.phone.matches) { this.#laneGuard?.arm(); }
       this.#settleSelection();
       this.#drawPanes();
       // On a phone the view that had focus went: focus goes back where it came from in the list,
@@ -599,6 +638,8 @@ export class SessionsPage {
     this.#listening = null;
     this.#shown?.abort();
     this.#shown = null;
+    this.#laneGuard?.stop();
+    this.#laneGuard = null;
     this.#unwatchLane?.();
     this.#unwatchLane = null;
     this.#unwatchNews?.();

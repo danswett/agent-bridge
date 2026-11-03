@@ -13,6 +13,15 @@ export function row(page, id, hostId = null) {
   return page.locator(`.session[data-id="${id}"]${hostId ? `[data-host-id="${hostId}"]` : ''}`);
 }
 
+// Every motion with an end (a fade, a slide, a transition; not a glyph's turning or the progress
+// ring) has reached it: what a test reads next is the page at rest, as a person sees it once
+// things have moved (ui.md §5.3). A fade still under way reads as a paler colour, or as not drawn.
+export async function motionsDone(page) {
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter((a) => a.playState === 'running' && Number.isFinite(a.effect?.getComputedTiming?.().endTime))
+    .map((a) => a.finished.catch(() => {}))));
+}
+
 // On a phone, the view pushed over the list goes back to it first.
 async function backToList(page) {
   const back = page.locator('.session-view:not([hidden]) .session-header .back');

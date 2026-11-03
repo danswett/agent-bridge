@@ -76,6 +76,14 @@ const tokens = (page) => page.evaluate(() => {
   return out;
 });
 
+// The page's clock made the test's, from now: time moves on only as the test runs it on, so a slow
+// runner can't let a short wait run out between two steps. Paused a moment ahead of the page's
+// own time, which a busy runner may have moved on since the test last asked.
+async function holdClock(page) {
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+}
+
 async function ask(page, id) {
   await page.evaluate((id) => {
     const d = window.agentBridgeDemo;
@@ -291,10 +299,13 @@ test('a control eases back to its fill only when a press lets go: a row selected
   const main = row(page, CODEX).locator('.row-main');
   const b = await main.boundingBox();
   await page.mouse.move(b.x + 20, b.y + b.height / 2);
+  // The page's clock held while the release is read, so a slow runner can't let it run out first.
+  await holdClock(page);
   await page.mouse.down();
   await page.mouse.up();
   expect(await main.evaluate((el) => [el.dataset.press, getComputedStyle(el).transitionDuration.split(',')[0].trim()]))
     .toEqual(['released', `${t.press[0] / 1000}s`]);
+  await page.clock.runFor(t.press[0] + 100);
   await expect(main).not.toHaveAttribute('data-press', /./);
 });
 
@@ -906,29 +917,33 @@ test('where the browser sends no scrollend, as Safari doesn\'t, a question scrol
   }, long);
   const v = await open(page, CODEX);
   await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; });
-  // From Needs you. Headless Chromium lands a smooth scroll in one step, so the steps of one that
-  // takes its time, as Safari's does, are sent a frame or two apart over 450 ms. 300 ms after the
-  // last, past 500 ms from the start but within 500 ms of where it came to rest, the question
-  // still holds its clicks back. Once that has run out, a scroll the person makes (well inside
-  // the 1.5 s the listening may last) starts no new wait.
-  const r = await page.evaluate(async (id) => {
-    const el = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
-    const question = () => el.closest('.session-view').querySelector('.question-slot .question');
-    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+  // From Needs you, with the scroll's steps sent by the test, as Safari's smooth scroll sends
+  // them, and nothing else scrolling: the browser's own scroll doesn't move (a smooth one in
+  // headed or CI Chromium would send steps of its own), and the page's clock is the test's, so a
+  // slow runner can't stretch a step past the scroll's rest. Steps 30 ms apart over 450 ms; 300 ms
+  // after the last, past 500 ms from the start but within 500 ms of where it came to rest, the
+  // question still holds its clicks back. Once that has run out, a scroll the person makes (well
+  // inside the 1.5 s the listening may last) starts no new wait.
+  await holdClock(page);
+  const scroller = `.session-view[data-id="${CODEX}"] .stream-scroll`;
+  const question = () => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  const step = () => page.evaluate((s) => document.querySelector(s).dispatchEvent(new Event('scroll')), scroller);
+  await page.evaluate((id) => {
+    Element.prototype.scrollIntoView = function () {};
     document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    for (let i = 0; i < 15; i += 1) {
-      await wait(30);
-      el.dispatchEvent(new Event('scroll'));
-    }
-    await wait(300);
-    const held = question().hasAttribute('data-arriving');
-    await wait(300);
-    const after = question().hasAttribute('data-arriving');
-    el.dispatchEvent(new Event('scroll'));
-    await wait(50);
-    return { held, after, mine: question().hasAttribute('data-arriving') };
   }, CODEX);
-  expect(r).toEqual({ held: true, after: false, mine: false });
+  for (let i = 0; i < 15; i += 1) {
+    await page.clock.runFor(30);
+    await step();
+  }
+  await page.clock.runFor(300);
+  const held = await question();
+  await page.clock.runFor(300);
+  const after = await question();
+  await step();
+  await page.clock.runFor(50);
+  expect({ held, after, mine: await question() }).toEqual({ held: true, after: false, mine: false });
 });
 test('a question that arrives while another page is shown takes no click for a moment when Sessions is shown again', async ({ page }) => {
   await openDemo(page);
@@ -947,6 +962,40 @@ test('a question that arrives while another page is shown takes no click for a m
   const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
   const before = await answers();
   // Back to Sessions and a click where the question's first choice now is, in one go.
+  const tapped = await page.evaluate(() => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    tap(document.querySelector('#nav [data-nav="sessions"]'));
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return false; }
+    tap(choice);
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+test('a question that arrives while another page is shown takes no click when Sessions comes back, though Tools was picked before the inspector was shown beside the conversation', async ({ page }) => {
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  // Tools picked as a tab, then the inspector shown: Tools moves into it, and the conversation
+  // is on screen again though Tools is still the tab picked.
+  await v.getByRole('button', { name: 'Hide inspector' }).click();
+  await v.getByRole('tab', { name: 'Tools' }).click();
+  await v.getByRole('button', { name: 'Show inspector' }).click();
+  await expect(v.locator('.stream-scroll')).toBeVisible();
+  await go(page, 'settings');
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-inspector', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
   const tapped = await page.evaluate(() => {
     const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
     tap(document.querySelector('#nav [data-nav="sessions"]'));
@@ -993,6 +1042,44 @@ test('a question that arrives while the page is in the background takes no click
     return true;
   });
   expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+test('a question held while its machine sends its list again takes no click for a moment once it can be answered', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-held', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  const v = await open(page, CODEX);
+  // Away, and back with its list held: the question stays, held, as the same question (#269).
+  await page.evaluate(() => { const d = window.agentBridgeDemo; d.host.holdSnapshot(); d.setOnline('demo', false); });
+  await expect(v).toHaveAttribute('data-stale', 'offline');
+  await page.evaluate(() => window.agentBridgeDemo.setOnline('demo', true));
+  await expect(v).toHaveAttribute('data-stale', 'confirming');
+  await expect(v.locator('.question-slot .question')).toHaveAttribute('data-held', 'true');
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // The list whole again, and a click on the first choice the moment it can be answered.
+  const clicked = await page.evaluate(async () => {
+    window.agentBridgeDemo.host.releaseSnapshot();
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    let choice = null;
+    for (let i = 0; i < 500 && !choice; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+      choice = view.querySelector('.question-slot .question:not([data-held="true"]) .choice:not([disabled])');
+    }
+    if (!choice) { return false; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return true;
+  });
+  expect(clicked).toBe(true);
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });
