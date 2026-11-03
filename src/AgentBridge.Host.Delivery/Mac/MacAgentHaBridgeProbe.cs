@@ -80,28 +80,47 @@ public sealed class MacAgentHaBridgeProbe : IAgentHaBridgeProbe
             if (owner.ProcessId != pid) { return new(false, user.Value, found); }
             if (owner.UserId != user && owner.RealUserId != user && owner.SavedUserId != user) { continue; }
             if (owner.Zombie) { continue; }
-            var first = native.ReadIdentity(pid);
-            if (first.Identity is not { } before)
+            // Full BSDINFO is denied for a setuid login parent whose real UID is
+            // ours. The kernel's unique ID + exec version needs no such privilege,
+            // and detects both PID reuse and exec (start time alone misses exec).
+            var first = native.ReadGeneration(pid);
+            if (first.Generation is not { } before)
             {
                 if (first.Error == MacDaemonNative.NoSuchProcess) { continue; }
                 return new(false, user.Value, found);
             }
-            if (before.ProcessId != pid || before.UserId != owner.UserId || before.RealUserId != owner.RealUserId || before.SavedUserId != owner.SavedUserId)
-            { return new(false, user.Value, found); }
-            if (before.Zombie) { continue; }
+            if (before.UniqueId == 0) { return new(false, user.Value, found); }
+            var firstOwner = native.ReadOwner(pid);
+            if (firstOwner.Owner is not { } ownerBefore)
+            {
+                if (firstOwner.Error == MacDaemonNative.NoSuchProcess) { continue; }
+                return new(false, user.Value, found);
+            }
+            if (ownerBefore.ProcessId != pid) { return new(false, user.Value, found); }
+            if (ownerBefore.Zombie) { continue; }
+            if (ownerBefore != owner) { return new(false, user.Value, found); }
             var path = native.ReadPath(pid);
-            var second = native.ReadIdentity(pid);
-            if (second.Identity is not { } after)
+            var secondOwner = native.ReadOwner(pid);
+            var pathAfter = native.ReadPath(pid);
+            var second = native.ReadGeneration(pid);
+            if (secondOwner.Owner is not { } ownerAfter)
+            {
+                if (secondOwner.Error == MacDaemonNative.NoSuchProcess) { continue; }
+                return new(false, user.Value, found);
+            }
+            if (ownerAfter.ProcessId != pid) { return new(false, user.Value, found); }
+            if (ownerAfter.Zombie) { continue; }
+            if (second.Generation is not { } after)
             {
                 if (second.Error == MacDaemonNative.NoSuchProcess) { continue; }
                 return new(false, user.Value, found);
             }
-            if (after.Zombie) { continue; }
-            if (before != after || path is null || !Path.IsPathFullyQualified(path) || path.Contains('\0'))
+            if (before != after || ownerBefore != ownerAfter || path != pathAfter
+                || path is null || !Path.IsPathFullyQualified(path) || path.Contains('\0') || Path.GetFileName(path).Length == 0)
             { return new(false, user.Value, found); }
             var name = Path.GetFileName(path);
             if (include?.Invoke(name) ?? (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase)))
-            { found.Add(new(pid, after.UserId, after.RealUserId, after.SavedUserId)); }
+            { found.Add(new(pid, ownerAfter.UserId, ownerAfter.RealUserId, ownerAfter.SavedUserId)); }
         }
         return new(true, user.Value, found);
     }
@@ -147,13 +166,12 @@ internal interface IMacDaemonNative
     uint? UserId { get; }
     int ListPids(int[]? buffer);
     MacDaemonOwnerRead ReadOwner(int processId);
-    MacDaemonIdentityRead ReadIdentity(int processId);
+    MacDaemonGenerationRead ReadGeneration(int processId);
     string? ReadPath(int processId);
 }
 
-internal sealed record MacDaemonIdentity(int ProcessId, uint UserId, uint RealUserId, uint SavedUserId,
-    ulong StartedSeconds, ulong StartedMicroseconds, bool Zombie = false);
-internal sealed record MacDaemonIdentityRead(MacDaemonIdentity? Identity, int Error = 0);
+internal sealed record MacDaemonGeneration(ulong UniqueId, int ExecVersion);
+internal sealed record MacDaemonGenerationRead(MacDaemonGeneration? Generation, int Error = 0);
 internal sealed record MacDaemonOwner(int ProcessId, uint UserId, uint RealUserId, uint SavedUserId, bool Zombie = false);
 internal sealed record MacDaemonOwnerRead(MacDaemonOwner? Owner, int Error = 0);
 
@@ -171,36 +189,48 @@ internal sealed class MacDaemonNative : IMacDaemonNative
         return new(new(checked((int)info.Pid), info.Uid, info.RealUid, info.SavedUid, info.Status == 5));
     }
 
-    public MacDaemonIdentityRead ReadIdentity(int processId)
+    public MacDaemonGenerationRead ReadGeneration(int processId)
     {
-        var size = Marshal.SizeOf<BsdInfo>();
-        var count = proc_pidinfo(processId, 3 /* PROC_PIDTBSDINFO */, 0, out BsdInfo info, size);
-        if (count != size) { return new(null, count <= 0 ? Marshal.GetLastPInvokeError() : 0); }
-        return new(new(checked((int)info.Pid), info.Uid, info.RealUid, info.SavedUid, info.Seconds, info.Microseconds, info.Status == 5));
+        var count = proc_pidinfo(processId, 17 /* PROC_PIDUNIQIDENTIFIERINFO */, 0, out UniqueInfo info, Marshal.SizeOf<UniqueInfo>());
+        return DecodeGeneration(count, Marshal.GetLastPInvokeError(), info);
+    }
+
+    internal static MacDaemonGenerationRead DecodeGeneration(int count, int error, UniqueInfo info)
+    {
+        if (count != Marshal.SizeOf<UniqueInfo>() || info.UniqueId == 0)
+        { return new(null, count <= 0 ? error : 0); }
+        // UUID/reserved fields are not process identity; unique ID detects PID reuse,
+        // and pidversion changes on exec even when the unique ID stays the same.
+        return new(new(info.UniqueId, info.ExecVersion));
     }
 
     public string? ReadPath(int processId)
     {
         var bytes = new byte[4096];
         var length = proc_pidpath(processId, bytes, (uint)bytes.Length);
-        if (length <= 0 || length > bytes.Length) { return null; }
+        return DecodePath(bytes, length);
+    }
+
+    internal static string? DecodePath(byte[] bytes, int length)
+    {
+        // A full buffer leaves no room for the terminating NUL, so it may be truncated.
+        if (length <= 0 || length >= bytes.Length) { return null; }
         var end = Array.IndexOf(bytes, (byte)0, 0, length);
         try { return new UTF8Encoding(false, true).GetString(bytes, 0, end < 0 ? length : end); }
         catch (DecoderFallbackException) { return null; }
     }
 
-    // Darwin proc_bsdinfo, independently of whether proc_pidpath is readable. Its
-    // UID fields let a protected foreign process be skipped without guessing a name.
-    // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h
+    // XNU proc_info_private.h declares this 56-byte structure an API. These
+    // fields are populated by proc_piduniqidentifierinfo; kern_exec changes the
+    // version on every exec. Unsupported flavors or short replies fail closed.
+    // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h
     [StructLayout(LayoutKind.Sequential)]
-    internal unsafe struct BsdInfo
+    internal unsafe struct UniqueInfo
     {
-        public uint Flags, Status, ExitStatus, Pid, Parent, Uid, Gid, RealUid, RealGid, SavedUid, SavedGid, Reserved;
-        public fixed byte Command[16];
-        public fixed byte Name[32];
-        public uint Files, ProcessGroup, JobCount, Terminal, TerminalGroup;
-        public int Nice;
-        public ulong Seconds, Microseconds;
+        public fixed byte ExecutableUuid[16];
+        public ulong UniqueId, ParentUniqueId;
+        public int ExecVersion, OriginalParentVersion;
+        public ulong Reserved2, Reserved3;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -214,7 +244,7 @@ internal sealed class MacDaemonNative : IMacDaemonNative
     [DllImport("/usr/lib/libproc.dylib", SetLastError = true)]
     static extern int proc_listallpids([Out] int[]? buffer, int bufferSize);
     [DllImport("/usr/lib/libproc.dylib", SetLastError = true)]
-    static extern int proc_pidinfo(int pid, int flavor, ulong arg, out BsdInfo buffer, int size);
+    static extern int proc_pidinfo(int pid, int flavor, ulong arg, out UniqueInfo buffer, int size);
     [DllImport("/usr/lib/libproc.dylib", SetLastError = true)]
     static extern int proc_pidinfo(int pid, int flavor, ulong arg, out ShortBsdInfo buffer, int size);
     [DllImport("/usr/lib/libproc.dylib", SetLastError = true)]
