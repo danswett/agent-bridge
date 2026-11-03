@@ -4,7 +4,22 @@ using System.Text;
 namespace AgentBridge.Host.Delivery.Mac;
 
 public sealed record MacProcessIdentity(int ProcessId, int ParentProcessId, uint UserId, uint RealUserId,
-    uint SavedUserId, DateTimeOffset StartedAt, string Executable);
+    uint SavedUserId, DateTimeOffset StartedAt, string Executable)
+{
+    // System.Diagnostics.Process on macOS converts the same timeval through double
+    // seconds. Match that exact representation at its interface, while retaining the
+    // full kernel microseconds above for all native identity/generation comparisons.
+    // https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Diagnostics.Process/src/System/Diagnostics/Process.OSX.cs#L41
+    public DateTimeOffset ProcessStartTime
+    {
+        get
+        {
+            var seconds = StartedAt.ToUnixTimeSeconds();
+            var microseconds = (StartedAt - DateTimeOffset.FromUnixTimeSeconds(seconds)).Ticks / 10;
+            return DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(seconds + microseconds / 1_000_000d);
+        }
+    }
+}
 
 // Kernel identity, not a parsed command line. Darwin's proc_bsdinfo ABI is documented in
 // https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h.
