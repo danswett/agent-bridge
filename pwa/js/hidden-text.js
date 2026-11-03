@@ -41,8 +41,17 @@ export function reveal(text, { rightToLeft = false } = {}) {
   return String(text ?? '').replace(rightToLeft ? HIDDEN_OR_RTL_ALL : HIDDEN_ALL, escape);
 }
 
-// Line endings a Markdown parser breaks on but a shell does not, kept as the escapes reveal gives
-// them, before anything is parsed: a bare carriage return (not one of a CRLF), NEL, and the line
-// and paragraph separators. Split at the CR, `echo safe \r#; echo SECOND` drew its second command
-// on a line of its own, looking commented out, while bash runs it (#220).
-export const keepLineSeparators = (text) => String(text ?? '').replace(/\r(?!\n)|[\u0085\u2028\u2029]/g, escape);
+// The line endings a shell does not end a line at, as the escapes reveal gives them: a bare
+// carriage return (not one of a CRLF), NEL, and the line and paragraph separators. The Markdown
+// parser keeps them in their line (markdown.js parseMarkdown), and prose draws them so: split at
+// the CR, `echo safe \r#; echo SECOND` drew its second command on a line of its own, looking
+// commented out, while bash runs it (#220).
+export const revealLineSeparators = (text) => String(text ?? '').replace(/\r(?!\n)|[\u0085\u2028\u2029]/g, escape);
+
+export const HIDDEN_NOTE = 'Contains hidden characters';
+export const RIGHT_TO_LEFT_NOTE = 'Contains right-to-left text';
+
+// What a drawn block says it held, beside it (ui.md §6.4): an escape can be read past while its
+// character still acts. PowerShell ends a `#` comment at a bare CR, so
+// `# just a note\u000D Write-Output RAN`, drawn on one line, still reads as a comment, and runs.
+export const notesFor = (text) => [hasHidden(text) && HIDDEN_NOTE, hasRightToLeft(text) && RIGHT_TO_LEFT_NOTE].filter(Boolean);

@@ -160,13 +160,13 @@ const HEBREW = 'echo \u05D0#;\u05D1;rm -rf ~';
 const HEBREW_DRAWN = 'echo \\u05D0#;\\u05D1;rm -rf ~';
 const bidi = (l) => l.evaluate((e) => [e.getAttribute('dir'), getComputedStyle(e).direction, getComputedStyle(e).unicodeBidi]);
 
-test('a block with bidi isolates draws them as escapes, strictly left to right, and Copy takes exactly that', async ({ page }) => {
+test('a block with bidi isolates draws them as escapes, strictly left to right, says it contains hidden characters, and Copy takes exactly that', async ({ page }) => {
   await openDemo(page);
   const r = await respond(page, `Check first:\n\n\`\`\`powershell\n${ISOLATED}\n\`\`\``, ISOLATED_DRAWN);
   expect(await r.locator('pre code').textContent()).toBe(ISOLATED_DRAWN);
   expect(await bidi(r.locator('pre'))).toEqual(['ltr', 'ltr', 'isolate']);
   expect(await bidi(r.locator('pre code'))).toEqual(['ltr', 'ltr', 'isolate']);
-  await expect(r.locator('.md-code-rtl')).toHaveCount(0);
+  await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
   expect(await copies(page)).toEqual([{ via: 'api', text: ISOLATED_DRAWN }]);
@@ -176,7 +176,7 @@ test('a block with right-to-left letters draws and copies them as escapes and sa
   await page.setViewportSize({ width: 390, height: 844 });
   await openDemo(page);
   const r = await respond(page, `\`\`\`\n${HEBREW}\n\`\`\``, HEBREW_DRAWN);
-  const note = r.locator('.md-code-rtl');
+  const note = r.locator('.md-note');
   await expect(note).toHaveText('Contains right-to-left text');
   await expect(note).toBeVisible();
   // Beside Copy, never under it, and above the code.
@@ -196,15 +196,32 @@ test('a code span draws its hidden characters and right-to-left letters as escap
   expect(await bidi(r.locator('p code').first())).toEqual(['ltr', 'ltr', 'isolate']);
 });
 
-test('a bare carriage return in a block is drawn and copied as an escape on its line', async ({ page }) => {
+test('a bare carriage return in a block is drawn and copied as an escape on its line, and the block says it contains hidden characters', async ({ page }) => {
   await openDemo(page);
   // Bash runs `echo SECOND`; split at the CR, it drew on a line of its own as a comment.
   const drawn = 'echo safe \\u000D#; echo SECOND';
   const r = await respond(page, 'Run:\r\n\r\n```\r\necho safe \r#; echo SECOND\r\n```\r\n', drawn);
   expect(await r.locator('pre code').textContent()).toBe(drawn);
+  await expect(r.locator('.md-note')).toHaveText(['Contains hidden characters']);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
   expect(await copies(page)).toEqual([{ via: 'api', text: drawn }]);
+});
+
+test('a block with both hidden characters and right-to-left letters says both, beside Copy and above the code', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openDemo(page);
+  // PowerShell ends a `#` comment at a bare CR: drawn on one line, this still reads as a comment.
+  const drawn = `# just a note\\u000D Write-Output RAN ${HEBREW_DRAWN}`;
+  const r = await respond(page, `\`\`\`powershell\n# just a note\r Write-Output RAN ${HEBREW}\n\`\`\``, drawn);
+  const notes = r.locator('.md-note');
+  await expect(notes).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
+  const button = await r.getByRole('button', { name: 'Copy code' }).boundingBox();
+  const code = await r.locator('pre code').boundingBox();
+  for (const n of await notes.evaluateAll((ns) => ns.map((e) => { const b = e.getBoundingClientRect(); return { right: b.right, bottom: b.bottom }; }))) {
+    expect(n.right).toBeLessThanOrEqual(button.x + 0.5);
+    expect(n.bottom).toBeLessThanOrEqual(code.y + 0.5);
+  }
 });
 
 test('a plain command is copied byte for byte unchanged', async ({ page }) => {
@@ -212,6 +229,8 @@ test('a plain command is copied byte for byte unchanged', async ({ page }) => {
   const command = 'git log --format="%h %s" -- "src/app.js"  \n\tmake -C build all   \n    echo \'done\' | tee out.txt';
   const r = await respond(page, `\`\`\`sh\n${command}\n\`\`\``, command);
   expect(await r.locator('pre code').textContent()).toBe(command);
+  // Tabs and spaces are no hidden characters.
+  await expect(r.locator('.md-notes')).toHaveCount(0);
   await stubClipboard(page);
   await r.getByRole('button', { name: 'Copy code' }).click();
   expect(await copies(page)).toEqual([{ via: 'api', text: command }]);

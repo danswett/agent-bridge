@@ -16,7 +16,7 @@
 // is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
 // An approval's message is never Markdown: it is drawn exactly as written (parseApproval).
 
-import { hasRightToLeft, keepLineSeparators, reveal } from './hidden-text.js';
+import { notesFor, revealLineSeparators, reveal } from './hidden-text.js';
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -82,8 +82,42 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const raw = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
-  return parseBlocks(raw.map(expandTabs), raw, 0);
+  const kept = standIns(text.replace(/\r\n/g, '\n'));
+  const raw = kept.text.split('\n');
+  return kept.restore(parseBlocks(raw.map(expandTabs), raw, 0));
+}
+
+// A bare carriage return and the line and paragraph separators end no line in a shell, so they
+// end none here: each stays in its line as the character it is, for a block to draw as an escape
+// and to say it held (hidden-text.js notesFor). Escaping them before parsing, as this once did,
+// left a block unable to tell `\u000D` it held from a carriage return. JavaScript's `.` and `$`
+// stop at them, though, so while the parser reads the text each stands in as a private-use
+// character the text does not hold, and is put back in what the parser made.
+const SEPARATORS = /[\r\u2028\u2029]/;
+function standIns(text) {
+  if (!SEPARATORS.test(text)) { return { text, restore: (nodes) => nodes }; }
+  const by = new Map();
+  for (let c = 0xF0000; by.size < 3; c++) {
+    const s = String.fromCodePoint(c);
+    if (!text.includes(s)) { by.set(['\r', '\u2028', '\u2029'][by.size], s); }
+  }
+  const back = new Map([...by].map(([k, v]) => [v, k]));
+  const there = new RegExp([...back.keys()].join('|'), 'gu');
+  const put = (s) => s.replace(there, (c) => back.get(c));
+  // A link whose address held one is no link, as one with a control character never is (safeHref).
+  const held = [...back.keys()].map(encodeURIComponent);
+  const restore = (nodes) => nodes.map((n) => {
+    if (typeof n === 'string') { return put(n); }
+    if (!n || typeof n !== 'object') { return n; }
+    const out = { ...n, children: restore(n.children ?? []) };
+    if (n.attrs) {
+      out.attrs = Object.fromEntries(Object.entries(n.attrs)
+        .filter(([k, v]) => !(k === 'href' && held.some((h) => String(v).toUpperCase().includes(h))))
+        .map(([k, v]) => [k, typeof v === 'string' ? put(v) : v]));
+    }
+    return out;
+  });
+  return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => by.get(c)), restore };
 }
 
 // An approval's message as its card reads it (#220, #415): exactly as written, all of it, fence
@@ -94,10 +128,11 @@ export function parseMarkdown(src) {
 // dropped a glob's stars. And a line of three backticks, a fence's marker, is a command
 // substitution in bash: `bash -c '` around a fenced `echo rm -rf ~` drew as a harmless echo in a
 // box, while bash runs `rm -rf ~`. So it is one block of text in the code face, its line breaks
-// kept (pre-wrap); only blank lines at its very start and end are left out.
+// kept (pre-wrap); only blank lines at its very start and end are left out. A bare CR stays the
+// character it is, drawn as an escape (revealed).
 export function parseApproval(src) {
   const text = typeof src === 'string' ? src : '';
-  const lines = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
   while (lines.length && blank(lines[0])) { lines.shift(); }
   while (lines.length && blank(lines[lines.length - 1])) { lines.pop(); }
   return lines.length ? [el('p', [lines.join('\n')], { class: 'md-literal' })] : [];
@@ -481,7 +516,8 @@ export function revealed(nodes) {
 }
 
 function build(node, doc) {
-  if (typeof node === 'string') { return doc.createTextNode(node); }
+  // Prose draws a bare CR, NEL and the line and paragraph separators as escapes in their line.
+  if (typeof node === 'string') { return doc.createTextNode(revealLineSeparators(node)); }
   if (!node || !TAGS.has(node.tag)) { return doc.createTextNode(''); }
   // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
   // reply text can produce one, and the only handler on it is ours.
@@ -497,7 +533,7 @@ function build(node, doc) {
   }
   if (node.tag === 'a') {
     const href = safeHref(a.href);
-    if (!href) { return doc.createTextNode(textOf(node)); }
+    if (!href) { return doc.createTextNode(revealLineSeparators(textOf(node))); }
     e.setAttribute('href', href);
     e.setAttribute('target', '_blank');
     e.setAttribute('rel', 'noopener noreferrer nofollow');
@@ -510,7 +546,6 @@ function build(node, doc) {
 }
 
 const COPY_RESET_MS = 1500;
-export const RIGHT_TO_LEFT_NOTE = 'Contains right-to-left text';
 
 // A code block with a Copy button in its top-right corner. On a phone, a long command (a
 // 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
@@ -554,15 +589,26 @@ function codeBlock(raw, doc) {
   const wrap = doc.createElement('div');
   wrap.className = 'md-code';
   wrap.append(button);
-  // Right-to-left letters are drawn as escapes, so the block says it held them (ui.md §6.4).
-  if (hasRightToLeft(raw)) {
-    const note = doc.createElement('span');
-    note.className = 'md-code-rtl';
-    note.textContent = RIGHT_TO_LEFT_NOTE;
-    wrap.append(note);
-  }
+  const notes = notesOf(raw, doc);
+  if (notes) { wrap.append(notes); }
   wrap.append(pre, status);
   return wrap;
+}
+
+// What a drawn block held that its escapes stand for, said in words beside it (ui.md §6.4):
+// "Contains hidden characters", "Contains right-to-left text", or both.
+function notesOf(raw, doc) {
+  const said = notesFor(raw);
+  if (said.length === 0) { return null; }
+  const notes = doc.createElement('div');
+  notes.className = 'md-notes';
+  for (const words of said) {
+    const note = doc.createElement('span');
+    note.className = 'md-note';
+    note.textContent = words;
+    notes.append(note);
+  }
+  return notes;
 }
 
 // Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
@@ -609,7 +655,15 @@ export function textOf(node) {
 }
 
 // approval: the text is an approval's message, drawn as its card draws it: exactly as written,
-// revealed, never Markdown (parseApproval). The caller reads its container left to right.
+// revealed, never Markdown (parseApproval), and saying what hidden characters or right-to-left
+// letters it held, as a code block does. It has no Copy: it would take the whole message, prose and
+// fence lines too, and pasted into bash a line of backticks runs as a command substitution. The
+// caller reads its container left to right.
 export function renderMarkdown(text, doc = document, { approval = false } = {}) {
-  return toDom(approval ? revealed(parseApproval(text)) : parseMarkdown(text), doc);
+  if (!approval) { return toDom(parseMarkdown(text), doc); }
+  const nodes = parseApproval(text);
+  const frag = toDom(revealed(nodes), doc);
+  const notes = nodes.length ? notesOf(textOf(nodes[0]), doc) : null;
+  if (notes) { frag.prepend(notes); }
+  return frag;
 }

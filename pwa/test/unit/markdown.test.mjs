@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { codeText, parseApproval, parseMarkdown, revealed, safeHref, textOf } from '../../js/markdown.js';
-import { hasRightToLeft } from '../../js/hidden-text.js';
+import { hasRightToLeft, notesFor, revealLineSeparators } from '../../js/hidden-text.js';
 
 // Every element and link the parser would put on the page.
 function walk(nodes, out = { tags: [], hrefs: [], text: '' }) {
@@ -156,14 +156,17 @@ test('a bare carriage return stays on its line as an escape, while CRLF still en
   const command = 'echo safe \r#; echo SECOND';
   const drawn = 'echo safe \\u000D#; echo SECOND';
   assert.equal(blockOf(`Run:\r\n\r\n\`\`\`\r\n${command}\r\n\`\`\`\r\n`), drawn);
-  assert.equal(words(parseMarkdown(`Codex wants to run:\r\n\r\n${command}`)), `Codex wants to run:\n${drawn}\n`);
+  // Kept in its line as the character it is, which prose draws as the escape.
+  assert.equal(words(parseMarkdown(`Codex wants to run:\r\n\r\n${command}`)), `Codex wants to run:\n${command}\n`);
+  assert.equal(revealLineSeparators(command), drawn);
 });
 
 test('NEL and the line and paragraph separators stay on their line as escapes', () => {
   for (const [separator, escape] of [['\u0085', '\\u0085'], ['\u2028', '\\u2028'], ['\u2029', '\\u2029']]) {
     const drawn = `echo safe ${escape}#; echo SECOND`;
     assert.equal(blockOf(`\`\`\`\necho safe ${separator}#; echo SECOND\n\`\`\``), drawn);
-    assert.equal(words(parseMarkdown(`Codex wants to run:\n\necho safe ${separator}#; echo SECOND`)), `Codex wants to run:\n${drawn}\n`);
+    assert.equal(words(parseMarkdown(`Codex wants to run:\n\necho safe ${separator}#; echo SECOND`)), `Codex wants to run:\necho safe ${separator}#; echo SECOND\n`);
+    assert.equal(revealLineSeparators(`echo safe ${separator}#; echo SECOND`), drawn);
   }
 });
 
@@ -227,4 +230,41 @@ test('right-to-left letters in an approval\'s fenced lines are escaped with the 
 
 test('a bare carriage return in an approval stays on its line as an escape', () => {
   assert.deepEqual(approvalDrawn('Codex wants to run:\r\n\r\necho safe \r#; echo SECOND'), ['Codex wants to run:\n\necho safe \\u000D#; echo SECOND']);
+});
+
+// What a drawn block says it held (#415, ui.md §6.4), from the characters the block holds.
+const notesOfBlock = (md) => {
+  const find = (nodes) => nodes.map((n) => (n?.tag === 'pre' ? n : find(n?.children ?? []))).find(Boolean);
+  return notesFor(textOf(find(parseMarkdown(md))));
+};
+
+test('a block with a bare carriage return says it contains hidden characters', () => {
+  // PowerShell ends a `#` comment at a bare CR: drawn on one line, this still reads as a comment, and runs.
+  assert.deepEqual(notesOfBlock('```powershell\r\n# just a note\r Write-Output RAN\r\n```'), ['Contains hidden characters']);
+  // A CRLF is an ordinary line ending.
+  assert.deepEqual(notesOfBlock('```\r\nls\r\npwd\r\n```'), []);
+});
+
+test('a block with bidi isolates says it contains hidden characters, and with right-to-left letters too, both', () => {
+  assert.deepEqual(notesOfBlock(`\`\`\`\n${ISOLATED}\n\`\`\``), ['Contains hidden characters']);
+  assert.deepEqual(notesOfBlock(`\`\`\`\n${HEBREW}\n\`\`\``), ['Contains right-to-left text']);
+  assert.deepEqual(notesOfBlock(`\`\`\`\n${HEBREW} ${ISOLATED}\n\`\`\``), ['Contains hidden characters', 'Contains right-to-left text']);
+  assert.deepEqual(notesOfBlock('```\ngit status\n```'), []);
+});
+
+test('an escape written as text is drawn as written and is no hidden character', () => {
+  assert.deepEqual(notesOfBlock('```\necho \\u000D \\u2067\n```'), []);
+  assert.equal(blockOf('```\necho \\u000D \\u2067\n```'), 'echo \\u000D \\u2067');
+});
+
+test('a block holding the private-use characters the parser stands separators in with still draws each as itself', () => {
+  const held = '\u{F0000}\u{F0001}';
+  assert.equal(blockOf(`\`\`\`\na${held}\rb\u2028c\n\`\`\``), 'a\\u{F0000}\\u{F0001}\\u000Db\\u2028c');
+});
+
+test('an approval says it contains hidden characters for a bare carriage return or an isolate, and a CRLF is none', () => {
+  const noted = (message) => notesFor(textOf(parseApproval(message)[0]));
+  assert.deepEqual(noted('Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN'), ['Contains hidden characters']);
+  assert.deepEqual(noted(`Codex wants to run:\n\n${ISOLATED}`), ['Contains hidden characters']);
+  assert.deepEqual(noted('Codex wants to run:\r\n\r\ngit status\r\n'), []);
 });

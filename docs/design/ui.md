@@ -579,25 +579,31 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
   outcome said to a screen reader. Every code block reads strictly left to right, and a
   character that is not on screen as it runs (bidi controls, zero-width and other format or
-  invisible characters, and a bare carriage return, NEL or line or paragraph separator, which a
-  shell does not take as a line break) is drawn as a visible escape such as `\u2067` (#220, the owner's
+  invisible characters, and a bare carriage return, which a shell does not take as a line break)
+  is drawn as a visible escape such as `\u2067` (#220, the owner's
   "escape and allow" rule from #253): an agent's isolates must never draw a download as a comment.
   Right-to-left letters are escaped too (`\u05D0`), since even in a left-to-right line the
   punctuation between two of them joins their run and is drawn reversed: `echo א#;ב;rm -rf ~` would
-  read as commented out. Such a block also says "Contains right-to-left text" beside Copy. This is
-  the owner's trade-off (#253): Hebrew or Arabic in a code block is harder to read, so that what is
-  read is what runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
+  read as commented out. This is the owner's trade-off (#253): Hebrew or Arabic in a code block is
+  harder to read, so that what is read is what runs. **A block says what its escapes stand for,**
+  beside Copy: "Contains hidden characters" when it holds any, and "Contains right-to-left text"
+  when it holds right-to-left letters, both if both. An escape can be read past while its
+  character still acts: PowerShell ends a `#` comment at a bare CR, so `# just a note\u000D Write-Output RAN`
+  drawn on one line still reads as a comment, and runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
   line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
   still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
-  this since #296 and the PWA since #415, which draws every code span in a sentence the same way.
-- **An approval's card** (#220): an approval's message is drawn exactly as written, fence markers
-  included, in the code face; nothing in it is read as Markdown. Its line breaks are kept, it reads
-  left to right, and it is escaped as a code block is (right-to-left letters included), with
-  Approve once still offered. A Codex approval carries its command in prose ("Codex wants to run:
-  …"), and any structure a parser decides can hide part of what runs (#415): a link draws
-  `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a fence's
-  own line of three backticks, hidden as a marker, is a command substitution in bash. Other
-  questions and the conversation keep their Markdown.
+  this since #296; the PWA follows in #415.
+- **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
+  markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
+  left to right with its line breaks kept, and escaped as every code block is (hidden characters,
+  right-to-left letters and a bare carriage return), with the same notes, and Approve once still
+  offered. **It has no Copy:** the block is the whole message, prose and fence lines too, and pasted
+  into bash a line of backticks runs as a command substitution. Ordinary code blocks keep Copy. Whatever a parser decides can hide what runs: a link draws
+  `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a line
+  of three backticks, which Markdown takes as a fence, is a command substitution to bash, so a
+  fenced `echo rm -rf ~` inside `bash -c '…'` runs `rm -rf ~`. A Codex approval carries its
+  command in prose ("Codex wants to run: …"). Other questions and the conversation keep their
+  Markdown.
 
 ### 6.5 Reply box
 
@@ -761,8 +767,10 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
   letters' included, are copied as drawn, so the text pasted is never different from the text read.
   Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
-  An approval's message is drawn exactly as written, fence markers included, in the code face;
-  nothing in it is read as Markdown (§6.4, #415).
+- **An approval reads as it runs** (§6.4, #220): an approval's message is drawn exactly as
+  written, fence markers included, in the code face; nothing in it is read as Markdown.
+- **Code notes** (§6.4, #220): "Contains hidden characters" and "Contains right-to-left text",
+  exactly so, beside the block they describe. An approval's card has no Copy.
 
 ## 9. Accessibility
 

@@ -413,14 +413,19 @@ back to a hidden text area and `execCommand('copy')` where that API is missing o
 What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
 reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
 zero-width, format and other default-ignorable characters, and right-to-left letters drawn as
-`\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule), and a block with
-right-to-left letters says "Contains right-to-left text". Copy takes the escapes as drawn.
-A bare carriage return (not one of a CRLF), NEL and the line and paragraph separators are
-escaped before parsing, so they never split a line a shell runs as one. An approval's message,
-on its card and as its prompt in Needs you, is drawn exactly as written, fence markers
+`\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule). Copy takes the escapes as
+drawn. A block says what its escapes stand for, beside Copy: "Contains hidden characters",
+"Contains right-to-left text", or both. A bare carriage return (not one of a CRLF), NEL and the
+line and paragraph separators end no line: the parser keeps each in its line as the character it
+is (standing in a private-use character the text does not hold while it parses), so a block can
+tell it from an escape written as text, and prose draws them as escapes too. An approval's
+message, on its card and as its prompt in Needs you, is drawn exactly as written, fence markers
 included, in the code face; nothing in it is read as Markdown (`parseApproval`,
 `renderMarkdown`'s `approval`): a link, code span, backslash escape, emphasis or a fence's own
-backtick lines (a command substitution in bash) could otherwise hide part of what runs.
+backtick lines (a command substitution in bash) could otherwise hide part of what runs. It has
+the same notes, and no Copy, which would take the whole message, fence lines too. ui.md §6.4 and
+§8's wording on this is the app's (#323), copied word for word; the PWA also draws every code
+span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 

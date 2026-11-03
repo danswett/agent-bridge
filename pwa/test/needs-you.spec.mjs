@@ -305,7 +305,9 @@ test.describe('what an entry offers', () => {
     await expect(message).toBeVisible();
     expect(await message.evaluate((m) => [m.getAttribute('dir'), getComputedStyle(m).direction, getComputedStyle(m).unicodeBidi]))
       .toEqual(['ltr', 'ltr', 'isolate']);
-    expect(await message.textContent()).toBe(`Codex wants to run:\n\n${ISOLATED_DRAWN}\n\nthen \`${HEBREW_DRAWN}\``);
+    expect(await message.locator('.md-literal').textContent()).toBe(`Codex wants to run:\n\n${ISOLATED_DRAWN}\n\nthen \`${HEBREW_DRAWN}\``);
+    // What its escapes stand for, said in words above it.
+    await expect(message.locator('.md-note')).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
     await expect(card(page, CODEX).locator('.question .choice[data-value="approve"]')).toBeEnabled();
   });
 
@@ -370,14 +372,50 @@ test.describe('what an entry offers', () => {
     expect(await card(page, COPILOT).locator('.question-message').textContent()).toBe(message);
   });
 
-  test('a bare carriage return in an approval\'s command is drawn on its card as an escape on its line', async ({ page }) => {
+  test('a bare carriage return in an approval\'s command is drawn on its card as an escape on its line, and the card says it contains hidden characters', async ({ page }) => {
     await openDemo(page);
     // Bash runs `echo SECOND`; split at the CR, it drew on a line of its own as a comment.
     const e = await ask(page, CODEX, permission({ message: 'Codex wants to run:\r\n\r\necho safe \r#; echo SECOND\r\n\r\n```\r\necho safe \r#; echo SECOND\r\n```' }));
     await e.locator('.needs-title').click();
-    expect(await card(page, CODEX).locator('.question-message').textContent())
+    const message = card(page, CODEX).locator('.question-message');
+    expect(await message.locator('.md-literal').textContent())
       .toBe('Codex wants to run:\n\necho safe \\u000D#; echo SECOND\n\n```\necho safe \\u000D#; echo SECOND\n```');
+    await expect(message.locator('.md-note')).toHaveText(['Contains hidden characters']);
     await expect(card(page, CODEX).locator('.question .choice[data-value="approve"]')).toBeEnabled();
+  });
+
+  test('an approval\'s card says it contains hidden characters for a PowerShell comment ended by a bare carriage return, and for an isolate', async ({ page }) => {
+    await openDemo(page);
+    // PowerShell ends a `#` comment at a bare CR: drawn on one line, this still reads as a comment, and runs.
+    const e = await ask(page, CODEX, permission({ id: 'r1#cr', message: 'Codex wants to run:\r\n\r\n# just a note\r Write-Output RAN' }));
+    await e.locator('.needs-title').click();
+    const cr = card(page, CODEX).locator('.question[data-question="r1#cr"] .question-message');
+    expect(await cr.locator('.md-literal').textContent()).toBe('Codex wants to run:\n\n# just a note\\u000D Write-Output RAN');
+    await expect(cr.locator('.md-note')).toHaveText(['Contains hidden characters']);
+    await ask(page, CODEX, permission({ id: 'r2#rli', message: `Codex wants to run:\n\n${ISOLATED}` }));
+    const rli = card(page, CODEX).locator('.question[data-question="r2#rli"] .question-message');
+    await expect(rli.locator('.md-note')).toHaveText(['Contains hidden characters']);
+    // A message with neither says nothing; its CRLF line endings are ordinary.
+    await ask(page, CODEX, permission({ id: 'r3#plain', message: 'Codex wants to run:\r\n\r\ngit status\r\n' }));
+    await expect(card(page, CODEX).locator('.question[data-question="r3#plain"] .question-message .md-literal')).toBeVisible();
+    await expect(card(page, CODEX).locator('.question[data-question="r3#plain"] .md-notes')).toHaveCount(0);
+  });
+
+  test('an approval\'s card has no Copy, while a code block in the conversation still has one', async ({ page }) => {
+    await openDemo(page);
+    // Copy would take the whole message, fence lines too, and bash runs a line of backticks.
+    const e = await ask(page, CODEX, permission({ message: 'Codex wants to run:\n\n```\ngit status\n```' }));
+    await e.locator('.needs-title').click();
+    const view = card(page, CODEX);
+    await expect(view.locator('.question-message .md-literal')).toBeVisible();
+    await expect(view.locator('.question-message').getByRole('button', { name: 'Copy code' })).toHaveCount(0);
+    await page.evaluate(({ id, t }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, updatedAt: t, activity: { ...s.activity, response: 'Then:\n\n```\nnpm test\n```' } });
+    }, { id: CODEX, t: later() });
+    await expect(view.locator('.response pre code')).toHaveText('npm test');
+    await expect(view.locator('.response').getByRole('button', { name: 'Copy code' })).toHaveCount(1);
   });
 
   test('a prompt only the machine can answer says so, with no controls', async ({ page }) => {

@@ -867,11 +867,11 @@ summary {
 /* An approval's message, exactly as written (js/markdown.js parseApproval): in the code face, as a
    code block's text is, every line break, space and tab where the agent put it. */
 .md .md-literal { font: .86em var(--ab-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
-/* Beside Copy, never under it: the block's right-to-left letters are drawn as escapes. */
-.md-code-rtl {
-  position: absolute; top: 0; left: 10px; right: calc(var(--tap) + 64px); min-height: var(--tap);
-  display: flex; align-items: center; color: var(--ab-text2); font-size: .8rem; line-height: 1.1;
-}
+/* What a block held that its escapes stand for, in words (ui.md §6.4): beside Copy, never under it,
+   one note above the other. On an approval's card, which has no Copy, above its text. */
+.md-notes { display: flex; flex-direction: column; justify-content: center; gap: 2px; color: var(--ab-text2); font-size: .8rem; line-height: 1.1; }
+.md-code > .md-notes { position: absolute; top: 0; left: 10px; right: calc(var(--tap) + 64px); min-height: var(--tap); }
+.md > .md-notes { margin: 8px 0 4px; }
 /* The code starts below the Copy button, so the button never covers its first line. */
 .md .md-code > pre { margin: 0; padding-top: var(--tap); }
 .md-copy {
