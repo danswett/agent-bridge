@@ -743,7 +743,9 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   color: var(--ab-text); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-pill); cursor: pointer;
 }
 .strip-item:hover { background: var(--ab-selected); }
-.strip-item[aria-pressed="true"] { color: var(--ab-bridge); background: var(--ab-selected); border-color: var(--ab-bridge); }
+/* The one open is marked by its outline, as a tab by its bar; its words stay the text colour,
+   which the brand colour on the selected fill is too light for (4.45:1). */
+.strip-item[aria-pressed="true"] { color: var(--ab-text); background: var(--ab-selected); border-color: var(--ab-bridge); box-shadow: inset 0 0 0 1px var(--ab-bridge); }
 .strip-item[aria-expanded="true"] { background: var(--ab-selected); }
 .strip-words { display: inline-flex; gap: var(--ab-space-2); min-width: 0; white-space: nowrap; }
 .strip-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -865,7 +867,13 @@ summary {
 .delegate[data-depth="1"] { padding-left: 16px; }
 .delegate[data-depth="2"] { padding-left: 32px; }
 .delegate[data-depth="3"] { padding-left: 48px; }
-.delegate-summary { display: block; padding: 6px 0; min-width: 0; font-weight: 400; color: var(--ab-text); }
+/* A button, not the disclosure's summary it was: none of a button's own face, so the row reads
+   as the list's text (#376's axe walk found the browser's grey under it). */
+.delegate-summary {
+  display: block; width: 100%; margin: 0; padding: 6px 4px; min-width: 0; font: inherit; font-weight: 400; text-align: start;
+  color: var(--ab-text); background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
+}
+.delegate-summary:hover { background: var(--ab-selected); }
 /* The name, "under" its parent and the time flow as text beside the glyph, so in the inspector's
    336 px they wrap at spaces and a separator stays with the fact after it, never starting a
    line (#214); the glyph and the chevron keep to the first line. */
