@@ -203,12 +203,22 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
 - **Resolved:** the card quietens, with no Needs you fill. The client keeps the question it was
   shown, since the host clears it, and draws it with "Main agent asked" and then the question.
   Below that:
-  - answered from this device and confirmed by the host: the `done` glyph and "You answered
-    *Pre-release only* · 1m", from the answer service's own record (as today's receipt);
-  - otherwise (answered at the machine or on another device, or the call ended without an
-    answer): the `idle` glyph and "No longer waiting · 1m". Protocol v1 doesn't say what another
-    device or the terminal answered, or whether anything was, so the card doesn't claim to know;
-  - it stays until the session's next turn replaces what the conversation shows.
+  - **if this device has an answer record for that question id,** the record's own progress and
+    outcome, exactly as the card shows them today (`describeAnswer`, `QuestionViewModel`):
+    - "You answered *Pre-release only* · 1m" with the `done` glyph once the host confirmed it;
+    - "Sent, but not confirmed. Check at the machine" for `unconfirmed` (a typed Codex approval,
+      say);
+    - refused, failed and stale as today, Try again included where it applies;
+  - **only with no answer record** (answered at the machine or on another device, or the call
+    ended without an answer): the `idle` glyph and "No longer waiting · 1m". Protocol v1
+    doesn't say what another device or the terminal answered, or whether anything was, so the
+    card doesn't claim to know.
+- **History:** a resolved question is a read-only item in the conversation, where it was asked.
+  It stays across later turns, so the question can still be read after the next prompt starts.
+  - Kept per session for as long as the client runs: the latest 20 per session, the oldest going
+    first, and none across a restart. That is the Ended group's bound (§6.1).
+  - Each keeps the words it was shown with, and is never re-rendered from a later upsert.
+  - Tools' link to a question works for as long as its item is kept.
 - **Answer at the machine:**
   - the card shows the whole question with no controls, and one line in Needs you's text colour:
     "Answer at the machine · DEV-VM1";
@@ -455,9 +465,11 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
 +    table, is drawn as literal text, not Markdown.
 +  - `answerAtMachine`: the question, no controls, and "Answer at the machine · *machine*".
 +    Leaving it is never an answer.
-+  - Resolved, it quietens ("Main agent asked") and stays until the next turn: "You answered
-+    *value*" (`done`) for an answer this device sent and the host confirmed, otherwise "No
-+    longer waiting" (`idle`), since the protocol doesn't say what was answered elsewhere.
++  - Resolved, it quietens ("Main agent asked") and stays as a read-only history item, the latest
++    20 per session for as long as the client runs. Under it is this device's answer record as
++    the card shows it today: "You answered *value*" once confirmed, and "Sent, but not
++    confirmed. Check at the machine", refused or failed as they are. With no record, it says
++    "No longer waiting", since the protocol doesn't say what was answered elsewhere.
 +  - Several at once (if a host sends them): one card each, in the order asked, "1 of N" in the
 +    heading.
 +- **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
@@ -526,7 +538,9 @@ device approves on a machine. So each takes an independent security review befor
 - `ui/session-card.js`:
   - drops the Now line while waiting;
   - draws the linked `ask_user` row in Tools, with its reported status and Show summary in its menu;
-  - lands focus on the question when opened from a waiting row.
+  - lands focus on the question when opened from a waiting row;
+  - keeps resolved questions as read-only history items (the latest 20 per session), each with
+    its answer record's outcome or "No longer waiting".
 - `ui/delegates-view.js` gets the Status link.
 - The lane's markup in `index.html` and its rules in `app.css` go.
 
@@ -536,7 +550,9 @@ device approves on a machine. So each takes an independent security review befor
     `Reveal`, `HasTable`) move to an `ApprovalPrompt` helper that `QuestionViewModel` uses;
   - `MainViewModel.NeedsYou` becomes a `NeedsYouFilter` (pressed, N, "N on *machine*") and a
     filter over `Sessions`, with `Waiting` from the cards;
-  - `SessionCardViewModel` gets `ShowNowLine` and an `ask_user` `ToolRow` with a question link;
+  - `SessionCardViewModel` gets `ShowNowLine`, an `ask_user` `ToolRow` with a question link,
+    and the resolved questions' history (the latest 20, each with its `QuestionViewModel`'s
+    outcome or "No longer waiting");
   - `Delegates.cs` gets the Status link.
 - `App`:
   - in `SessionsPage.xaml`, the `ListView.Header` lane becomes a `ToggleButton`;
@@ -579,10 +595,13 @@ device approves on a machine. So each takes an independent security review befor
     width;
   - an update to the same question id changes its card in place, and never adds a second;
   - the Now line gives way to the question while the session waits on it;
-  - a question this device answered stays in the conversation, quiet, with what was sent and
-    confirmed;
+  - a question this device answered stays in the conversation, quiet, with its answer record's
+    progress and outcome: "You answered" once confirmed, and "Sent, but not confirmed. Check at
+    the machine" for an unconfirmed one, never "No longer waiting";
   - a question resolved elsewhere, or whose call ended without an answer, says "No longer
-    waiting" and claims no answer.
+    waiting" and claims no answer;
+  - a resolved question is still readable after the session's next turn starts, and the 21st
+    resolved question in a session drops the oldest.
 - **Tools and delegates:**
   - the `ask_user` call in Tools shows no summary, links to its question, and Show summary
     discloses the summary the host sent;
