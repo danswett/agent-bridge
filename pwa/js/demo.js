@@ -1078,3 +1078,4 @@ export function demoUsage(now = Date.now()) {
     ],
   };
 }
+// throwaway: a PWA-only change for #443's demo
