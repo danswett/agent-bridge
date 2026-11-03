@@ -51,6 +51,15 @@ Delegated work: when a coordinating session hands work to delegates, each delega
 opens one PR per slice and reports "#<n> ready at <sha>". **Only the coordinator
 merges.**
 
+### Before each push
+
+**Every push costs every session.** Each push re-runs CI and Copilot's review, which all sessions share from one fixed pool of concurrent runners; when it's full, everyone's jobs and reviews queue, and reviews time out. So before each push:
+- run `pwsh quality/run.ps1` (see Tests);
+- review your own diff locally with a code-review agent, and fix what it finds;
+- batch every fix for a review round into one push, rather than a push per comment.
+
+Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset of CI), and mark it ready when it's done. Never push only to re-trigger CI: re-run the failed job with `gh run rerun <run id> --failed`.
+
 ## Tests
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
