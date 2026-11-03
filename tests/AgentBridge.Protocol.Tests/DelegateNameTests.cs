@@ -98,7 +98,7 @@ public class DelegateNameTests
 
         Assert.StartsWith("Delegate “Main agent x", name);
         Assert.EndsWith("…”", name);
-        Assert.True(name.Length <= DelegateName.MaxLength);
+        Assert.True(new System.Globalization.StringInfo(name).LengthInTextElements <= DelegateName.MaxLength);
         Assert.True(System.Text.Encoding.UTF8.GetByteCount(name) <= Limits.SubagentName);
     }
 

@@ -335,7 +335,7 @@ about delegates. The name is added before the length check above, so it can neve
 makes an answerable question one the card would have to cut. And the decision attributes
 gain `agent` (the sub-agent's id) and `agent_name`. The pushes for it (stage 5b) are titled
 "Delegate *name* asks · *their usual title*" and keep the session's tag. *name* is cleaned as in the
-`subagents` attribute (`agent_name` is that alone), and the line is "A delegate asks" when the
+`subagents` attribute (`agent_name` is that alone, `""` without one), and the line is "A delegate asks" when the
 list no longer has it or nothing is left. The word "Delegate" is always there (#263), as in the
 clients (ui.md §6.3): no look-alike check is complete ("Ma1n agent" passes it), and the main
 agent's own lines never have it. A name already starting "Delegate " is not given it twice.

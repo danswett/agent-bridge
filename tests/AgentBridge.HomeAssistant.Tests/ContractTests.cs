@@ -290,6 +290,7 @@ public class ContractTests
         var question = new Question { Id = "q1", Kind = QuestionKind.Form, Message = "Approve?", AskedAt = DateTimeOffset.Now, Agent = "agent-1" };
         Assert.Equal("Delegate “Main agent”", HaDecision.Asker(question, s));
         Assert.Equal("A delegate", HaDecision.Asker(question with { Agent = "agent-3" }, s));
+        Assert.Equal(("", "A delegate"), (HaDecision.Plan(question with { Agent = "agent-3" }, s).AgentName, HaDecision.Plan(question with { Agent = "agent-3" }, s).Asker));
         // A look-alike the check misses still reads as a delegate's where it says who asks: the
         // question's text and the push title, never "Ma1n agent asks".
         var missed = question with { Agent = "agent-4" };

@@ -83,7 +83,8 @@ public static partial class HaDecision
     public static DecisionPlan Plan(Question question, Session session)
     {
         if (question.Agent is not { } agent) { return Plan(question, session.Agent); }
-        var name = DelegateName.Clean(Name(question, session)) is { } clean ? HaPayloads.NeutraliseTemplates(clean) : "A delegate";
+        // The name alone, "" when there is none: "A delegate" is how a line says who asks, not a name.
+        var name = DelegateName.Clean(Name(question, session)) is { } clean ? HaPayloads.NeutraliseTemplates(clean) : "";
         var asker = Asker(question, session);
         return Plan(question with { Message = $"{asker} asks:\n\n{question.Message}" }, session.Agent) with { Agent = agent, AgentName = name, Asker = asker };
     }
