@@ -15,24 +15,23 @@ public sealed class MigrationHostTests : IAsyncLifetime
     readonly string profile = Path.Combine(Path.GetTempPath(), "abm-" + Guid.NewGuid().ToString("N")[..8]);
     readonly TaskCompletionSource exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly FakeTimeProvider clock = new(new DateTimeOffset(2026, 11, 2, 18, 0, 0, TimeSpan.Zero));
-    // Signals rather than polling: the stand-in was asked to restart, and the old host watched.
-    readonly TaskCompletionSource restartAsked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Signals rather than polling: the old host watched, and the wait for it begun (the timeout
+    // already set by then, so one advance of the clock is enough).
     readonly TaskCompletionSource<int> watched = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource waiting = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    // Whether the wait was torn down when it was given up on.
+    CancellationToken waitedWith;
     LocalServer server = null!;
 
     public Task InitializeAsync()
     {
         Directory.CreateDirectory(profile);
-        server = LocalServer.Start(LocalEndpoint.For(profile), (_, op, _) =>
+        server = LocalServer.Start(LocalEndpoint.For(profile), (_, op, _) => Task.FromResult<object?>(op switch
         {
-            if (op == HostOps.Restart) { restartAsked.TrySetResult(); }
-            return Task.FromResult<object?>(op switch
-            {
-                HostOps.Status => Status(),
-                HostOps.Restart => new { restarting = true },
-                _ => null,
-            });
-        });
+            HostOps.Status => Status(),
+            HostOps.Restart => new { restarting = true },
+            _ => null,
+        }));
         return Task.CompletedTask;
     }
 
@@ -48,7 +47,12 @@ public sealed class MigrationHostTests : IAsyncLifetime
         Watch = (pid, _) =>
         {
             watched.TrySetResult(pid);
-            return ct => exited.Task.WaitAsync(ct);
+            return ct =>
+            {
+                waitedWith = ct;
+                waiting.TrySetResult();
+                return exited.Task.WaitAsync(ct);
+            };
         },
     };
 
@@ -70,7 +74,7 @@ public sealed class MigrationHostTests : IAsyncLifetime
     {
         var restart = Host().RestartAsync(CancellationToken.None);
 
-        await Task.WhenAll(watched.Task, restartAsked.Task).WaitAsync(Patience);
+        await waiting.Task.WaitAsync(Patience);
         // Long past the migration's 45 s for the new host: the old one is still shutting down.
         clock.Advance(TimeSpan.FromMinutes(2));
         Assert.False(restart.IsCompleted);
@@ -81,19 +85,15 @@ public sealed class MigrationHostTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_restart_whose_old_host_never_finishes_stopping_is_reported_rather_than_waited_on()
+    public async Task A_restart_whose_old_host_never_finishes_stopping_is_reported_and_its_wait_given_up()
     {
         var restart = Host().RestartAsync(CancellationToken.None);
 
-        await Task.WhenAll(watched.Task, restartAsked.Task).WaitAsync(Patience);
-        // A step at a time: the timeout's timer may not be set yet when the first is taken.
-        while (!restart.IsCompleted)
-        {
-            clock.Advance(TimeSpan.FromMinutes(1));
-            await Task.Delay(10);
-        }
+        await waiting.Task.WaitAsync(Patience);
+        clock.Advance(TimeSpan.FromMinutes(5));
 
-        Assert.Equal("it was still stopping after 5 minutes", await restart);
+        Assert.Equal("it was still stopping after 5 minutes", await restart.WaitAsync(Patience));
+        Assert.True(waitedWith.IsCancellationRequested);
     }
 
     [Fact]

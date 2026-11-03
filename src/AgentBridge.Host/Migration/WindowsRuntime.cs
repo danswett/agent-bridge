@@ -244,8 +244,11 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
             await channel.CallAsync(HostOps.Restart, ct: cancellationToken);
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
-        try { await gone(cancellationToken).WaitAsync(ShutdownTimeout, Time, cancellationToken); }
-        catch (TimeoutException)
+        // Given up on by cancelling the wait itself, so nothing is left holding the old host's handle.
+        using var giveUp = new CancellationTokenSource(ShutdownTimeout, Time);
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, giveUp.Token);
+        try { await gone(waiting.Token); }
+        catch (OperationCanceledException) when (giveUp.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             var waited = ShutdownTimeout >= TimeSpan.FromMinutes(1) ? $"{ShutdownTimeout.TotalMinutes:0.#} minutes" : $"{ShutdownTimeout.TotalSeconds:0.#} s";
             return $"it was still stopping after {waited}";
