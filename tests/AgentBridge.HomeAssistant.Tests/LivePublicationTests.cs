@@ -21,6 +21,10 @@ public sealed class LivePublicationTests
         Assert.DoesNotContain(initial.EnumerateArray(), r => r.GetProperty("url").GetString()!.Contains("agent-bridge-", StringComparison.Ordinal));
         var policyJson = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json")))!["policy"]!;
         policyJson["dashboard"] = dashboard;
+        // Provision the legacy renderer fence, not the policy-decision fixture's
+        // deliberately newer 2.0.0 artifact used to exercise downgrade refusals.
+        policyJson["render"]!["version"] = "1.13.0";
+        policyJson["highRender"]!["version"] = "1.13.0";
         var policy = HaPublicationPolicy.Read(JsonSerializer.SerializeToElement(policyJson), dashboard);
         var createdIds = new HashSet<string>(StringComparer.Ordinal);
         try
