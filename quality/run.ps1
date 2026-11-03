@@ -11,6 +11,9 @@
   lacks are skipped with a note, never failed. Prints pass, fail and time per suite, and exits 1
   if any failed.
 
+  Where api.nuget.org is blocked, set AGENT_BRIDGE_NUGET_SOURCE to a mirror's index.json: every
+  restore the run does then fetches packages and audit data from it (quality/README.md §4).
+
 .EXAMPLE
   pwsh quality/run.ps1                      # what this change reaches, on this OS
   pwsh quality/run.ps1 -Ring 1              # what the PR gate would run here
@@ -38,7 +41,21 @@ $root = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $root 'tools/AgentBridge.Quality/AgentBridge.Quality.csproj'
 $tool = Join-Path $root 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
 
-$build = dotnet build $project -c Release --nologo -v q
+# Opt-in, for machines that can't reach api.nuget.org: restore packages and run NuGet's audit
+# through a mirror (quality/nuget-mirror.ps1 says why both). Unset, nothing here changes.
+$mirrorConfig = $null
+if ($env:AGENT_BRIDGE_NUGET_SOURCE) {
+    . (Join-Path $PSScriptRoot 'nuget-mirror.ps1')
+    # Under obj/, which git ignores, so it can't be committed by mistake.
+    $mirrorConfig = Join-Path $root 'tools/AgentBridge.Quality/obj/nuget.mirror.config'
+    New-NuGetMirrorConfig -Source $env:AGENT_BRIDGE_NUGET_SOURCE -Path $mirrorConfig
+    # Not the URL itself: a mirror's URL can carry a token, and this output gets pasted into PRs.
+    if (-not $Json) { Write-Host "Restoring packages and auditing them through the mirror in AGENT_BRIDGE_NUGET_SOURCE." -ForegroundColor DarkGray }
+}
+
+$restore = @()
+if ($mirrorConfig) { $restore += "-p:RestoreConfigFile=$mirrorConfig" }
+$build = dotnet build $project -c Release --nologo -v q @restore
 if ($LASTEXITCODE -ne 0) {
     $build | Out-Host
     throw "Building the selector (tools/AgentBridge.Quality) failed."
@@ -104,8 +121,11 @@ foreach ($s in $selection.suites) {
     try {
         # A child shell, so a "cd" in the command stays there, and so a failing program in
         # "a; b" fails the suite rather than being masked by b's success. That preference needs
-        # pwsh 7.4, hence the #Requires.
-        pwsh -NoProfile -NonInteractive -Command "`$ErrorActionPreference = 'Stop'; `$PSNativeCommandUseErrorActionPreference = `$true; $command" | Out-Host
+        # pwsh 7.4, hence the #Requires. The mirror's config reaches every restore in the suite
+        # through MSBuild, which reads environment variables as properties; set only in the
+        # child, so it never outlives this run in the caller's session.
+        $prelude = if ($mirrorConfig) { "`$env:RestoreConfigFile = '$([System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($mirrorConfig))'; " } else { '' }
+        pwsh -NoProfile -NonInteractive -Command "`$ErrorActionPreference = 'Stop'; `$PSNativeCommandUseErrorActionPreference = `$true; $prelude$command" | Out-Host
         $exit = $LASTEXITCODE
     }
     finally {

@@ -76,9 +76,10 @@ suites:
     runner: local
     project: tests/AgentBridge.Protocol.Tests
     triggers: [docs/protocol/**]
+    # Replays docs/protocol/vectors, and fails while the committed vectors are stale (#454).
     command: dotnet test tests/AgentBridge.Protocol.Tests -c Release
     where: ci.yml product
-    baseline: { tests: 73, seconds: 1 }
+    baseline: { tests: 571, seconds: 3 }
     status: exists
 
   - id: transport
@@ -144,10 +145,10 @@ suites:
     # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
     # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
     triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**]
-    # The filter doesn't help here: two AgentReplyFlowTests wait 34 s and 17 s of real time (#390).
+    # The filter doesn't help here: MigrationTests bounds the suite (#390 follow-up).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
-    baseline: { tests: 605, seconds: 66 }
+    baseline: { tests: 609, seconds: 55 }
     status: exists
 
   - id: hooks
@@ -169,9 +170,10 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.HomeAssistant.Tests
+    # AuthBackoffTests bounds the suite.
     command: dotnet test tests/AgentBridge.HomeAssistant.Tests -c Release --filter "Category!=HomeAssistantIntegration"
     where: ci.yml product
-    baseline: { tests: 519, skipped: 15, seconds: 69 }
+    baseline: { tests: 520, skipped: 15, seconds: 69 }
     status: exists
 
   - id: app-core
@@ -420,7 +422,7 @@ suites:
     # slows past its limit; the first run still enforces it.
     command: cd pwa && node --test "test/unit/*.test.mjs"
     where: ci.yml pwa
-    baseline: { files: 26 }
+    baseline: { files: 27 }
     status: exists
 
   - id: pwa-ui
@@ -491,7 +493,8 @@ suites:
     ring: 0
     select: affected
     # The SwiftPM package on the codex/apple-* branches: AgentBridgeAppleCoreTests and
-    # AgentBridgeClientStateTests (about 35 files), including the shared Noise vectors.
+    # AgentBridgeClientStateTests (about 35 files), including the shared Noise vectors. It should
+    # also replay docs/protocol/vectors, as C# and the PWA do (that folder's README says how).
     platforms: [macos-arm64]
     runner: local
     triggers: [apple/**, docs/protocol/**]

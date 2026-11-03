@@ -65,6 +65,7 @@ Keep a PR a draft while you iterate (from #459 on, drafts run only a fast subset
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
 - Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
 - Before a push, `pwsh quality/run.ps1` runs the suites your change reaches on this machine; `-Explain` shows what it chose and why.
+- Where api.nuget.org is blocked, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet mirror's index.json, and run.ps1 restores and audits through it ([quality/README.md §4](quality/README.md#4-choosing-tests-from-what-changed)); never commit the mirror into nuget.config.
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.
 - Never weaken or skip existing tests to get green.
