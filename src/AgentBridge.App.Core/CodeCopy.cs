@@ -17,6 +17,7 @@ public sealed class CodeCopy : Observable
     readonly IUiDispatcher ui;
     readonly TimeProvider time;
     ITimer? reset;
+    int copies;
     string label = Ready;
 
     // put: places text on the clipboard, false if the clipboard refused it (another program can
@@ -44,9 +45,10 @@ public sealed class CodeCopy : Observable
         catch (Exception e) when (e is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { ok = false; }
         Label = ok ? Done : Failed;
         reset?.Dispose();
-        reset = time.CreateTimer(_ => ui.Post(Reset), null, ResetAfter, Timeout.InfiniteTimeSpan);
+        // Disposing the old timer can't recall a reset it already posted: each reset carries the
+        // copy it belongs to, and one from an earlier copy leaves this copy's word showing.
+        var copy = ++copies;
+        reset = time.CreateTimer(_ => ui.Post(() => { if (copy == copies) { Label = Ready; } }), null, ResetAfter, Timeout.InfiniteTimeSpan);
         return ok;
     }
-
-    void Reset() => Label = Ready;
 }

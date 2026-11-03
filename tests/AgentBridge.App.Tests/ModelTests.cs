@@ -101,6 +101,29 @@ public sealed class MarkdownTests
         Assert.False(refused.Copy());
         Assert.Equal("Copy failed", refused.Label);
     }
+
+    sealed class QueuedDispatcher : IUiDispatcher
+    {
+        public readonly Queue<Action> Posted = new();
+        public void Post(Action action) => Posted.Enqueue(action);
+    }
+
+    [Fact]
+    public void A_reset_queued_by_an_earlier_copy_leaves_a_later_copy_saying_copy_failed()
+    {
+        var time = new FakeTimeProvider();
+        var ui = new QueuedDispatcher();
+        var works = true;
+        var copy = new CodeCopy(new MdCode("git status", null), _ => works, ui, time);
+
+        copy.Copy();
+        time.Advance(CodeCopy.ResetAfter);
+        works = false;
+        copy.Copy();
+        while (ui.Posted.TryDequeue(out var posted)) { posted(); }
+
+        Assert.Equal("Copy failed", copy.Label);
+    }
 }
 
 public sealed class UsageTests
