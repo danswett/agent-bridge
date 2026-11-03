@@ -76,6 +76,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Starting_runs_the_task_when_there_is_one_and_waits_until_the_host_answers()
     {
         manager.SetStartAtSignIn(true);
@@ -89,6 +90,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Without_a_task_starting_runs_the_launcher_with_the_profile()
     {
         processes.OnStart = () => host.Start();
@@ -101,6 +103,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_elevated_app_starts_the_host_only_through_its_logon_task_which_runs_it_unelevated()
     {
         elevated = true;
@@ -117,6 +120,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Starting_a_running_host_starts_nothing_more()
     {
         host.Start();
@@ -128,12 +132,14 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_that_never_answers_is_reported_rather_than_waited_on_forever()
     {
         await Assert.ThrowsAsync<TimeoutException>(() => manager.StartAsync());
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Restarting_waits_for_the_stopped_hosts_task_run_to_end_rather_than_running_the_task_into_it()
     {
         manager.SetStartAtSignIn(true);
@@ -151,6 +157,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_that_fails_to_apply_starts_the_host_again_once_its_task_run_has_ended()
     {
         manager.SetStartAtSignIn(true);
@@ -167,6 +174,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_task_run_that_ends_just_as_the_start_timeout_runs_out_still_gives_its_host_the_whole_timeout()
     {
         var clock = new FakeTimeProvider(Make.T0);
@@ -197,6 +205,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Quitting_during_an_update_brings_the_host_back_once_its_task_run_has_ended()
     {
         manager.SetStartAtSignIn(true);
@@ -223,6 +232,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_start_through_the_task_that_brings_no_host_up_is_still_reported_and_not_run_again()
     {
         manager.SetStartAtSignIn(true);
@@ -234,6 +244,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_task_run_that_never_ends_is_reported_within_the_start_timeout()
     {
         manager.SetStartAtSignIn(true);
@@ -246,6 +257,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Stopping_asks_the_host_to_stop_and_a_host_that_will_not_is_ended()
     {
         host.On(HostOps.Stop, _ => new { stopping = true });
@@ -258,6 +270,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_that_refuses_to_stop_or_restart_is_left_running_and_never_ended()
     {
         host.On(HostOps.Stop, _ => throw new InvalidOperationException("refused: this connection is from pid 30, inside a copilot process (pid 20); stopping, restarting, signing in and changing settings are for the person, from the Agent Bridge app"));
@@ -274,6 +287,7 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Stopping_a_host_that_goes_kills_nothing()
     {
         host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });

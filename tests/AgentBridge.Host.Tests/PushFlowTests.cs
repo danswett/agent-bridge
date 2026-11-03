@@ -11,6 +11,7 @@ using Xunit;
 // Notifications end to end: a phone registers over its Noise channel, a fixture Copilot
 // session read by the real SessionSource asks a question, and the host's push goes,
 // encrypted to the phone's key, through the in-process relay to its fake push service.
+[Trait("Category", "Network")]
 public sealed class PushFlowTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";

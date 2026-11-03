@@ -13,6 +13,7 @@ public class RelayTests
     static readonly GitHubUser Mallory = new(2, "mallory");
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Sign_in_issues_a_relay_token_and_the_GitHub_token_is_revoked_not_returned()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -28,6 +29,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_sign_in_denied_at_GitHub_fails()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -39,6 +41,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Two_devices_of_one_account_see_each_other()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -52,6 +55,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Another_accounts_device_is_neither_listed_nor_reachable()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -72,6 +76,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_bad_token_is_refused_with_4001()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -83,6 +88,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_device_that_cannot_prove_it_holds_the_key_it_claims_is_refused_with_4003()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -95,6 +101,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_key_that_is_not_on_the_curve_is_refused_at_hello()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -108,6 +115,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_frame_over_the_size_limit_closes_the_connection_with_4013()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -120,6 +128,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_socket_that_aborts_itself_ends_the_connection_without_faulting_it_or_throwing_on_dispose()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -135,6 +144,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Flooding_frames_closes_the_connection_with_4008()
     {
         await using var relay = await TestRelay.StartAsync(o => o.MaxFramesPerSecond = 20);
@@ -178,6 +188,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_second_connection_with_the_same_device_key_replaces_the_first_with_4009()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -194,6 +205,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_device_that_leaves_drops_out_of_presence()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -208,6 +220,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task After_many_devices_come_and_go_at_once_every_device_hears_the_account_as_it_now_is()
     {
         // Each change is announced with the account as it was then. Announcements once raced each
@@ -229,6 +242,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_socket_from_a_web_origin_that_is_not_allowed_is_refused_and_an_allowed_one_opens()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -247,6 +261,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_sign_in_API_answers_CORS_preflight_for_allowed_origins_only()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -265,6 +280,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_relay_serves_no_app_code_unless_asked_to()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -275,6 +291,7 @@ public class RelayTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_relay_that_is_stopping_tells_connected_devices_to_reconnect_at_once_with_1012()
     {
         await using var relay = await TestRelay.StartAsync();

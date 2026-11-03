@@ -286,6 +286,7 @@ public sealed class ToastTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Answering_on_a_toast_sends_through_the_host_and_replaces_the_toast_with_the_outcome()
     {
         await using var host = new FakeHost();

@@ -122,6 +122,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_found_while_no_session_is_busy_installs_once_the_host_has_stayed_idle_a_while()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle), Make.Session("s2", SessionStatus.Ending));
@@ -144,6 +145,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_read_only_host_beside_a_running_agent_ha_bridge_updates_when_idle_like_any_other()
     {
         var status = FakeHost.StatusOf(agentHaBridge: "agent-ha-bridge's daemon is running") with
@@ -160,6 +162,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_turn_running_holds_the_update_until_the_session_has_been_idle_a_while()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));
@@ -182,6 +185,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_turn_that_starts_and_ends_between_ticks_starts_the_idle_wait_again()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
@@ -201,6 +205,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_reconnect_between_ticks_starts_the_idle_wait_again()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
@@ -222,6 +227,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_question_waiting_holds_the_update_too()
     {
         await StartAsync(null, Make.Session("s1") with { Status = SessionStatus.Idle, Question = Make.Approval() });
@@ -234,6 +240,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_session_busy_for_six_hours_does_not_hold_an_update_any_longer()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));
@@ -249,6 +256,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task It_checks_on_start_and_then_every_half_hour_not_every_tick()
     {
         updater.Found = null;
@@ -265,6 +273,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_whose_sessions_are_not_yet_read_in_full_is_not_idle()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Idle));
@@ -283,6 +292,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Without_a_running_host_to_say_what_its_sessions_are_doing_nothing_is_installed()
     {
         await StartAsync();
@@ -296,6 +306,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Another_profile_running_from_the_installation_holds_the_update()
     {
         await StartAsync();
@@ -309,6 +320,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_release_replaced_since_it_was_downloaded_does_not_stop_the_host()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));
@@ -330,6 +342,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_release_replaced_during_the_last_checks_does_not_stop_the_host()
     {
         await StartAsync();
@@ -344,6 +357,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_failed_install_brings_the_host_back_and_waits_for_the_next_check()
     {
         await StartAsync();
@@ -383,6 +397,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Quitting_while_the_host_stops_for_an_update_applies_nothing_and_starts_the_host_again_once_it_has_stopped()
     {
         await StartAsync();
@@ -406,6 +421,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Update_and_restart_pressed_while_the_automatic_update_installs_is_refused_and_leaves_it_alone()
     {
         await StartAsync();
@@ -427,6 +443,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Quitting_after_the_host_stopped_for_an_update_but_before_it_was_applied_starts_the_host_again()
     {
         await StartAsync();
@@ -445,6 +462,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Quitting_with_no_update_under_way_starts_nothing_and_no_update_stops_the_host_afterwards()
     {
         await StartAsync();
@@ -458,6 +476,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Turning_it_off_while_it_asks_the_host_one_last_time_stops_the_install()
     {
         await StartAsync();
@@ -471,6 +490,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Turned_off_it_neither_checks_nor_installs()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -521,6 +541,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Install_asked_for_from_another_device_installs_once_idle_even_with_automatic_updates_off_and_says_so_after_the_restart()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -558,6 +579,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Install_asked_for_while_another_profile_runs_from_the_installation_is_refused_at_once_and_nothing_is_downloaded()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -575,6 +597,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Install_asked_for_with_nothing_newer_says_it_is_current_and_stops_nothing()
     {
         updater.Found = null;
@@ -588,6 +611,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Check_asked_for_finds_the_release_without_installing_it_when_automatic_updates_are_off()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -605,6 +629,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Install_asked_for_that_fails_says_so_and_the_host_comes_back()
     {
         await StartAsync();
@@ -623,6 +648,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     List<UpdateReport> Reports() => [.. host.Sent(HostOps.UpdateReport).Select(r => r.Deserialize<UpdateReport>(ProtocolJson.Options)!)];
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_hosts_asks_reach_the_updater_once_each_and_the_host_hears_what_it_did_and_which_it_took()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -642,6 +668,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_press_the_app_comes_to_after_it_lapsed_at_the_host_is_refused_not_carried_out_late()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -660,6 +687,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_restarted_host_is_told_at_once_and_an_unchanged_state_is_not_sent_again()
     {
         host.On(HostOps.UpdateReport, _ => new { ok = true });
@@ -680,6 +708,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_copy_the_updater_cannot_update_says_so_and_takes_no_asks()
     {
         host.On(HostOps.UpdateReport, _ => new { ok = true });
@@ -694,6 +723,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Turning_automatic_updates_off_while_a_release_waits_tells_the_devices_it_now_waits_for_them()
     {
         await StartAsync(null, Make.Session("s1", SessionStatus.Working));
@@ -710,6 +740,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_check_that_finds_nothing_newer_drops_the_release_an_earlier_check_found()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -728,6 +759,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_pipe_that_drops_under_a_host_still_running_is_told_again_when_it_comes_back()
     {
         host.On(HostOps.UpdateReport, _ => new { ok = true });
@@ -748,6 +780,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task What_Settings_checks_and_downloads_is_what_the_devices_are_told()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -766,6 +799,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_from_Settings_that_fails_is_what_the_devices_are_told_at_once()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -781,6 +815,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_check_pressed_beside_an_install_an_update_answered_is_reported_unfinished_after_the_restart()
     {
         await StartAsync();
@@ -799,6 +834,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_release_whose_download_failed_is_still_reported_as_there()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -812,6 +848,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_check_pressed_while_another_runs_gets_a_check_of_its_own()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -834,6 +871,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_install_pressed_while_another_is_looked_at_is_looked_at_too_before_anything_downloads()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -856,6 +894,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Automatic_installs_turned_on_hours_after_a_check_found_a_release_still_wait_for_the_busy_sessions()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -884,6 +923,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    [Trait("Category", "Network")]
     public async Task An_install_pressed_hours_after_the_release_was_found_still_waits_for_the_busy_sessions(bool automaticWhenFound)
     {
         prefs = prefs with { AutoUpdate = automaticWhenFound };
@@ -912,6 +952,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Presses_within_a_minute_of_a_check_are_answered_from_it_without_asking_the_feed_again()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -930,6 +971,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_check_from_Settings_that_succeeds_ends_the_failure_a_press_soon_after_would_be_answered_with()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -978,6 +1020,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_check_pressed_while_Settings_downloads_waits_for_that_download_rather_than_failing()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -999,6 +1042,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_download_that_failed_in_Settings_is_not_tried_again_for_a_while_by_a_devices_press()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1057,6 +1101,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_download_that_failed_is_not_tried_again_for_a_while_however_often_a_device_presses()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1078,6 +1123,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_install_pressed_and_not_carried_out_when_the_app_restarts_is_reported_as_such_and_not_installed()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1100,6 +1146,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_press_taken_before_the_app_restarted_is_not_carried_out_again()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1117,6 +1164,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_install_asked_for_is_not_carried_out_once_the_machine_has_become_read_only()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1137,6 +1185,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_install_asked_for_on_a_read_only_machine_is_refused_before_anything_downloads()
     {
         prefs = prefs with { AutoUpdate = false };
@@ -1149,6 +1198,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_development_copy_refuses_what_it_is_asked()
     {
         updater.InstalledVersion = null;

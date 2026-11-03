@@ -11,6 +11,7 @@ using Xunit;
 // The host's local API end to end: fixture sessions read by the real SessionSource, served by
 // the same SessionService the relay uses, over a real pipe (a Unix socket off Windows), with
 // the host's management ops beside them.
+[Trait("Category", "Network")]
 public sealed class LocalApiTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";

@@ -11,6 +11,7 @@ using Xunit;
 // update.* (#51): another of the person's devices sees this machine's updates and asks for one,
 // through the in-process relay over a Noise channel; the app beside the host is a channel that
 // reports through host.update.report, as LocalApi lets only the app do (LocalApiTests).
+[Trait("Category", "Network")]
 public sealed class UpdateFlowTests : IAsyncLifetime
 {
     const string Id = "66666666-6666-4666-8666-666666666666";

@@ -15,6 +15,7 @@ using Xunit;
 // and real git for isolated workspaces. Starting an agent is the one thing faked: the fake
 // starter plays the agent by writing the session folder and process an agent would have, so
 // no test ever starts Copilot, Claude or Codex. Nothing here is ever typed into a console.
+[Trait("Category", "Network")]
 public sealed partial class LaunchFlowTests : IAsyncLifetime
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
@@ -391,6 +392,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_Copilot_launch_answered_before_its_window_was_seen_ready_is_still_followed_and_unlocks_its_worktree_once_it_ends()
     {
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -480,6 +482,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task An_isolated_workspace_starts_each_session_in_a_worktree_of_its_own_and_unlocks_it_once_it_registers()
     {
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -506,6 +509,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_finished_worktree_is_removed_before_the_cap_is_counted_so_the_next_isolated_launch_goes_ahead()
     {
         Git(f.Root, "init", "-q", "-b", "main", app);
@@ -662,6 +666,7 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_hold_that_begins_while_the_worktree_is_made_stops_the_launch_before_anything_starts()
     {
         Git(f.Root, "init", "-q", "-b", "main", app);

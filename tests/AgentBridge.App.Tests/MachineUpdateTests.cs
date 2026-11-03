@@ -8,6 +8,7 @@ using Xunit;
 // listed on the Sessions page with Check and Install, and Check all. The other machine's host is a
 // FakeHost here; what it does with a press is UpdateFlowTests', and what its app does is
 // AutoUpdaterTests'.
+[Trait("Category", "Network")]
 public sealed class MachineUpdateTests : IAsyncLifetime
 {
     readonly FakeHost localHost = new();
