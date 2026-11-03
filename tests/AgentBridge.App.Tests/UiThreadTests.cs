@@ -26,7 +26,9 @@ public sealed class UiThreadTests
             back.SetResult(TestUi.ForTest.OnIt);
         }
         // As a host event arrives: on the pipe's thread, posted to the UI.
-        await Task.Run(() => ui.Post(() => _ = Handle()));
+        Task? handled = null;
+        await Task.Run(() => ui.Post(() => handled = Handle()));
+        await handled!.WaitAsync(FakeHost.Patience);
         Assert.True(await back.Task);
     }
 
@@ -41,7 +43,7 @@ public sealed class UiThreadTests
             ui.Post(ran.Set);
         });
         // The post has been made from the other thread; until this step awaits, it cannot run.
-        posting.Wait();
+        Assert.True(posting.Wait(FakeHost.Patience), "the post");
         Assert.False(ran.Wait(TimeSpan.FromMilliseconds(100)));
         await post;
         Assert.True(ran.IsSet);
