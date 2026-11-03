@@ -563,6 +563,22 @@ test.describe('at three panes', () => {
     expect(await page.evaluate(() => window.agentBridgeDemo.host.replyLog.length)).toBe(0);
   });
 
+  test('asking to stop a delegate while a reply is on its way leaves the box with only the ask once the reply is delivered', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const input = c.locator('.reply-slot textarea');
+    // A trailing line break, which the box keeps: the reply sent is the box as it was.
+    await input.fill('Fix the flake.\n');
+    await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+    await c.getByRole('button', { name: 'Send' }).click();
+    await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    await pane(page).getByRole('button', { name: 'Ask main agent to stop it' }).click();
+    await expect(input).toHaveValue('Fix the flake.\nPlease stop your delegate demo-agent-suite.');
+    await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+    await expect(c.locator('.reply-slot form')).toHaveAttribute('data-reply', 'delivered');
+    await expect(input).toHaveValue('Please stop your delegate demo-agent-suite.');
+  });
+
   test('nothing in a delegate\'s inspector types to it or stops it, and a finished one has nothing to ask', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
