@@ -34,10 +34,10 @@ jobs:
     # (#129); this caps what a hang can cost.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
@@ -70,7 +70,7 @@ jobs:
           pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ matrix.os }}
           path: |
@@ -80,7 +80,7 @@ jobs:
           retention-days: 14
       - name: Keep the hang dumps
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-hang-${{ matrix.os }}
           path: |
@@ -140,10 +140,10 @@ jobs:
       HA_IMAGE: ghcr.io/home-assistant/home-assistant:2026.10.4
       MOSQUITTO_IMAGE: eclipse-mosquitto:2.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
       - name: Start a disposable Home Assistant and Mosquitto
@@ -162,10 +162,10 @@ jobs:
   spikes:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
       - name: Build spike projects
@@ -221,10 +221,10 @@ jobs:
             artifact: agent-bridge-windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
@@ -295,12 +295,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir ${{ matrix.out }}/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}" -DryRun
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/releases
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: app-self-test-${{ matrix.runtime }}
@@ -347,18 +347,18 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
       - run: dotnet tool install -g vpk --version 1.2.161
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: agent-bridge-windows-${{ env.APP_VERSION }}
           path: out/app/releases
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: agent-bridge-windows-arm64-${{ env.APP_VERSION }}
           path: out/app-arm64/releases
@@ -376,13 +376,13 @@ jobs:
       run:
         working-directory: spikes/s2-noise-interop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - run: dotnet build dotnet/S2.Noise.csproj -c Release --nologo
@@ -404,13 +404,13 @@ jobs:
       run:
         working-directory: spikes/s4-relay
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - run: dotnet build src/S4.DevStack -c Release --nologo
@@ -430,10 +430,10 @@ jobs:
     # contrast rules in design/tokens.json.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - name: Every generated file matches design/
@@ -449,13 +449,13 @@ jobs:
       run:
         working-directory: pwa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
       - run: dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
@@ -491,7 +491,7 @@ jobs:
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: success() || failure()
         with:
           name: pwa-coverage
@@ -517,7 +517,7 @@ jobs:
           grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
       - run: npx playwright install --with-deps chromium webkit
       - run: npx playwright test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: pwa-test-results

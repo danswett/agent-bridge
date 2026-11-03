@@ -105,7 +105,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
 5. **rollback**: run the workflow by hand with `rollback_to=<earlier commit SHA>`. Same
    approval, same script, same smoke test.
 
-Every job signs in with GitHub OIDC (`azure/login`, `id-token: write`). There is no
+Every job that touches Azure (build, staging, production, rollback) signs in with GitHub OIDC
+(`azure/login`); only those jobs get `id-token: write`, and `infra`, which only compiles the
+templates, cannot mint a token. There is no
 client secret anywhere. Each environment has its own principal:
 
 | Principal | Roles |
@@ -117,7 +119,12 @@ Each has one federated credential for its environment. GitHub now presents subje
 `production` environment allows only `main` and requires `danswett`'s approval. Repository
 variables `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` (the stamp's subscription), and each environment's
 `AZURE_CLIENT_ID`, are ids, not secrets. The repository variable `RELAY_DEPLOY=true` turns
-the Azure jobs on; without it (a fork, a fresh clone) the workflow only compiles `infra/`.
+the Azure jobs on; without it (a fresh clone) the workflow only compiles `infra/`. A fork's
+pull request never reaches Azure: GitHub gives it a read-only token, no OIDC token and no
+secrets. Dependabot's pull requests skip the Azure jobs too (`build`'s condition), because their
+branches are in this repository: a bumped action reaches staging's sign-in only once a person
+has reviewed and merged it. That condition, not the `staging` environment, which has no branch
+policy or reviewer, is what keeps Dependabot's branches out.
 
 Infra changes (probes, sizes, secrets, a new region) are not applied by CI. A person runs
 `infra/deploy.ps1`, which never rolls an image: it re-states what each app runs now.
