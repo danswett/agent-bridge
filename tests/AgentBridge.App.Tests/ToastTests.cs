@@ -352,23 +352,26 @@ public sealed class ToastTests
     }
 
     [Fact]
-    public async Task A_click_that_would_answer_a_question_the_app_knows_is_an_approval_opens_it_and_answers_nothing()
+    public async Task A_click_on_a_session_the_app_knows_is_asking_for_approval_opens_it_and_answers_nothing_whatever_question_it_names()
     {
         await using var host = new FakeHost();
         host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
         host.Start();
         await using var connection = host.Connect();
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
-        string? opened = null;
-        var responder = new ToastResponder(deliveries, sink, s => opened = s)
+        var opened = new List<string?>();
+        var responder = new ToastResponder(deliveries, sink, opened.Add)
         {
             OutcomeWait = TimeSpan.FromSeconds(2),
             SessionOf = (_, id) => Make.Session(id, SessionStatus.Waiting, Make.Approval()),
         };
+        var mark = ToastXml.Args((ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
 
-        await responder.HandleAsync($"{OldApproveOnce()}&{ToastXml.Args((ToastXml.AnswerVersionKey, ToastXml.AnswerVersion))}", new Dictionary<string, string>());
+        await responder.HandleAsync($"{OldApproveOnce()}&{mark}", new Dictionary<string, string>());
+        // A button for an earlier question, a choice, while the session now asks for approval.
+        await responder.HandleAsync($"{ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "option"), ("field", "answer"), ("value", "pg"))}&{mark}", new Dictionary<string, string>());
 
-        Assert.Equal("s1", opened);
+        Assert.Equal(["s1", "s1"], opened);
         Assert.Empty(host.Sent(Ops.SessionAnswer));
         Assert.Empty(sink.Shown);
     }

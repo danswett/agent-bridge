@@ -33,11 +33,13 @@ public sealed class ToastResponder
     public TimeSpan MachineWait { get; init; } = TimeSpan.FromSeconds(15);
 
     // The session as the app knows it now (machine null for this one's), or null when it doesn't
-    // yet. Only a second line of defence: no toast this build draws answers an approval.
+    // yet. Only a second line of defence: no toast this build draws answers an approval. A session
+    // asking for approval now takes no answer from a toast whatever question the click names: a
+    // button for an earlier question is stale anyway, and opening shows what is asked now.
     public Func<string?, string, AgentBridge.Protocol.Session?> SessionOf { get; init; } = (_, _) => null;
 
     bool AsksApproval(ToastAction action) =>
-        action.Session is { } session && SessionOf(action.Machine, session)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval } q && q.Id == action.Question;
+        action.Session is { } session && SessionOf(action.Machine, session)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval };
 
     // The gates on an answer from a toast, beyond its being one: it carries this build's mark (an
     // older build's button may be Approve once), and its question is not known to be an approval.
