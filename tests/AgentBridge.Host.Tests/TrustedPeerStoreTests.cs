@@ -113,6 +113,91 @@ public sealed class TrustedPeerStoreTests : IDisposable
         Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
     }
 
+    [Theory]
+    [InlineData("revoke")]
+    [InlineData("reset")]
+    [InlineData("downgrade")]
+    [InlineData("shorten")]
+    public void A_failed_authority_change_stays_blocked_after_the_file_lock_is_released_and_the_host_restarts(string change)
+    {
+        // Windows file sharing can refuse replacement while leaving the old grant intact.
+        if (!OperatingSystem.IsWindows()) { return; }
+        var store = Load();
+        store.Reset();
+        store.Put(person.Public, "person", time.GetUtcNow().AddHours(1));
+        var lease = store.Find(person.Public, account)!;
+        var path = Path.Combine(folder, TrustedPeerStore.FileName);
+        var original = File.ReadAllText(path);
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var failure = Record.Exception(() =>
+            {
+                switch (change)
+                {
+                    case "revoke": store.Revoke(person.Public); break;
+                    case "reset": store.Reset(); break;
+                    case "downgrade": store.Put(person.Public, "service", time.GetUtcNow().AddHours(1)); break;
+                    case "shorten": store.Put(person.Public, "person", time.GetUtcNow().AddMinutes(1)); break;
+                }
+            });
+            Assert.True(failure is IOException or UnauthorizedAccessException);
+            Assert.NotNull(store.Problem);
+            Assert.Null(store.Find(person.Public, account));
+        }
+        Assert.Equal(original, File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(folder, "*.tmp"));
+
+        var restarted = Load();
+        Assert.NotNull(restarted.Problem);
+        Assert.Null(restarted.Find(person.Public, account));
+        Assert.Throws<InvalidOperationException>(() => restarted.Put(person.Public, "person", time.GetUtcNow().AddHours(1)));
+        restarted.Reset();
+        Assert.Null(Load().Problem);
+        Assert.Null(Load().Find(person.Public, account));
+        restarted.Put(person.Public, "person", time.GetUtcNow().AddHours(1));
+        Assert.False(Load().Current(lease, account));
+    }
+
+    [Fact]
+    public void An_interrupted_mutation_marker_denies_an_intact_store_until_an_explicit_reset()
+    {
+        var store = Load();
+        store.Reset();
+        store.Put(person.Public, "person", time.GetUtcNow().AddHours(1));
+        var path = Path.Combine(folder, TrustedPeerStore.FileName);
+        var original = File.ReadAllText(path);
+        var marker = Path.Combine(folder, "trusted-peers.blocked");
+        File.WriteAllBytes(marker, []);
+
+        var restarted = Load();
+        Assert.NotNull(restarted.Problem);
+        Assert.Null(restarted.Find(person.Public, account));
+        Assert.Equal(original, File.ReadAllText(path));
+        restarted.Reset();
+        Assert.False(File.Exists(marker));
+        Assert.Null(Load().Problem);
+        Assert.Null(Load().Find(person.Public, account));
+    }
+
+    [Fact]
+    public void Failure_to_persist_the_block_marker_reports_that_revocation_is_not_durable()
+    {
+        var store = Load();
+        store.Reset();
+        store.Put(person.Public, "person", time.GetUtcNow().AddHours(1));
+        var path = Path.Combine(folder, TrustedPeerStore.FileName);
+        var original = File.ReadAllText(path);
+        Directory.CreateDirectory(Path.Combine(folder, "trusted-peers.blocked"));
+
+        var failure = Record.Exception(() => store.Revoke(person.Public));
+        Assert.True(failure is IOException or UnauthorizedAccessException);
+        Assert.Contains("revocation NOT durable; do not restart", failure!.Message);
+        Assert.Null(store.Find(person.Public, account));
+        Assert.NotNull(store.Problem);
+        Assert.Equal(original, File.ReadAllText(path));
+        Assert.Null(Load().Find(person.Public, account));
+    }
+
     public void Dispose()
     {
         host.Dispose();

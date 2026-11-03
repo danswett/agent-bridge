@@ -31,6 +31,7 @@ public sealed class TrustedPeerStore
 
     readonly object gate = new();
     readonly string path;
+    readonly string blockedPath;
     readonly string host;
     readonly Func<string?> account;
     readonly TimeProvider time;
@@ -46,6 +47,7 @@ public sealed class TrustedPeerStore
     {
         P256KeyPair.AssertOnCurve(hostKey);
         path = Path.Combine(folder, FileName);
+        blockedPath = Path.Combine(folder, "trusted-peers.blocked");
         host = BlobFormat.Base64Url(hostKey);
         this.account = account;
         this.time = time ?? TimeProvider.System;
@@ -80,6 +82,11 @@ public sealed class TrustedPeerStore
     {
         try
         {
+            if (BlockedOnDisk())
+            {
+                Fault("the trust store is durably blocked");
+                return;
+            }
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             if (file.Length > 256 * 1024) { throw new JsonException("store exceeds its byte bound"); }
             var value = JsonSerializer.Deserialize<Saved>(file, Json) ?? throw new JsonException("empty store");
@@ -117,13 +124,31 @@ public sealed class TrustedPeerStore
         }
     }
 
+    bool BlockedOnDisk()
+    {
+        try { _ = File.GetAttributes(blockedPath); return true; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
+    }
+
     void Save(Saved value)
     {
-        try { DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(value, Json)); }
+        var marked = false;
+        try
+        {
+            // Write intent before replacing the grant file, so a failed revoke cannot revive on restart.
+            DurableFile.Write(blockedPath, [1]);
+            marked = true;
+            DurableFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(value, Json));
+            if (!value.Blocked) { File.Delete(blockedPath); }
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Fault("the trust store could not be durably written");
-            throw;
+            var why = marked
+                ? "the trust store mutation did not complete; its durable block requires an explicit owner reset"
+                : "the trust store block could not be durably written; revocation NOT durable; do not restart before a successful owner reset";
+            Fault(why);
+            throw new IOException(why, e);
         }
         saved = value;
     }

@@ -545,6 +545,23 @@ public sealed class PushNotifierTests : IDisposable
     }
 
     [Fact]
+    public async Task A_notice_that_cannot_be_encrypted_does_not_consume_the_send_rate_limit()
+    {
+        Start(new PushOptions { MaxPerMinute = 1 });
+        Subscribe(Phone);
+        store.Put(store.Get(Phone)! with { P256dh = "invalid" });
+        source.Upsert(S("s1", SessionStatus.Waiting, question: Q("q1")));
+        await After(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, sender.Attempts);
+
+        Subscribe(Laptop);
+        source.Upsert(S("s2", SessionStatus.Waiting, question: Q("q2")));
+        await After(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(Laptop, Assert.Single(Received()).Device);
+    }
+
+    [Fact]
     public async Task Sends_past_the_rate_limit_wait_for_the_next_minute_rather_than_being_refused()
     {
         Start(new PushOptions { MaxPerMinute = 3 });

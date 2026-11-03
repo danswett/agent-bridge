@@ -442,14 +442,24 @@ public sealed class PushNotifier : IAsyncDisposable
                 outbox.Remove(ready);
                 if (store.Get(ready.Device) is not { } found) { continue; }
                 if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
-                recent.Enqueue(now);
                 (next, sub, via) = (ready, found, s);
             }
             PushResult result;
             try
             {
                 var encrypted = WebPushCrypto.Encrypt(next.Plain, sub.Subscription);
-                if (!MayNotify(sub)) { continue; }
+                lock (gate)
+                {
+                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant) { continue; }
+                    var now = time.GetUtcNow();
+                    while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
+                    if (recent.Count >= options.MaxPerMinute)
+                    {
+                        outbox.Insert(0, next);
+                        return NextWake(now);
+                    }
+                    recent.Enqueue(now);
+                }
                 result = await via.PushAsync(sub.Endpoint, encrypted, next.Ttl, next.Urgency, next.Topic);
             }
             catch (TimeoutException)

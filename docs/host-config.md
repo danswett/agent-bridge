@@ -148,7 +148,7 @@ enrollment or authorization to migrate a live machine. Disabled mode retains the
 legacy relay-admission authority model and is not suitable for scoped services.
 
 In enforcing mode, relay presence, names, intro kinds and short routing IDs grant
-no authority. Every remote channel, in either handshake direction, needs a locally
+no authority. Every relay channel, in either handshake direction, needs a locally
 pinned full Noise static public key. Every request is checked again:
 
 | Local role | Allowed remote operations |
@@ -164,14 +164,23 @@ still apply. Transfer carriers and outbound usage/transfer peers need host pins;
 transfer and folder-trust signers independently need person pins at the machine
 whose authority they request. A person's approval at another host is insufficient.
 Historical usage from devices without current host pins is discarded.
+This boundary covers relay channels, not the existing HA MQTT connector or local
+pipe: those retain their own caller and command authorization checks.
 
 Pins are kept in version-1 `trusted-peers.json`, bound to this host's full key and
 signed-in account. Each has a full canonical SEC1 base64url key, role, monotonically
 increasing generation, explicit future expiry and revocation state. There are at most
 256 pins. Missing, invalid, truncated or newer-schema state denies all authority
-until an explicit reset. Mutations use flushed atomic replacement; a write failure
-is reported and latches deny-all. The mode switch is in `config.json`, not the trust
-store: deleting the trust store cannot turn enforcement off.
+until an explicit reset. Before each mutation, including reset, a separate
+`trusted-peers.blocked` marker is durably written. Only a successful commit clears
+it (a blocked store keeps it). A failed or interrupted mutation therefore denies
+all authority across restart, even when the previous grant file remains intact.
+Recovery requires the guarded owner reset, which creates an empty new trust epoch;
+do not delete the marker by hand. If even the marker cannot be written, the API and
+log explicitly report **"revocation NOT durable; do not restart"**: the process
+denies access, but restart safety cannot be promised until a successful owner reset
+after repairing storage. The mode switch is in `config.json`, not the trust store:
+deleting the trust store cannot turn enforcement off.
 
 Pin management is currently an API-only developer foundation through the fresh,
 guarded **app-only local pipe**, not a CLI bypass, remote operation, enrollment UI
