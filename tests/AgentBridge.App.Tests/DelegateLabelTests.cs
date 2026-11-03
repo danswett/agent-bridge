@@ -93,6 +93,23 @@ public class DelegateLabelTests
         Assert.Equal(shown, DelegateLabel.For(AgentBridge.Protocol.DelegateName.Clean(raw), Id));
     }
 
+    // The host cleans first and the app again (#263): around any one character, a name that poses
+    // as the main agent shows the same whichever path it came by. A quote the host left inside its
+    // label, which the app would have made plain, would show here.
+    [Fact]
+    public void A_name_the_host_cleaned_shows_exactly_as_the_raw_name_would_whatever_character_it_holds()
+    {
+        var differ = new List<string>();
+        IEnumerable<int> points = [.. Enumerable.Range(0, 0xD800), .. Enumerable.Range(0xE000, 0x2000), 0x1F676, 0x1F677, 0x1F678, 0x10101];
+        foreach (var v in points)
+        {
+            var c = char.ConvertFromUtf32(v);
+            var raw = $"Main agent {c}x{c}";
+            if (DelegateLabel.For(raw, Id) != DelegateLabel.For(AgentBridge.Protocol.DelegateName.Clean(raw), Id)) { differ.Add($"U+{v:X4}"); }
+        }
+        Assert.Empty(differ);
+    }
+
     [Fact]
     public void A_bidi_reversed_main_agent_shows_its_letters_in_the_order_they_were_sent()
     {

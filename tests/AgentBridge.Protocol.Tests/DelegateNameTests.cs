@@ -83,12 +83,13 @@ public class DelegateNameTests
     [InlineData("Main ‹agent›")]
     [InlineData("Main agent ″x″")]
     [InlineData("Main «agent» „x‟ ＂y＂")]
+    [InlineData("Main 「agent」 〝x〞 ″y″ ʼz")]
     public void Every_quote_the_clients_know_is_made_plain_inside_the_label(string raw)
     {
         var label = DelegateName.Clean(raw)!;
 
         Assert.True(DelegateName.IsLabelled(label), label);
-        Assert.DoesNotMatch("[\"«»“”„‟″‹›＂]", label[10..^1]);
+        Assert.DoesNotMatch("[\"«»“”„‟″‹›＂「」〝〞ʼ]", label[10..^1]);
     }
 
     [Fact]

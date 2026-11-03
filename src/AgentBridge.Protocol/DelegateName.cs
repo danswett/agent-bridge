@@ -41,25 +41,41 @@ public static class DelegateName
         return Opening + inner + Closing;
     }
 
-    // The PWA's set too (attribution.js QUOTES), so a label made here is one it recognises.
-    static bool IsQuote(char c) => QuoteChars.Contains(c);
+    // Inside the quotes, a quote of its own could close them and carry on as other words: every
+    // character Unicode files as an opening or closing quote (Pi, Pf), and those drawn like one,
+    // exactly the app's DelegateLabel set (#303's security review), which includes the PWA's
+    // QUOTES. A label made here is then one both clients recognise as made, and the app's test
+    // that it shows a host-cleaned name exactly as it shows the raw one keeps the sets together.
+    static readonly HashSet<int> QuoteLike =
+    [
+        0x0022, 0x201A, 0x201E, 0x2E42, 0x300C, 0x300D, 0x300E, 0x300F, 0x301D, 0x301E, 0x301F,
+        0xFE41, 0xFE42, 0xFE43, 0xFE44, 0xFF02, 0xFF07, 0xFF62, 0xFF63,
+        0x2032, 0x2033, 0x2034, 0x2035, 0x2036, 0x2037, 0x2057,
+        0x05F3, 0x05F4, 0x02B9, 0x02BA, 0x02BB, 0x02BC, 0x02DD, 0x02EE,
+        0x275B, 0x275C, 0x275D, 0x275E, 0x1F676, 0x1F677, 0x1F678,
+    ];
 
-    const string QuoteChars = "\"“”„‟«»″‹›＂";
+    static bool IsQuote(Rune r) => QuoteLike.Contains(r.Value) || Rune.GetUnicodeCategory(r) is UnicodeCategory.InitialQuotePunctuation or UnicodeCategory.FinalQuotePunctuation;
 
-    // Inside the quotes, a quote of its own could close them and carry on as other words.
     static string Unquoted(string s)
     {
-        if (s.AsSpan().IndexOfAny(QuoteChars) < 0) { return s; }
-        var chars = s.ToCharArray();
-        for (var i = 0; i < chars.Length; i++) { if (IsQuote(chars[i])) { chars[i] = '\''; } }
-        return new string(chars);
+        var b = new StringBuilder(s.Length);
+        foreach (var r in s.EnumerateRunes()) { b.Append(IsQuote(r) ? "'" : r.ToString()); }
+        return b.ToString();
     }
 
     // Already in the form rule 4 gives: "Delegate", then the name in quotes with none of its own.
-    // A client that labels names itself (the app's DelegateLabel) leaves this as it is too.
-    public static bool IsLabelled(string s) =>
-        s.Length > Opening.Length + Closing.Length && s.StartsWith(Opening, StringComparison.Ordinal) && s.EndsWith(Closing, StringComparison.Ordinal)
-        && s.AsSpan(Opening.Length, s.Length - Opening.Length - Closing.Length).IndexOfAny(QuoteChars) < 0;
+    // A client that labels names itself (the app's DelegateLabel, the PWA's delegateName) leaves
+    // this as it is too.
+    public static bool IsLabelled(string s)
+    {
+        if (s.Length <= Opening.Length + Closing.Length || !s.StartsWith(Opening, StringComparison.Ordinal) || !s.EndsWith(Closing, StringComparison.Ordinal)) { return false; }
+        foreach (var r in s.AsSpan(Opening.Length, s.Length - Opening.Length - Closing.Length).EnumerateRunes())
+        {
+            if (IsQuote(r)) { return false; }
+        }
+        return true;
+    }
 
     // The delegate as a line that says it asks or works names it ("<this> asks · …"): the cleaned
     // name after the word "Delegate", unless it starts with that already, or "A delegate" with no
