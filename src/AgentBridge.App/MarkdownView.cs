@@ -86,6 +86,9 @@ public sealed class MarkdownView : StackPanel
         var data = new DataPackage();
         data.SetText(text);
         Clipboard.SetContent(data);
+        // Kept after the app exits: a command copied, then the app closed, still pastes. A flush
+        // refused leaves it on the clipboard while the app runs, so the copy still counts.
+        try { Clipboard.Flush(); } catch (System.Runtime.InteropServices.COMException) { }
         return true;
     };
 
