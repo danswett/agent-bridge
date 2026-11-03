@@ -39,3 +39,5 @@ internal static class Json
     // An element that outlives its document, for Field.Default.
     public static JsonElement Detach(JsonElement e) => e.Clone();
 }
+
+// throwaway probe for #459
