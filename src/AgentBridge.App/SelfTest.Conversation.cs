@@ -57,7 +57,8 @@ static partial class SelfTest
                 foreach (var by in new[] { -(DesignLayout.List - DesignLayout.ListMin), -(DesignLayout.List - DesignLayout.ListMin) / 2 })
                 {
                     divider.Move(x + by);
-                    await Task.Delay(300);
+                    // Measured once the pane has taken the dragged width, rather than after a fixed wait.
+                    await Until(() => Math.Abs(scroll2.ViewportWidth - (before - by)) <= 1, TimeSpan.FromSeconds(5));
                     var misplaced = Misplaced(shown, scroll2, column2, bubble2, readingMax);
                     if (Math.Abs(scroll2.ViewportWidth - (before - by)) > 1 || misplaced is not null)
                     {
@@ -66,7 +67,7 @@ static partial class SelfTest
                 }
                 divider.End();
                 divider.Reset();
-                await Task.Delay(300);
+                await Until(() => Math.Abs(scroll2.ViewportWidth - before) <= 1, TimeSpan.FromSeconds(5));
             }
             else if (width is 1440.0) { dragged.Add("the launched session not drawn at 1440"); }
             // Pictures for review: the short message beside the short reply, wide and narrow, both themes.
