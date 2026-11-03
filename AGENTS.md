@@ -50,8 +50,8 @@ Everything lands through a PR, including documentation.
 Delegated work: when a coordinating session hands work to delegates, each delegate
 opens one PR per slice and reports "#<n> ready at <sha>". **Only the designated merge
 coordinator merges: currently Quality**, not each implementation or UI coordinator.
-The [#170 routing index](https://github.com/danswett/agent-bridge/issues/170) identifies
-the accepted current owner and handoff evidence. Implementation owners submit exact-head
+The [current role reference](docs/status.md#running-work) identifies the accepted
+owner and handoff evidence while the #170 index cutover is incomplete. Implementation owners submit exact-head
 readiness on their PR and yield the merge slot; a ready packet is not a merge grant.
 
 ### Before each push

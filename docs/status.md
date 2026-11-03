@@ -87,9 +87,12 @@ The work has been built phone-first. All merged PRs are listed in §7.
 
 ### Running work
 
-Check `gh pr list -R danswett/agent-bridge` for open PRs. Current routing is in the
-[#170 index](https://github.com/danswett/agent-bridge/issues/170), not its historical
-comment stream:
+Check `gh pr list -R danswett/agent-bridge` for open PRs. The roles and linked
+acceptance receipts below are the current role reference. The #170 index cutover
+is incomplete: its existing
+[canonical tracker](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6590748446)
+and [frontier](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6612294268)
+remain routing references until every active destination is verified.
 - **Quality is the sole merge coordinator**, accepted in
   [the takeover receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924).
   Implementation coordinators, delegates and triage do not merge independently.
@@ -112,7 +115,7 @@ comment stream:
 | Canonical issue | Scope, acceptance criteria, priority, accepted implementation owner, dependencies and next action |
 | Implementation PR | Exact head, CI, actual review, finding dispositions, unresolved threads and readiness evidence for Quality |
 | GitHub Project views, once configured | Filterable indexes over those issues and PRs; not a second plan or evidence of acceptance |
-| #170 root/index | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
+| #170 root/index, after verified cutover | Current roles, operating rules and links; not a repeated whole-project inventory or per-PR queue |
 | Repository docs and approved designs | Durable architecture, roadmap and decisions; not a minute-by-minute activity log |
 
 A suggested owner is **unclaimed** until explicitly accepted. Link the acceptance
@@ -122,9 +125,13 @@ If the next action requires owner input, state the precise decision; do not rela
 already-approved requirement as blocked on design.
 
 Keep cross-track dependencies on their canonical issues. Put readiness and
-merge/rebase requests on the PR for Quality; head changes invalidate old-head
-clearance unless the reviewer explicitly accepts a proved delta. Safety, trust,
-security and required checks remain gates. Quality's
+merge/rebase requests on the PR for Quality. Every head change needs fresh CI and
+an actual Copilot review on that exact head. Only an **independent** review may
+use a bounded delta: the previously reviewed commit must be a proved ancestor of
+the new head, and the independent reviewer must explicitly clear that delta at the
+new head. A rebase without that ancestry needs a full independent review; neither
+old CI nor an old Copilot review is inherited. Safety, trust, security and required
+checks remain gates. Quality's
 [current operating receipt](https://github.com/danswett/agent-bridge/issues/170#issuecomment-6617409924)
 allows ready PRs while main CI is pending, but pauses merges while main is red until
 green or reverted; it does not waive final-head PR gates.
