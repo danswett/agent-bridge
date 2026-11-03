@@ -226,6 +226,10 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
 - **Which session:** the one chosen, or with none chosen yet on a desktop, the first row.
   A phone shows the list until one is chosen.
 - **The inspector's toggle** is remembered on the device.
+- **Scrolling:** from 760 the window itself never scrolls. The app bar, the rail and the
+  reply box stay put; a page scrolls on its own, and on Sessions the list, the conversation
+  and the inspector each do (#288). A phone's list scrolls the page; a pushed session's
+  panes scroll on their own.
 - **A pushed session** takes the whole screen on a phone, with the reply box at its foot: the
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.

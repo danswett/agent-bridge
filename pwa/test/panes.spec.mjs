@@ -112,8 +112,65 @@ test('at 900 px two panes: the list and the session, with Conversation and Tools
   expect(await overflow(page)).toBeLessThanOrEqual(0);
 });
 
+// #288: how far the page itself can scroll, beside the panes' own scrolling.
+const pageScroll = (page) => page.evaluate(() => document.scrollingElement.scrollHeight - innerHeight);
+// A pane with more than it can show scrolls under the wheel, and the page stays where it is.
+async function scrollsOnItsOwn(page, pane) {
+  await pane.evaluate((el) => { el.scrollTop = 0; });
+  expect(await pane.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+  await pane.hover();
+  await page.mouse.wheel(0, 120);
+  await expect.poll(() => pane.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+}
+
+for (const width of [900, 1440]) {
+  test(`at ${width} px the page itself never scrolls, while the delegates and the conversation each scroll on their own`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 480 });
+    await openDemo(page, '&delegates=1');
+    const v = await open(page, 'demo-delegates');
+    const stream = v.locator('.stream-scroll');
+    const inspector = v.locator('.inspector');
+    if (width < 1280) { await v.getByRole('tab', { name: 'Delegates' }).click(); }
+    await expect(v.locator('.delegates')).toBeVisible();
+    // A delegate's line read aloud far down the inspector once stretched the page under it.
+    await scrollsOnItsOwn(page, inspector);
+    await inspector.evaluate((el) => { el.scrollTop = 0; });
+    expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+
+    if (width < 1280) { await v.getByRole('tab', { name: 'Conversation' }).click(); }
+    await scrollsOnItsOwn(page, stream);
+    await stream.evaluate((el) => { el.scrollTop = 0; });
+    expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+    if (width >= 1280) {
+      // With the inspector hidden, the conversation alone still keeps the page still.
+      await v.locator('.inspector-button').click();
+      await expect(inspector).toBeHidden();
+      await scrollsOnItsOwn(page, stream);
+      expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+    }
+    // The list too: it scrolls on its own and leaves the page where it is.
+    await scrollsOnItsOwn(page, page.locator('#list-pane'));
+    expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+  });
+}
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('a long list scrolls the page as before, and a pushed session\'s delegates and conversation scroll on their own', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 480 });
+    await openDemo(page, '&delegates=1');
+    expect(await pageScroll(page)).toBeGreaterThan(0);
+    const v = await open(page, 'demo-delegates');
+    expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+    await v.getByRole('tab', { name: 'Delegates' }).click();
+    await v.locator('.delegates-finished > summary').click();
+    await scrollsOnItsOwn(page, v.locator('.inspector'));
+    await v.getByRole('tab', { name: 'Conversation' }).click();
+    await scrollsOnItsOwn(page, v.locator('.stream-scroll'));
+    expect(await pageScroll(page)).toBeLessThanOrEqual(0);
+  });
 
   test('one column: a session is pushed over the list, and the browser\'s own back returns to it', async ({ page }) => {
     await openDemo(page);
