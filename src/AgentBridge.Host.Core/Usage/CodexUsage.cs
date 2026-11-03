@@ -220,13 +220,9 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         lock (gate)
         {
             if (probed is null || reading.MeasuredAt > probed.MeasuredAt) { probed = reading; }
-            // The allowance read after all: signed in.
-            if (ending && ReferenceEquals(probed, reading))
-            {
-                signedOutAt = null;
-                signedOutReading = null;
-                ending = false;
-            }
+            // A sign-out stands: the probe this came from failed, as one answering in time would
+            // have (Apply), and a lost refresh token still reads the allowance (#238 review). The
+            // next released probe decides.
             finished = true;
         }
     }

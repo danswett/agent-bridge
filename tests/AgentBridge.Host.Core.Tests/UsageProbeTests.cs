@@ -1452,6 +1452,43 @@ public sealed class UsageProbeTests : IDisposable
         Assert.False(codex.TakeWithdrawal());
     }
     [Fact]
+    public async Task A_late_reading_whose_second_account_read_fails_leaves_a_sign_out_standing_after_a_Codex_session_opens()
+    {
+        CodexUsed();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+
+        // A session arrives. The probe it releases reads the allowance (the access token still
+        // works), then its second account/read is slow past the report's wait and fails, not as a
+        // sign-out: still signed out, for all anyone knows.
+        var release = new TaskCompletionSource();
+        AppServer(s =>
+        {
+            s.Answers["account/rateLimits/read"] = _ =>
+            {
+                s.Before["account/read"] = release.Task;
+                return FakeAppServer.Result(Limits());
+            };
+            s.Answers["account/read"] = n => n == 1 ? FakeAppServer.Result(Account()) : FakeAppServer.Error("workspace routing discovery timed out");
+        });
+        codex.Pace(sessionOpen: true, busy: true);
+        time.Advance(TimeSpan.FromMinutes(16));
+        await codex.CollectAsync();
+        await Until(() => launcher.Started.Count == 2);
+        await AdvanceUntil(time, () => log.Any(l => l.Contains("did not answer within", StringComparison.Ordinal)), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(70));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+
+        release.SetResult();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+        Assert.False(codex.TakeWithdrawal());
+    }
+
+    [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
     {
         CodexUsed();
