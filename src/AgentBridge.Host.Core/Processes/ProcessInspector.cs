@@ -67,7 +67,18 @@ public sealed class SystemProcessInspector : IProcessInspector
         var listed = true;
         var listing = new List<ListedProcess>();
         var seen = new HashSet<int>();
-        foreach (var candidate in CandidateNames(name))
+        if (OperatingSystem.IsMacOS())
+        {
+            var snapshot = MacProcessListing.Capture(CandidateNames(name));
+            listed = snapshot is not null;
+            foreach (var process in snapshot ?? [])
+            {
+                listing.Add(new(process.Candidate, process.Id, process.StartedAt,
+                    CommandLineOf((process.Id, process.StartedAt?.UtcTicks ?? 0)),
+                    process.Candidate is "node" or "bun" ? null : process.Parent));
+            }
+        }
+        else foreach (var candidate in CandidateNames(name))
         {
             Process[] processes;
             try { processes = Process.GetProcessesByName(candidate); }
