@@ -239,6 +239,9 @@ suites:
     select: affected
     platforms: [win-x64, win-arm64]
     runner: hosted
+    # It runs this project's InjectorIntegrationTests against the published worker, so whatever
+    # reaches the project (its tests, the delivery code, Protocol) reaches this too.
+    project: tests/AgentBridge.Host.Delivery.Tests
     triggers: [src/AgentBridge.Injector/**, src/AgentBridge.Host.Delivery/**]
     command: see ci.yml "The NativeAOT injector types into a real console"
     where: ci.yml product
@@ -250,6 +253,9 @@ suites:
     select: affected
     platforms: [win-x64, win-arm64]
     runner: hosted
+    # It runs this project's HookProcessTests against the published hook, so whatever reaches
+    # the project reaches this too.
+    project: tests/AgentBridge.Hooks.Tests
     triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
     command: see ci.yml "The NativeAOT hook replies and spools as an agent runs it"
     where: ci.yml product
@@ -386,8 +392,8 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
     runner: local
     # Every file generate.mjs writes, since --check compares each one with design/ (it isn't
-    # only design/ changing that can make them disagree).
-    triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**, src/AgentBridge.App.Core/DesignLayout.cs, pwa/index.html, pwa/manifest.webmanifest]
+    # only design/ changing that can make them disagree), the app icon's too (lib/app-icon.mjs).
+    triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**, src/AgentBridge.App.Core/DesignLayout.cs, pwa/index.html, pwa/manifest.webmanifest, pwa/icon.svg, pwa/icons/**, src/AgentBridge.App/Assets/AgentBridge.ico, src/AgentBridge.App/Assets/AgentBridge.png]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
     where: ci.yml design
     status: exists
