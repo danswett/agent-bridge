@@ -29,6 +29,8 @@ a fresh host scan. CLI sign-in, trust and new-session activation stay explicitly
 this is not yet the first-run installer or repair flow. Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
+Version commands are contained in Windows process jobs; non-Windows hosts keep installation
+and ownership detection but explicitly report version probing unavailable for now.
 Home Assistant setup, configuration and verification are outside the first-run design
 while its model is redesigned (#384); existing integrations are unchanged.
 

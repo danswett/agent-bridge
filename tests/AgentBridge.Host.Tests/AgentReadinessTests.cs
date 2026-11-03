@@ -217,8 +217,9 @@ public sealed class AgentReadinessTests : IDisposable
         try
         {
             var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(5)), "claude");
-            Assert.Equal(ReadinessState.NeedsAction, agent.VersionCheck.State);
+            Assert.Equal(ReadinessState.Failed, agent.VersionCheck.State);
             Assert.Contains("timed out", agent.VersionCheck.Detail);
+            Assert.Contains("without confirming cleanup", agent.VersionCheck.Detail);
         }
         finally { release.TrySetResult(new CommandResult(true, false, 0, "1.2.3")); }
     }

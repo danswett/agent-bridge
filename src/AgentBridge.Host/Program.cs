@@ -465,7 +465,7 @@ async Task<int> ServeAsync(HostHandover handover)
     var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
     await using var agentReadiness = new AgentReadinessService(identity.Folder,
         new IntakeState.AgentHomes(options.CopilotHome, options.ClaudeHome, options.CodexHome),
-        settings.Launch, agentLocator, new BatchFileRunner(new CommandRunner()), ServeReadOnly, intake);
+        settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,

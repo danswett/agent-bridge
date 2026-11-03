@@ -118,9 +118,22 @@ public sealed class AgentReadinessService(
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
             limit.CancelAfter(VersionTimeout);
             CommandResult result;
-            try { result = await commands.RunAsync(executable, ["--version"], VersionTimeout, limit.Token).WaitAsync(limit.Token); }
-            catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
+            var pending = commands.RunAsync(executable, ["--version"], VersionTimeout, limit.Token);
+            try { result = await pending.WaitAsync(limit.Token); }
+            catch (OperationCanceledException) when (limit.IsCancellationRequested)
             {
+                // Production probes terminate their job and drain the pipes before returning.
+                // Give that cleanup time to finish before releasing the scan or shutting down.
+                try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+                catch (OperationCanceledException) when (limit.IsCancellationRequested) { }
+                catch (TimeoutException)
+                {
+                    _ = pending.ContinueWith(t => _ = t.Exception, CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    ct.ThrowIfCancellationRequested();
+                    return row with { VersionCheck = new(ReadinessState.Failed, "The version command timed out without confirming cleanup.") };
+                }
+                ct.ThrowIfCancellationRequested();
                 result = new CommandResult(true, true, -1, "");
             }
             var version = result.Ran && !result.TimedOut && result.ExitCode == 0
@@ -135,7 +148,7 @@ public sealed class AgentReadinessService(
                         : "Installed, but the version response was not recognized."),
             };
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception or PlatformNotSupportedException)
         {
             return row.Executable is null
                 ? row with { Installation = new(ReadinessState.Failed, $"Detection failed: {e.Message}") }

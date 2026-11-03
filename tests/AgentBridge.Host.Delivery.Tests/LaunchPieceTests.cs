@@ -112,6 +112,63 @@ public sealed class LaunchPieceTests : IDisposable
         Assert.Equal(["home", "work"], await new AgencyCatalog(new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner())).ProfilesAsync(shim));
     }
 
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_version_probe_timeout_terminates_an_orphaned_grandchild_holding_its_output() => ProbeDescendant(false, false);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task Cancelling_a_version_probe_terminates_its_orphaned_grandchild_before_returning() => ProbeDescendant(false, true);
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
+    public Task A_successful_version_probe_also_terminates_descendants_that_closed_their_output() => ProbeDescendant(true, false);
+
+    async Task ProbeDescendant(bool closeOutput, bool cancel)
+    {
+        var shim = Out("version.cmd");
+        var intermediate = Out("intermediate.cmd");
+        var pidFile = Out("probe.pid");
+        var release = Out("release.txt");
+        File.WriteAllText(intermediate, $"@start \"\" /b \"{Echo}\" --probe-child \"{pidFile}\" {(closeOutput ? "close" : "keep")}\r\n");
+        File.WriteAllText(shim, $"@echo off\r\nstart \"\" /b cmd.exe /d /c \"\"{intermediate}\"\"\r\n:wait\r\nif not exist \"{release}\" goto wait\r\necho fixture 1.2.3\r\n");
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        var runner = new VersionCommandRunner();
+        var pending = runner.RunAsync(shim, ["--version"], TimeSpan.FromSeconds(10), stop.Token);
+        Process? child = null;
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (!File.Exists(pidFile) && DateTime.UtcNow < deadline) { await Task.Delay(10); }
+            Assert.True(File.Exists(pidFile), "The fixture descendant did not start.");
+            child = Process.GetProcessById(int.Parse(File.ReadAllText(pidFile)));
+            File.WriteAllText(release, "continue");
+            if (cancel) { stop.CancelAfter(TimeSpan.FromMilliseconds(100)); }
+            AgentBridge.Host.Core.Usage.CommandResult? result = null;
+            var failure = await Record.ExceptionAsync(async () => result = await pending.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.True(child.HasExited, "The version probe left its fixture descendant running.");
+            if (cancel) { Assert.IsAssignableFrom<OperationCanceledException>(failure); }
+            else
+            {
+                Assert.Null(failure);
+                Assert.NotNull(result);
+                Assert.Equal(!closeOutput, result.TimedOut);
+                if (closeOutput) { Assert.Equal(0, result.ExitCode); Assert.Contains("1.2.3", result.Output); }
+            }
+        }
+        finally
+        {
+            stop.Cancel();
+            if (child is not null)
+            {
+                if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
+                child.Dispose();
+            }
+            try { await pending.WaitAsync(TimeSpan.FromSeconds(2)); }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+        }
+    }
+
     [Fact]
     public void A_line_too_long_for_cmd_exe_is_refused_rather_than_cut()
     {

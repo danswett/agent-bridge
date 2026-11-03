@@ -193,8 +193,13 @@ There is deliberately no aggregate "ready" bit.
 
 The running host scans at startup, every ten minutes and when the app asks. It uses
 Launch's executable locator and running launch configuration, not an app-side PATH probe.
-Installed executables get `--version` with a three-second timeout each; a failed version
-probe does not make an installed CLI missing. A read-only host (including one beside the
+On Windows, installed executables get `--version` with a three-second timeout each in a
+non-breakaway process job assigned atomically at creation. Success, timeout and cancellation
+all terminate remaining descendants and allow one second for process and pipe cleanup.
+The scan waits for cleanup before releasing its gate. Other platforms still detect
+executables and hook ownership, but explicitly report version probing unavailable until
+equivalent process isolation is implemented. A failed version probe does not make an
+installed CLI missing. A read-only host (including one beside the
 legacy bridge) runs no version commands and reports hook setup blocked.
 The guard is checked again before each process: if the legacy bridge starts during a
 scan, subsequent commands are blocked. Earlier observations remain evidence from before
