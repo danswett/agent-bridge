@@ -123,6 +123,8 @@ export class SessionCard {
   #menu = new RowMenu();
   // The delegate open, in the inspector or pushed in the Delegates tab.
   #delegate = null;
+  // Whether the inspector was a pane of its own at the last layout.
+  #wasInspector = false;
 
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
@@ -395,13 +397,16 @@ export class SessionCard {
     const e = this.els;
     const events = delegateEvents(s, now);
     if (!this.#changed('events', events)) { return; }
-    e.events.replaceChildren(...events.map((ev) => h('li', { class: 'delegate-event', dataset: { kind: ev.kind } },
+    // Rebuilt as their ages move on: a name with keyboard focus keeps it, in its new line.
+    const focused = e.events.contains(document.activeElement) ? document.activeElement.closest('.delegate-event')?.dataset.key : null;
+    e.events.replaceChildren(...events.map((ev) => h('li', { class: 'delegate-event', dataset: { kind: ev.kind, key: ev.key } },
       glyph(ev.glyph ?? 'delegating', { size: 12 }),
       h('span', { class: 'delegate-event-text' },
         ev.before ? `${ev.before}${ev.name ? ' ' : ''}` : '',
         ev.name ? h('button', { type: 'button', class: 'delegate-link', dataset: { id: ev.id }, onclick: () => this.openDelegate(ev.id) }, ev.name) : null,
         ev.after ? ` ${ev.after}` : ''))));
     e.events.hidden = events.length === 0;
+    if (focused) { [...e.events.children].find((li) => li.dataset.key === focused)?.querySelector('.delegate-link')?.focus({ preventScroll: true }); }
   }
 
   // A delegate opened from the strip, the list, a nested list or the conversation: in the
@@ -409,6 +414,9 @@ export class SessionCard {
   openDelegate(id) {
     if (!id) { this.closeDelegate(); return; }
     if (!(this.#s.subagents ?? []).some((a) => a.id === id)) { return; }
+    // Opened from inside the detail (its nested list): the button pressed goes with the detail it
+    // was in, so focus follows to the delegate opened, at any width.
+    const fromDetail = this.detail.element.contains(document.activeElement);
     this.#delegate = id;
     if (!this.detail.element.isConnected) { this.els.inspector.insertBefore(this.detail.element, this.els.tools); }
     this.detail.select(id, this.#s);
@@ -419,7 +427,7 @@ export class SessionCard {
     this.#renderDelegates(this.#s);
     this.detail.shown();
     // Pushed in the list's place, focus goes to it; in the inspector it stays where it was.
-    if (!inspector) { this.detail.focus(); }
+    if (!inspector || fromDetail) { this.detail.focus(); }
     this.onDelegate?.();
   }
 
@@ -432,6 +440,7 @@ export class SessionCard {
     this.detail.element.remove();
     delete this.view.dataset.delegate;
     this.#renderDelegates(this.#s);
+    this.#revealTools();
     if (focus) { (this.delegates.row(id) ?? this.els.tabD).focus(); }
     this.onDelegate?.();
   }
@@ -560,6 +569,10 @@ export class SessionCard {
   layoutChanged() {
     this.#readToEnd = null;
     const { inspector } = this.layout();
+    // A delegate shown in the inspector stays shown as the window narrows: pushed in the Delegates
+    // tab. Only then: a tab chosen at a narrower width is left as it was.
+    if (this.#delegate && this.#wasInspector && !inspector && !this.layout().wide && this.#tab !== 'delegates') { this.setTab('delegates'); }
+    this.#wasInspector = inspector;
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
     this.#revealTools();
@@ -610,6 +623,8 @@ export class SessionCard {
   // of the conversation, and the button again goes back.
   showDetails() {
     if (this.layout().inspector) {
+      // A delegate open holds the inspector in Details' place: it gives way.
+      if (this.#delegate) { this.closeDelegate(); }
       this.els.details.scrollIntoView({ block: 'nearest' });
       this.focusDetails();
       return;
@@ -631,8 +646,9 @@ export class SessionCard {
   }
 
   #toolsShown() {
-    // On screen only while Sessions shows (and, on a phone, the session is pushed).
-    return this.#selected && this.viewing() && (this.layout().inspector || this.#tab === 'tools');
+    // On screen only while Sessions shows (and, on a phone, the session is pushed). At three
+    // panes a delegate open takes the inspector in their place, so they are not fetched then.
+    return this.#selected && this.viewing() && (this.layout().inspector ? !this.#delegate : this.#tab === 'tools');
   }
 
   // A phone's overflow menu: Pin, Details and End session (ui.md §6.2).

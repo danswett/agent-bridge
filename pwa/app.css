@@ -749,6 +749,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .strip-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .strip-facts { color: var(--ab-text2); font-variant-numeric: tabular-nums; }
 .strip-facts:empty { display: none; }
+.strip-more { color: var(--ab-text2); align-self: center; white-space: nowrap; font-size: .8rem; }
 @media (pointer: coarse), (max-width: 759px) { .strip-item { min-height: var(--tap); } }
 @media (forced-colors: active) { .strip-item[aria-pressed="true"] { border: 2px solid Highlight; } }
 

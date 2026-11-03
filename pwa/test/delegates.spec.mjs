@@ -426,8 +426,9 @@ test.describe('at three panes', () => {
     const strip = c.locator('.delegate-strip');
     await expect(strip).toBeVisible();
     await expect(c.getByRole('tab', { name: 'Delegates' })).toBeHidden();
-    // One item per delegate the main agent started, running first, then the finished folded.
-    expect(await strip.locator('.strip-item').evaluateAll((els) => els.map((e) => e.dataset.id ?? e.textContent))).toEqual(['demo-agent-witness', 'demo-agent-suite', '2 finished']);
+    // One item per delegate the main agent started, running first, then the finished folded. The
+    // witness's finished review is the witness's: in its "2 nested", not an item of its own.
+    expect(await strip.locator('.strip-item').evaluateAll((els) => els.map((e) => e.dataset.id ?? e.textContent))).toEqual(['demo-agent-witness', 'demo-agent-suite', '1 finished']);
     await expect(strip.locator('.strip-item[data-id="demo-agent-witness"] .strip-facts')).toHaveText(/^\d+m · 2 nested$/);
     const shown = () => c.locator('.inspector > section').evaluateAll((els) => els.filter((e) => e.getClientRects().length).map((e) => e.className));
     expect(await shown()).toEqual(['details', 'tools-panel']);
@@ -458,7 +459,7 @@ test.describe('at three panes', () => {
     const strip = card(page).locator('.delegate-strip');
     await strip.locator('.strip-item[data-id="demo-agent-suite"]').click();
     await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
-    await expect(strip.locator('.strip-fold')).toHaveText('3 finished');
+    await expect(strip.locator('.strip-fold')).toHaveText('2 finished');
     await expect(strip.locator('.strip-fold')).toHaveAttribute('aria-expanded', 'true');
     await expect(strip.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
@@ -546,6 +547,111 @@ test.describe('at three panes', () => {
     await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
     await c.locator('.delegate-events').getByRole('button', { name: 'Run full test suite' }).click();
     await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
+  });
+
+  test('Details from the header at three panes lets the open delegate go, and shows the session\'s Details, focused', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    await expect(pane(page)).toBeVisible();
+    await c.locator('.session-header .details-button').click();
+    await expect(pane(page)).toHaveCount(0);
+    await expect(c.locator('.details .section-head')).toBeVisible();
+    await expect(c.locator('.details .section-head')).toBeFocused();
+    await expect(c.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('the strip says how many delegates the host left out, and shows when that count is all there is', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const strip = c.locator('.delegate-strip');
+    const listed = (fields) => page.evaluate(({ id, fields, at }) => {
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), updatedAt: at, ...fields });
+    }, { id: SESSION, fields, at: later() });
+    await listed({ subagentsMore: 3 });
+    await expect(strip.locator('.strip-more')).toHaveText('3 more delegates not listed');
+    await listed({ subagents: [], subagentsMore: 2 });
+    await expect(strip).toBeVisible();
+    await expect(strip.locator('.strip-more')).toHaveText('2 more delegates not listed');
+  });
+
+  test('the finished fold opens for a finished delegate chosen, and can still be shut over it', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const fold = c.locator('.strip-fold');
+    await fold.click();
+    await c.locator('.strip-item[data-id="demo-agent-lint"]').click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-lint');
+    await fold.click();
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    await expect(c.locator('.strip-item[data-id="demo-agent-lint"]')).toHaveCount(0);
+    // An update to the session leaves it shut.
+    await change(page, 'demo-agent-suite', { line: 'Still going.' });
+    await page.waitForTimeout(300);
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+    // The open delegate finishing opens it, once.
+    await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    await change(page, 'demo-agent-suite', { status: 'ended', outcome: 'done', endedAt: later() });
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await fold.click();
+    await expect(fold).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  test('a name in the conversation\'s events keeps keyboard focus as the events are drawn again', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const lint = c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link');
+    await lint.focus();
+    // A new delegate starting redraws the events.
+    await page.evaluate(({ id, at }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, updatedAt: at, subagents: [{ id: 'demo-agent-new', kind: 'background', name: 'Write the fix', status: 'working', startedAt: at }, ...s.subagents] });
+    }, { id: SESSION, at: later() });
+    await expect(c.locator('.delegate-events > li')).toHaveCount(3);
+    await expect(lint).toBeFocused();
+  });
+
+  test('while a delegate holds the inspector the session\'s Tools are not fetched, and they are once it lets go', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await expect(c.locator('.tools-panel li.tool').first()).toBeVisible();
+    const toolFetches = () => page.evaluate((id) => window.agentBridgeDemo.host.getLog.filter((g) => g.id === id && !g.agent).length, SESSION);
+    const suite = c.locator('.strip-item[data-id="demo-agent-suite"]');
+    await suite.click();
+    await expect(pane(page)).toBeVisible();
+    const before = await toolFetches();
+    await change(page, 'demo-agent-witness', { line: 'One.' });
+    await page.waitForTimeout(2500);
+    await change(page, 'demo-agent-witness', { line: 'Two.' });
+    await page.waitForTimeout(2500);
+    expect(await toolFetches()).toBe(before);
+    await suite.click();
+    await expect.poll(toolFetches).toBeGreaterThan(before);
+  });
+
+  test('a nested delegate opened with the keyboard in the inspector takes focus to its name', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.strip-item[data-id="demo-agent-witness"]').click();
+    const nested = pane(page).locator('.delegate-nested .delegate-summary').first();
+    await nested.focus();
+    await page.keyboard.press('Enter');
+    await expect(pane(page)).not.toHaveAttribute('data-id', 'demo-agent-witness');
+    await expect(pane(page).locator('.delegate-title')).toBeFocused();
+  });
+
+  test('a delegate shown in the inspector stays shown as the window narrows: in the Delegates tab', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    // At three panes the tabs aren't shown, and Conversation is the one chosen.
+    await expect(c).toHaveAttribute('data-tab', 'conversation');
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toHaveAttribute('aria-selected', 'true');
+    await expect(pane(page).locator('.delegate-title')).toHaveText('Run full test suite');
+    await expect(pane(page)).toBeVisible();
   });
 
   test('a delegate\'s start in the conversation is history: its glyph stands still', async ({ page }) => {

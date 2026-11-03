@@ -153,33 +153,51 @@ export class DelegateStrip {
   #open = false;
   #session = null;
   #selected = null;
+  // The finished items as last drawn, so the fold opens as the one open finishes, once.
+  #finishedIds = new Set();
 
   // onSelect(id): an item pressed: its delegate, or null to let the one open go.
   constructor({ onSelect = () => {} } = {}) {
     this.onSelect = onSelect;
     this.fold = h('button', { type: 'button', class: 'strip-item strip-fold', 'aria-expanded': 'false', onclick: () => { this.#open = !this.#open; this.update(this.#session); } },
       glyph('done', { size: 14 }), h('span', { class: 'strip-name' }));
+    this.more = h('span', { class: 'strip-more' });
     this.element = h('div', { class: 'delegate-strip', role: 'group', 'aria-label': 'Delegates', hidden: true });
   }
 
   update(session, now = Date.now(), selected = this.#selected) {
+    const was = this.#selected;
     this.#session = session;
     this.#selected = selected;
     const d = delegateList(session);
-    this.element.hidden = !d || (d.active.length === 0 && d.finished.length === 0);
+    const list = session?.subagents ?? [];
+    // The delegates the main agent started: no parent, or one the list doesn't have. Not depth 0,
+    // which is a row's place in its own group: a child that finished while its parent works is
+    // depth 0 among the finished, and would pass for one of the main agent's own here.
+    const ids = new Set(list.map((a) => a.id));
+    const top = (rows) => rows.filter((r) => !r.parent || r.parent === r.id || !ids.has(r.parent));
+    const active = d ? top(d.active) : [];
+    const finished = d ? top(d.finished) : [];
+    this.element.hidden = !d || (active.length === 0 && finished.length === 0 && !d.more);
     if (!d) { return; }
-    const list = session.subagents ?? [];
-    // An open delegate that finishes stays in view: the fold opens with it.
-    if (selected && d.finished.some((r) => r.id === selected && r.depth === 0)) { this.#open = true; }
-    const top = (rows) => rows.filter((r) => r.depth === 0);
-    const want = [...top(d.active)];
+    // An open delegate stays in view as it finishes, and a finished one chosen is shown: the fold
+    // opens then, once, so it can still be shut over it.
+    const finishedNow = new Set(finished.map((r) => r.id));
+    if (selected && finishedNow.has(selected) && (selected !== was || !this.#finishedIds.has(selected))) { this.#open = true; }
+    this.#finishedIds = finishedNow;
     const live = new Set();
-    const els = want.map((r) => this.#item(r, list, now, selected, live));
-    if (d.finished.length) {
-      this.fold.querySelector('.strip-name').textContent = `${d.finished.length} finished`;
+    const els = active.map((r) => this.#item(r, list, now, selected, live));
+    if (finished.length) {
+      this.fold.querySelector('.strip-name').textContent = `${finished.length} finished`;
       this.fold.setAttribute('aria-expanded', this.#open ? 'true' : 'false');
       els.push(this.fold);
-      if (this.#open) { els.push(...top(d.finished).map((r) => this.#item(r, list, now, selected, live))); }
+      if (this.#open) { els.push(...finished.map((r) => this.#item(r, list, now, selected, live))); }
+    }
+    // What the host left out of the list (its limit or the session budget) is still said here,
+    // where at three panes the Delegates list is not shown.
+    if (d.more) {
+      this.more.textContent = `${plural(d.more, 'more delegate', 'more delegates')} not listed`;
+      els.push(this.more);
     }
     keepFocus(this.element, () => {
       els.forEach((el, i) => { if (this.element.children[i] !== el) { this.element.insertBefore(el, this.element.children[i] ?? null); } });
