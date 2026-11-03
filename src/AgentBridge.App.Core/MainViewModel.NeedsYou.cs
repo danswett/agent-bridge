@@ -59,9 +59,10 @@ public sealed partial class MainViewModel
                 existing = null;
             }
             var entry = existing ?? new NeedsYouEntry(this, key, m.Key, card);
-            // A question asked since the machine's list was read: its entry's mark fades in. One
-            // rebuilt for new words, or listed on connecting, is not news.
-            if (existing is null && !rebuilt && baselined.Contains(m)) { arriving.Add(entry); }
+            // A question a live upsert just asked: its entry's mark fades in. One rebuilt for new
+            // words, listed as a list is read, or back as its machine's rows are confirmed, is not
+            // news. Every entry added still holds the lane's buttons (SessionsPage.GuardLane).
+            if (existing is null && !rebuilt && key == askedNow) { arriving.Add(entry); }
             entry.Refresh(several ? m.Name : null, now);
             entries.Add(entry);
         }

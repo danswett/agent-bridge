@@ -76,6 +76,33 @@ public sealed class NeedsYouTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Sessions_a_recovery_snapshot_lists_on_the_same_connection_are_not_arrivals()
+    {
+        await SnapshotAsync();
+        var added = new System.Collections.Concurrent.ConcurrentQueue<(string Id, bool Arriving)>();
+        ui.Post(() =>
+        {
+            main.Sessions.CollectionChanged += (_, e) => { foreach (SessionCardViewModel c in e.NewItems ?? Array.Empty<object>()) { added.Enqueue((c.Id, main.IsArriving(c))); } };
+            main.NeedsYou.CollectionChanged += (_, e) => { foreach (NeedsYouEntry n in e.NewItems ?? Array.Empty<object>()) { added.Enqueue(($"lane:{n.Card.Id}", main.IsArriving(n))); } };
+        });
+        // Sessions the app never heard of, which only the snapshot after a gap in the events lists.
+        lock (host.Sessions)
+        {
+            host.Sessions.Add(Make.Session("unseen", updated: Make.T0.AddMinutes(4)));
+            host.Sessions.Add(Make.Session("unseen-asking", question: Make.Approval("u1") with { AskedAt = Make.T0.AddMinutes(4) }, updated: Make.T0.AddMinutes(4)));
+        }
+        var before = host.Sent(Ops.SessionsSubscribe).Count;
+        foreach (var ch in host.Channels.OfType<AgentBridge.Local.LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+        await host.SendAsync(Events.SessionUpsert, Make.Session("idle", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionsSubscribe).Count > before, "the sessions to be subscribed again");
+        await Wait.UntilAsync(() => connection.Sessions.Complete && TestUi.Read(() => main.Sessions.Any(c => c.Id == "unseen") && main.NeedsYou.Any(e => e.Card.Id == "unseen-asking")), "the recovery snapshot");
+        Assert.Contains(added, a => a.Id == "unseen");
+        Assert.Contains(added, a => a.Id == "lane:unseen-asking");
+        Assert.DoesNotContain(added, a => a.Arriving);
+    }
+
+    [Fact]
     public async Task Approve_once_shows_its_ring_only_while_its_answer_is_on_its_way()
     {
         using var gate = new ManualResetEventSlim();

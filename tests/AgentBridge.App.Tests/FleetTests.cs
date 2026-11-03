@@ -127,6 +127,24 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Another_machines_questions_listed_as_its_list_is_read_or_read_again_on_reconnecting_are_not_arrivals()
+    {
+        var lane = new System.Collections.Concurrent.ConcurrentQueue<(string Id, bool Arriving)>();
+        ui.Post(() => main.NeedsYou.CollectionChanged += (_, e) =>
+        {
+            foreach (NeedsYouEntry n in e.NewItems ?? Array.Empty<object>()) { lane.Enqueue((n.Card.Id, main.IsArriving(n))); }
+        });
+        await BothMachinesAsync();
+        Assert.Contains(lane, a => a.Id == "there");
+
+        await GoneAsync();
+        Return();
+        await Wait.UntilAsync(() => Remote().Current && TestUi.Read(() => main.NeedsYou.Any(e => e.Card.Id == "there")), "the other machine back, its question confirmed");
+        Assert.True(lane.Count(a => a.Id == "there") >= 2);
+        Assert.DoesNotContain(lane, a => a.Arriving);
+    }
+
+    [Fact]
     public async Task An_answer_on_another_machines_card_goes_to_that_machines_host_only()
     {
         remoteHost.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
