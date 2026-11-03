@@ -39,12 +39,13 @@ The same rules, with these differences, each deliberate:
 | | agent-ha-bridge | This host |
 |---|---|---|
 | Confirming | Any second press of the shared button within 10 s | The second press carries the token the first press was given (`confirm`), so a press from another device or a resent first press is never taken for the second |
-| Process identity | pid and start time, read again on the second press | pid and start time, checked on both presses, and then the process is **held open by handle** from just before `/exit` until it has gone, so the id cannot pass to another process in between and termination can only reach the process that was checked |
+| Process identity on Windows | pid and start time, read again on the second press | pid and start time, checked on both presses, and then the process is **held open by handle** from just before `/exit` until it has gone, so the id cannot pass to another process in between and termination can only reach the process that was checked |
 | A session asking a question | `/exit` typed into it | Terminated without `/exit`: typed words land in the question's input, and Enter could submit `/exit` as the answer. Asking is read from the session and, for Copilot, from the transcript (a subagent's question is only there) |
 | `/exit` that could not be typed | Waits out the 12 s anyway | Terminates at once |
 | Who it refuses | Whatever `Stop-Process` refuses | Refused before anything is armed: an elevated process (integrity High or above), another user's (token user SID differs), one whose start time cannot be read, and the host's own process |
 | The window or tab | Closes the console the bridge launched | Left open for a terminal the person opened. A session this host launched has a console of its own, which normally closes when the agent exits, since nothing else runs in it |
-| macOS and Linux | tmux | Not offered yet (`sessions.stop` left out), as for answers and replies |
+| macOS | tmux | Owned panes use the same graceful-stop checks; force stop revalidates and closes only the owned pane, never an arbitrary PID. See [managed delivery](macos-managed-delivery.md) |
+| Linux | tmux | Not offered yet (`sessions.stop` left out) |
 
 ## In order, for every press
 

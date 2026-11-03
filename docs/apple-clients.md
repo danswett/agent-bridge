@@ -56,7 +56,9 @@ cooperative executor, which also runs client callbacks and timeout tasks.
 See [the parity checklist](apple-parity.md) for remaining work. This is not yet a
 shipping-parity claim: a real .NET-host/relay interoperability run,
 physical/minimum-OS devices, VoiceOver and APNs delivery remain acceptance work.
-The current delivery target is local development builds; signing and distribution
-are deliberately deferred. The Mac/Linux host also lacks answer/reply/stop/launch
-backends and local host management; the client must respect those capability
-limits rather than bypass them. Live hooks, Home Assistant and daemons are untouched.
+The current delivery target is local development builds; release signing and
+distribution are deliberately deferred. Apple Development signing supports local
+physical-device builds. The [Mac host](macos-host.md) now supplies managed tmux
+answer/reply/stop/launch backends for sessions it owns. Mac administration remains
+an operator CLI workflow; Linux delivery is unsupported. The clients respect
+those capability limits. Live hooks, Home Assistant and legacy daemons are untouched.
