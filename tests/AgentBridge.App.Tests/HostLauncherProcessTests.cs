@@ -142,6 +142,9 @@ public sealed class HostLauncherProcessTests : IDisposable
     [Fact]
     public void Only_one_launcher_at_a_time_holds_the_record_which_the_app_can_read_and_which_goes_with_it()
     {
+        // Windows's share modes, which the launcher (Windows only) relies on; elsewhere they are
+        // advisory.
+        if (!OperatingSystem.IsWindows()) { return; }
         var record = Path.Combine(folder, HostLauncherContract.LauncherRecord);
         var first = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
         var logged = new List<string>();

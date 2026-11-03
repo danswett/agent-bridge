@@ -69,4 +69,7 @@ public sealed class LauncherFiles(string profileFolder, Action<string> log) : ID
         record?.Dispose();
         record = null;
     }
+
+    // Whether this launcher holds its record now.
+    public bool Holding => record is not null;
 }

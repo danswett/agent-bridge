@@ -28,7 +28,7 @@ var supervisor = new HostSupervisor
     {
         // Whether the app's Stop finds this launcher without the logon task. When it may not, the
         // host looks for the stop marker itself once its pipe is open (CheckStopVariable).
-        var recorded = files?.HoldRecord(Environment.ProcessId, startedUtc) ?? true;
+        var recorded = files is null || files.Holding;
         if (job is not null && OperatingSystem.IsWindows())
         {
             // Watched: host.restart hands its replacement to this launcher, since the host cannot
@@ -79,6 +79,7 @@ var supervisor = new HostSupervisor
     Log = log,
     Stopped = () => files?.Stopped() ?? false,
     ClearStopped = () => files?.ClearStopped(),
+    BeforeStart = () => files?.HoldRecord(Environment.ProcessId, startedUtc),
 };
 try { return await supervisor.RunAsync(); }
 finally

@@ -119,7 +119,7 @@ public sealed class HostHandover
     public bool StoppedFromTheApp(string profileFolder) =>
         checkStop && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false, bool checkStop = false)
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action<bool> startReplacement, bool supervised = false, bool checkStop = false)
     {
         var handover = new HostHandover { checkStop = checkStop };
         try
@@ -133,7 +133,7 @@ public sealed class HostHandover
         {
             // A supervised host that fails on its way out ends as a crash instead, which the
             // launcher starts again too.
-            if (handover.Requested && !supervised) { startReplacement(); }
+            if (handover.Requested && !supervised) { startReplacement(checkStop); }
         }
     }
 }

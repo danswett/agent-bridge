@@ -534,6 +534,74 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_stop_that_fails_with_task_scheduler_unavailable_still_leaves_no_marker_for_a_host_that_runs_on()
+    {
+        // Answers the stop and goes on running; and Task Scheduler cannot be asked about the task.
+        host.On(HostOps.Stop, _ => new { stopping = true });
+        host.Start();
+        manager.SetStartAtSignIn(true);
+        tasks.Unavailable = true;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => manager.StopAsync());
+
+        Assert.False(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_cancelled_stop_is_reported_promptly_even_when_the_hosts_pipe_never_answers()
+    {
+        // A pipe that takes a connection and never answers: every look waits as long as it is let.
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new IOException("unreachable");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+        };
+        using var cancel = new CancellationTokenSource();
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => m.StopAsync(cancel.Token).WaitAsync(TimeSpan.FromSeconds(30)));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_ends_both_the_logon_tasks_run_and_a_launcher_an_earlier_run_of_the_app_started()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        m.SetStartAtSignIn(true);
+        // The task's run and a launcher started directly by an earlier run of the app, each still
+        // starting a host.
+        tasks.StillRunningWhile = () => true;
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        using var launcherFiles = new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { });
+        Assert.True(launcherFiles.HoldRecord(77, startedUtc));
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+
+        await m.StopAsync();
+
+        Assert.Equal([m.TaskName], tasks.Ended);
+        Assert.Equal([77], processes.Killed);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task A_stop_that_ends_the_launcher_returns_only_once_the_host_in_its_job_has_gone_too()
     {
         var clock = new FakeTimeProvider(Make.T0);

@@ -274,6 +274,8 @@ sealed class FakeTasks : ILogonTasks
         ended.Add(name);
     }
     public bool Exists(string name) => Registered.ContainsKey(name);
+    // Task Scheduler that cannot be reached: asking whether a task runs fails.
+    public bool Unavailable;
     public void Register(string name, string xml) => Registered[name] = xml;
     public void Delete(string name) => Registered.Remove(name);
     public void Run(string name)
@@ -285,6 +287,7 @@ sealed class FakeTasks : ILogonTasks
     }
     public bool IsRunning(string name)
     {
+        if (Unavailable) { throw new InvalidOperationException("Task Scheduler is not available"); }
         if (ended.Contains(name)) { return false; }
         if (StillRunningWhile is { } running) { return running(); }
         if (StillRunningLooks <= 0) { return false; }

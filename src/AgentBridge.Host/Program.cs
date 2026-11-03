@@ -784,11 +784,14 @@ static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindow
 
 // host.restart: the same command again, without a window, started once this process has stopped
 // serving and let go of the profile's lock (HostHandover). Only for a host the logon task's
-// launcher does not watch; a watched one leaves this to the launcher.
-void RestartSelf()
+// launcher does not watch; a watched one leaves this to the launcher. One whose launcher could not
+// vouch for it (HostLauncherContract.CheckStopVariable) hands its look for the app's stop on to
+// the replacement, which no launcher can be asked about either (#420's review).
+void RestartSelf(bool checkStop)
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };
     foreach (var a in args) { start.ArgumentList.Add(a); }
+    if (checkStop) { start.Environment[HostLauncherContract.CheckStopVariable] = "1"; }
     using var _ = ProcessLaunch.Start(start);
 }
 

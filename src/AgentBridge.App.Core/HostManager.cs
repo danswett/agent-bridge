@@ -51,8 +51,11 @@ public interface IProcesses
 
 public sealed class SystemProcesses : IProcesses
 {
-    // The processes this started, by handle: whether one runs, and ending it, are asked of the
-    // process itself, never of whatever has its pid by then (a launcher long gone, its pid reused).
+    // The processes this started or took on, by handle: whether one runs, and ending it, are asked
+    // of the process itself, never of whatever has its pid by then. Kept after they exit, since
+    // Windows never gives a pid to another process while a handle to the old one is open: a pid
+    // this tracked stays that process's, so a Kill after it exited ends nothing (#420's review).
+    // A launcher or two a run of the app, so nothing to speak of.
     readonly System.Collections.Concurrent.ConcurrentDictionary<int, Process> started = new();
 
     public int Start(string path, IReadOnlyList<string> arguments)
@@ -66,12 +69,7 @@ public sealed class SystemProcesses : IProcesses
 
     public bool IsRunning(int pid)
     {
-        if (started.TryGetValue(pid, out var mine))
-        {
-            if (!mine.HasExited) { return true; }
-            if (started.TryRemove(pid, out _)) { mine.Dispose(); }
-            return false;
-        }
+        if (started.TryGetValue(pid, out var mine)) { return !mine.HasExited; }
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
@@ -79,7 +77,7 @@ public sealed class SystemProcesses : IProcesses
 
     public bool Adopt(int pid, long startedTicks)
     {
-        if (started.TryGetValue(pid, out var mine) && IsRunning(pid)) { return mine.StartTime.ToUniversalTime().Ticks == startedTicks; }
+        if (started.TryGetValue(pid, out var mine)) { return !mine.HasExited && mine.StartTime.ToUniversalTime().Ticks == startedTicks; }
         Process p;
         try { p = Process.GetProcessById(pid); }
         catch (ArgumentException) { return false; }
@@ -486,18 +484,28 @@ public sealed class HostManager
         }
     }
 
-    // After a stop that failed: whether the host or its launcher is still there. Unknown is gone,
-    // keeping the marker, which at worst spares a launcher's restart the person can still make.
+    // After a stop that failed: whether the host or its launcher is still there. Each is looked
+    // for on its own, so one that cannot be (Task Scheduler unavailable, say) does not hide the
+    // others; a host whose pipe takes a connection is there, whether or not it answers, and the
+    // look is bounded on its own, so a cancelled stop is reported promptly (#420's review).
+    // Unknown is gone, keeping the marker, which at worst spares a launcher's restart the person
+    // can still make.
     async Task<bool> StillThereAsync()
     {
+        if (Looks(() => tasks.Exists(TaskName) && tasks.IsRunning(TaskName)) || Looks(() => CurrentLauncher() is not null)) { return true; }
+        using var bound = new CancellationTokenSource(StopTimeout, Time);
         try
         {
-            if (LauncherRunning()) { return true; }
-            await using var ch = await connect(CancellationToken.None);
-            await ch.HelloAsync(CancellationToken.None);
+            await using var ch = await connect(bound.Token);
             return true;
         }
         catch (LocalRefusedException) { return true; }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return false; }
+    }
+
+    static bool Looks(Func<bool> look)
+    {
+        try { return look(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException)) { return false; }
     }
 
@@ -571,8 +579,14 @@ public sealed class HostManager
         }
     }
 
-    bool LauncherRunning() =>
-        tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || CurrentLauncher() is not null;
+    // The logon task's run, and a launcher this app or an earlier run of it started, each looked
+    // for every time: both can be there at once (#420's review), and both are ended at the
+    // deadline.
+    bool LauncherRunning()
+    {
+        var task = tasks.Exists(TaskName) && tasks.IsRunning(TaskName);
+        return CurrentLauncher() is not null || task;
+    }
 
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)

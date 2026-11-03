@@ -229,11 +229,15 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   profile's folder, held open so no second launcher can write over it and deleted as its handle
   closes, however it ends; an app opened after it started, with no logon task, finds it to wait
   for or end, and a process since given its pid is told apart by its start time. A `shadow run`
-  launcher neither records itself nor touches the marker. A host the launcher cannot vouch for
+  launcher neither records itself nor touches the marker. A launcher looks for the marker again
+  before every start of the host, once its record is held, so a Stop that came just after it
+  cleared the last one is honoured even when the app could not find it yet. A host the launcher cannot vouch for
   (one it could not create in its job, which is then also not told it is watched, or one started
   while it could not hold its record) looks for the marker itself once its pipe is open and
-  exits without serving if it is there. A Stop that fails otherwise (timed out, cancelled) while
-  the host or its launcher is still there clears the marker too. A host that refuses the app's
+  exits without serving if it is there, and hands that look on to the replacement it starts after
+  `host.restart`. A Stop that fails otherwise (timed out, cancelled) while
+  the host or its launcher is still there clears the marker too, each looked for on its own and
+  within the stop timeout. A host that refuses the app's
   connection (one of them elevated) is a refused Stop: left running, with its launcher, and the
   marker cleared. Without the task, a Start while a launcher the app (or an earlier run of it)
   started is between crash restarts waits for its host rather than starting a second launcher.
