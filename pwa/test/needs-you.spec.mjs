@@ -550,6 +550,9 @@ test.describe('a moment before the lane takes a click', () => {
     await ask(page, LAND, permission());
     await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
     await expect(entries(page)).toHaveCount(2);
+    // Responses held, so the answer stays on its way and its entry in the lane however slow the
+    // runner: what moves the next one is the status appearing, not the entry going.
+    await hold(page);
     // The first entry answered by a key (which waits for nothing): its status appears beneath its
     // buttons and the entry grows, moving the next one down. A frame later, a click lands on the
     // second entry's Approve once.
@@ -557,7 +560,7 @@ test.describe('a moment before the lane takes a click', () => {
       const [a, b] = document.querySelectorAll('#needs-you .needs-entry');
       a.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const grew = !a.querySelector('.needs-status').hidden;
+      const grew = !a.querySelector('.needs-status').hidden && a.isConnected;
       b.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
       return { grew, id: b.dataset.id };
     });
@@ -580,6 +583,7 @@ test.describe('a moment before the lane takes a click', () => {
     expect(pushed).toBe(true);
     await page.waitForTimeout(100);
     expect((await log(page)).length).toBe(1);
+    await release(page);
   });
   test('in a scrolled list, an answer going in the last entry moves no other answer, and the lane takes the next click', async ({ page }) => {
     await page.setViewportSize({ width: 1000, height: 500 });
@@ -588,6 +592,9 @@ test.describe('a moment before the lane takes a click', () => {
     await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
     await page.evaluate(() => { document.getElementById('list-pane').scrollTop = 40; });
     await still(page);
+    // Responses held: the answer stays on its way, so its entry stays, however slow the runner.
+    // Its going would be a change to the lane, and rightly hold the next click.
+    await hold(page);
     // The last entry answered by a key: its status appears beneath its own buttons, so nothing
     // that can be clicked moves. Every Resend stays hidden throughout, with no place of its own.
     const after = await page.evaluate(async () => {
@@ -597,9 +604,10 @@ test.describe('a moment before the lane takes a click', () => {
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const armed = a.closest('.needs-you-list').hasAttribute('data-arriving');
       a.querySelector('.needs-deny').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-      return { scrolled: pane.scrollTop, grew: !b.querySelector('.needs-status').hidden, armed };
+      return { scrolled: pane.scrollTop, grew: !b.querySelector('.needs-status').hidden, stays: b.isConnected, armed };
     });
-    expect(after).toEqual({ scrolled: 40, grew: true, armed: false });
+    expect(after).toEqual({ scrolled: 40, grew: true, stays: true, armed: false });
+    await release(page);
     await expect.poll(async () => (await log(page)).length).toBe(2);
   });
 
@@ -638,8 +646,13 @@ test.describe('a moment before the lane takes a click', () => {
     await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
     const held = () => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'));
     const step = () => page.evaluate(() => document.getElementById('list-pane').dispatchEvent(new Event('scroll')));
-    // Opened from its entry: the list scrolls to its row, a step at a time over 600 ms.
-    await entryFor(page, CODEX).locator('.needs-title').evaluate((t) => t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+    // Opened from its entry: the list scrolls to its row, a step at a time over 600 ms. The
+    // browser's own scroll is stilled, as its steps would come in real time while the page's clock
+    // stands still; the test makes the steps instead.
+    await entryFor(page, CODEX).locator('.needs-title').evaluate((t) => {
+      Element.prototype.scrollIntoView = function () {};
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    });
     expect(await held()).toBe(true);
     for (let i = 0; i < 10; i += 1) {
       await page.clock.runFor(60);

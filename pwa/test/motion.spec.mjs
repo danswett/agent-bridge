@@ -421,7 +421,9 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
       found: document.querySelectorAll('#leaving, #link, #b, .session[data-id="x"]').length,
       urls: all.filter((n) => (n.getAttribute('style') ?? '').includes('url(')).length,
     };
-    await new Promise((r) => setTimeout(r, 300));
+    // Long enough for anything in it to have run, and for its motion to end, when it goes: on a
+    // busy runner a motion can start a while after it is asked for.
+    await Promise.all([new Promise((r) => setTimeout(r, 300)), a.finished.catch(() => {})]);
     out.ran = window.__ran ?? null;
     out.gone = !host.isConnected;
     return out;
