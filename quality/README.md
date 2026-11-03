@@ -197,23 +197,28 @@ manual rehearsal to the automated tests.
 
 ## 4. Choosing tests from what changed
 
-One selector, `quality/tools/select`, serves both ring 0 on a laptop and ring 1 in CI, so
-both agree on what a change needs.
+One selector, `tools/AgentBridge.Quality` (`agent-bridge-quality select`), serves both ring 0 on a
+laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a change needs. Its
+`check` command is the completeness check in step 5.
 
-1. **What changed:** `git diff --name-only <merge-base>...HEAD`, plus uncommitted files
-   locally. CI checks out with the base fetched, not shallow.
+1. **What changed:** `git diff --name-only <merge-base>...HEAD`, plus uncommitted and untracked
+   files locally. CI checks out with the base fetched, not shallow.
 2. **.NET, derived from the code itself, not hand-kept:** map each changed file to the
    project that owns it. Walk the `ProjectReference` graph backwards to every test project
-   that reaches it. For example, a change to `AgentBridge.Protocol` reaches every test
-   project but `transport` and `hooks`. A change to `AgentBridge.Relay` reaches only
-   `transport` (and the relay's container and staging suites). The graph today, each
-   project with what it references:
+   that reaches it. A file a project links in from outside its folder (a shared fixture,
+   `docs/protocol/examples`) belongs to that project too. For example, a change to
+   `AgentBridge.Protocol` reaches every test project but `transport` and `hooks`. A change to
+   `AgentBridge.Relay` reaches `transport`, and through it `app-core` and `host`, because
+   App.Tests and Host.Tests reference Transport.Tests, which references Relay (plus the relay's
+   container and staging suites). The graph today, each project with what it references:
 
    ```
    Host.Core     -> Protocol, Hooks          Local     -> Protocol, Transport
    Host.Delivery -> Protocol, Host.Core      Relay     -> Transport
    HomeAssistant -> Host.Core                App.Core  -> Protocol, Local, Host.Core
    Host          -> Host.Core, Host.Delivery, Transport, Local, HomeAssistant
+   Transport.Tests -> Transport, Relay, RelaySmoke
+   App.Tests     -> App.Core, Transport.Tests      Host.Tests -> Host, Transport.Tests
    ```
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
@@ -239,17 +244,18 @@ Later, once per-test coverage is collected (§5), selection can narrow from proj
 individual test classes in the slow projects. Project-level selection already captures most
 of the benefit, because the slow projects sit at the top of the graph.
 
-Ring 0's command, the same on Windows, Linux and macOS (PowerShell 7, as `build/` uses):
+Ring 0's command, the same on Windows, Linux and macOS (PowerShell 7.4 or later):
 
 ```
-pwsh quality/run.ps1            # what this change reaches, on this OS, unit and component
+pwsh quality/run.ps1            # what this change reaches, on this OS, in-process tests only
 pwsh quality/run.ps1 -Ring 1    # what the PR gate would run here
 pwsh quality/run.ps1 -Explain   # the selection and why, without running
 pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
-Agents will follow the same loop: the PR that adds `quality/run.ps1` (#355) also points
-AGENTS.md's Tests section at it, to run before a push.
+People and agents follow the same loop: AGENTS.md's Tests section says to run
+`pwsh quality/run.ps1` before a push. It skips, with a note, suites that only CI can run, suites
+that are planned, and suites whose tool (Node, Swift) isn't installed.
 
 ## 5. Coverage, timing, flakes and reports
 
@@ -346,7 +352,7 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 4. `Category` traits on the process-level tests in Host.Delivery and Hooks.
 
 **Phase 1: the inner loop and the PR gate (weeks 2–3)**
-1. `quality/tools/select` with its tests: graph walk, triggers, fail-safe, explain.
+1. The selector (`tools/AgentBridge.Quality`) with its tests: graph walk, triggers, fail-safe, explain.
 2. `quality/run.ps1` for ring 0.
 3. `ci.yml` restructured: `plan`, then selected jobs, then `quality-gate`. Branch protection
    moved to `quality-gate` alone, and the owner asked first.

@@ -49,6 +49,16 @@ public class CompletenessTests
     }
 
     [Fact]
+    public void A_where_can_switch_workflow_files_and_one_that_names_no_workflow_is_prose()
+    {
+        var parsed = Completeness.ParseWhere("dependencies.yml review, dependencies.yml audit; relay.yml build, staging")
+            .Select(w => $"{w.File}: {string.Join(" ", w.Jobs)}");
+
+        Assert.Equal(["dependencies.yml: review", "dependencies.yml: audit", "relay.yml: build staging"], parsed);
+        Assert.Empty(Completeness.ParseWhere("GitHub secret scanning with push protection (a repository setting, not a workflow job)"));
+    }
+
+    [Fact]
     public void A_where_that_names_a_job_that_doesnt_exist_is_reported()
     {
         var problems = Check(workflows: new Dictionary<string, IReadOnlyList<string>> { ["ci.yml"] = ["product"] });

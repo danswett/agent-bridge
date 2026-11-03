@@ -95,17 +95,36 @@ static class Completeness
 
     /// <summary>
     /// "ci.yml product" names one job, "ci.yml spikes, s2-noise-interop" several, and
-    /// "ha-contract-drift.yml" alone the whole workflow. Several files are separated by ';'.
+    /// "ha-contract-drift.yml" alone the whole workflow. An item that starts with another file
+    /// switches to it ("dependencies.yml review, dependencies.yml audit"; ';' works too). A where
+    /// that doesn't start with a workflow file is prose about a place that isn't one (secret-scan's
+    /// "GitHub secret scanning ..."), so it names no jobs.
     /// </summary>
     public static IEnumerable<(string File, IReadOnlyList<string> Jobs)> ParseWhere(string where)
     {
-        foreach (var part in where.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        static bool IsWorkflow(string token) =>
+            token.EndsWith(".yml", StringComparison.Ordinal) || token.EndsWith(".yaml", StringComparison.Ordinal);
+
+        var items = where.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (items.Length == 0 || !IsWorkflow(items[0].Split(' ')[0]))
+            yield break;
+        string? file = null;
+        var jobs = new List<string>();
+        foreach (var item in items)
         {
-            var space = part.IndexOf(' ');
-            var file = space < 0 ? part : part[..space];
-            var jobs = space < 0 ? [] : part[(space + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            yield return (file, jobs);
+            var space = item.IndexOf(' ');
+            var first = space < 0 ? item : item[..space];
+            if (IsWorkflow(first))
+            {
+                if (file is not null)
+                    yield return (file, jobs);
+                file = first;
+                jobs = space < 0 ? [] : [item[(space + 1)..].Trim()];
+            }
+            else
+                jobs.Add(item);
         }
+        yield return (file!, jobs);
     }
 
     static IEnumerable<(string Path, bool HasPlaywrightSpecs)> PwaSpecFolders(IEnumerable<string> tracked) =>

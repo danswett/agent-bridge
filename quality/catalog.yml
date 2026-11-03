@@ -50,12 +50,15 @@ global_triggers:
   - quality/**
 
 no_test_paths:
-  # Changes only here select no suite but docs-links (below). docs/protocol/** is not here:
+  # Changes only here select only suites whose triggers name them: docs-links (below) for
+  # Markdown, nothing for the rest; never the sentinels. docs/protocol/** is not here:
   # the protocol specs are contracts, and reach protocol, pwa-unit and apple-core.
   - '*.md'
   - docs/*.md
   - docs/design/**
-  - design/preview.png
+  - .gitignore
+  - LICENSE
+  - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
 
 suites:
   # ---------------------------------------------------------------- .NET unit and component
@@ -186,6 +189,19 @@ suites:
     baseline: { tests: 72, seconds: 3 }
     status: exists
 
+  - id: quality-tool
+    kind: unit
+    ring: 0
+    select: affected
+    # The selector and its catalog checks (quality/README.md §4). A change to it can change any
+    # selection, so its own tests run before anything trusts it.
+    platforms: [win-x64, linux-x64]
+    runner: local
+    project: tests/AgentBridge.Quality.Tests
+    command: dotnet test tests/AgentBridge.Quality.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: mac-host
     kind: component
     ring: 1
@@ -256,6 +272,18 @@ suites:
     where: ci.yml app
     status: exists
 
+  - id: app-publish
+    kind: packaging
+    ring: 2
+    select: always
+    # Every merge to main: only main's newest commit passes the gate, then the x64 and Arm64
+    # packages become one GitHub pre-release, which installed copies update from.
+    platforms: [win-x64, win-arm64]
+    runner: hosted
+    command: see ci.yml publish-gate and publish (main only)
+    where: ci.yml publish-gate, publish
+    status: exists
+
   - id: app-upgrade
     kind: packaging
     ring: 2
@@ -291,6 +319,19 @@ suites:
     where: ha-contract-drift.yml
     status: exists
 
+  - id: ha-contract-fixtures
+    kind: integration
+    ring: 1
+    select: affected
+    # ha-contract-drift.yml on a pull request: the exporter that records the HA contract
+    # fixtures, run at the fixtures' pinned agent-ha-bridge commit, must reproduce them exactly.
+    platforms: [win-x64]
+    runner: hosted
+    triggers: [tools/ha-contract/**, tests/AgentBridge.HomeAssistant.Tests/Fixtures/**]
+    command: see ha-contract-drift.yml (pull_request)
+    where: ha-contract-drift.yml
+    status: exists
+
   - id: agent-drift
     kind: integration
     ring: 3
@@ -321,7 +362,7 @@ suites:
     kind: static
     ring: 0
     select: affected
-    platforms: [linux-x64]
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
     runner: local
     triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
@@ -375,6 +416,19 @@ suites:
     triggers: [pwa/tools/**, pwa/index.html, .github/workflows/pages.yml]
     command: see ci.yml pwa "The Pages build accepts the live relay and its blob store, and refuses bad ones"
     where: ci.yml pwa
+    status: exists
+
+  - id: pwa-pages
+    kind: packaging
+    ring: 2
+    select: affected
+    # pages.yml on main: builds the site (the PWA at /app/ and the spikes' pages), checks its CSP
+    # names the relay and blob store, and publishes it to GitHub Pages.
+    platforms: [linux-x64]
+    runner: hosted
+    triggers: ['spikes/**/web/**', pwa/**, design/fonts/**, .github/workflows/pages.yml]
+    command: see pages.yml deploy
+    where: pages.yml deploy
     status: exists
 
   - id: pwa-iphone
@@ -439,8 +493,9 @@ suites:
     platforms: [linux-x64]
     runner: staging
     triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, tools/AgentBridge.RelaySmoke/**, infra/**]
-    command: see relay.yml staging "Smoke test"
-    where: relay.yml staging
+    # build makes the image staging deploys and smoke-tests.
+    command: see relay.yml build and staging "Smoke test"
+    where: relay.yml build, staging
     status: exists
 
   - id: relay-production-smoke
@@ -449,8 +504,9 @@ suites:
     select: always
     platforms: [linux-x64]
     runner: staging
-    command: see relay.yml production
-    where: relay.yml production
+    # rollback is production's other path: an earlier image, rolled out and smoke-tested the same way.
+    command: see relay.yml production and rollback
+    where: relay.yml production, rollback
     status: exists
 
   # ---------------------------------------------------------------- spikes (kept honest, not product)
@@ -551,7 +607,10 @@ suites:
     # GitHub secret scanning with push protection is on for the repository; the hook is opt-in
     # (AGENTS.md, Secrets) and flags 13 known false positives (test keys, Azure role ids) only
     # when a commit changes those lines.
-    command: pre-commit install, once per clone; then gitleaks runs on each commit (.pre-commit-config.yaml)
+    # Install the hook once per clone with `pre-commit install`; the command below scans what is
+    # staged, as the hook does at each commit.
+    triggers: [.pre-commit-config.yaml]
+    command: pre-commit run gitleaks
     where: GitHub secret scanning with push protection (a repository setting, not a workflow job)
     status: exists
 
@@ -632,7 +691,7 @@ suites:
     kind: a11y
     ring: 0
     select: affected
-    platforms: [linux-x64]
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
     runner: local
     triggers: [design/**, tools/design-gen/**]
     command: node --test tools/design-gen/test/contrast.test.mjs
