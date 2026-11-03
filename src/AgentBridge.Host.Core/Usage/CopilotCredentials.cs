@@ -62,10 +62,6 @@ public sealed class WindowsCredentialStore : ICredentialStore
 // login (Windows), then `gh auth token` for the same login. Read, used for one request and
 // dropped: never logged, never sent anywhere but api.github.com, never written.
 //
-// macOS's keychain item is not read: reading it raises an authorization panel that the CLI's
-// next token refresh invalidates, so the prompt cannot be made to stop by answering it
-// (agent-ha-bridge #122). agent-ha-bridge reads it only when usage.keychain says to; this host
-// does not take that setting yet (#52), so it never does.
 public sealed class CopilotCredentials(UsageOptions options, ICommandRunner commands, ICredentialStore? store = null,
     Func<string, string?>? environment = null, Func<string?>? findGh = null, TimeProvider? time = null, Action<string>? log = null)
 {
@@ -75,6 +71,8 @@ public sealed class CopilotCredentials(UsageOptions options, ICommandRunner comm
     readonly Action<string> say = log ?? (_ => { });
     readonly Dictionary<string, string> reasons = new(StringComparer.Ordinal);
     readonly object sync = new();
+    readonly SemaphoreSlim keychainGate = new(1);
+    readonly Dictionary<string, string?> keychainResults = new(StringComparer.OrdinalIgnoreCase);
     // A gh that did not answer is held off for every login alike: a keyring holding it at a
     // prompt holds it whoever it is asked for.
     DateTimeOffset? heldSince;
@@ -103,7 +101,44 @@ public sealed class CopilotCredentials(UsageOptions options, ICommandRunner comm
             }
             catch (Exception e) when (e is ExternalException or DllNotFoundException or EntryPointNotFoundException or InvalidOperationException) { }
         }
+        if (options.ReadMacKeychain && await FromMacKeychainAsync(login, hostUrl, cancellationToken) is { } token) { return token; }
         return await FromGhAsync(login, hostUrl, cancellationToken);
+    }
+
+    async Task<string?> FromMacKeychainAsync(string login, string hostUrl, CancellationToken ct)
+    {
+        var account = hostUrl.TrimEnd('/') + ":" + login;
+        await keychainGate.WaitAsync(ct);
+        try
+        {
+            lock (sync)
+            {
+                if (keychainResults.TryGetValue(account, out var cached)) { return cached; }
+                // At most one potentially interactive read per account, even on cancellation.
+                keychainResults[account] = null;
+            }
+            var result = await commands.RunAsync("/usr/bin/security", ["find-generic-password", "-s", "copilot-cli", "-a", account, "-w"], TimeSpan.FromSeconds(5), ct);
+            var token = result.Output.Trim();
+            if (result.Ran && !result.TimedOut && result.ExitCode == 0 && LooksLikeToken(token))
+            {
+                lock (sync) { keychainResults[account] = token; }
+                return token;
+            }
+            say("usage: Mac Keychain access failed. Sign in to Copilot CLI and restart this host to retry, or set usage.keychain false.");
+            return null;
+        }
+        finally { keychainGate.Release(); }
+    }
+
+    internal void RejectMacToken(string login, string hostUrl, string token)
+    {
+        var account = hostUrl.TrimEnd('/') + ":" + login;
+        lock (sync)
+        {
+            if (!keychainResults.TryGetValue(account, out var cached) || cached != token) { return; }
+            keychainResults[account] = null;
+        }
+        say("usage: GitHub rejected the cached Mac Keychain token. Sign in to Copilot CLI and restart this host to read its replacement.");
     }
 
     // The token gh holds for exactly this github.com login, and nothing else: for a further account

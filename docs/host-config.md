@@ -340,3 +340,10 @@ changing nothing (exit 1 when it failed). There is no pass by hand that moves th
 This is a reprieve per occurrence, not a policy change, and a Dev Box kept awake keeps costing
 money, so it is off unless turned on. The durable fix is for whoever runs the pool to raise its
 `stopOnDisconnect.gracePeriodMinutes` or turn stop-on-disconnect off.
+
+On macOS, `config set usage.keychain true` opts the host into reading the signed-in
+Copilot CLI account's Keychain entry for allowance reporting. Restart the host
+after changing this setting. A lookup can show one access prompt per account
+per host run. After denial, timeout, or rejection of a rotated token, usage falls
+back to GitHub CLI or its cached reading. Sign in to Copilot CLI and restart
+the host to try a replacement credential, or set `usage.keychain false`.

@@ -6,6 +6,8 @@ namespace AgentBridge.Host.Core.Usage;
 // usage.idleIntervalSeconds change it as they change that bridge's (UsageSettings).
 public sealed class UsageOptions
 {
+    public bool ReadMacKeychain { get; init; }
+
     // ~/.copilot: config.json names the signed-in login.
     public required string CopilotHome { get; init; }
 
@@ -79,6 +81,7 @@ public sealed class UsageOptions
             ClaudeHome = sessions.ClaudeHome,
             ClaudeAccountPath = ClaudeAccountFor(sessions.ClaudeHome, sessions.ClaudeConfigDirExplicit),
             CodexHome = sessions.CodexHome,
+            ReadMacKeychain = OperatingSystem.IsMacOS() && usage?.Keychain == true,
             Interval = (usage ?? UsageSettings.Default).Interval,
             IdleInterval = (usage ?? UsageSettings.Default).IdleInterval,
         };

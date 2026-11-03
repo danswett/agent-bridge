@@ -33,7 +33,7 @@ public static class ConfigCommands
         "launch.profiles", "launch.defaultProfile", "launch.resumeCount", "launch.remoteFolderTrust", "launch.remoteFolderTrustDevices",
         "homeAssistant.enabled", "homeAssistant.baseUrl", "homeAssistant.dashboardUrlPath", "homeAssistant.detailedActivity",
         "homeAssistant.machineName", "homeAssistant.disposable", "homeAssistant.agentUserIds",
-        "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
+        "usage.keychain", "usage.publish", "usage.intervalSeconds", "usage.idleIntervalSeconds", "usage.copilotAccounts",
         "devBox.keepAwake", "devBox.intervalMinutes",
     ];
 
