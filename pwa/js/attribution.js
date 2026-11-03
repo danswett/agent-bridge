@@ -242,11 +242,18 @@ export function delegateTime(row, now = Date.now()) {
 // strip's "N nested", and the inspector's nested list. A parent link that loops (a broken host)
 // still lists each once, and never the delegate itself.
 export function descendants(id, list) {
+  // Children by parent, once, in list order: each visit is then its own children, not the list.
+  const children = new Map();
+  for (const a of list ?? []) {
+    if (!a.parent || a.parent === a.id) { continue; }
+    if (!children.has(a.parent)) { children.set(a.parent, []); }
+    children.get(a.parent).push(a);
+  }
   const out = [];
   const seen = new Set([id]);
   const visit = (parent, depth) => {
-    for (const a of list ?? []) {
-      if (a.parent !== parent || a.id === parent || seen.has(a.id)) { continue; }
+    for (const a of children.get(parent) ?? []) {
+      if (seen.has(a.id)) { continue; }
       seen.add(a.id);
       out.push({ agent: a, depth });
       visit(a.id, depth + 1);

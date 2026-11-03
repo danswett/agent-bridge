@@ -561,6 +561,16 @@ test.describe('at three panes', () => {
     await expect(c.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
+  test('a delegate that names itself its parent, from a broken host, is under nobody in its inspector', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await change(page, 'demo-agent-suite', { parent: 'demo-agent-suite' });
+    await c.locator('.strip-item[data-id="demo-agent-suite"]').click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
+    await expect(fact(page, 'kind')).toBeVisible();
+    await expect(fact(page, 'under')).toHaveCount(0);
+  });
+
   test('a delegate whose parent the list left out is not one of the main agent\'s in the strip', async ({ page }) => {
     await openDemo(page);
     const c = card(page);

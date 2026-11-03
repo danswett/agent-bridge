@@ -421,8 +421,11 @@ export class SessionCard {
     if (!this.detail.element.isConnected) { this.els.inspector.insertBefore(this.detail.element, this.els.tools); }
     this.detail.select(id, this.#s);
     this.view.dataset.delegate = 'open';
-    if (this.layout().wide && !this.layout().inspector) { this.onInspector?.(); }
-    const inspector = this.layout().inspector;
+    // At three panes a hidden inspector is shown for it: the delegate is there, whenever the
+    // layout catches up, never the tab.
+    const { wide } = this.layout();
+    if (wide && !this.layout().inspector && this.onInspector) { this.onInspector(); }
+    const inspector = this.layout().inspector || (wide && !!this.onInspector);
     if (!inspector) { this.setTab('delegates'); }
     this.#renderDelegates(this.#s);
     this.detail.shown();

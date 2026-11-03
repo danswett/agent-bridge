@@ -352,7 +352,7 @@ export class DelegateDetail {
     const raw = list.find((a) => a.id === this.#id);
     if (!raw) { return false; }
     const names = new Map(list.map((a) => [a.id, delegateName(a)]));
-    const a = { ...raw, name: delegateName(raw), ...delegateState(raw), parentName: raw.parent ? names.get(raw.parent) ?? null : null };
+    const a = { ...raw, name: delegateName(raw), ...delegateState(raw), parentName: raw.parent && raw.parent !== raw.id ? names.get(raw.parent) ?? null : null };
     const first = this.#a === null;
     this.#a = a;
     const e = this.els;
@@ -530,7 +530,8 @@ export class DelegateDetail {
     } catch (err) {
       if (gen !== this.#state.gen) { return; }
       // A failed fetch keeps what was fetched before; with nothing fetched yet, its latest line.
-      this.#note(`Couldn't load the delegate: ${err.reason ?? err.message}`, true);
+      const why = typeof err?.reason === 'string' && err.reason ? err.reason : typeof err?.message === 'string' && err.message ? err.message : 'the machine didn\'t say why';
+      this.#note(`Couldn't load the delegate: ${why}`, true);
       failed = true;
     } finally {
       if (gen === this.#state.gen) { this.#state.loading = false; }
