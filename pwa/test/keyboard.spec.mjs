@@ -117,18 +117,18 @@ test.describe('on a desktop', () => {
 
   test('Tab walks the app bar, the rail, the list and the open session in the order they are laid out, with focus shown, and Shift+Tab walks back', async ({ page, browserName }) => {
     await openDemo(page);
-      // The worked example, open at first: its question holds the reply box back, so the walk goes
-      // from the conversation to the inspector.
-      const v = view(page, COPILOT);
-      await expect(v).toBeVisible();
-      const last = v.locator('.end-session').getByRole('button', { name: 'End session' });
-      const stops = await tabTo(page, last, { max: 200 });
-      // The parts in the order they are laid out, each once: focus never leaves one and comes back.
-      // WebKit's walk has no links (reachLink), so no skip link, rail or banner.
-      const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
-      const links = ['skip link', 'navigation', 'banner'];
-      expect(parts).toEqual(['skip link', 'app bar', 'navigation', 'banner', 'list', 'session header', 'conversation', 'inspector']
-        .filter((p) => browserName !== 'webkit' || !links.includes(p)));
+    // The worked example, open at first: its question holds the reply box back, so the walk goes
+    // from the conversation to the inspector.
+    const v = view(page, COPILOT);
+    await expect(v).toBeVisible();
+    const last = v.locator('.end-session').getByRole('button', { name: 'End session' });
+    const stops = await tabTo(page, last, { max: 200 });
+    // The parts in the order they are laid out, each once: focus never leaves one and comes back.
+    // WebKit's walk has no links (reachLink), so no skip link, rail or banner.
+    const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
+    const links = ['skip link', 'navigation', 'banner'];
+    expect(parts).toEqual(['skip link', 'app bar', 'navigation', 'banner', 'list', 'session header', 'conversation', 'inspector']
+      .filter((p) => browserName !== 'webkit' || !links.includes(p)));
     expect(readingOrder(stops)).toEqual([]);
     // Shift+Tab walks the same stops in reverse.
     const back = [];
@@ -192,7 +192,7 @@ test.describe('on a desktop', () => {
 
   test('Launch is reached on the rail and opened with Enter, and a session starts with Tab, typing and Enter', async ({ page, browserName }) => {
     await openDemo(page);
-      await reachLink(page, browserName, page.locator('#nav [data-nav="launch"]'));
+    await reachLink(page, browserName, page.locator('#nav [data-nav="launch"]'));
     await page.keyboard.press('Enter');
     const panel = page.locator('#launch');
     await expect(panel).toBeVisible();

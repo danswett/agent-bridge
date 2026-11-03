@@ -70,11 +70,14 @@ async function scan(page) {
   const found = [];
   for (const v of violations.filter((x) => FAILING.has(x.impact))) {
     for (const node of v.nodes) {
-      const target = node.target.join(' ');
-      const known = await page.evaluate(({ target, selectors }) => {
-        const el = document.querySelector(target);
-        return selectors.some((s) => el?.matches(s));
-      }, { target, selectors: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) });
+      // One selector, unless the element is inside a frame or a shadow root (one selector per
+      // level), which the app has none of: such a node is never taken for a known one.
+      const [selector, ...within] = node.target;
+      const target = node.target.join(' >>> ');
+      const known = within.length === 0 && await page.evaluate(({ selector, known }) => {
+        const el = document.querySelector(selector);
+        return known.some((s) => el?.matches(s));
+      }, { selector, known: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) });
       if (!known) { found.push(`${v.id} (${v.impact}): ${target}: ${node.failureSummary.replace(/\s+/g, ' ')}`); }
     }
   }
