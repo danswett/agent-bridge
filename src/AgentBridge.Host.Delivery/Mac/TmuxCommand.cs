@@ -7,32 +7,33 @@ internal sealed record TmuxResult(int ExitCode, string Output);
 
 internal interface ITmuxCommand
 {
-    Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default);
+    Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default, string? standardInput = null);
 }
 
 internal sealed class TmuxCommand(string executable, string socketPath) : ITmuxCommand
 {
-    public async Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+    public async Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default, string? standardInput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var info = new ProcessStartInfo(executable)
         {
             UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true,
             RedirectStandardInput = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = new UTF8Encoding(false),
         };
         // No personal tmux configuration or default server: neither can redirect keys or
         // install hooks into a launch. All commands address this instance's private socket.
         foreach (var arg in new[] { "-S", socketPath, "-f", "/dev/null" }.Concat(arguments)) { info.ArgumentList.Add(EscapeArgument(arg)); }
         info.Environment.Remove("TMUX");
         using var process = Process.Start(info) ?? throw new IOException("tmux could not start");
-        process.StandardInput.Close();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         var output = ReadBoundedAsync(process.StandardOutput, timeout.Token);
         var error = ReadBoundedAsync(process.StandardError, timeout.Token);
+        var input = WriteInputAsync();
         try
         {
-            await Task.WhenAll(output, error, process.WaitForExitAsync(timeout.Token)).ConfigureAwait(false);
+            await Task.WhenAll(input, output, error, process.WaitForExitAsync(timeout.Token)).ConfigureAwait(false);
             return new(process.ExitCode, await output.ConfigureAwait(false));
         }
         catch
@@ -40,8 +41,14 @@ internal sealed class TmuxCommand(string executable, string socketPath) : ITmuxC
             try { process.Kill(); } catch (InvalidOperationException) { }
             // Drain both readers before disposing their streams; never leak terminal text
             // or a launch environment through an exception's stderr detail.
-            try { await Task.WhenAll(output, error).ConfigureAwait(false); } catch (Exception) { }
+            try { await Task.WhenAll(input, output, error).ConfigureAwait(false); } catch (Exception) { }
             throw;
+        }
+
+        async Task WriteInputAsync()
+        {
+            if (standardInput is not null) { await process.StandardInput.WriteAsync(standardInput.AsMemory(), timeout.Token).ConfigureAwait(false); }
+            process.StandardInput.Close();
         }
     }
 
