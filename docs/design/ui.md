@@ -470,7 +470,9 @@ dot with the preceding fact.
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
   zero-width, format, control and other default-ignorable characters are removed, any
   whitespace (line and paragraph separators too) becomes one space, and the result is cut to
-  60 characters with "…". With nothing left, it is "Delegate" and the first 8 characters of
+  60 characters with "…". A middle dot (and the dots drawn like it) becomes "-", since a
+  status line splits its facts at " · " and a row shows only the first: "Idle · x" would have
+  read "Delegate Idle" there. With nothing left, it is "Delegate" and the first 8 characters of
   its id. A name that reads as the main agent's shows as `Delegate “<name>”`: it is
   NFKD-folded, with marks and case dropped by code point (so a combining mark outside the BMP
   goes too), and Cyrillic, Greek, Armenian and Latin IPA letters drawn like those of "main

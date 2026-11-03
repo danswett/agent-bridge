@@ -30,6 +30,7 @@ import { factsOf, lastSegment, pathView, setFacts } from './meta.js';
 import { RowMenu } from './row-menu.js';
 import { DelegatesBlock } from './delegates-view.js';
 import { mainVoice } from '../attribution.js';
+import { delegateOf } from '../needs-you.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -159,7 +160,7 @@ export class SessionCard {
     // End session lives in Details (ui.md §6.2), last and furthest from Send.
     e.stop = h('div', { class: 'stop-slot' });
     e.details = h('section', { class: 'details', id: this.ids.details, 'aria-labelledby': `${this.ids.details}-h` },
-      h('h3', { class: 'section-head', id: `${this.ids.details}-h` }, 'Details'), e.facts, e.stop);
+      e.detailsHead = h('h3', { class: 'section-head', id: `${this.ids.details}-h`, tabindex: '-1' }, 'Details'), e.facts, e.stop);
     e.historyBody = h('div', { class: 'history-body' });
     e.tools = h('section', { class: 'tools-panel', id: this.ids.tools, role: 'tabpanel', 'aria-labelledby': this.ids.tabT },
       h('h3', { class: 'section-head' }, 'Tools'), e.historyBody);
@@ -220,8 +221,10 @@ export class SessionCard {
       const driver = state.driven ? h('span', { class: 'driver', title: s.driverPrincipal ?? null }, 'Driven by an agent') : null;
       setFacts(e.meta, [e.statusText, driver, this.machineName ? h('span', { class: 'session-machine' }, this.machineName) : null, whereView()]);
     }
-    e.agentAge.dateTime = s.updatedAt;
-    e.agentAge.title = localTime(s.updatedAt);
+    // The main agent's words dated by when it wrote them, not by a delegate's later update.
+    const said = mainVoice(s).at ?? s.updatedAt;
+    e.agentAge.dateTime = said;
+    e.agentAge.title = localTime(said);
     e.rowAge.dateTime = s.updatedAt;
     e.rowAge.title = localTime(s.updatedAt);
     this.refreshTimes();
@@ -374,11 +377,17 @@ export class SessionCard {
   showDetails() {
     if (this.layout().inspector) {
       this.els.details.scrollIntoView({ block: 'nearest' });
-      this.els.details.querySelector('.section-head').focus?.();
+      this.focusDetails();
       return;
     }
-    this.setTab(this.#tab === 'details' ? 'conversation' : 'details');
+    const opening = this.#tab !== 'details';
+    this.setTab(opening ? 'details' : 'conversation');
+    if (opening) { this.focusDetails(); }
   }
+
+  // Focus to Details' heading, which a screen reader reads as "Details, heading": the same place
+  // however Details was opened, and never a button inside it or the question card (#249).
+  focusDetails() { this.els.detailsHead.focus(); }
 
   // Tools shown: fetched the first time, and again when the session changed while they were
   // hidden (updates refetch only what is on screen).
@@ -397,7 +406,7 @@ export class SessionCard {
     const end = this.#stop && !this.#stop.element.querySelector('.end-button')?.disabled ? this.#stop : null;
     this.#menu.show(this.els.header, [
       { label: this.#pinned ? 'Unpin' : 'Pin', run: () => this.onPin(this, !this.#pinned) },
-      { label: 'Details', run: () => { this.setTab('details'); this.els.details.querySelector('.section-head').focus?.(); } },
+      { label: 'Details', run: () => { this.setTab('details'); this.focusDetails(); } },
       ...(end ? [{ label: 'End session', run: () => { this.setTab('details'); end.element.querySelector('.end-button').click(); } }] : []),
     ], { back: this.els.more, label: `${this.#s.title || 'Session'}: more` });
   }
@@ -462,8 +471,10 @@ export class SessionCard {
     const ctx = this.answering();
     const able = q ? answerability(q, ctx?.capabilities ?? [], s.agent) : null;
     const answerable = !!(able?.ok && ctx?.service);
-    // Who asks (ui.md §6.4): the main agent, or the delegate named.
-    const asker = q ? (q.agent ? `${s.subagents?.find((a) => a.id === q.agent)?.name ?? 'A delegate'} asks` : 'Main agent asks') : null;
+    // Who asks (ui.md §6.4): the main agent, or the delegate the question or waitingOn names,
+    // by the rule Needs you uses, so opening its entry never changes who asks (#249).
+    const by = q ? delegateOf(s) : null;
+    const asker = q ? (by ? `${by} asks` : 'Main agent asks') : null;
     if (!this.#changed('question', [q, answerable, answerable ? ctx.hostId : null, able?.why, ctx?.readOnly ?? null, asker])) { return; }
     const old = this.#panel;
     const sameQuestion = !!(old && q && old.questionId === q.id && answerable && old.answering.hostId === ctx.hostId);
@@ -546,9 +557,8 @@ export class SessionCard {
       e.since.textContent = since ? `for ${since}` : '';
       e.since.closest('.fact')?.toggleAttribute('hidden', !since);
     }
-    const u = ago(s.updatedAt, now);
-    e.rowAge.textContent = u;
-    e.agentAge.textContent = u;
+    e.rowAge.textContent = ago(s.updatedAt, now);
+    e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
     this.delegates.refreshTimes(now);
   }
 

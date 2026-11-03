@@ -11,6 +11,7 @@
 //              session is opened, where the card says what it asks and why.
 import { answerability, tapToAnswer } from './answers.js';
 import { parseMarkdown } from './markdown.js';
+import { delegateTitle } from './attribution.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 const LINE_MAX = 140;
@@ -180,14 +181,15 @@ export function reveal(text) {
 // answered on its card.
 const INLINE_AGENTS = new Set(['copilot']);
 
-// Who asked a session's question: null for the session's own, else the delegate's name from
-// `subagents` (ui.md §2.2 rule 2). A delegate the list left out (the host's limit or budget)
-// is still a delegate, just unnamed.
+// Who asked a session's question: null for the session's own, else the delegate from `subagents`
+// (ui.md §2.2 rule 2) as delegateTitle names it, after the word Delegate. A delegate the list left
+// out (the host's limit or budget) is still a delegate, just unnamed.
 export function delegateOf(session) {
   const q = session?.question;
   const id = q?.agent ?? (q ? session.waitingOn : null);
   if (!id) { return null; }
-  return session.subagents?.find((a) => a.id === id)?.name || 'A delegate';
+  const agent = session.subagents?.find((a) => a.id === id);
+  return agent ? delegateTitle(agent) : 'A delegate';
 }
 
 // The approve and deny options of an approval answered on a tap, or null when it has no such

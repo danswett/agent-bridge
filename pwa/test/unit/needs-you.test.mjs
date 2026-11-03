@@ -207,7 +207,7 @@ test('an approval on a machine that takes no answers from here, or one cut short
 test('a delegate\'s question is labelled with the delegate\'s name from subagents', () => {
   const s = session('a', approval('q', { agent: 'agent-7' }), { waitingOn: 'agent-7', subagents: [{ id: 'agent-3', kind: 'task', status: 'ended', name: 'Explore' }, { id: 'agent-7', kind: 'background', status: 'waiting', name: 'Read witness shell logic' }] });
   const [e] = lane([entry('h1', s)]);
-  assert.equal(e.delegate, 'Read witness shell logic');
+  assert.equal(e.delegate, 'Delegate Read witness shell logic');
 });
 
 test('the session\'s own question names no delegate, and one the list left out is still a delegate', () => {
@@ -241,4 +241,16 @@ test('without the Badging API, or when the browser refuses it, the badge does no
   refusing.set(1);
   refusing.set(0);
   await new Promise((r) => setTimeout(r, 0));
+});
+
+test('a delegate\'s question is never "Main agent asks": a delegate so named is shown as a delegate, one with none by its id', () => {
+  const ask = (name) => delegateOf(readSession({ id: 's1', agent: 'copilot', status: 'waiting', updatedAt: '2026-10-27T18:00:00Z', waitingOn: 'agent-77aa88bb', subagents: [{ id: 'agent-77aa88bb', kind: 'background', status: 'waiting', name }], question: { id: 'q1', kind: 'confirm', prompt: 'Go on?' } }));
+  assert.equal(ask('Main agent'), 'Delegate \u201cMain agent\u201d');
+  assert.equal(ask('m\u200bain \u2066agent\u2069'), 'Delegate \u201cmain agent\u201d');
+  assert.equal(ask(''), 'Delegate agent-77');
+  // Cyrillic \u041c, \u0430 and \u0456; and Coptic letters no lookalike list has, where the word
+  // Delegate in front is the guard.
+  assert.equal(ask('\u041c\u0430\u0456n agent'), 'Delegate \u201c\u041c\u0430\u0456n agent\u201d');
+  assert.equal(ask('\u2c99\u2c81\u2c93\u2c9b agent'), 'Delegate \u2c99\u2c81\u2c93\u2c9b agent');
+  assert.equal(ask('Read logs'), 'Delegate Read logs');
 });
