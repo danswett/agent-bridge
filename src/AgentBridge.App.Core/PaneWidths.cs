@@ -21,7 +21,8 @@ public readonly record struct PaneSizes(double List, double Inspector);
 //     a pane off a narrower one, and the width kept is not changed by it: the window widened again
 //     gets it back.
 //   * A divider moves only within what that leaves, so it can't push the session below its
-//     narrowest either.
+//     narrowest either. The list's may take the inspector down to its narrowest, as a narrower
+//     window would, without changing the inspector's kept width.
 //
 // It knows nothing of XAML, so its rules run on Linux CI.
 public sealed class PaneWidths
@@ -79,12 +80,16 @@ public sealed class PaneWidths
     }
 
     // How far a divider can take its pane now: never under the pane's narrowest, nor so wide that
-    // the session, beside the other pane as it is, would go under its own.
+    // the session would go under its own. The list's room is measured with the inspector at its
+    // narrowest, as the inspector gives way to it first: measured with the inspector as it shows,
+    // the inspector coming back towards its kept width as the list narrowed took the room the list
+    // had left, and a drag or an arrow key could not be reversed. The inspector's is measured with
+    // the list as it shows: the list doesn't give way to it.
     public (double Min, double Max) Range(PaneDivider divider, double page, PaneMode mode, bool inspectorShown)
     {
         var now = Arrange(page, mode, inspectorShown);
         var (min, max, other) = divider == PaneDivider.List
-            ? (DesignLayout.ListMin, DesignLayout.ListMax, now.Inspector)
+            ? (DesignLayout.ListMin, DesignLayout.ListMax, now.Inspector > 0 ? DesignLayout.InspectorMin : 0)
             : (DesignLayout.InspectorMin, DesignLayout.InspectorMax, now.List);
         return (min, Math.Max(min, Math.Min(max, page - DesignLayout.SessionMin - other)));
     }

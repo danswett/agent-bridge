@@ -47,6 +47,7 @@ public sealed partial class PaneDividerView : UserControl
     // press taken for a drag (handled, the pointer captured) need not raise.
     ulong lastPress;
     double lastX = double.NaN;
+    double lastY = double.NaN;
 
     public PaneDivider Divider { get; set; }
     internal IPaneSizer? Sizer { get; set; }
@@ -85,11 +86,13 @@ public sealed partial class PaneDividerView : UserControl
         var point = e.GetCurrentPoint(null);
         if (point.PointerDeviceType == PointerDeviceType.Mouse && !point.Properties.IsLeftButtonPressed) { return; }
         e.Handled = true;
-        var x = point.Position.X;
-        // Timestamps are in microseconds; GetDoubleClickTime in milliseconds.
-        var twice = point.Timestamp - lastPress <= GetDoubleClickTime() * 1000UL && Math.Abs(x - lastX) <= 4;
+        var (x, y) = (point.Position.X, point.Position.Y);
+        // Timestamps are in microseconds; GetDoubleClickTime in milliseconds. Near in both
+        // directions: the grip is as tall as the page, so two quick clicks far apart down it are
+        // two clicks.
+        var twice = point.Timestamp - lastPress <= GetDoubleClickTime() * 1000UL && Math.Abs(x - lastX) <= 4 && Math.Abs(y - lastY) <= 4;
         lastPress = point.Timestamp;
-        lastX = x;
+        (lastX, lastY) = (x, y);
         if (twice)
         {
             lastX = double.NaN;

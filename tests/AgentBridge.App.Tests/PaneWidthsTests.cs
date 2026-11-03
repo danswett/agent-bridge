@@ -77,13 +77,43 @@ public sealed class PaneWidthsTests : IDisposable
     public void A_divider_cannot_push_the_session_under_its_narrowest()
     {
         var widths = new PaneWidths(null);
-        // Three panes at their breakpoint, inside the rail: the inspector at its default.
+        // Three panes at their breakpoint, inside the rail: the list as wide as it goes, the
+        // inspector giving way to it.
         const double page = 1232;
-        var list = widths.Set(PaneDivider.List, 5000, page, PaneMode.Three, true);
+        Assert.Equal(DesignLayout.ListMax, widths.Set(PaneDivider.List, 5000, page, PaneMode.Three, true));
         Assert.Equal(DesignLayout.SessionMin, SessionOf(page, widths.Arrange(page, PaneMode.Three, true)));
-        Assert.Equal(page - DesignLayout.SessionMin - DesignLayout.Inspector, list);
+        Assert.Equal(page - DesignLayout.SessionMin - DesignLayout.ListMax, widths.Set(PaneDivider.Inspector, 5000, page, PaneMode.Three, true));
+        Assert.Equal(DesignLayout.SessionMin, SessionOf(page, widths.Arrange(page, PaneMode.Three, true)));
         // Two panes at theirs: little room for the list beyond its narrowest.
         Assert.Equal(712 - DesignLayout.SessionMin, widths.Set(PaneDivider.List, 5000, 712, PaneMode.Two, false));
+    }
+
+    [Fact]
+    public void A_drag_of_the_list_beside_an_inspector_given_way_can_be_reversed()
+    {
+        var widths = new PaneWidths(null);
+        widths.Set(PaneDivider.List, DesignLayout.ListMax, Wide, PaneMode.Three, true);
+        widths.Set(PaneDivider.Inspector, DesignLayout.InspectorMax, Wide, PaneMode.Three, true);
+        const double page = 1232;
+        var from = widths.Width(PaneDivider.List, page, PaneMode.Three, true);
+
+        widths.Drag(PaneDivider.List, from, -80, page, PaneMode.Three, true);
+        Assert.Equal(from, widths.Drag(PaneDivider.List, from, 0, page, PaneMode.Three, true));
+        Assert.Equal(DesignLayout.SessionMin, SessionOf(page, widths.Arrange(page, PaneMode.Three, true)));
+        // Its kept width is untouched: a wider window gives it back.
+        Assert.Equal(DesignLayout.InspectorMax, widths.Arrange(Wide, PaneMode.Three, true).Inspector);
+    }
+
+    [Fact]
+    public void Left_then_Right_on_the_list_s_divider_beside_an_inspector_given_way_comes_back()
+    {
+        var widths = new PaneWidths(null);
+        widths.Set(PaneDivider.List, DesignLayout.ListMax, Wide, PaneMode.Three, true);
+        widths.Set(PaneDivider.Inspector, DesignLayout.InspectorMax, Wide, PaneMode.Three, true);
+        const double page = 1232;
+
+        widths.Nudge(PaneDivider.List, -1, page, PaneMode.Three, true);
+        Assert.Equal(DesignLayout.ListMax, widths.Nudge(PaneDivider.List, 1, page, PaneMode.Three, true));
     }
 
     [Fact]
@@ -124,10 +154,10 @@ public sealed class PaneWidthsTests : IDisposable
     }
 
     [Fact]
-    public void Hiding_the_inspector_gives_its_room_to_the_list_s_divider()
+    public void The_list_s_divider_may_take_the_inspector_down_to_its_narrowest_and_hiding_the_inspector_gives_it_the_rest()
     {
         var widths = new PaneWidths(null);
-        Assert.Equal((DesignLayout.ListMin, 1100 - DesignLayout.SessionMin - DesignLayout.Inspector), widths.Range(PaneDivider.List, 1100, PaneMode.Three, inspectorShown: true));
+        Assert.Equal((DesignLayout.ListMin, 1100 - DesignLayout.SessionMin - DesignLayout.InspectorMin), widths.Range(PaneDivider.List, 1100, PaneMode.Three, inspectorShown: true));
         Assert.Equal((DesignLayout.ListMin, DesignLayout.ListMax), widths.Range(PaneDivider.List, 1100, PaneMode.Three, inspectorShown: false));
     }
 

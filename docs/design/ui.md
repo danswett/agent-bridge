@@ -240,7 +240,9 @@ panes the app's list is 320 too, as long as the session keeps its narrowest.
 - **The window still decides how many panes show.** A pane's width never hides it: short of
   room, the inspector gives way first, down to its narrowest, then the list, so the session
   keeps its narrowest and nothing goes past the window's edge. At every breakpoint the narrowest
-  of each fit. The width kept is unchanged by this: the window widened again gets it back.
+  of each fit. The width kept is unchanged by this: the window widened again gets it back. The
+  list's divider may likewise take the inspector down to its narrowest, keeping its width for
+  when there is room.
 - **Per device:** the widths are kept on the device, beside Your order (§6.1), across restarts,
   and never sent to a host. One list width serves two and three panes.
 - **A divider** is a grip as tall as the page, with the resize cursor. It is clear at rest (the
