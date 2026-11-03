@@ -465,12 +465,7 @@ public static partial class CommandLine
         if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
         var arguments = Split(commandLine);
         if (arguments.Count == 0) { return false; }
-        var program = 0;
-        for (var i = 0; i < arguments.Count; i++)
-        {
-            var name = arguments[i].Replace('\\', '/');
-            if (name[(name.LastIndexOf('/') + 1)..].StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { program = i; break; }
-        }
+        var program = CodexProgram(arguments);
         if (InDaemonFolder(arguments[0]) || InDaemonFolder(arguments[program])) { return true; }
         for (var i = program + 1; i < arguments.Count; i++)
         {
@@ -484,11 +479,26 @@ public static partial class CommandLine
 
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
-    // Codex's options that take the next argument as their value, before any subcommand.
-    static readonly HashSet<string> CodexValueOptions = new(StringComparer.Ordinal)
+    // Where Codex's own command line starts: the first argument whose file name starts with codex
+    // (the executable, or the codex.js an npm install runs in node), else the first. A runtime's
+    // options and their values (`node --require preload.cjs .../codex.js`) are never Codex's.
+    internal static int CodexProgram(IReadOnlyList<string> arguments)
+    {
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var name = arguments[i].Replace('\\', '/');
+            if (name[(name.LastIndexOf('/') + 1)..].StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+        }
+        return 0;
+    }
+
+    // Codex's global options that take the next argument as their value, before any subcommand
+    // (codex-rs cli/src/main.rs and tui/src/cli.rs). One list for every reader: one missing from
+    // a reader took the value for the subcommand there.
+    internal static readonly HashSet<string> CodexValueOptions = new(StringComparer.Ordinal)
     {
         "-c", "--config", "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-a", "--ask-for-approval",
-        "-C", "--cd", "-i", "--image", "--add-dir", "--enable", "--disable", "--local-provider",
+        "-C", "--cd", "-i", "--image", "--add-dir", "--enable", "--disable", "--local-provider", "--remote", "--remote-auth-token-env",
     };
 
     // The session a Copilot CLI was started in, from `--session-id <id>` or

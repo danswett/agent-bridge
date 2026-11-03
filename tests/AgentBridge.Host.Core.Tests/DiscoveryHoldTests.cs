@@ -318,6 +318,10 @@ public class DiscoveryHoldTests
     [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
     [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
     [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"list the files\"", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"list the files\"", false)]
+    [InlineData("node --require /work/preload.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("codex.exe --remote-auth-token-env app-server --remote ws://localhost:4500", true)]
     public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
     {
         using var f = new Fixture();
@@ -638,6 +642,7 @@ public class DiscoveryHoldTests
     [InlineData("codex resume 0199a213-81c0-7800-8aa1-bbab2a035a53", false)]
     [InlineData("codex.exe --no-daemon -c model_reasoning_summary=detailed -- app-server", false)]
     [InlineData("codex.exe -- \"Explain /app-server-daemon/ in this repo\"", false)]
+    [InlineData("codex --remote-auth-token-env app-server --remote ws://localhost:4500", false)]
     public void Codexs_app_server_is_the_subcommand_not_the_word_in_a_prompt(string commandLine, bool appServer)
     {
         Assert.Equal(appServer, CommandLine.IsCodexAppServer(commandLine));

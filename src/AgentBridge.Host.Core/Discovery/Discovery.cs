@@ -486,14 +486,6 @@ internal static class CodexLockDiscovery
     internal static bool IsAppServer(string? commandLine) =>
         CommandLine.Split(commandLine).Skip(1).Any(a => a is "app-server" or "mcp-server");
 
-    // Global options that take a value (codex-rs cli/src/main.rs and tui/src/cli.rs), so a value
-    // is never read as the subcommand.
-    static readonly HashSet<string> ValueOptions = new(StringComparer.Ordinal)
-    {
-        "-c", "--config", "--enable", "--disable", "--remote", "--remote-auth-token-env", "-a", "--ask-for-approval",
-        "-m", "--model", "-p", "--profile", "-s", "--sandbox", "-C", "--cd", "-i", "--image", "--add-dir", "--local-provider",
-    };
-
     // Every subcommand but the interactive ones, with their aliases. The first argument that is
     // not an option is the subcommand if it names one, else the prompt, as clap reads it; after
     // `--` everything is the prompt.
@@ -505,27 +497,20 @@ internal static class CodexLockDiscovery
         "responses-api-proxy", "stdio-to-uds", "exec-server", "features", "help",
     };
 
-    // Codex's own arguments: after the executable, or, for an npm install run in node or bun,
-    // after the script (codex.js) the runtime runs, the first argument that is not one of its
-    // options, as IsLoaderScript reads it. Read from the runtime, the script's path was the
-    // prompt, and a wrapped `exec` or server was taken for a terminal.
+    // Read from Codex's own arguments, after its program (CommandLine.CodexProgram): read from
+    // the runtime an npm install runs it in, the script's path was the prompt, and a wrapped
+    // `exec` or server was taken for a terminal.
     internal static bool IsInteractive(string commandLine)
     {
-        var all = CommandLine.Split(commandLine).ToList();
-        var skip = 1;
-        if (all.Count > 0 && Path.GetFileNameWithoutExtension(all[0].Replace('\\', '/').Split('/')[^1]).ToLowerInvariant() is "node" or "bun")
-        {
-            while (skip < all.Count && all[skip].StartsWith('-')) { skip++; }
-            skip++;
-        }
-        var args = all.Skip(skip).ToList();
+        var all = CommandLine.Split(commandLine);
+        var args = all.Skip(CommandLine.CodexProgram(all) + 1).ToList();
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];
             if (a == "--") { return true; }
             if (a.StartsWith('-'))
             {
-                if (ValueOptions.Contains(a)) { i++; }
+                if (CommandLine.CodexValueOptions.Contains(a)) { i++; }
                 continue;
             }
             return !Subcommands.Contains(a);
