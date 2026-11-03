@@ -250,9 +250,10 @@ public sealed class AutoUpdater
     static bool Busy(Session s) => s.Question is not null || s.Status is SessionStatus.Working or SessionStatus.Waiting;
 
     // No turn running and no question waiting on this machine's host, as its whole snapshot says:
-    // a list still being read may be missing the busy session. Another machine's sessions are its
-    // own host's: an update here restarts only this one.
-    public bool Idle => host.Sessions.Complete && !host.Sessions.All.Any(Busy);
+    // a list still being read may be missing the busy session, and one with a session the app
+    // could not fully read may have it wrong (#446). Another machine's sessions are its own host's:
+    // an update here restarts only this one.
+    public bool Idle => host.Sessions.Complete && !host.Sessions.Unsure && !host.Sessions.All.Any(Busy);
 
     // Idle now and for IdleFor without a break, or waited six hours. Either way only over a whole
     // snapshot: six hours on, an update still waits out a reconnect's sessions being read again.

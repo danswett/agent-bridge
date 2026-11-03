@@ -88,6 +88,7 @@ with the wrong type):
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
 | `UsageReader` | `id` | |
+| `AgentUsage` | `readBy` | |
 | `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
 | `LaunchWorkspace` | `label` | |
 | `ResumableSession` | `id`, `launcher` | |

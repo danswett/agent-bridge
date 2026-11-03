@@ -24,6 +24,8 @@ sealed class FakeHost : IAsyncDisposable
     public DiscoveryHeld? Held { get; set; }
     // While set, a subscribe's snapshot is sent but its sessions.synced waits for it.
     public TaskCompletionSource? HoldSynced { get; set; }
+    // What sessions.subscribe answers in place of its result, when set.
+    public object? SubscribeReply { get; set; }
     public HostStatus Status { get; set; } = StatusOf();
 
     public FakeHost()
@@ -77,7 +79,7 @@ sealed class FakeHost : IAsyncDisposable
             List<Session> snapshot;
             lock (Sessions) { snapshot = [.. Sessions]; }
             var hold = HoldSynced;
-            return Task.FromResult<object?>(new ChannelReply(new SubscribeResult(1, snapshot.Count), async c =>
+            return Task.FromResult<object?>(new ChannelReply(SubscribeReply ?? new SubscribeResult(1, snapshot.Count), async c =>
             {
                 foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s); }
                 if (hold is not null) { await hold.Task; }

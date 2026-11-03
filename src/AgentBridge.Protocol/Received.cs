@@ -40,8 +40,24 @@ public static class Received
 {
     public static T Read<T>(JsonElement data) where T : class => (T)Read(data, typeof(T));
 
-    public static object Read(JsonElement data, Type type) =>
-        Strictly(Clean(data, type, "$", strict: false), type, "$") ?? throw new MalformedRecordException("$", "no record");
+    public static object Read(JsonElement data, Type type) => Read(data, type, out _);
+
+    // exact: nothing was left out or filled in. A record read past a field it could not read is
+    // still what the spec says to show, but it is no evidence: the app's updater does not take a
+    // session whose status was filled in as idle as proof that its host may be restarted.
+    public static T Read<T>(JsonElement data, out bool exact) where T : class => (T)Read(data, typeof(T), out exact);
+
+    public static object Read(JsonElement data, Type type, out bool exact)
+    {
+        lossy = false;
+        var read = Strictly(Clean(data, type, "$", strict: false), type, "$") ?? throw new MalformedRecordException("$", "no record");
+        exact = !lossy;
+        return read;
+    }
+
+    // Set while cleaning when anything is left out or defaulted. The cleaning is synchronous and
+    // never re-enters Read, so one flag per thread is the whole read's.
+    [ThreadStatic] static bool lossy;
 
     // The strict read, with every way it can fail made the one way a reader handles: a converter
     // that cannot decode its text throws InvalidOperationException or FormatException, which a
@@ -98,7 +114,14 @@ public static class Received
 
     // The records' shapes as ProtocolJson.Options reads them, from a copy of it, so asking for them
     // never freezes the shared options before their first use.
-    static readonly JsonSerializerOptions Meta = new(ProtocolJson.Options) { TypeInfoResolver = new DefaultJsonTypeInfoResolver() };
+    // Read-only, so the shapes it builds are cached rather than rebuilt for every record read.
+    static readonly JsonSerializerOptions Meta = Frozen(new(ProtocolJson.Options) { TypeInfoResolver = new DefaultJsonTypeInfoResolver() });
+
+    static JsonSerializerOptions Frozen(JsonSerializerOptions o)
+    {
+        o.MakeReadOnly();
+        return o;
+    }
 
     static readonly Dictionary<Type, Func<JsonElement, bool>> Numbers = new()
     {
@@ -135,10 +158,14 @@ public static class Received
                     o[f.Name] = Clean(v, f.Type, at, f.Strict);
                     continue;
                 }
-                catch (MalformedRecordException) when (!f.Strict) { }
+                catch (MalformedRecordException) when (!f.Strict) { lossy = true; }
             }
             if (f.Strict && f.Required) { throw Bad(at, "missing"); }
-            if (f.Required) { o[f.Name] = Default(f.Type, at); }
+            if (f.Required)
+            {
+                lossy = true;
+                o[f.Name] = Default(f.Type, at);
+            }
         }
         return o;
     }
@@ -152,7 +179,7 @@ public static class Received
         {
             var at = $"{path}[{i++}]";
             try { a.Add(x.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(x, item, at, strict: false)); }
-            catch (MalformedRecordException) when (!strict) { }
+            catch (MalformedRecordException) when (!strict) { lossy = true; }
         }
         return a;
     }
@@ -170,7 +197,7 @@ public static class Received
                 var key = Name(p) ?? throw Bad(at, "a key that is not text");
                 o[key] = p.Value.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(p.Value, value, at, strict: false);
             }
-            catch (MalformedRecordException) when (!strict) { }
+            catch (MalformedRecordException) when (!strict) { lossy = true; }
         }
         return o;
     }

@@ -250,7 +250,9 @@ public sealed class HostConnection : IAsyncDisposable
     {
         // The snapshot is marked before the request goes, so no upsert of it is missed.
         ui.Post(Sessions.BeginSnapshot);
-        await ch.CallAsync<SubscribeResult>(Ops.SessionsSubscribe, ct: ct);
+        // Its result (revision, count) is not used: read strictly, a result the app could not read
+        // ended the connection, and every reconnect asked again (#446).
+        await ch.CallAsync(Ops.SessionsSubscribe, ct: ct);
     }
 
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
@@ -367,8 +369,17 @@ public sealed class HostConnection : IAsyncDisposable
         {
             case Events.SessionUpsert:
                 {
-                    var s = Received.Read<Session>(ev.Data);
-                    ui.Post(() => Sessions.Upsert(s));
+                    Session s;
+                    bool exact;
+                    try { s = Received.Read<Session>(ev.Data, out exact); }
+                    catch (JsonException)
+                    {
+                        // A session the app could not read may be the busy one: the list is not
+                        // the whole word on whether this host may be restarted.
+                        ui.Post(Sessions.Refuse);
+                        throw;
+                    }
+                    ui.Post(() => Sessions.Upsert(s, exact));
                     break;
                 }
             case Events.SessionRemove:
@@ -456,6 +467,7 @@ public sealed class SessionStore
     {
         snapshot = new HashSet<string>(StringComparer.Ordinal);
         Complete = false;
+        refused = false;
         Snapshots++;
         SnapshotBegun?.Invoke();
     }
@@ -470,15 +482,31 @@ public sealed class SessionStore
     // missing a busy session.
     public bool Complete { get; private set; }
 
-    public void Upsert(Session s)
+    // Sessions read past a field the app could not read, and whether a session.upsert has been
+    // refused since the snapshot began (Received, #446). What they show is the spec's reading,
+    // not evidence: a session whose status was filled in as idle may be working.
+    readonly HashSet<string> unsure = new(StringComparer.Ordinal);
+    bool refused;
+
+    // Whether anything in the list was read past or refused: the list is not the host's whole word
+    // on which sessions are busy.
+    public bool Unsure => refused || unsure.Count > 0;
+
+    public void Upsert(Session s) => Upsert(s, exact: true);
+
+    public void Upsert(Session s, bool exact)
     {
         snapshot?.Add(s.Id);
         sessions[s.Id] = s;
+        if (exact) { unsure.Remove(s.Id); } else { unsure.Add(s.Id); }
         Upserted?.Invoke(s);
     }
 
+    public void Refuse() => refused = true;
+
     public void Remove(string id)
     {
+        unsure.Remove(id);
         if (sessions.Remove(id)) { Removed?.Invoke(id); }
     }
 

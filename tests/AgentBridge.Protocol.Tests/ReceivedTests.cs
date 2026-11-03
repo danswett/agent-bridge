@@ -331,6 +331,39 @@ public class ReceivedTests
         Assert.Equal((AgentKind.Claude, "", UsageSource.None, DateTimeOffset.MinValue), (r.Agents[1].Agent, r.Agents[1].Label, r.Agents[1].Source, r.Agents[1].MeasuredAt));
     }
 
+    // Read as absent, a reading another machine took was filed as the passing host's own, past the
+    // reader's own forget and roster filtering.
+    [Theory]
+    [InlineData("""{"id":5,"name":"Laptop"}""")]
+    [InlineData("""{"name":"Laptop"}""")]
+    [InlineData("\"laptop-id\"")]
+    public void A_reading_whose_machine_cannot_be_read_is_left_out_rather_than_filed_as_the_hosts(string readBy)
+    {
+        var report = JsonNode.Parse($$"""
+            {"agents":[{"agent":"copilot","label":"Copilot","source":"api","measuredAt":"{{T}}","windows":[]},
+                       {"agent":"claude","label":"Claude","source":"api","measuredAt":"{{T}}","windows":[],"readBy":{{readBy}}}]}
+            """)!;
+
+        var r = Received.Read<UsageReport>(JsonSerializer.SerializeToElement(report));
+
+        Assert.Equal([AgentKind.Copilot], r.Agents.Select(a => a.Agent));
+    }
+
+    [Fact]
+    public void A_record_read_past_a_field_says_it_was_not_read_exactly()
+    {
+        Received.Read<Session>(JsonSerializer.SerializeToElement(Session()), out var exact);
+        Assert.True(exact);
+
+        foreach (var change in new Action<JsonObject>[] { s => s.Remove("status"), s => s["title"] = 5, s => s["subagents"]!.AsArray().Add(null) })
+        {
+            var node = Session();
+            change(node);
+            Received.Read<Session>(JsonSerializer.SerializeToElement(node), out exact);
+            Assert.False(exact);
+        }
+    }
+
     [Theory]
     [InlineData("[]")]
     [InlineData("\"s1\"")]

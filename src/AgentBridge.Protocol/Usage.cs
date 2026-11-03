@@ -48,7 +48,9 @@ public sealed record AgentUsage
     // Stable while the list is, so a Home Assistant sensor keeps its account (usage_copilot_<slot>).
     public int? Slot { get; init; }
     // The machine that took the reading, on one a host passes on from another of the account's
-    // machines (usage.shared, #172). Absent on the host's own readings.
+    // machines (usage.shared, #172). Absent on the host's own readings. Strict: read as absent,
+    // another machine's reading would be filed as the passing host's own.
+    [Strict(Strictness.Identity)]
     public UsageReader? ReadBy { get; init; }
 }
 

@@ -160,6 +160,20 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => conn.Sessions.Complete, "the snapshot's own end");
     }
 
+    // The subscribe's own result (revision, count) is not used; read strictly, one the app could not
+    // read ended the connection, and every reconnect asked again and never showed a session.
+    [Fact]
+    public async Task A_subscribe_result_the_app_cannot_read_still_brings_the_sessions()
+    {
+        await using var odd = new FakeHost { SubscribeReply = new System.Text.Json.Nodes.JsonObject { ["revision"] = "seven" } };
+        odd.Sessions.Add(Make.Session("s1"));
+        odd.Start();
+        await using var conn = odd.Connect();
+
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete && conn.Sessions.Get("s1") is not null, "the snapshot");
+        Assert.Equal(1L, conn.ConnectionNumber);
+    }
+
     // Usage and update state are read on connecting, before the sessions are subscribed. One the
     // app could not read ended the connection there, and every connection after read the same
     // thing: it reconnected for good and never showed a session.
