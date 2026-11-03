@@ -68,11 +68,12 @@ public sealed partial class MainViewModel
     void SyncMachineRows()
     {
         var want = new List<MachineRowViewModel>();
+        var listedOffline = OfflineMachines.Select(o => o.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var m in machines.OrderByDescending(m => m.IsLocal))
         {
             // One kept offline with its rows (#269) that the roster lists is shown by its offline
             // row, which has its Forget; one the roster does not know says so itself.
-            if (m.Offline && OfflineMachines.Any(o => o.Id == m.Key)) { continue; }
+            if (m.Offline && listedOffline.Contains(m.Key)) { continue; }
             var row = MachineRows.FirstOrDefault(r => r.Key == m.Key) ?? new MachineRowViewModel(m.Key);
             var connected = m.Host.State == LinkState.Connected;
             var count = byId.Values.Count(c => owner[c] == m);

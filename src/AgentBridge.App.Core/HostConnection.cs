@@ -88,8 +88,12 @@ public sealed class HostConnection : IAsyncDisposable
 
     // Reads everything again on the connection there is, as after a gap in its events, the
     // sessions with a new snapshot; nothing without one (the next connection subscribes afresh).
-    // For a machine back in the relay's presence whose channel outlived its absence (#269).
-    public void Resync() => Volatile.Read(ref resync)?.Release();
+    // For a machine back in the relay's presence whose channel outlived its absence (#269). One
+    // pending is enough: a recovery reads everything.
+    public void Resync()
+    {
+        if (Volatile.Read(ref resync) is { CurrentCount: 0 } s) { s.Release(); }
+    }
 
     // Waits until there is a connection, for those that have something to send.
     public Task WhenConnectedAsync(CancellationToken ct = default) => Volatile.Read(ref connected).Task.WaitAsync(ct);

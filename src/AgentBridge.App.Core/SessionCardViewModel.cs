@@ -361,9 +361,11 @@ public sealed partial class SessionCardViewModel : Observable
         Delegates.RefreshTimes(now);
     }
 
+    static readonly string[] StatusProperties = [nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel)];
+
     void RaiseStatus()
     {
-        foreach (var p in new[] { nameof(Line), nameof(State), nameof(View), nameof(StatusText), nameof(Glyph), nameof(StatusTone), nameof(GlyphLabel), nameof(RowStatus), nameof(RowFacts), nameof(RowLabel) }) { Raise(p); }
+        foreach (var p in StatusProperties) { Raise(p); }
     }
 
     // The tool history, from session.get, newest first.
