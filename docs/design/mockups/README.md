@@ -1,6 +1,9 @@
 # Design mock-ups
 
-Every board from the design canvas, rendered on 2026-11-01. The list boards, the Windows and PWA desktop boards, the design language and the status rules were redrawn for #253 on 2026-11-02 (Needs you · N is a filter, and a waiting session is an ordinary row). The list boards, the Windows and PWA desktop boards, the design language and the status rules were redrawn for #253 on 2026-11-02 (Needs you · N is a filter, and a waiting session is an ordinary row). **These are reference, not
+Every board from the design canvas, rendered on 2026-11-01. The list boards, the Windows and
+PWA desktop boards, the design language and the status rules were redrawn for #253 on
+2026-11-02 (Needs you · N is a filter, and a waiting session is an ordinary row). **These are
+reference, not
 spec:** [ui.md](../ui.md) is the spec, and it wins wherever an image disagrees with it.
 
 **Text fonts are stand-ins:** Inter takes the place of Segoe UI and SF Pro, so trust the
