@@ -14,3 +14,27 @@ test('only the exact GitHub device page is offered by a relay response', async t
     t.mock.restoreAll();
   }
 });
+
+test('unusable codes and polling limits fail before the first poll', async t => {
+  for (const patch of [{ userCode: '' }, { deviceCode: ' ' }, { expiresIn: 0 }, { expiresIn: 3601 },
+    { interval: -1 }, { interval: 1.5 }, { interval: 61 }, { interval: '1' }, { interval: null }]) {
+    const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ ...device, ...patch }));
+    await assert.rejects(startDeviceFlow(''), /invalid/);
+    assert.equal(fetch.mock.callCount(), 1);
+    t.mock.restoreAll();
+  }
+});
+
+test('malformed pending responses stop polling immediately', async t => {
+  t.mock.method(globalThis, 'setTimeout', fn => { queueMicrotask(fn); });
+  for (const pending of [{}, null, { pending: true, interval: null }, { pending: true, interval: 0 }, { pending: true, interval: 61 }]) {
+    let requests = 0;
+    const fetch = t.mock.method(globalThis, 'fetch', async () => {
+      if (++requests > 2) { throw new Error('unexpected extra poll'); }
+      return requests === 1 ? Response.json(device) : Response.json(pending, { status: 202 });
+    });
+    await assert.rejects((await startDeviceFlow('')).wait(), /invalid polling/);
+    assert.equal(requests, 2);
+    fetch.mock.restore();
+  }
+});

@@ -3,22 +3,29 @@
 // its own token for this account.
 import { sleep } from './bytes.js';
 
+const seconds = (value, max) => Number.isInteger(value) && value >= 1 && value <= max;
+const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+
 export async function startDeviceFlow(base) {
   const r = await fetch(`${base}/v1/auth/device`, { method: 'POST' });
   if (!r.ok) { throw new Error(`sign-in is unavailable (${r.status})`); }
   const s = await r.json();
   const devicePage = 'https://github.com/login/device';
   if (s.verificationUri !== devicePage) { throw new Error('The relay returned an untrusted sign-in page.'); }
+  if (!nonempty(s.deviceCode) || !nonempty(s.userCode) || !seconds(s.expiresIn, 3600) || !seconds(s.interval, 60)) {
+    throw new Error('The relay returned an invalid sign-in code or lifetime.');
+  }
+  const deadline = Date.now() + s.expiresIn * 1000;
   return {
-    userCode: String(s.userCode ?? ''),
+    userCode: s.userCode,
     verificationUri: devicePage,
-    expiresIn: Number(s.expiresIn) || 900,
+    expiresIn: s.expiresIn,
     // Polls until the code is entered, refused or expired. `signal` cancels.
     async wait(signal) {
-      let interval = Number(s.interval) || 5;
-      const deadline = Date.now() + (Number(s.expiresIn) || 900) * 1000;
+      let interval = s.interval;
       while (Date.now() < deadline) {
-        await sleep(interval * 1000);
+        await sleep(Math.min(interval * 1000, deadline - Date.now()));
+        if (Date.now() >= deadline) { break; }
         if (signal?.aborted) { throw new Error('sign-in cancelled'); }
         const t = await fetch(`${base}/v1/auth/token`, {
           method: 'POST',
@@ -26,7 +33,14 @@ export async function startDeviceFlow(base) {
           body: JSON.stringify({ deviceCode: s.deviceCode }),
         });
         const j = await t.json().catch(() => ({}));
-        if (t.status === 202) { if (j.interval) { interval = Number(j.interval) || interval; } continue; }
+        if (Date.now() >= deadline) { break; }
+        if (t.status === 202) {
+          if (j?.pending !== true || ('interval' in j && !seconds(j.interval, 60))) {
+            throw new Error('The relay returned an invalid polling response.');
+          }
+          interval = Math.max(interval, j.interval ?? interval);
+          continue;
+        }
         if (!t.ok) { throw new Error(`sign-in failed: ${j.error ?? t.status}`); }
         return j;
       }
