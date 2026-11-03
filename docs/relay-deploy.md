@@ -105,7 +105,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
 5. **rollback**: run the workflow by hand with `rollback_to=<earlier commit SHA>`. Same
    approval, same script, same smoke test.
 
-Every job signs in with GitHub OIDC (`azure/login`, `id-token: write`). There is no
+Every job that touches Azure (build, staging, production, rollback) signs in with GitHub OIDC
+(`azure/login`); only those jobs get `id-token: write`, and `infra`, which only compiles the
+templates, cannot mint a token. There is no
 client secret anywhere. Each environment has its own principal:
 
 | Principal | Roles |

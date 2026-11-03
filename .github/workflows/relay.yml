@@ -3,8 +3,8 @@ name: Relay deploy
 # Builds the relay image once per commit, rolls it onto staging, smoke-tests it there, and
 # only then offers it to production, which waits for a person to approve (the production
 # environment's required reviewer). Rollback is a workflow_dispatch with an earlier commit.
-# No long-lived Azure secret is stored anywhere: every job signs in with GitHub OIDC, and
-# each environment has its own principal with rights over its own app only.
+# No long-lived Azure secret is stored anywhere: every job that touches Azure signs in with GitHub
+# OIDC, and each environment has its own principal with rights over its own app only.
 # Infra itself (infra/) is applied by a person with infra/deploy.ps1; see docs/relay-deploy.md.
 on:
   push:
@@ -32,9 +32,10 @@ on:
         required: false
         default: ''
 
+# id-token: write only on the jobs that sign in to Azure (build, staging, production, rollback):
+# given here, it let `infra`, which only compiles the templates, mint an Azure OIDC token too (#360).
 permissions:
   contents: read
-  id-token: write
 
 env:
   RESOURCE_GROUP: rg-agent-bridge-relay
@@ -50,7 +51,7 @@ jobs:
     # The templates compile, on every change, before anything is deployed.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - run: |
@@ -68,13 +69,16 @@ jobs:
     runs-on: ubuntu-latest
     # Fork pull requests get no OIDC token, so they skip Azure and only compile the templates.
     environment: staging
+    permissions:
+      contents: read
+      id-token: write # azure/login's OIDC sign-in
     outputs:
       image: ${{ steps.push.outputs.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: azure/login@v2
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -100,14 +104,17 @@ jobs:
       # One rollout at a time on the shared staging app; a newer one waits, never cancels.
       group: relay-staging
       cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # azure/login's OIDC sign-in
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: azure/login@v2
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -145,14 +152,17 @@ jobs:
     concurrency:
       group: relay-production
       cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # azure/login's OIDC sign-in
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: azure/login@v2
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -177,14 +187,17 @@ jobs:
     concurrency:
       group: relay-production
       cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # azure/login's OIDC sign-in
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - uses: azure/login@v2
+      - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
