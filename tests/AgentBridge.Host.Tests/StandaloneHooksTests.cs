@@ -183,6 +183,24 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Empty(codex.Calls);
     }
 
+    [WindowsHomeTheory]
+    [InlineData(@"\\server\share\agents", @"\\?\UNC\server\share\agents\")]
+    [InlineData(@"\\SERVER\SHARE\AGENTS\", @"\\?\unc\server\share\agents")]
+    public void Extended_UNC_home_and_marketplace_paths_match_their_normal_form_without_changing_share_identity(string normal, string extended)
+    {
+        Assert.True(StandaloneHooks.Same(normal, extended));
+        Assert.False(StandaloneHooks.Same(@"\\other-server\share\agents", extended));
+        Assert.False(StandaloneHooks.Same(@"\\server\other-share\agents", extended));
+    }
+
+    sealed class WindowsHomeTheoryAttribute : TheoryAttribute
+    {
+        public WindowsHomeTheoryAttribute()
+        {
+            if (!OperatingSystem.IsWindows()) { Skip = "Windows extended UNC path syntax"; }
+        }
+    }
+
     [Theory]
     [InlineData("[]", true)]
     [InlineData("{\"hooks\":false}", true)]

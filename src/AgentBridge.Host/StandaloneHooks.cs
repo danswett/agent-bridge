@@ -95,16 +95,22 @@ public sealed class StandaloneHooks(
         }
     }
 
-    static bool Same(string left, string right)
+    internal static bool Same(string left, string right) =>
+        string.Equals(Normal(left), Normal(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    static string Normal(string path)
     {
-        static string Normal(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(
-            OperatingSystem.IsWindows() && path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path));
-        return string.Equals(Normal(left), Normal(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (OperatingSystem.IsWindows())
+        {
+            if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) { path = @"\\" + path[8..]; }
+            else if (path.StartsWith(@"\\?\", StringComparison.Ordinal) && Path.IsPathFullyQualified(path[4..])) { path = path[4..]; }
+        }
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     }
 
     static string PhysicalHome(string path)
     {
-        var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var current = Normal(path);
         var missing = new Stack<string>();
         // A fresh home may not exist yet, but its parent can already be a junction.
         while (!Directory.Exists(current))

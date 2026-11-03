@@ -60,7 +60,7 @@ An absent Codex home does not require Codex when setting up another agent.
 Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
 finishes on the previous image, and an interrupted replacement restores that image before
 retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
-Equivalent home paths (including trailing separators and Windows casing) do not block
+Equivalent home paths (including trailing separators, Windows casing and extended UNC syntax) do not block
 setup or removal, and Windows profile casing does not leave owned Claude commands behind.
 The three agents must use separate home directories: setup and removal resolve links
 through existing parents even for homes not yet created, and refuse shared homes before
