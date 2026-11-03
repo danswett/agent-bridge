@@ -116,6 +116,10 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         return moves;
     }
 
+    // Added to on the UI thread, so read and cleared there too.
+    static List<PaneMove> Seen(List<PaneMove> moves) => TestUi.Read(() => moves.ToList());
+    void Clear(List<PaneMove> moves) => ui.Post(moves.Clear);
+
     [Fact]
     public void One_column_pushes_a_chosen_session_and_pops_back_to_the_list_and_a_resize_moves_nothing()
     {
@@ -126,12 +130,12 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Resize(400);
         Resize(1000);
         Resize(400);
-        Assert.Empty(moves);
+        Assert.Empty(Seen(moves));
 
         ui.Post(layout.Back);
         Select("busy");
         Select("quiet");
-        Assert.Equal([new(PaneMotion.Pop, true), new(PaneMotion.Push, true), new(PaneMotion.Push, true)], moves);
+        Assert.Equal([new(PaneMotion.Pop, true), new(PaneMotion.Push, true), new(PaneMotion.Push, true)], Seen(moves));
     }
 
     [Fact]
@@ -143,13 +147,13 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         var moves = Moves();
 
         Select("asking");
-        Assert.Equal([new PaneMove(PaneMotion.Push, false)], moves);
+        Assert.Equal([new PaneMove(PaneMotion.Push, false)], Seen(moves));
 
         // A question arriving on the session being pushed stops its content travelling, so the
         // approval's command never slides under the pointer.
         ui.Post(layout.Back);
         Select("quiet");
-        moves.Clear();
+        Clear(moves);
         await host.SendAsync(Events.SessionUpsert, Make.Session("quiet", question: Make.Approval("q2"), updated: Make.T0.AddMinutes(3)));
         await Wait.UntilAsync(() => TestUi.Read(() => moves.Contains(new PaneMove(PaneMotion.Settle, false))), "the settle");
     }
@@ -163,21 +167,21 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Select("busy");
         var moves = Moves();
         ui.Post(layout.ToggleInspector);
-        Assert.Empty(moves);
+        Assert.Empty(Seen(moves));
         ui.Post(layout.ToggleInspector);
-        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], moves);
+        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], Seen(moves));
 
-        moves.Clear();
+        Clear(moves);
         Resize(1000);
         ui.Post(() => layout.Tab = SessionTab.Tools);
         ui.Post(() => layout.Tab = SessionTab.Tools);
-        Assert.Equal([new PaneMove(PaneMotion.Tab, false)], moves);
+        Assert.Equal([new PaneMove(PaneMotion.Tab, false)], Seen(moves));
 
         // A session opened to be answered goes to its conversation at once, without a tab's fade.
-        moves.Clear();
+        Clear(moves);
         ui.Post(() => main.Open("asking"));
         Assert.True(Read(l => l.ShowConversation));
-        Assert.Empty(moves);
+        Assert.Empty(Seen(moves));
     }
 
     [Fact]

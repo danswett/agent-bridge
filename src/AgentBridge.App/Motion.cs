@@ -122,6 +122,7 @@ public static class Motion
             show.InsertKeyFrame(0, 0);
             show.InsertKeyFrame(1, 1, ease);
             show.Duration = step.Duration;
+            visual.Opacity = 0;
             visual.StartAnimation("Opacity", show);
         }
     }

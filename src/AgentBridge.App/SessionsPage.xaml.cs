@@ -25,7 +25,9 @@ public sealed partial class SessionsPage : UserControl
         ListColumn.Width = new GridLength(DesignLayout.List);
         Motion.Banner(FleetNote);
         SizeChanged += (_, _) => Measure();
-        Loaded += (_, _) => { Measure(); SyncList(); Ready(); };
+        Loaded += (_, _) => { Measure(); SyncList(); Ready(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
+        // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
+        Unloaded += (_, _) => laneTimer?.Stop();
         // The list shown for the first time (one column, after a session opened at start).
         List.SizeChanged += (_, _) => Ready();
     }
@@ -38,8 +40,8 @@ public sealed partial class SessionsPage : UserControl
     void Ready()
     {
         if (ready || readying || viewModel is null) { return; }
-        readying = true;
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        // Not queued (the dispatcher shutting down): the next layout asks again.
+        readying = DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             readying = false;
             ready = IsLoaded && viewModel.Sessions.Count > 0 && ListPane.Visibility == Visibility.Visible && List.ActualHeight > 0;

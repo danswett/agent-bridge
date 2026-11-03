@@ -218,6 +218,8 @@ public sealed partial class SessionView : UserControl
         if (!attached) { return; }
         attached = false;
         if (Card is { } c) { c.PropertyChanged -= OnCardChanged; c.Delegates.ReplyWanted -= OnReplyWanted; }
+        // The question goes with the view: its guard's timer has nothing left to let go of.
+        guardTimer?.Stop();
         questionView?.Detach();
         questionView = null;
         QuestionHost.Content = null;
