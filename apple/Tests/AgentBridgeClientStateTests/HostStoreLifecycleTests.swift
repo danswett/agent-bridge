@@ -88,6 +88,15 @@ private actor LifecycleHost {
             sequence += 1
             try messages.continuation.yield(envelope(["ev": .string("sessions.synced"), "seq": .number(Double(sequence)), "data": .object([:])]))
         }
+        if request.op == "update.subscribe" {
+            // This marker follows both report responses in the shared stream. Seeing it
+            // in HostStore proves those envelopes were consumed, regardless of scheduling.
+            sequence += 1
+            try messages.continuation.yield(envelope(["ev": .string("session.upsert"), "seq": .number(Double(sequence)), "data": .object([
+                "id": .string("s1"), "title": .string("Revision \(revision)"), "agent": .string("codex"), "status": .string("idle"),
+                "updatedAt": .string("reports-\(revision)"),
+            ])]))
+        }
         return response
     }
 
@@ -128,6 +137,16 @@ private actor DeferredProvider {
         try await Task.sleep(for: .milliseconds(5))
     }
     throw RelayError.timeout
+}
+
+@MainActor private func awaitReportBarrier(_ host: HostStore, revision: Int) async throws {
+    // sessions.synced makes the session feed live before the separate usage/update
+    // response envelopes drain. Wait for the later fixture marker, then assert
+    // report values separately so a transient correct value cannot pass the test.
+    try await awaitLifecycle {
+        host.isLive && host.sessions.first?.title == "Revision \(revision)"
+            && host.sessions.first?.updatedAt == "reports-\(revision)"
+    }
 }
 
 @MainActor @Test func delayedOldProviderCannotReplaceTheNewConnection() async throws {
@@ -193,11 +212,11 @@ private actor DeferredProvider {
     let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.transport() }
     defer { host.stop() }
     host.start()
-    try await awaitLifecycle { host.isLive }
+    try await awaitReportBarrier(host, revision: 1)
     #expect(host.usage?["revision"] == .number(1))
     #expect(host.update?["revision"] == .number(1))
     try await fixture.skipEvent()
-    try await awaitLifecycle { host.isLive && host.sessions.first?.title == "Revision 2" }
+    try await awaitReportBarrier(host, revision: 2)
     #expect(host.usage?["revision"] == .number(2))
     #expect(host.update?["revision"] == .number(2))
     #expect(await fixture.count("sessions.subscribe") == 2)
@@ -210,9 +229,9 @@ private actor DeferredProvider {
     let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.transport() }
     defer { host.stop() }
     host.start()
-    try await awaitLifecycle { host.isLive }
+    try await awaitReportBarrier(host, revision: 1)
     try await fixture.skipEvent()
-    try await awaitLifecycle { host.isLive && host.sessions.first?.title == "Revision 2" }
+    try await awaitReportBarrier(host, revision: 2)
     #expect(host.usage?["revision"] == .number(2))
     #expect(host.update?["revision"] == .number(2))
     #expect(await fixture.count("usage.subscribe") == 2)
