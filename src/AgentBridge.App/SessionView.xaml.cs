@@ -326,12 +326,12 @@ public sealed partial class SessionView : UserControl
     // laid out; never once they have scrolled back through it (ui.md §5.3, Scroll to a question).
     void FollowQuestion()
     {
-        if (!Ready || !follow.Follows || layout?.ShowConversation != true || Card is not { } card) { return; }
+        if (!Ready || !follow.Follows || layout?.ViewingConversation != true || Card is not { } card) { return; }
         DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             // Asked again: a scroll of the person's own since (a wheel, a key) has the last word.
             // Follows changes only as the view moves, never as the question is laid out above it.
-            if (Card != card || !follow.Follows || layout?.ShowConversation != true || QuestionCard.Visibility != Visibility.Visible) { return; }
+            if (Card != card || !follow.Follows || layout?.ViewingConversation != true || QuestionCard.Visibility != Visibility.Visible) { return; }
             QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Motion.Scrolls });
             GuardAnswer();
         });
@@ -357,8 +357,8 @@ public sealed partial class SessionView : UserControl
         if (e.PropertyName is nameof(PaneLayoutViewModel.ShownTab) or "" or null) { ShowTab(); }
         // The conversation back (its tab picked again, the session pushed in, the window shown):
         // its question is under a pointer aimed at what was there, motion or none.
-        if (e.PropertyName is (nameof(PaneLayoutViewModel.ShowConversation) or "" or null) && layout is not null
-            && guard.Shown(layout.ShowConversation && layout.OnScreen, DateTimeOffset.UtcNow)) { GuardAnswer(); }
+        if (e.PropertyName is (nameof(PaneLayoutViewModel.ViewingConversation) or "" or null) && layout is not null
+            && guard.Shown(layout.ViewingConversation, DateTimeOffset.UtcNow)) { GuardAnswer(); }
     }
 
     // The tab the panes show, selected in the bar: the one picked, or Conversation once the picked

@@ -109,6 +109,11 @@ public sealed class PaneLayoutViewModel : Observable
         : tab == SessionTab.Tools && !ShowToolsTab ? SessionTab.Conversation
         : tab;
     public bool ShowConversation => Has && Shown == SessionTab.Conversation;
+    // The conversation where the person can see it: its tab shown on the Sessions page, in a window
+    // neither minimised nor hidden in the tray. A conversation in the background is not being read,
+    // so nothing scrolls it to a question (ui.md §5.3), and coming back into view is its question
+    // appearing (AnswerGuard).
+    public bool ViewingConversation => ShowConversation && onScreen;
     public bool ShowDelegates => Has && Shown == SessionTab.Delegates;
     public bool ShowTools => Has && Shown == SessionTab.Tools;
     // The tool history is wanted where it is on screen: the inspector's session details or the
@@ -229,7 +234,7 @@ public sealed class PaneLayoutViewModel : Observable
         foreach (var p in new[]
         {
             nameof(ShowList), nameof(ShowSession), nameof(ShowBack), nameof(ShowEmpty), nameof(CanToggleInspector), nameof(ShowInspector),
-            nameof(InspectorToggleName), nameof(ShowTabs), nameof(ShowDelegatesTab), nameof(ShowToolsTab), nameof(ShowConversation), nameof(ShowDelegates),
+            nameof(InspectorToggleName), nameof(ShowTabs), nameof(ShowDelegatesTab), nameof(ShowToolsTab), nameof(ShowConversation), nameof(ViewingConversation), nameof(ShowDelegates),
             nameof(ShowTools), nameof(WantsTools), nameof(ShownTab), nameof(ShowStrip), nameof(ShowDelegateInspector), nameof(ShowSessionInspector),
             nameof(ShowDelegateList), nameof(ShowDelegateDetail), nameof(ShowDelegateCounts), nameof(WantsDelegate),
         }) { Raise(p); }

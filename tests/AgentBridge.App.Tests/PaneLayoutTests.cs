@@ -268,6 +268,28 @@ public sealed class PaneLayoutTests : IAsyncLifetime
     }
 
     [Fact]
+    public void A_conversation_on_another_page_or_in_a_hidden_window_is_not_being_viewed()
+    {
+        Resize(1000);
+        Select("quiet");
+        Assert.True(TestUi.Read(() => layout.ViewingConversation));
+
+        // Settings, the tray or minimised: nothing scrolls it to a question, and its coming back
+        // is its question appearing again.
+        var changed = new List<string?>();
+        ui.Post(() => layout.PropertyChanged += (_, e) => changed.Add(e.PropertyName));
+        ui.Post(() => layout.OnScreen = false);
+        Assert.False(TestUi.Read(() => layout.ViewingConversation));
+        Assert.True(TestUi.Read(() => changed.Contains(nameof(PaneLayoutViewModel.ViewingConversation))));
+        ui.Post(() => layout.OnScreen = true);
+        Assert.True(TestUi.Read(() => layout.ViewingConversation));
+
+        // The Tools tab: the conversation is behind it.
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        Assert.False(TestUi.Read(() => layout.ViewingConversation));
+    }
+
+    [Fact]
     public async Task A_row_keeps_only_the_first_fact_of_a_long_status_and_the_header_keeps_all_of_it()
     {
         var subagents = new[] { new Subagent { Id = "a1", Kind = SubagentKind.Task, Name = "Read the logs", Status = SubagentStatus.Working } };
