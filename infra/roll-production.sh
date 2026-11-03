@@ -21,11 +21,17 @@ fi
 previous=$(az containerapp show -g "$RESOURCE_GROUP" -n "$PRODUCTION_APP" --query "properties.template.containers[0].image" -o tsv)
 previous_version=$(az containerapp show -g "$RESOURCE_GROUP" -n "$PRODUCTION_APP" \
   --query "properties.template.containers[0].env[?name=='Relay__Version'].value | [0]" -o tsv)
+# A rollback takes the digest of an image production ran (infra/rollback-target.sh), never a tag.
+if [[ "$previous" =~ @(sha256:[0-9a-f]{64})$ ]]; then
+  rollback="run this workflow with rollback_to=${BASH_REMATCH[1]}"
+else
+  rollback="the image it replaced was not deployed by digest, so the workflow cannot roll back to it; see docs/relay-deploy.md, Rollback"
+fi
 {
   echo "### Production"
   echo "- now: \`$image\` ($version)"
   echo "- before: \`$previous\` ($previous_version)"
-  echo "- roll back: run this workflow with rollback_to=$previous_version"
+  echo "- roll back: $rollback"
 } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 az containerapp update -g "$RESOURCE_GROUP" -n "$PRODUCTION_APP" --image "$image" \
