@@ -293,7 +293,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                 return;
             // Closed, it takes no more input.
             case "close_agent":
-                foreach (var id in receivers) { work.AgentEnded(id, at, aborted: false); }
+                foreach (var id in receivers) { work.AgentClosed(id, at); }
                 return;
         }
         if (Json.Obj(item, "agents_states") is { } states)
@@ -342,7 +342,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                         Stopped(null, SubagentOutcome.Failed);
                         break;
                     case "shutdown" or "not_found":
-                        work.AgentEnded(agent, at, aborted: false);
+                        work.AgentClosed(agent, at);
                         break;
                 }
                 break;

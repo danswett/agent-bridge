@@ -998,8 +998,9 @@ command); the shapes are in `tests/fixtures/claude`.
   `run_in_background`) starts one, counted in `background.shells`.
 * **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`: a
   `queue-operation` `enqueue` whose `content` is one, written the moment it stops, or a `user`
-  entry whose content is one, when it is delivered. The same notice delivered after it was
-  queued is not a second end. An agent's run ends `done` for `<status>completed</status>` and
+  entry whose content is one, when it is delivered (or the queue's `remove`, for one delivered
+  to a sub-agent). A delivery of a notice that was queued is spent on the run the queued one
+  ended, never ending one a message has started since. An agent's run ends `done` for `<status>completed</status>` and
   `failed` for any other, and it is `idle`; any run still going under it ends `done` too,
   since Claude notifies an agent only once none of its own is live. A `SendMessage` `tool_use`
   whose `input.to` is an agent's id wakes it. A notice delivered to the main agent starts a

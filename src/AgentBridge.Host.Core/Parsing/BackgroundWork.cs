@@ -263,6 +263,16 @@ internal sealed class BackgroundWork
         else { Outcome(agent, at, outcome); }
     }
 
+    // Closed for good by its starter (Codex's close_agent, or a state saying it is shut down):
+    // a run still going failed, and no notice is owed for it, so one that says how a run after a
+    // resume ended is not spent on this one.
+    public void AgentClosed(string agentId, DateTimeOffset? at)
+    {
+        if (!_agents.TryGetValue(agentId, out var agent)) { return; }
+        if (agent.Working) { Stop(agent, at, SubagentOutcome.Failed); }
+        Finish(agent);
+    }
+
     // Bytes were never read (TranscriptTail's skim budget spent): a run the skim saw start may
     // have ended there. Kept listed, as between runs with no outcome known, until the window says
     // more; left running, a Claude or Codex delegate, whose own events are not in the session's

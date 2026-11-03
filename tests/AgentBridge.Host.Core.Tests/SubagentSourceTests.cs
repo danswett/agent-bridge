@@ -40,7 +40,7 @@ public class ClaudeSubagentTests
             _beside = Path.Combine(Path.GetDirectoryName(_transcript)!, Id, "subagents");
             _f.ClaudeRegistration(Id, 900, _transcript);
             _f.Processes.Run(AgentKind.Claude, 900);
-            _lines = [.. File.ReadAllLines(FixturePath(Id + ".jsonl")).Select(l => edit is null ? l : edit(l)).OfType<string>()];
+            _lines = [.. File.ReadAllLines(FixturePath(Id + ".jsonl")).Select(l => edit is null ? l : edit(l)).OfType<string>().SelectMany(l => l.Split('\n'))];
             foreach (var meta in Directory.GetFiles(FixturePath(Id, "subagents"), "*.meta.json"))
             {
                 var name = Path.GetFileName(meta)[..^".meta.json".Length];
@@ -67,6 +67,15 @@ public class ClaudeSubagentTests
                 Fixture.Append(Path.Combine(_beside, name + ".jsonl"), lines[from..to]);
                 _written[name] = to;
             }
+            await Source.RefreshAsync();
+            return Source.Get(Id)!;
+        }
+
+        // A delegate's record written before anything of its own transcript is.
+        public async Task<Session> RecordOnly(string agent)
+        {
+            Directory.CreateDirectory(_beside);
+            File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".meta.json"), _agents["agent-" + agent].Meta);
             await Source.RefreshAsync();
             return Source.Get(Id)!;
         }
@@ -272,6 +281,36 @@ public class ClaudeSubagentTests
         await using var cold = new Replay(l => l.Contains("\"queue-operation\"", StringComparison.Ordinal) && l.Contains(Nested, StringComparison.Ordinal) ? null : l);
         var all = await cold.Through(200);
         Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Entry(all, Nested).Status, Entry(all, Nested).Outcome));
+    }
+
+    [Fact]
+    public async Task A_delegate_recorded_before_its_own_transcript_is_written_gets_its_prompt_and_start_once_it_is()
+    {
+        await using var r = new Replay();
+        await r.Through(6.5);
+
+        var early = Entry(await r.RecordOnly(Nested), Nested);
+        Assert.Equal((Nester, (string?)null, (DateTimeOffset?)null), (early.Parent, early.Task, early.StartedAt));
+
+        var s = await r.Through(8);
+
+        Assert.Equal("Show the latest three commits in this folder and reply with them.", Entry(s, Nested).Task);
+        Assert.Equal(Fixture.T0.AddMilliseconds(6943), Entry(s, Nested).StartedAt);
+    }
+
+    [Fact]
+    public async Task A_notice_delivered_after_a_message_woke_the_delegate_does_not_end_its_new_run()
+    {
+        // Found in review: the notice is queued, a message wakes the delegate, and only then is
+        // the notice delivered to the main agent.
+        var wake = JsonNode.Parse(Claude.Assistant(0, "tool_use", Claude.ToolUse("toolu_wake", "SendMessage", new JsonObject { ["to"] = Files, ["summary"] = "List again", ["message"] = "List them again." })))!;
+        wake["timestamp"] = Fixture.T0.AddMilliseconds(8700).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        await using var r = new Replay(l => l.Contains("\"operation\":\"enqueue\"", StringComparison.Ordinal) && l.Contains($"<task-id>{Files}</task-id>", StringComparison.Ordinal) ? l + "\n" + wake.ToJsonString() : l);
+
+        var s = await r.Through(9.3);
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+        Assert.Equal(3, s.Activity.Background!.Agents);
     }
 
     [Fact]
@@ -507,6 +546,29 @@ public class CodexSubagentTests
         var closed = await r.Append(Collab("close_agent", 220, "shutdown"));
         Assert.Equal((SubagentStatus.Ended, SubagentOutcome.Failed), (Assert.Single(closed.Subagents!).Status, closed.Subagents![0].Outcome));
         Assert.Null(closed.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_closed_sub_agent_resumed_and_then_completed_is_no_longer_counted()
+    {
+        // Found in review; resume_agent and a notice with no wait were not recorded either.
+        await using var r = new Replay();
+        await r.Through(15);
+
+        Assert.Equal(SubagentStatus.Ended, Assert.Single((await r.Append(Collab("close_agent", 16, "shutdown"))).Subagents!).Status);
+        Assert.Equal(1, (await r.Append(Collab("resume_agent", 17, "running"))).Activity.Background!.Agents);
+
+        var s = await r.Append(Codex.Item(new
+        {
+            type = "message",
+            id = "msg_notice",
+            role = "user",
+            content = new[] { new { type = "input_text", text = $"<subagent_notification>\n{{\"agent_path\":\"{Thread}\",\"status\":{{\"completed\":\"done again\"}}}}\n</subagent_notification>" } },
+        }, 18));
+
+        var thread = Assert.Single(s.Subagents!);
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done, "done again"), (thread.Status, thread.Outcome, thread.Line));
+        Assert.Null(s.Activity.Background);
     }
 
     static string Collab(string tool, double s, string state)

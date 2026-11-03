@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentBridge.Protocol;
@@ -57,29 +56,21 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     ];
 
     const string NoticeStart = "<task-notification>";
-    const int KeepNotices = 64;
+    const int KeepUnclaimed = 64;
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
-    // Notices read as they were queued: the same notice delivered later as a user entry is not
-    // a second end, and by then a message may have woken the agent again.
-    readonly HashSet<string> _queued = new(StringComparer.Ordinal);
-    readonly Queue<string> _queuedOrder = new();
     // Ends of agents not known yet: a nested agent is known only from its own record, which
     // can be read after the session's transcript says it stopped.
     readonly Dictionary<string, (SubagentOutcome Outcome, DateTimeOffset? At)> _unclaimed = new(StringComparer.Ordinal);
-    readonly Queue<string> _unclaimedOrder = new();
 
     public override void Reset()
     {
         base.Reset();
         _responseMessage = null;
-        _queued.Clear();
-        _queuedOrder.Clear();
         _unclaimed.Clear();
-        _unclaimedOrder.Clear();
     }
 
     // A command or delegate the skim saw start may have ended in bytes never read; counted, it
@@ -165,8 +156,13 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var work = S.Background;
         switch (Json.Str(e, "type"))
         {
-            case "queue-operation" when Json.Str(e, "operation") == "enqueue" && Json.Str(e, "content") is { } queued && IsNotice(queued):
-                Notice(queued, at, queued: true);
+            case "queue-operation" when Json.Str(e, "content") is { } queued && IsNotice(queued):
+                switch (Json.Str(e, "operation"))
+                {
+                    case "enqueue": Notice(queued, at, queued: true); break;
+                    // Delivered to the sub-agent that started it, not to the main agent.
+                    case "remove": Notice(queued, at, queued: false); break;
+                }
                 break;
             case "user":
                 {
@@ -203,34 +199,28 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     }
 
     // A delegate or a background command stopped: "completed" is done, any other status failed.
+    // Queued, a delegate's notice ends its run and is owed the delivery that says it again
+    // (a user entry, or the queue's "remove" for one delivered to a sub-agent): that delivery
+    // is spent on this run, never ending one a message has started since. A delivery owed
+    // nothing (Claude writing no queue, or its enqueue never read) ends the run itself.
     void Notice(string text, DateTimeOffset? at, bool queued)
     {
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
-        if (queued) { Keep(_queued, _queuedOrder, key); }
-        else if (_queued.Contains(key)) { return; }
         if (Tag(text, "task-id") is not { } id) { return; }
         var outcome = Tag(text, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed;
         var work = S.Background;
         if (work.Knows(id))
         {
-            work.AgentIdle(id, at, outcome);
+            if (queued) { work.AgentRunEnded(id, at, outcome); }
+            else if (!work.AgentIdle(id, at, outcome)) { return; }
             work.DescendantsStopped(id, at);
             return;
         }
         work.ShellEnded(id);
-        if (!_unclaimed.ContainsKey(id))
+        if (!_unclaimed.ContainsKey(id) && _unclaimed.Count >= KeepUnclaimed)
         {
-            if (_unclaimed.Count >= KeepNotices) { _unclaimed.Remove(_unclaimedOrder.Dequeue()); }
-            _unclaimedOrder.Enqueue(id);
+            _unclaimed.Remove(_unclaimed.MinBy(p => p.Value.At ?? DateTimeOffset.MinValue).Key);
         }
         _unclaimed[id] = (outcome, at);
-    }
-
-    static void Keep(HashSet<string> set, Queue<string> order, string key)
-    {
-        if (!set.Add(key)) { return; }
-        order.Enqueue(key);
-        if (order.Count > KeepNotices) { set.Remove(order.Dequeue()); }
     }
 
     // A sub-agent another one started, known from its own record: listed as working unless the
@@ -246,6 +236,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (work.Knows(record.Id))
         {
             if (record.StartedAt is not null) { work.KnowMode(record.ToolUseId, record.Id, record.Background, info, record.StartedAt); }
+            work.AgentPrompt(record.Id, record.Prompt);
             return false;
         }
         // Listed only under a delegate that is: one whose start was in bytes never read says
