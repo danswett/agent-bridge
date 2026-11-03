@@ -78,8 +78,9 @@ async function scan(page) {
   // taken for a known one.
   const known = await page.evaluate((checks) => checks.map(({ target, selectors }) => {
     if (target.length !== 1) { return false; }
-    const el = document.querySelector(target[0]);
-    return selectors.some((s) => el?.matches(s));
+    // axe's selectors are unique; one that isn't can't say which element it meant.
+    const els = document.querySelectorAll(target[0]);
+    return els.length === 1 && selectors.some((s) => els[0].matches(s));
   }), nodes.map(({ v, node }) => ({ target: node.target, selectors: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) })));
   return nodes.filter((_, i) => !known[i]).map(({ v, node }) =>
     `${v.id} (${v.impact}): ${node.target.join(' >>> ')}: ${(node.failureSummary ?? v.help).replace(/\s+/g, ' ')}`);

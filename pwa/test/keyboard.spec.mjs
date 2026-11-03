@@ -92,7 +92,10 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
 // a link (the rail, New, Leave demo) is focused directly, as Option+Tab would, and operated as
 // everywhere else, with Enter.
 async function reachLink(page, browserName, link) {
-  if (browserName === 'webkit') { await link.focus(); } else { await tabTo(page, link); }
+  if (browserName !== 'webkit') { await tabTo(page, link); return; }
+  await link.focus();
+  const stop = await focused(page);
+  expect.soft(stop.visible && stop.shown, `focus shown on ${stop.name}`).toBe(true);
 }
 
 // Pairs of stops known to go against the layout, each tracked by an issue: the earlier stop's
