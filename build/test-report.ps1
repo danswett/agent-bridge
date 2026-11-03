@@ -56,7 +56,8 @@ if ($summary) {
         "| $project | $($a.name) | $($a.coverage) | $branch | $($a.coveredlines) / $($a.coverablelines) |"
     }
     $s = $summary.summary
-    "| **All** | | **$($s.linecoverage)** | **$($s.branchcoverage)** | $($s.coveredlines) / $($s.coverablelines) |"
+    $branch = if ($null -ne $s.branchcoverage) { $s.branchcoverage } else { 'n/a' }
+    "| **All** | | **$($s.linecoverage)** | **$branch** | $($s.coveredlines) / $($s.coverablelines) |"
 } elseif (-not ($CoverageSummary -and (Test-Path -LiteralPath $CoverageSummary))) {
     '_No coverage summary: the tests did not get far enough to write one._'
 }
@@ -72,15 +73,18 @@ foreach ($trx in Get-ChildItem $TestResults -Filter *.trx -Recurse -ErrorAction 
         $suite = if ($storage) { [IO.Path]::GetFileNameWithoutExtension($storage) } else { $trx.BaseName }
         $suite = $testProjects[$suite] ?? $suite
         $counters = $run.ResultSummary.Counters
+        # VSTest writes a skipped test as a result with outcome NotExecuted but leaves the
+        # notExecuted counter at 0, so skips are counted from the results.
+        $results = @($run.Results.UnitTestResult)
         $suiteRow = [pscustomobject]@{
             Suite   = $suite
             Total   = [int]$counters.total
             Passed  = [int]$counters.passed
             Failed  = [int]$counters.failed
-            Skipped = [int]$counters.total - [int]$counters.executed
+            Skipped = @($results | Where-Object outcome -eq 'NotExecuted').Count
             Seconds = ([datetimeoffset]$run.Times.finish - [datetimeoffset]$run.Times.start).TotalSeconds
         }
-        $testRows = foreach ($r in @($run.Results.UnitTestResult)) {
+        $testRows = foreach ($r in $results) {
             if ($r.duration) {
                 [pscustomobject]@{
                     Suite   = $suite

@@ -450,19 +450,24 @@ jobs:
         # This run only measures: a test failing here is reported and does not fail the job.
         continue-on-error: true
         run: |
-          mkdir -p "$RUNNER_TEMP/pwa-coverage"
+          out="$RUNNER_TEMP/pwa-coverage"
+          mkdir -p "$out"
           node --test --experimental-test-coverage --test-coverage-exclude='test/**' \
             --test-skip-pattern='^pathological input finishes quickly$' \
-            --test-reporter=spec --test-reporter-destination="$RUNNER_TEMP/pwa-coverage/unit.log" \
-            --test-reporter=lcov --test-reporter-destination="$RUNNER_TEMP/pwa-coverage/lcov.info" \
+            --test-reporter=spec --test-reporter-destination="$out/unit.log" \
+            --test-reporter=lcov --test-reporter-destination="$out/lcov.info" \
             "test/unit/*.test.mjs" || echo "::warning::Some PWA unit tests failed under coverage; see unit.log in the pwa-coverage artifact. The run without coverage passed."
-          sed -n '/start of coverage report/,/end of coverage report/p' "$RUNNER_TEMP/pwa-coverage/unit.log"
+          if [ ! -s "$out/lcov.info" ]; then
+            echo "::warning::The PWA coverage run wrote no lcov.info."
+            exit 0
+          fi
+          sed -n '/start of coverage report/,/end of coverage report/p' "$out/unit.log" 2>/dev/null || true
           awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} /^BRF:/{bf+=$2} /^BRH:/{bh+=$2} /^FNF:/{ff+=$2} /^FNH:/{fh+=$2}
             function pct(hit, found) { return found ? sprintf("%.1f (%d / %d)", 100*hit/found, hit, found) : "n/a" }
             END {
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
-            }' "$RUNNER_TEMP/pwa-coverage/lcov.info" >> "$GITHUB_STEP_SUMMARY"
+            }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: success() || failure()
         with:
