@@ -250,17 +250,21 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         try { await gone(waiting.Token); }
         catch (OperationCanceledException) when (giveUp.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            var waited = ShutdownTimeout >= TimeSpan.FromMinutes(1) ? $"{ShutdownTimeout.TotalMinutes:0.#} minutes" : $"{ShutdownTimeout.TotalSeconds:0.#} s";
+            var waited = ShutdownTimeout >= TimeSpan.FromMinutes(1) ? Count(ShutdownTimeout.TotalMinutes, "minute") : Count(ShutdownTimeout.TotalSeconds, "second");
             return $"it was still stopping after {waited}";
         }
         return null;
     }
 
+    static string Count(double n, string unit) => $"{n:0.#} {unit}{(n == 1 ? "" : "s")}";
+
+    // Best effort: a process that cannot be found or looked at is not waited on, and the
+    // migration's own wait for the new host's heartbeat is all there is, as before.
     internal static Func<CancellationToken, Task> WatchProcess(int pid, DateTimeOffset startedAt)
     {
         Process process;
         try { process = Process.GetProcessById(pid); }
-        catch (ArgumentException) { return _ => Task.CompletedTask; }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return _ => Task.CompletedTask; }
         try
         {
             if (new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero) > startedAt)
@@ -269,11 +273,15 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
                 return _ => Task.CompletedTask;
             }
         }
-        // Not to be looked at, or gone meanwhile: waited on, which ends at once if it has gone.
+        // Its start time not to be read, or gone meanwhile: waited on, which ends at once if it has gone.
         catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
         return async ct =>
         {
-            using (process) { await process.WaitForExitAsync(ct); }
+            using (process)
+            {
+                try { await process.WaitForExitAsync(ct); }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            }
         };
     }
 }

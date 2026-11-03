@@ -7,6 +7,7 @@ using Xunit;
 // The host a migration restarts, over a real pipe to a stand-in that answers status and restart:
 // the restart is done once the old host has gone, however long its shutdown, so the migration's
 // own wait is for the new host alone (#239's review).
+[Trait("Category", "Network")]
 public sealed class MigrationHostTests : IAsyncLifetime
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
