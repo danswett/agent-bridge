@@ -503,12 +503,13 @@ would be:
    apps until approved.
 
 About six codes for today's fleet. A lighter alternative is a one-time **bulk grandfather** on
-the genesis device: it lists the devices online at that moment, each with its kind and the first
-8 characters of its id; the owner ticks each after checking the id shown on that device, and the
-genesis device signs `add` entries with `approval.method: "grandfather"`. A device that came only
-from a stolen token, online at that moment and named like one of the owner's, would be caught
-only by that id check. Ids from `launch.remoteFolderTrustDevices` (approved at a machine
-already) are pre-ticked, nothing else is.
+the genesis device: it lists the devices online at that moment, each with its kind and its whole
+id in groups of four; the owner ticks each after comparing the whole id with the one shown on
+that device (a prefix is not enough: 8 hex characters can be matched by generating about 2³²
+keys). The genesis device then signs `add` entries with `approval.method: "grandfather"`. A
+device that came only from a stolen token, online at that moment and named like one of the
+owner's, would be caught only by that comparison. Ids from `launch.remoteFolderTrustDevices`
+(approved at a machine already) are pre-ticked, nothing else is.
 
 ### 8.3 Order of releases
 
