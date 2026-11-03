@@ -287,3 +287,21 @@ test('a block of only whitespace lines draws only its first line\'s spaces', () 
   assert.equal(codeText('  \n\t\n   '), '  ');
   assert.equal(codeText('\n\n'), '');
 });
+test('a block ending in tens of thousands of blank lines is trimmed in linear time', () => {
+  // Quadratic, as the regex was, 50,000 blank lines took seconds and stalled the render.
+  for (const text of ['x' + '\n'.repeat(50000) + 'y', 'x' + ' \n'.repeat(50000) + 'y', 'echo\n' + ' \n'.repeat(50000), 'echo' + '\n'.repeat(100000), '\t\n'.repeat(100000)]) {
+    const start = performance.now();
+    codeText(text);
+    assert.ok(performance.now() - start < 250, `${text.length} characters took ${performance.now() - start} ms`);
+  }
+  assert.equal(codeText('echo\n' + ' \n'.repeat(50000)), 'echo');
+  assert.equal(codeText('x' + '\n'.repeat(50000) + 'y'), 'x' + '\n'.repeat(50000) + 'y');
+});
+
+test('the linear trim draws exactly what the trailing-blank-lines rule did, for every short block', () => {
+  const rule = (s) => s.replace(/(?:\n[^\S\n]*)+$/, '');
+  const alphabet = ['a', ' ', '\t', '\n', '\u00a0', '\u3000'];
+  const all = [''];
+  for (let from = 0, n = 0; n < 6; n++) { const to = all.length; for (let i = from; i < to; i++) { for (const c of alphabet) { all.push(all[i] + c); } } from = to; }
+  for (const s of all) { assert.equal(codeText(s), rule(s), JSON.stringify(s)); }
+});

