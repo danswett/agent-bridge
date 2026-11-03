@@ -15,8 +15,14 @@
 #   triggers   for everything else: path globs that make it affected
 #   command    how to run it
 #   where      the workflow job that runs it today
-#   baseline   tests and duration measured 2026-11-02 (win-x64, local, Release)
+#   baseline   measured 2026-11-02 (win-x64, local, Release); any of: tests, skipped, seconds,
+#              files (for suites counted by spec file rather than test)
+#   security_sensitive
+#              optional, default false: a change reaching it adds the security suites and the
+#              security-review label (quality/README.md §2, AGENTS.md rule 5)
 #   status     exists | partial | planned
+#
+# A suite with select: affected needs project or triggers (or both), or nothing can select it.
 
 global_triggers:
   # A change here can affect any suite, so rings 0-1 run everything they hold.
@@ -169,8 +175,10 @@ suites:
     ring: 1
     select: affected
     # The same .NET test projects on macOS, including ManagedTmux* from codex/mac-tmux-delivery.
+    # It runs the whole solution, so any product or test change reaches it.
     platforms: [macos-arm64]
     runner: hosted
+    triggers: [src/**, tests/**, tools/AgentBridge.*/**]
     command: dotnet test AgentBridge.slnx -c Release
     status: planned
 
