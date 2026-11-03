@@ -497,7 +497,7 @@ test.describe('at three panes', () => {
     const c = card(page);
     const events = c.locator('.agent-block .delegate-events > li');
     // Starts each within a minute of the last are one line, as the app has it.
-    await expect(events).toHaveText([/^Started 3 delegates · 1[78]m$/, /^Lint the PWA failed · 1[45]m$/]);
+    await expect(events).toHaveText([/^Started 3 delegates · 1[78]m$/, /^Delegate Lint the PWA failed · 1[45]m$/]);
     // After the main agent's words, before what it is running now.
     expect(await c.locator('.agent-block > :not([hidden])').evaluateAll((els) => els.map((e) => e.className))).toEqual(['speaker', 'reasoning', 'md response', 'delegate-events']);
     await events.nth(1).getByRole('button', { name: 'Lint the PWA' }).click();
@@ -588,6 +588,25 @@ test.describe('at three panes', () => {
     await showList(page);
     await expect(delegate(page, 'demo-agent-witness').locator('.delegate-name')).toHaveText(impostor);
     await expect(delegate(page, 'demo-agent-grep').locator('.sr-only')).toHaveText(`under ${impostor}`);
+  });
+
+  test('the conversation\'s lines say Delegate before every name, and a delegate whose id isn\'t plain ASCII has nothing to ask', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    // Coptic letters no look-alike list has: the word Delegate is the guard.
+    await change(page, 'demo-agent-lint', { name: '\u2c99\u2c81\u2c93\u2c9b agent' });
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"]')).toHaveText(/^Delegate \u2c99\u2c81\u2c93\u2c9b agent failed · 1[45]m$/);
+    await expect(c.locator('.delegate-events .delegate-event[data-kind="end"] .delegate-link')).toHaveText('\u2c99\u2c81\u2c93\u2c9b agent');
+    // An id with a Cyrillic letter in it would go into the reply as it is, or cleaned into another
+    // delegate's: neither, so there is no action at all.
+    await page.evaluate(({ id, at }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, updatedAt: at, subagents: [{ id: 'agent-\u0437', kind: 'background', name: 'Odd id', status: 'working', startedAt: at }, ...s.subagents] });
+    }, { id: SESSION, at: later() });
+    await c.locator('.strip-item[data-id="agent-\u0437"]').click();
+    await expect(pane(page)).toHaveAttribute('data-id', 'agent-\u0437');
+    await expect(pane(page).getByRole('button', { name: 'Ask main agent to stop it' })).toBeHidden();
   });
 
   test('the delegate open survives a resize: in the inspector at three panes, in the Delegates tab at two', async ({ page }) => {

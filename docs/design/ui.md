@@ -848,11 +848,11 @@ question, as choosing its row does.
   - **Back:** on a phone, a delegate opened in a pushed session is a step of its own. The
     system's Back (Android's button and gesture, iOS's edge swipe in an installed app, the
     browser's) goes delegate → session → list, then leaves the app; the header's Back is
-    always the list. The step follows what shows: one however many delegates are open, gone
-    once the last is closed or hidden (by hand, behind another tab or the finished fold shut, or
-    because its machine no longer lists it, even on Forward to it), and there again when the
-    window narrows to a phone's with one open. Forward to it shows the delegate again, opening
-    the finished fold if it has finished meanwhile.
+    always the list. The step follows what shows: one while a delegate is open (another opened
+    takes its place, and its step), gone once it is closed or hidden (by hand, behind another
+    tab, or because its machine no longer lists it, even on Forward to it), and there again when
+    the window narrows to a phone's with one open. Forward to it opens the delegate again,
+    finished meanwhile or not.
 
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform

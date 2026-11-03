@@ -40,7 +40,7 @@ Larger files come next.
 | `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
 | `js/status.js` | What a session says about itself: [ui.md](../docs/design/ui.md) §2.2's rules, as its glyph, its words, the colour role of the words, and the glyph's accessible name (§9). Rules 1-6 first match wins, 8 refining 4, and 7 (an agent driving) as an overlay. Pure, and tested rule by rule in `test/unit/status.test.mjs` |
-| `js/attribution.js` | Who said what (#176): the main agent's own response and reasoning, never a delegate's (`activity.source` and `activity.own`, [v1-sessions.md](../docs/protocol/v1-sessions.md) Activity), and the delegates as a card lists them: running first, then idle, each under its parent, with its glyph and words, and the finished folded apart; the delegates one started, at any depth; the conversation's "Started N delegates" and "*name* reported back" lines; the words "Ask main agent to stop it" puts in the reply box; and a host's background counts where it lists none. Pure, and tested in `test/unit/attribution.test.mjs` |
+| `js/attribution.js` | Who said what (#176): the main agent's own response and reasoning, never a delegate's (`activity.source` and `activity.own`, [v1-sessions.md](../docs/protocol/v1-sessions.md) Activity), and the delegates as a card lists them: running first, then idle, each under its parent, with its glyph and words, and the finished folded apart; the delegates one started, at any depth; the conversation's "Started N delegates" and "Delegate *name* reported back" lines; the words "Ask main agent to stop it" puts in the reply box; and a host's background counts where it lists none. Pure, and tested in `test/unit/attribution.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
@@ -484,9 +484,10 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   reads: ⌘ in the hints on a Mac and Ctrl on Windows; with an iPhone's or an iPad's insets reported,
   the app bar, bottom navigation or rail and reply box clear of them only when installed on iOS or
   iPadOS; the system's Back (Android's, and iOS's edge swipe) from a delegate to its session, to the
-  list, then out of the app, with the delegate's step kept in line with what shows (two open, one
-  closed by hand, one behind another tab or the finished fold shut, one its machine stops listing
-  before or after Back, one that finished before Forward, a resize to a phone's width and back);
+  list, then out of the app, with the delegate's step kept in line with what shows (one opened from
+  the chip row, another opened in its place, one closed by hand, one behind another tab, one its
+  machine stops listing before or after Back, one that finished before Forward, a resize to a
+  phone's width and back);
   and a platform nobody recognises drawn and behaving as Windows.
   `test/unit/platform.test.mjs` holds the detection table.
 * `test/machines.spec.mjs`, in demo mode with three machines (`?machines=3`): All machines

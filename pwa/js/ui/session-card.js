@@ -420,6 +420,7 @@ export class SessionCard {
     this.detail.shown();
     // Pushed in the list's place, focus goes to it; in the inspector it stays where it was.
     if (!inspector) { this.detail.focus(); }
+    this.onDelegate?.();
   }
 
   // Back to the session's own Details and Tools, or to the Delegates tab's list.
@@ -432,6 +433,7 @@ export class SessionCard {
     delete this.view.dataset.delegate;
     this.#renderDelegates(this.#s);
     if (focus) { (this.delegates.row(id) ?? this.els.tabD).focus(); }
+    this.onDelegate?.();
   }
 
   get openDelegateId() { return this.#delegate; }

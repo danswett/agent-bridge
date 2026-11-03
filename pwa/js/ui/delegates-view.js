@@ -318,7 +318,7 @@ export class DelegateDetail {
     this.#drawWords();
     this.#drawTools(now);
     this.#drawNested(list, now);
-    e.ask.hidden = a.status === 'ended' || !this.canAsk();
+    e.ask.hidden = a.status === 'ended' || !this.canAsk() || !askToStopText(a);
     // Followed as it changes: fetched again (at most every 2 s).
     const key = JSON.stringify([a.status, a.outcome, a.line, a.endedAt]);
     if (!first && key !== this.#state.key) { this.#schedule(CHANGE_MS); }
