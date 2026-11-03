@@ -23,8 +23,8 @@ internal static partial class HaPublicationRenderer
     // version. Normalize source line endings so Windows and Unix build the same fence.
     public static readonly HaPublicationArtifact Artifact = HaPublicationArtifact.Read(JsonSerializer.SerializeToElement(new
     {
-        version = "1.14.1",
-        hash = HaPublicationJson.Hash(string.Join("\n", new[] { "HaPublicationRenderer.cs", "HaPublicationWriter.cs", "HaPublicationPolicy.cs", "HaContract.cs", "session-templates.json" }
+        version = "1.15.0",
+        hash = HaPublicationJson.Hash(string.Join("\n", new[] { "HaPublicationRenderer.cs", "HaPublicationWriter.cs", "HaPublicationSelector.cs", "HaPublicationFleet.cs", "HaConnector.Publication.cs", "HaPublicationPolicy.cs", "HaContract.cs", "session-templates.json" }
             .Select(name => name + "\n" + Read(name).Replace("\r\n", "\n", StringComparison.Ordinal)))),
     }));
 

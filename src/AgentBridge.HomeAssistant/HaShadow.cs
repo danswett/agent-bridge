@@ -231,7 +231,8 @@ public static partial class HaShadow
         public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => real.ReadDashboardAsync(urlPath, cancellationToken);
         public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => real.ReadResourcesAsync(cancellationToken);
         public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => real.ReadDashboardsAsync(cancellationToken);
-        public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
+        public Task<JsonElement> ReadMachineSelectorsAsync(CancellationToken cancellationToken = default) => real.ReadMachineSelectorsAsync(cancellationToken);
+        public Task<JsonElement> ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Shadow mode never publishes shared resources.");
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => real.ReadTopicsAsync(filters, window, cancellationToken);
     }

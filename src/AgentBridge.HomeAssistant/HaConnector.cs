@@ -16,6 +16,9 @@ public sealed record HaConnectorOptions
     // What a card carries when the machine has no Detailed activity switch.
     public bool DetailedActivityFallback { get; init; } = true;
     public string DashboardUrlPath { get; init; } = HaSettings.DefaultDashboard;
+    public HaPublicationSettings Publication { get; init; } = HaPublicationSettings.Default;
+    public string? ProfileFolder { get; init; }
+    public Uri? BaseUrl { get; init; }
     // Where sessions waiting to be retired are remembered across a restart. None in tests that
     // do not need it.
     public string? StateFile { get; init; }
@@ -284,6 +287,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         // timeout), and agent-ha-bridge starting part-way through must stop the rest of it, not
         // race the daemon's own publishes until the pass ends.
         this.ha = new Guarded(ha, agentHaBridge);
+        InitializePublication();
         this.source = source;
         this.usage = usage;
         this.agentHaBridge = agentHaBridge;
@@ -356,12 +360,14 @@ public sealed partial class HaConnector : IAsyncDisposable
             // the pass is skipped whole, so nothing in it is tried and fails, request by request.
             if (ha.Refused is { } refused)
             {
+                HoldRetirement();
                 Problem("auth", $"Home Assistant connector: {refused}");
                 return;
             }
             authFailed = false;
             if (!started)
             {
+                HoldRetirement();
                 if (now < retryAt) { return; }
                 try
                 {
@@ -392,6 +398,7 @@ public sealed partial class HaConnector : IAsyncDisposable
                 nextReconcile = now + options.Reconcile;
                 await Step("detailed", () => DetailedAsync(cancellationToken));
                 await Step("entities", () => SessionUpkeepAsync(now, cancellationToken));
+                await Step("publication", () => PublicationAsync(cancellationToken));
                 await Step("retire", () => RetireAsync(now, cancellationToken));
             }
             if (!authFailed) { Resolved("auth"); }
@@ -399,11 +406,13 @@ public sealed partial class HaConnector : IAsyncDisposable
         // agent-ha-bridge started during the pass: the write that found it was not made, and
         // nothing after it is.
         catch (AgentHaBridgeRunning e) { Pause(e.Message); }
+        catch { HoldRetirement(); throw; }
         finally { passes.Release(); }
     }
 
     void Pause(string why)
     {
+        HoldRetirement();
         if (pausedFor != why) { log($"Home Assistant connector paused: {why}"); }
         pausedFor = why;
         started = false;
@@ -431,6 +440,7 @@ public sealed partial class HaConnector : IAsyncDisposable
     // problem for every step and loop that met it, said once, in the guard's words.
     void Refusal(HomeAssistantAuthException e)
     {
+        HoldRetirement();
         authFailed = true;
         Problem("auth", $"Home Assistant connector: {e.Reason}");
     }
@@ -1048,9 +1058,8 @@ public sealed partial class HaConnector : IAsyncDisposable
     }
 
     // Ended sessions' entities, once the dashboard served to browsers no longer renders them.
-    // The served config is read as text and a node anywhere in it holds its retirement: that is
-    // stricter than "rendered" (a mention in display text holds too), which errs the safe way,
-    // and needs no trust in who wrote the config. A dashboard that cannot be read holds them all.
+    // An established publication additionally requires actual policy/content/node
+    // proof, even on a nonwriter. Unverifiable intervals reset the grace clock.
     async Task RetireAsync(DateTimeOffset now, CancellationToken ct)
     {
         List<string> nodes;
@@ -1061,14 +1070,31 @@ public sealed partial class HaConnector : IAsyncDisposable
             nodes = [.. retiring.Keys];
         }
         if (nodes.Count == 0) { return; }
-        var dashboard = await ha.ReadDashboardAsync(options.DashboardUrlPath, ct);
+        HaDashboard dashboard;
+        IReadOnlySet<string>? renderedNodes = null;
+        try
+        {
+            if (publicationReceipts is not null)
+            {
+                var observation = await HaPublicationObservation.ReadAsync(ha, options.DashboardUrlPath, publicationReceipts, ct);
+                dashboard = observation.Dashboard;
+                if (observation.Policy is not null)
+                {
+                    var proof = HaVerifiedPublication.Read(observation);
+                    if (!proof.Verified) { HoldRetirement(); return; }
+                    renderedNodes = proof.RenderedNodes;
+                }
+            }
+            else { dashboard = await ha.ReadDashboardAsync(options.DashboardUrlPath, ct); }
+        }
+        catch { HoldRetirement(); throw; }
         var served = dashboard.Found ? dashboard.Json ?? "" : "";
         var retired = 0;
         foreach (var node in nodes)
         {
             Retiring r;
             lock (gate) { if (!retiring.TryGetValue(node, out r!)) { continue; } }
-            if (served.Contains(node, StringComparison.Ordinal)) { r.AbsentSince = null; continue; }
+            if (renderedNodes?.Contains(node) == true || served.Contains(node, StringComparison.Ordinal)) { r.AbsentSince = null; continue; }
             if (r.AbsentSince is null) { r.AbsentSince = now; continue; }
             if (now - r.AbsentSince < options.RetireGrace) { continue; }
             foreach (var m in HaContract.SessionRemoval(node)) { await ha.PublishAsync(m.Topic, m.Payload, m.Retain, ct); }
@@ -1277,7 +1303,8 @@ public sealed partial class HaConnector : IAsyncDisposable
         public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => inner.ReadDashboardAsync(urlPath, cancellationToken);
         public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => inner.ReadResourcesAsync(cancellationToken);
         public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => inner.ReadDashboardsAsync(cancellationToken);
-        public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
+        public Task<JsonElement> ReadMachineSelectorsAsync(CancellationToken cancellationToken = default) => inner.ReadMachineSelectorsAsync(cancellationToken);
+        public Task<JsonElement> ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
             Write(() => inner.ApplyPublicationAsync(mutation, cancellationToken));
     }
 }

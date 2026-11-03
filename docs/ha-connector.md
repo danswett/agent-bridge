@@ -23,8 +23,9 @@ The plan, with every stage done, is below.
 The owner decided on 2026-11-02 to keep the HA dashboard after the legacy daemon is
 retired. #318 implements native shared dashboard/card publication; #319 depends on it
 for an explicit writer handover, rollback and disposable-HA rehearsal. This is not
-permission to bypass G7: the current connector still does not publish shared resources,
-and writer migration remains refused until the replacement is verified.
+permission to bypass G7: shared publication is separately opt-in, requires an already
+established matching policy, and writer migration remains refused until the explicit
+stopped-writer handover and rollback are verified.
 
 The first implementation slice ports protocol 1's policy validation, ordinal canonical
 policy JSON/digest/resource URL, receipt-progress checks and writer/artifact authorization
@@ -49,10 +50,11 @@ rejects duplicate JSON members instead of letting a parser silently select one.
 
 ## What it never does
 
-* **Publish the shared card resource, the Lovelace dashboard or the publication policy.**
-  Publication authority is explicit and fenced in agent-ha-bridge (its AGENTS.md,
-  "Publication authority, versions and rollback"); this host is never the writer (G7). It reads
-  the served dashboard config, and only to know when an ended session's card has gone.
+* **Acquire shared publication authority automatically.** Publication is off by default.
+  An explicitly configured participant must exactly match the established policy's
+  authority, designated writer and generation before publishing any shared resource.
+  There is no election or lease; an absent policy is not permission to bootstrap.
+  G7 still refuses migrating the legacy writer pending verified reversible handover.
 * **Call a Home Assistant service that names more than one entity.** Every service call goes
   through `ServiceTarget.Check`, a port of agent-ha-bridge's `Assert-HomeAssistantServiceTarget`
   (the 2026-10-02 incident that pressed 166 buttons): one scalar `entity_id` or none, and never
@@ -1349,8 +1351,8 @@ handle. Corrupt/inaccessible
 receipts refuse observation, and deleting a dashboard cannot reset an established
 high-water mark. No legacy configuration or installed files are read or changed.
 
-This boundary does not yet enable shared writes. The shared publisher and explicit
-reversible writer handover remain tracked by #318/#319; G7 is unchanged.
+This boundary alone does not grant shared writes. The opt-in runtime below adds
+publication only for an explicitly established writer; G7 is unchanged.
 
 `PublicationObservationTests` compares the actual inventory boundary with the
 original functions recorded by
@@ -1394,7 +1396,47 @@ deterministic for the same fleet, artifacts and host culture.
 `LivePublicationTests` exercises actual registration, saves, restart/readback and
 overwrite repair only on the explicitly disposable loopback HA of CI.
 
-These are internal primitives, **not an enabled runtime writer or migration
-command**. Fleet reconciliation, explicit opt-in and reversible stopped-writer
-handover still have to be integrated and verified. G7 is unchanged; no live
-cutover is authorized by this implementation slice.
+### Explicit native publication runtime (#318)
+
+`homeAssistant.publication` is an optional object, off by default:
+
+```json
+{
+  "enabled": true,
+  "authority": "example-authority",
+  "participant": "example-native-writer",
+  "writer": "example-native-writer",
+  "generation": 4
+}
+```
+
+These are illustrative identities, **not cutover instructions**. An existing HA
+protocol-1 policy must already designate the exact authority/writer/generation.
+The participant must be that writer; observers cannot gain authority by enabling
+the setting. Configure the whole object atomically, then restart the host to apply
+it, as with other host settings. Unknown/duplicate fields, malformed identities and
+missing enabled-writer configuration disable the connector instead of guessing.
+Management changes remain owner actions outside agent sessions (#67).
+
+Each reconciliation gathers the complete retained mixed legacy/native fleet from
+HA, with current local descriptors overriding its own lagging MQTT sensor. Offline
+machines remain visible without rendering stale sessions; shared MCP nodes are
+deduplicated. Malformed or conflicting peer inventories refuse a partial rebuild.
+The fenced writer maintains the exact machine-selector helper, including actual
+option/selection readback and asynchronous selection repair, then verifies the
+actual policy, card and dashboard receipt. A successful save alone is not proof.
+Restart, overwrite and selector changes are reconciled from actual HA state rather
+than trusting a cached input signature. Newer accepted cards are never downgraded.
+
+On all profile-backed connectors, including nonwriters and publication-disabled
+observers, an established policy requires verified actual dashboard content/node
+proof before ended-session entities can retire. Unverifiable intervals reset the
+retirement grace; lost policies cannot revert to pre-establishment behavior.
+
+`PublicationRuntimeTests` covers whole-fleet idempotence, restart/overwrite repair,
+malformed inventories, exact selector identity and duplicate cleanup, off/nonwriter
+refusals, mid-pass G5 fencing and proof-gated retirement. `LivePublicationTests`
+additionally runs actual selector registration and native runtime new/ended-card
+restart recovery on CI's explicitly disposable loopback HA. G7 is unchanged: the
+reversible stopped-writer migration/rehearsal remains #319, and this slice does
+not authorize a live cutover.

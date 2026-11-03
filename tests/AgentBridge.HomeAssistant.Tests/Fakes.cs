@@ -181,6 +181,12 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         if (ServiceFailsFor?.Invoke($"{domain}.{service}", entityId) == true) { throw new HttpRequestException($"{domain}.{service}: Home Assistant answered 500 Internal Server Error"); }
         var value = data["option"]?.GetValue<string>() ?? data["value"]?.GetValue<string>() ?? "";
         lock (gate) { Services.Add(($"{domain}.{service}", entityId, value, TokenUser)); }
+        if (domain == "input_select" && service == "select_option" && States.TryGetValue(entityId, out var selector))
+        {
+            if (!selector.Attributes.GetProperty("options").EnumerateArray().Any(v => v.GetString() == value)) { throw new HttpRequestException("Invalid selector option."); }
+            States[entityId] = selector with { State = value };
+            return Task.CompletedTask;
+        }
         Apply($"{domain}.{service}", entityId, value, TokenUser);
         return Task.CompletedTask;
     }

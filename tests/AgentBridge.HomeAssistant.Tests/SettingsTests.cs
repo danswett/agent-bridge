@@ -26,6 +26,31 @@ public sealed class SettingsTests : IDisposable
     }
 
     [Fact]
+    public void Native_publication_is_separately_opted_in_with_exact_identity_and_generation()
+    {
+        Assert.False(Read("""{"enabled":true,"baseUrl":"https://ha.test"}""").Settings.Publication.Enabled);
+        var (settings, problems) = Read("""
+            {"enabled":true,"baseUrl":"https://ha.test","publication":{"enabled":true,"authority":"Fleet:Main","participant":"Writer-A","writer":"Writer-A","generation":7}}
+            """);
+        Assert.Empty(problems);
+        Assert.True(settings.Publication.Enabled);
+        Assert.Equal("Fleet:Main", settings.Publication.Authority);
+        Assert.Equal("Writer-A", settings.Publication.Participant);
+        Assert.Equal(7, settings.Publication.Generation);
+        foreach (var publication in new[]
+        {
+            "null", """{"enabled":"yes"}""", """{"enabled":true}""",
+            """{"enabled":false,"generation":0}""", """{"enabled":false,"authority":" writer"}""",
+            """{"enabled":false,"enabled":true}""", """{"enabled":false,"unknown":true}""",
+        })
+        {
+            var malformed = Read($$"""{"enabled":true,"baseUrl":"https://ha.test","publication":{{publication}}}""");
+            Assert.False(malformed.Settings.Enabled);
+            Assert.NotEmpty(malformed.Problems);
+        }
+    }
+
+    [Fact]
     public void A_setting_that_is_wrong_turns_the_connector_off_and_says_why()
     {
         foreach (var json in new[]

@@ -28,9 +28,10 @@ public sealed record HaSettings
 
     public bool Enabled { get; init; }
     public Uri? BaseUrl { get; init; }
-    // The dashboard agent-ha-bridge's publication writer generates, read (never written) to
-    // know when an ended session's card has gone (dashboard.urlPath there).
+    // The shared dashboard, read to know when ended cards have gone. Publishing it
+    // additionally requires the explicit off-by-default publication identity.
     public string DashboardUrlPath { get; init; } = DefaultDashboard;
+    public HaPublicationSettings Publication { get; init; } = HaPublicationSettings.Default;
     // What a card carries when the machine's Detailed activity switch does not exist
     // (detailedActivity there).
     public bool DetailedActivity { get; init; } = true;
@@ -86,6 +87,7 @@ public sealed record HaSettings
             DashboardUrlPath = Text("dashboardUrlPath") ?? DefaultDashboard,
             MachineName = Text("machineName"),
             Notify = HaNotifySettings.Read(s, problems),
+            Publication = HaPublicationSettings.Read(s, problems),
         };
         if (s.TryGetProperty("updates", out var u) && u.ValueKind != JsonValueKind.Null)
         {

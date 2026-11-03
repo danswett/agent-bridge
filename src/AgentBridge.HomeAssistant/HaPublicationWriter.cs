@@ -134,7 +134,7 @@ internal sealed record HaVerifiedPublication(bool Verified, string InputHash, IR
     }
 }
 
-internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, HaPublicationReceipts receipts, HaPublicationIdentity identity)
+internal sealed partial class HaPublicationWriter(IHomeAssistant ha, string dashboard, HaPublicationReceipts receipts, HaPublicationIdentity identity)
 {
     // Targets come only from locally configured endpoints. This process-local
     // transaction gate is shared across client/profile instances, not a writer lease.

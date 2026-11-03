@@ -192,6 +192,21 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task Machine_selector_inventory_uses_the_authenticated_boundary_and_rejects_noninventory_results()
+    {
+        var (client, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray() });
+        Assert.Equal(JsonValueKind.Array, (await client.ReadMachineSelectorsAsync()).ValueKind);
+        Assert.Equal("input_select/list", received[1]["type"]!.GetValue<string>());
+        var (malformed, _, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
+        await Assert.ThrowsAsync<InvalidDataException>(() => malformed.ReadMachineSelectorsAsync());
+        var (denied, _, _) = Server(_ => new JsonObject { ["success"] = false, ["error"] = new JsonObject { ["code"] = "unauthorized" } });
+        await Assert.ThrowsAsync<HaCommandException>(() => denied.ReadMachineSelectorsAsync());
+        using var cancel = new CancellationTokenSource();
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ReadMachineSelectorsAsync(cancel.Token));
+    }
+
+    [Fact]
     public async Task Publication_mutations_use_authenticated_commands_and_surface_refusals_and_cancellation()
     {
         var command = new JsonObject { ["type"] = "lovelace/resources/update", ["resource_id"] = "policy", ["url"] = "reserved", ["res_type"] = "module" };
