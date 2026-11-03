@@ -8,6 +8,7 @@ import SwiftUI
 struct ConnectionView: View {
     @Bindable var store: BridgeStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var relayAddress: String
     @State private var deviceName: String
     @State private var profile: String
@@ -48,7 +49,11 @@ struct ConnectionView: View {
                                 copy(code.userCode)
                                 copiedCode = true
                             }
-                            Link("Continue on GitHub", destination: code.verificationUri)
+                            Button("Copy Code and Open GitHub") {
+                                copy(code.userCode)
+                                copiedCode = true
+                                openURL(code.verificationUri)
+                            }
                         } else {
                             ProgressView("Requesting sign-in code…")
                         }
@@ -148,7 +153,7 @@ struct ConnectionView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         #else
-            UIPasteboard.general.string = text
+            UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(TimeInterval(store.signInCode?.expiresIn ?? 300))])
         #endif
     }
 }

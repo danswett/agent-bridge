@@ -31,7 +31,7 @@ profile in **Connection Settings**. Sign in with the same GitHub account as your
 hosts to connect remote machines on any Apple platform. The default relay is the
 one used by the Windows app. Custom relays require HTTPS; authentication and blob
 HTTP requests refuse redirects. Tokens and device keys are scoped to the relay
-and GitHub account and stored in this installation's Keychain.
+and GitHub account and stored in this installation's Keychain. Choose **Sign In with GitHub** and **Copy Code and Open GitHub**, paste the code, authorize Agent Bridge, then return to the app. The iOS app waits to exchange the code while it is in the background. A temporary network interruption retries the same code within its original expiry.
 
 The app does not install, restart, migrate or reconfigure a local host. The Mac
 host supports actions on sessions launched by its own managed terminal backend;
