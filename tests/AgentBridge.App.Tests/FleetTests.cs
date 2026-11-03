@@ -84,6 +84,12 @@ public sealed class FleetTests : IAsyncLifetime
     async Task BothMachinesAsync()
     {
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        // Connected comes with the subscribe's result, ahead of the snapshot it sends. Each
+        // machine's first list goes to the top once it is whole (ui.md §6.1), so this machine's
+        // must be whole before the other's is asked for, as the order these tests expect
+        // (["there", "here"]) says. A slow runner once let the other machine's finish first,
+        // and "here" went on top (#414).
+        await Wait.UntilAsync(() => local.Sessions.Complete, "this machine's whole list");
         // The relay lists this machine's own host too: it is reached over the pipe, not again.
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
         await Wait.UntilAsync(() => Card("here") is not null && Card("there") is not null, "both machines' cards");
@@ -224,6 +230,7 @@ public sealed class FleetTests : IAsyncLifetime
         var there = Card("there")!;
         var here = Card("here")!;
         var hereLine = TestUi.Read(() => here.StatusText);
+        Assert.Equal(["there", "here"], TestUi.Read(() => main.Sessions.Select(c => c.Id).ToList()));
 
         Leave();
         clock.Advance(TimeSpan.FromSeconds(20));
