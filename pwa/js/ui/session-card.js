@@ -183,7 +183,13 @@ export class SessionCard {
     e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
     // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
     // Its item pressed again lets the delegate go, unless the inspector is hidden: then it shows it.
-    this.strip = new DelegateStrip({ onSelect: (id) => (id === null && !this.layout().inspector && this.layout().wide ? this.openDelegate(this.#delegate) : id === null ? this.closeDelegate() : this.openDelegate(id)) });
+    this.strip = new DelegateStrip({
+      onSelect: (id) => {
+        if (id !== null) { this.openDelegate(id); return; }
+        const { inspector, wide } = this.layout();
+        if (wide && !inspector) { this.openDelegate(this.#delegate); } else { this.closeDelegate(); }
+      },
+    });
 
     // Conversation / Delegates / Tools, where the inspector isn't a pane of its own (ui.md §6.3).
     // Delegates is there only while the host lists any.

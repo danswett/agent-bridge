@@ -290,6 +290,8 @@ export class DelegateDetail {
   // Every listed delegate's task and line as last sent, whether open or not, so one opened after
   // the budget trimmed them still has them.
   #known = new Map();
+  // The time the view last drew with, so a fetch coming back draws to the same clock as the rest.
+  #now = null;
 
   // fetchDelegate(agentId) -> Promise<Subagent|null>, or null. onOpen(id): a nested delegate
   // pressed. onAsk(text): "Ask main agent to stop it". onBack(): back to the list, where the
@@ -345,6 +347,7 @@ export class DelegateDetail {
 
   // Its entry in the session's list, as it changes. Returns false when it is no longer listed.
   update(session, now = Date.now()) {
+    this.#now = now;
     this.#session = session;
     const list = session?.subagents ?? [];
     this.#remember(list);
@@ -455,6 +458,7 @@ export class DelegateDetail {
   }
 
   refreshTimes(now = Date.now()) {
+    this.#now = now;
     if (!this.#a) { return; }
     this.#drawProps(now);
     this.#drawTools(now);
@@ -525,7 +529,7 @@ export class DelegateDetail {
         this.#state.loaded = true;
         this.#note(null);
         this.#drawWords();
-        if (this.#a) { this.#drawProps(Date.now()); this.#drawTools(Date.now()); }
+        if (this.#a) { const now = this.#now ?? Date.now(); this.#drawProps(now); this.#drawTools(now); }
       }
     } catch (err) {
       if (gen !== this.#state.gen) { return; }
