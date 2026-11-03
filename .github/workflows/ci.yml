@@ -209,8 +209,9 @@ jobs:
           dotnet test tests/AgentBridge.Hooks.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~HookProcessTests" --logger "console;verbosity=normal"
       - name: Relay container builds and serves
         # Run as it ships: its own unprivileged user and a read-only file system. The first product
-        # image built but crashed at start, which only running it shows.
-        if: runner.os == 'Linux' && contains(fromJSON(env.SUITES), 'relay-container')
+        # image built but crashed at start, which only running it shows. container-scan scans the image
+        # this builds, so it needs this step too.
+        if: runner.os == 'Linux' && (contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
         run: |
           docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
           docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
@@ -224,11 +225,11 @@ jobs:
       # high or critical finding, fixed or not, when this was added (#433). To accept one for a
       # while, list it in .trivyignore with a reason and an exp: date.
       - name: Install Trivy
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && contains(fromJSON(env.SUITES), 'container-scan')
         uses: ./.github/actions/install-trivy
       - name: The relay image has no fixable high or critical vulnerability
         id: relay-scan
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && contains(fromJSON(env.SUITES), 'container-scan')
         run: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
       - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
         # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
@@ -799,8 +800,9 @@ jobs:
     # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
     # required: a job the plan skipped isn't selected, so a pull request never waits on it, but
     # one that failed or was cancelled fails this. The plan itself is in needs, since when it
-    # fails every other job is skipped. publish-gate and publish are not: they deliver rather
-    # than check, and run only on main, where a superseded publish is cancelled by design.
+    # fails every other job is skipped. publish-gate, publish, attest and relay-image-sarif are
+    # not: they deliver rather than check, and run only on main, where a superseded publish is
+    # cancelled by design.
     needs: [plan, product, ha-integration, spikes, app, s2-noise-interop, s4-relay, design, pwa, docs-links]
     if: always()
     runs-on: ubuntu-latest

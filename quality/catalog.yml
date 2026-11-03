@@ -51,6 +51,7 @@ global_triggers:
   - .config/dotnet-tools.json       # coverage tools (#363)
   - build/coverage.settings.xml
   - .github/workflows/**
+  - .github/actions/**              # composite actions the workflows use (#433's install-trivy)
   - quality/**
 
 no_test_paths:
@@ -140,8 +141,9 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Tests
-    # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, which the graph can't see.
-    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1]
+    # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, and PushVectorTests and
+    # SignedCommandVectorTests the shared vectors (#454), none of which the graph can see.
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1, docs/protocol/vectors/**]
     # The filter doesn't help here: two AgentReplyFlowTests wait 34 s and 17 s of real time (#390).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
@@ -657,13 +659,16 @@ suites:
 
   - id: container-scan
     kind: security
-    ring: 2
+    ring: 1
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [src/AgentBridge.Relay/**]
-    command: trivy image agent-bridge-relay --severity HIGH,CRITICAL --exit-code 1
-    status: planned
+    triggers: [src/AgentBridge.Relay/**, src/AgentBridge.Transport/**, nuget.config, .github/actions/install-trivy/**]
+    # Blocks on a fixable HIGH or CRITICAL vulnerability (none on main when added, #433); unfixed
+    # ones go to code scanning from main only. relay.yml scan holds staging and production back.
+    command: see ci.yml product (trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay)
+    where: ci.yml product, relay-image-sarif; relay.yml scan
+    status: exists
 
   - id: iac-scan
     kind: security
@@ -672,8 +677,10 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     triggers: [infra/**]
-    command: PSRule for Azure (or checkov) over infra/
-    status: planned
+    # Advisory until #441's findings are fixed or suppressed in infra/ps-rule.yaml.
+    command: see iac-scan.yml (PSRule 2.9.0 and PSRule.Rules.Azure 1.47.0 with infra/ps-rule.yaml)
+    where: iac-scan.yml psrule
+    status: exists
 
   - id: workflow-lint
     kind: security
@@ -712,10 +719,13 @@ suites:
     kind: security
     ring: 2
     select: always
-    platforms: [win-x64, win-arm64]
+    platforms: [win-x64, win-arm64, linux-x64]
     runner: hosted
-    command: SBOM (CycloneDX) per artifact, build provenance attestation, and a check that the installed copy's binaries match it
-    status: planned
+    # CycloneDX SBOMs on every build; provenance and SBOM attestations on main (#433). Still to do:
+    # a check that an installed copy's binaries match them.
+    command: see ci.yml app (trivy fs --format cyclonedx), ci.yml attest and relay.yml scan, attest (actions/attest)
+    where: ci.yml app, attest; relay.yml scan, attest
+    status: partial
 
   # ---------------------------------------------------------------- accessibility
   - id: a11y-pwa

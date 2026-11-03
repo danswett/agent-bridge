@@ -42,6 +42,8 @@ public class CatalogTests
     [InlineData("docs/parity.md", "rehearsal-tool")]
     [InlineData("src/AgentBridge.App/AgentBridge.App.csproj", "host")]
     [InlineData("build/pack-app.ps1", "host")]
+    [InlineData("docs/protocol/vectors/signed-command.json", "host")]
+    [InlineData(".github/actions/install-trivy/action.yml", "container-scan")]
     [InlineData("spikes/s2-noise-interop/dotnet/Noise.cs", "pwa-e2e")]
     [InlineData("spikes/s2-noise-interop/web/noise-p256.js", "pwa-e2e")]
     [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]

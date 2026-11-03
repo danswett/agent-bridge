@@ -226,7 +226,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
 4. **Always:** the sentinels (`select: always` at that ring). Everything runs on
-   `global_triggers` (the solution, NuGet config, workflows, `quality/` itself). When every
+   `global_triggers` (the solution, NuGet config, workflows and their actions, `quality/` itself). When every
    file is in `no_test_paths`, only the catalog's `docs-links` suite runs; there's no hidden
    docs logic in the selector.
 5. **Fail safe:** a file that no rule claims runs the full ring. A ring-1 check fails if any
