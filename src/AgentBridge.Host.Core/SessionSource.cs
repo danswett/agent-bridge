@@ -484,10 +484,13 @@ public sealed class SessionSource : ISessionSource
 
     // A Codex registration naming no process: its hooks fired before they could tell which Codex
     // was theirs (one waiting on its hooks-trust question, #437). It may be a live session's that
-    // cannot be seen, so it holds while any Codex nothing accounts for could have written it (one
-    // that started no later than it was written, or whose start is unknown), or while the
-    // processes could not be listed, and for Unaccounted.Grace after it was written, as a process
-    // nothing accounts for does. Past that, no running Codex could be its session: one that exited
+    // cannot be seen, so it holds while any Codex nothing accounts for could be that session and
+    // have written it (an interactive terminal, or one whose command line could not be read, that
+    // started no later than a second after it was written, the slack OfGeneration allows for
+    // rounded start times, or whose start is unknown), or while the processes could not be listed, and for
+    // Unaccounted.Grace after it was written, as a process nothing accounts for does. A server or
+    // `exec` run is no session (#144): counted, an IDE's `codex mcp-server` would hold for as
+    // long as the IDE runs. Past that, no running Codex could be its session: one that exited
     // before its SessionEnd left the file behind, which held discovery for 4.5 hours with nothing
     // to rewrite it. It is carried on without, said once. Claude's rule is unchanged.
     void HoldForPidless(AgentProcessObservation observed, HashSet<int> accounted, List<Registration> pidless, List<string> holds)
@@ -501,6 +504,7 @@ public sealed class SessionSource : ISessionSource
             // processes does not have it said again after.
             current.Add((r.Path, written));
             var writer = !observed.Listed || observed.Processes.Any(p => !accounted.Contains(p.Id)
+                && (string.IsNullOrEmpty(p.CommandLine) || CodexLockDiscovery.IsTerminal(p.CommandLine))
                 && (p.StartedAt is not { } started || written is not { } w || started <= w + TimeSpan.FromSeconds(1)));
             if (writer || written is not { } at || now - at < Unaccounted.Grace)
             {

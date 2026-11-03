@@ -290,6 +290,79 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    public async Task A_codex_server_running_since_before_a_registration_naming_no_process_was_written_is_not_its_session()
+    {
+        // Found in review: an IDE's `codex mcp-server` nothing accounts for held it for as long as
+        // the IDE ran, as #437 did. Only its own unrecognised-process grace holds.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 980, "codex mcp-server");
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised codex process (pid 980)", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_whose_command_line_cannot_be_read_could_be_the_session_a_registration_naming_no_process_is_for()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 990);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+    }
+
+    // A second of slack, as for a registration's own process: start times the OS rounds.
+    [Theory]
+    [InlineData(1000, true)]
+    [InlineData(1001, false)]
+    public async Task A_codex_that_started_up_to_a_second_after_a_registration_naming_no_process_was_written_could_have_written_it(int afterMs, bool holds)
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe", startedAt: Fixture.T0.AddMilliseconds(afterMs));
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Equal(holds ? "a codex registration names no process" : null, source.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_with_no_time_of_its_own_is_dated_by_its_file()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var path = Path.Combine(f.CodexRegistrations, C + ".json");
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        json.Remove("Updated");
+        File.WriteAllText(path, json.ToJsonString());
+        File.SetLastWriteTimeUtc(path, f.Time.GetUtcNow().UtcDateTime);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromSeconds(119));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
     public async Task A_codex_registration_naming_no_process_that_cannot_be_listed_with_the_processes_holds()
     {
         using var f = new Fixture();
