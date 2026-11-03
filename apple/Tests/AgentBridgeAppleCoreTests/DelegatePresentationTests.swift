@@ -8,6 +8,37 @@ private func delegate(_ id: String, status: String = "working", fields: [String:
     return try #require(BridgeDelegate(json: .object(value)))
 }
 
+@Test func unknownDelegateOutcomesFollowTheProtocolDoneFallbackWithoutInventingMissingOutcomes() throws {
+    let future = try delegate("future", status: "ended", fields: ["outcome": .string("future-result")])
+    #expect(future.outcome == "done")
+    #expect(future.statusText == "Done")
+    #expect(future.symbol == "checkmark.circle")
+    let missing = try delegate("missing", status: "ended")
+    let null = try delegate("null", status: "ended", fields: ["outcome": .null])
+    for entry in [missing, null] {
+        #expect(entry.outcome == nil)
+        #expect(entry.statusText == "Ended")
+        #expect(entry.symbol == "stop.circle")
+    }
+}
+
+@Test(arguments: ["done", "failed", "future-result"])
+func idleBackgroundDelegatesShowTheirLastOutcomeWithoutBecomingEnded(outcome: String) throws {
+    let idle = try delegate("background", status: "idle", fields: ["outcome": .string(outcome)])
+    #expect(idle.outcome == (outcome == "failed" ? "failed" : "done"))
+    #expect(idle.symbol == (outcome == "failed" ? "xmark.circle" : "checkmark.circle"))
+    #expect(idle.status == "idle")
+    #expect(idle.statusText == "Idle")
+    #expect(!idle.isRunning)
+    let groups = BridgeDelegatePresentation.groups([idle])
+    #expect(groups.active.map(\.id) == [idle.id])
+    #expect(groups.finished.isEmpty)
+    #expect(try delegate("unknown-run", status: "idle").symbol == "circle")
+    // A woken delegate's current activity wins over its previous run's outcome.
+    #expect(try delegate("working", fields: ["outcome": .string(outcome)]).symbol == "circle.dashed")
+    #expect(try delegate("waiting", status: "waiting", fields: ["outcome": .string(outcome)]).symbol == "exclamationmark.circle.fill")
+}
+
 @Test func delegateGroupsNestActiveAndFinishedWithoutLosingCyclesOrDuplicates() throws {
     let root = try delegate("root")
     let child = try delegate("child", fields: ["parent": .string("root")])

@@ -27,7 +27,7 @@ public struct BridgeDelegate: Identifiable, Sendable, Equatable {
         line = json["line"]?.string
         kind = json["kind"]?.string == "background" ? "background" : "task"
         parent = json["parent"]?.string
-        outcome = json["outcome"]?.string
+        outcome = json["outcome"]?.string.map { $0 == "failed" ? "failed" : "done" }
         task = json["task"]?.string
         model = json["model"]?.string
         startedAt = SessionPresentation.date(json["startedAt"]?.string)
@@ -57,7 +57,7 @@ public struct BridgeDelegate: Identifiable, Sendable, Equatable {
         case "working": "circle.dashed"
         case "waiting": "exclamationmark.circle.fill"
         case "ended": outcome == "failed" ? "xmark.circle" : outcome == "done" ? "checkmark.circle" : "stop.circle"
-        default: "circle"
+        default: outcome == "failed" ? "xmark.circle" : outcome == "done" ? "checkmark.circle" : "circle"
         }
     }
 }
