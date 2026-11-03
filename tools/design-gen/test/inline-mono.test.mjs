@@ -42,7 +42,7 @@ function fontTables(b) {
   const directory = [];
   for (let i = 0, n = b.readUInt16BE(12); i < n; i++) {
     const flags = b[p++];
-    const tag = (flags & 0x3f) === 63 ? b.toString('latin1', p, (p += 4)) : WOFF2_TAGS[flags & 0x3f] ?? '?';
+    const tag = (flags & 0x3f) === 63 ? b.toString('latin1', p, (p += 4)) : WOFF2_TAGS[flags & 0x3f] ?? `known-${flags & 0x3f}`;
     const version = flags >> 6;
     const length = base128();
     const transformed = tag === 'glyf' || tag === 'loca' ? version === 0 : version !== 0;
@@ -50,7 +50,11 @@ function fontTables(b) {
   }
   const data = brotliDecompressSync(b.subarray(p, p + b.readUInt32BE(20)));
   const tables = {};
-  for (let at = 0, i = 0; i < directory.length; at += directory[i++].length) { tables[directory[i].tag] = data.subarray(at, at + directory[i].length); }
+  let at = 0;
+  for (const entry of directory) {
+    tables[entry.tag] = data.subarray(at, at + entry.length);
+    at += entry.length;
+  }
   return { os2: tables['OS/2'], hhea: tables.hhea };
 }
 const advances = (file) => {
@@ -62,7 +66,9 @@ const advances = (file) => {
 test('every bundled face of Agent Bridge Mono, TTF and WOFF2, is the build plan\'s normal 600-unit width, not the condensed 560 (#295)', () => {
   const font = monoFont(tokens);
   const plan = readFileSync(path.join(repoRoot, font.dir, 'private-build-plans.toml'), 'utf8');
-  const width = Number(/\[buildPlans\.AgentBridgeMono\.widths\.Normal\]\s+shape = (\d+)/.exec(plan)?.[1]);
+  const shape = /\[buildPlans\.AgentBridgeMono\.widths\.Normal\]\s+shape = (\d+)/.exec(plan);
+  assert.ok(shape, 'could not read widths.Normal.shape from private-build-plans.toml');
+  const width = Number(shape[1]);
   // The owner's decision on #295: Cascadia Mono's and Consolas' proportions, one face everywhere.
   assert.equal(width, 600);
   for (const face of font.faces) {
