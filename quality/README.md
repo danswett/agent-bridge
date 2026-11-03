@@ -232,7 +232,11 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 2. **.NET, derived from the code itself, not hand-kept:** map each changed file to the
    project that owns it. Walk the `ProjectReference` graph backwards to every test project
    that reaches it. A file a project links in from outside its folder (a shared fixture,
-   `docs/protocol/examples`) belongs to that project too. For example, a change to
+   `docs/protocol/examples`) belongs to that project too. A suite that ships a project rather
+   than testing one names it in `builds:` (`app-package`: `src/AgentBridge.App`), and whatever
+   that project's build takes in selects it the same way: the protocol's example sessions,
+   embedded in App.Core for the demo the app's self-test runs, once changed the app without
+   selecting its package (#487). For example, a change to
    `AgentBridge.Protocol` reaches every test project but `transport` and `hooks`. A change to
    `AgentBridge.Relay` reaches `transport`, and through it `app-core` and `host`, because
    App.Tests and Host.Tests reference Transport.Tests, which references Relay (plus the relay's
@@ -249,7 +253,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
 4. **Always:** the sentinels (`select: always` at that ring). Everything runs on
-   `global_triggers` (the solution, NuGet config, workflows and their actions, `quality/` itself). When every
+   `global_triggers` (the solution, NuGet config, workflows and their actions, `quality/` itself,
+   and the selector and its tests). When every
    file is in `no_test_paths`, only the catalog's `docs-links` suite runs; there's no hidden
    docs logic in the selector.
 5. **Fail safe:** a file that no rule claims runs the full ring. A ring-1 check fails if any
@@ -259,25 +264,49 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
    `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`, and on a draft the fast ring
-   (`-FastRing`: ring 0, Linux only, §2). The check wants every job in every workflow file named
+   (`-FastRing`: ring 0, Linux only, §2).
+
+   **What decides selection doesn't select for itself (#487).** Before the selector is built,
+   the plan job compares `HEAD^1..HEAD` with a fixed list in ci.yml: `.github/`, `quality/`,
+   `tools/AgentBridge.Quality/`, `tests/AgentBridge.Quality.Tests/`, `build/`, and any
+   `Directory.*.props` or `.targets`, `*.sln`/`*.slnx`, `global.json` or `nuget.config`. A ready
+   pull request that touches one runs the whole ring: its `whole-ring` output, written by a step
+   of its own that nothing from the change runs in, makes every gated job and every
+   suite-gated step run, `product` test the whole solution on all three runners, and the plan
+   select ring 2 (with ring 1's choice beside it). Otherwise a selector or catalog under change
+   would choose its own tests: a bug in `ChangedFiles`, or one line moving `quality/**` into
+   `no_test_paths`, could pass a gate that ran nothing. A draft keeps its fast ring, whose gate
+   isn't the required check. `.github/CODEOWNERS` asks the owner to review changes to
+   `.github/`, `quality/` and the selector and its tests.
+
+   The check wants every job in every workflow file named
    in a suite's `where:`, so a temporary workflow (a CI loop, say) fails it, and with it the plan:
    nothing else runs and `quality-gate` fails until the catalog lists it. Loop runs belong on a
    throwaway branch with no pull request, triggered by `push` to that branch (`workflow_dispatch`,
    for reruns with `gh workflow run --ref`, fires only once the file has run or is on `main`), or
-   listed in the catalog with `status: planned`.
+   listed in the catalog with `status: planned`. It also checks ci.yml's wiring to the plan, which
+   only names hold together: every job whose `if:` reads the plan reads its own output and runs
+   on `main` whatever the plan says; the plan step's `JOBS`, the jobs gated on the plan and the
+   plan's outputs agree; every job that needs the plan is in `quality-gate`'s needs;
+   `publish-gate` needs `quality-gate` and requires its success; and each step that runs when a
+   suite is selected names a suite the catalog has, whose `where:` names that job, and runs on
+   `main` whatever the plan selected.
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
      says which suites a job runs, and moving a suite moves its trigger. On a pull request a
-     job runs only when it's true; on `main` every job runs whatever the plan says;
+     job runs only when it's true or the whole ring runs; on `main` every job runs whatever the
+     plan says;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
-     the build scripts, the relay container) and inside `light`;
+     the build scripts, the relay container) and inside `light`, on a pull request only: on
+     `main`, and when the whole ring runs, every one of those steps runs;
    - `product`'s test projects, tested through a solution filter, still under
      `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
      ring runs; only Linux on a draft);
-   - the test filter `product` adds: ring 0's on a draft, none otherwise.
+   - the test filter `product` adds: ring 0's on a draft, none otherwise (ci.yml passes it
+     on only for a draft pull request, whatever the plan says).
 
    The jobs, and what each one's for (#459):
    - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
@@ -306,13 +335,15 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      review; CodeQL, Dependencies and Workflow lint each cancel a superseded run of the same
      pull request, as ci.yml does.
 
-   A final `quality-gate` job (`if: always()`) needs all of them and fails if any failed or
-   was cancelled; skipped is fine. It's the required check (on `main` since 2026-11-03, with
-   `merge-rule` beside it in main's ruleset, item 9), so skipped jobs never leave a pull request
-   waiting. `publish-gate` needs every
-   check job on `main` to have passed (`product` and `app` to have succeeded, and none failed
-   or cancelled), and on `main` they all run, so a selection miss, or any red suite, is caught
-   before a release publishes.
+   A final `quality-gate` job (`if: always()`) needs all of them. It fails if any failed or was
+   cancelled, and if any job the plan selected didn't succeed: on `main`, and when the whole ring
+   runs, that's every job; on a pull request, every job the plan gave true. A job the plan
+   skipped is fine. It's the required check (on `main` since 2026-11-03, with `merge-rule` beside
+   it in main's ruleset, item 9), so skipped jobs never leave a pull request waiting.
+   `publish-gate` needs `quality-gate` and its success, rather than a second copy of its list
+   (#512), so on `main` every ci.yml check job must have run and passed before a release
+   publishes, and a selection miss, or any red suite, is caught first. CodeQL, perf and the relay
+   workflow run apart and don't hold a release.
 8. **Keeping the selector honest:** ring 2 runs everything on `main`, and each `main` run's
    summary also says which jobs ring 1 chose for the same change. For every ring-2
    failure, a nightly job asks whether ring 1's selection for that PR would have included

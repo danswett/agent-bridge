@@ -14,7 +14,8 @@ static class Completeness
     public sealed record Inputs(
         IReadOnlyList<string> SolutionProjects,
         IReadOnlyDictionary<string, IReadOnlyList<string>> WorkflowJobs,
-        IReadOnlyList<string> TrackedFiles);
+        IReadOnlyList<string> TrackedFiles,
+        string? CiWorkflow = null);
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, ProjectGraph graph, Inputs inputs)
     {
@@ -48,6 +49,9 @@ static class Completeness
                 if (!covered.Contains((file, job)))
                     problems.Add(new("workflow-job", $"{file} job {job} isn't named in any suite's where:"));
 
+        if (inputs.CiWorkflow is not null)
+            problems.AddRange(CiPlan.Check(catalog, inputs.CiWorkflow));
+
         var commands = catalog.Suites.Where(s => s.Command is not null).Select(s => s.Command!).ToList();
         foreach (var folder in PwaSpecFolders(inputs.TrackedFiles))
             if (!commands.Any(c => RunsFolder(c, folder.Path, folder.HasPlaywrightSpecs)))
@@ -69,10 +73,12 @@ static class Completeness
         if (Directory.Exists(workflowDir))
             foreach (var file in Directory.EnumerateFiles(workflowDir).Where(f => f.EndsWith(".yml", StringComparison.Ordinal) || f.EndsWith(".yaml", StringComparison.Ordinal)))
                 workflows[Path.GetFileName(file)] = WorkflowJobs(File.ReadAllText(file));
+        var ci = Path.Combine(workflowDir, "ci.yml");
         return Check(catalog, graph, new Inputs(
             File.Exists(slnx) ? SolutionProjects(File.ReadAllText(slnx)) : [],
             workflows,
-            ChangedFiles.Tracked(root)));
+            ChangedFiles.Tracked(root),
+            File.Exists(ci) ? File.ReadAllText(ci) : null));
     }
 
     public static IReadOnlyList<string> SolutionProjects(string slnxXml) =>

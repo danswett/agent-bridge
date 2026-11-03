@@ -1,0 +1,7 @@
+# Who reviews what (GitHub requests their review on a pull request that touches it).
+# CI, the test catalog and the selector decide what every later change is tested by, so a change to
+# them is a workflow change and needs the owner's review (#487).
+/.github/                         @danswett
+/quality/                         @danswett
+/tools/AgentBridge.Quality/       @danswett
+/tests/AgentBridge.Quality.Tests/ @danswett
