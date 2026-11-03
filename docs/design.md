@@ -973,6 +973,9 @@ Mapping:
 * Freeform question: a text box and Send.
 * Multi-field form or multi-select: "Open" (deep-links to the card), the same rule as
   today's "three questions get no buttons".
+* An approval: "Open" only, never Approve once or Deny (#253 decision 7, #372). Its body is
+  plain text cut at about 300 characters, so it can't show the whole command or escape hidden
+  and bidi characters as the card does (#165, #220).
 * Tags per session, so a question replaces only its own toast. An answer from anywhere
   withdraws the toast. A stale tap is refused, as today.
 

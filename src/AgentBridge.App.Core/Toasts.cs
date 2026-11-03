@@ -217,6 +217,13 @@ public static partial class ToastXml
     // Windows shows at most five buttons and five inputs.
     const int MaxActions = 5;
 
+    // Carried by every answer button this build draws, and required before a click answers
+    // anything (ToastResponder). Builds before #372 put Approve once and Deny on an approval's
+    // toast, and Notification Center keeps such a toast after an update: its buttons, without
+    // this, only open the question.
+    public const string AnswerVersionKey = "v";
+    public const string AnswerVersion = "2";
+
     public static string Question(Session s, IReadOnlyList<string> capabilities, string? machine, string? machineKey = null)
     {
         var q = s.Question!;
@@ -226,8 +233,16 @@ public static partial class ToastXml
         var open = Args(machineKey, ("action", "open"), ("session", s.Id));
         var b = Start(open, Title(s), $"{Machine(machine)}{what}", body.Length > 0 ? body : "This session is waiting for an answer.");
         b.Append("<actions>");
-        var basic = Args(machineKey, ("action", "answer"), ("session", s.Id), ("question", q.Id));
-        if (answerable && q.Fields.Count == 0)
+        var basic = Args(machineKey, ("action", "answer"), ("session", s.Id), ("question", q.Id), (AnswerVersionKey, AnswerVersion));
+        if (q.Kind == QuestionKind.Approval)
+        {
+            // An approval is only ever answered where the whole command is shown, with its
+            // invisible, bidi and right-to-left characters refused or escaped (#165, #220). The
+            // OS draws a toast's body as plain text and cuts it at about 300 characters, so a
+            // toast can show neither: it opens the question (#253 decision 7, #372).
+            b.Append(Action("Open", open));
+        }
+        else if (answerable && q.Fields.Count == 0)
         {
             // Free text: a box and Send.
             b.Append(Input("text", "Type your answer"));
@@ -342,8 +357,11 @@ public static partial class ToastXml
 }
 
 // A click on a toast, read back: open a session, or answer its question.
-public sealed record ToastAction(string Action, string? Session, string? Question, string? Kind, string? Field, string? Value, string? Machine = null)
+public sealed record ToastAction(string Action, string? Session, string? Question, string? Kind, string? Field, string? Value, string? Machine = null, string? Version = null)
 {
+    // A button of this build's (ToastXml.AnswerVersion): one from an older toast only opens.
+    public bool Current => Version == ToastXml.AnswerVersion;
+
     public static ToastAction Parse(string? arguments)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -354,7 +372,8 @@ public sealed record ToastAction(string Action, string? Session, string? Questio
             map[Uri.UnescapeDataString(pair[..i])] = Uri.UnescapeDataString(pair[(i + 1)..]);
         }
         return new ToastAction(map.GetValueOrDefault("action") ?? "open", map.GetValueOrDefault("session"), map.GetValueOrDefault("question"),
-            map.GetValueOrDefault("kind"), map.GetValueOrDefault("field"), map.GetValueOrDefault("value"), map.GetValueOrDefault("machine"));
+            map.GetValueOrDefault("kind"), map.GetValueOrDefault("field"), map.GetValueOrDefault("value"), map.GetValueOrDefault("machine"),
+            map.GetValueOrDefault(ToastXml.AnswerVersionKey));
     }
 
     // The session.answer this click gives, or why it gives none (an empty Other box, say).

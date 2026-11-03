@@ -4,7 +4,7 @@ namespace AgentBridge.App.Core;
 // the session's card, or sends the answer through the host exactly as the card would (the
 // same delivery, so the card shows its progress too), then replaces the toast with what
 // became of it. A stale click is the host's to refuse: it answers stale for a question that
-// has gone, and the toast says so.
+// has gone, and the toast says so. An approval is never answered from a toast (#372).
 public sealed class ToastResponder
 {
     readonly Func<string?, Deliveries?> deliveriesFor;
@@ -31,6 +31,13 @@ public sealed class ToastResponder
     // another machine's answer waits this long for it to turn up, rather than calling a machine
     // that is online gone and dropping the answer.
     public TimeSpan MachineWait { get; init; } = TimeSpan.FromSeconds(15);
+
+    // The session as the app knows it now (machine null for this one's), or null when it doesn't
+    // yet. Only a second line of defence: no toast this build draws answers an approval.
+    public Func<string?, string, AgentBridge.Protocol.Session?> SessionOf { get; init; } = (_, _) => null;
+
+    bool AsksApproval(ToastAction action) =>
+        SessionOf(action.Machine, action.Session!)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval } q && q.Id == action.Question;
 
     async Task<Deliveries?> FindAsync(string? machine)
     {
@@ -67,8 +74,11 @@ public sealed class ToastResponder
     public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = "Agent Bridge")
     {
         var action = ToastAction.Parse(arguments);
-        if (action.Action != "answer" || action.Session is null || action.Question is null)
+        if (action.Action != "answer" || action.Session is null || action.Question is null || !action.Current || AsksApproval(action))
         {
+            // A click that answers nothing, and any that would answer an approval: an older build's
+            // toast, still in Notification Center, offered Approve once (#372). It opens the
+            // question, where the person approves seeing the whole command.
             open(action.Machine, action.Session);
             return;
         }

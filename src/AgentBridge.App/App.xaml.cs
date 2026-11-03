@@ -142,7 +142,10 @@ public partial class App : Application
         // Usage kept between runs for the account (#172), beside them too.
         main = self = new MainViewModel(localMachine, new UsageViewModel(cache: new UsageCache(Path.Combine(appData, $"{options.Profile}-usage.json"))), settings, new SessionOrder(Path.Combine(appData, $"{options.Profile}-order.json")));
         settings.PreferencesChanged += () => { foreach (var c in main.AllCards) { c.CapabilitiesChanged(); } };
-        responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id));
+        responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (machine, id) => ShowWindow(machine, id))
+        {
+            SessionOf = (key, id) => main.MachineOf(key)?.Host.Sessions.Get(id),
+        };
         main.MachineRemoved += responder.MachineGone;
 
         // The account's other machines, through the relay as a device of the app's own (the
