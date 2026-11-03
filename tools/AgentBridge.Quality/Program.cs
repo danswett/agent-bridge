@@ -158,8 +158,12 @@ static class Program
     {
         output.WriteLine($"Ring {selection.Ring}{(selection.Platform is null ? ", every platform" : $", on {selection.Platform}")}. " +
             $"{selection.Files.Count} changed file(s) from {source}. Mode: {selection.Mode}.");
-        if (selection.Unclaimed.Count > 0)
-            output.WriteLine($"No rule claims {Files(selection.Unclaimed)}, so the whole ring runs.");
+        // Global triggers and the fail-safe pull in every suite, so say so once rather than per row.
+        static bool WholeRing(Reason r) => r.Rule.StartsWith("global_triggers ", StringComparison.Ordinal) || r.Rule == Selector.FailSafe;
+        var wholeRing = selection.Suites.SelectMany(s => s.Reasons).Where(WholeRing).GroupBy(r => r.Rule)
+            .Select(g => new Reason(g.Key, g.SelectMany(r => r.Files).Distinct(StringComparer.Ordinal).ToList())).ToList();
+        foreach (var reason in wholeRing)
+            output.WriteLine($"The whole ring runs, by {reason.Rule}: {Files(reason.Files)}");
         if (selection.Mode == "docs-only")
             output.WriteLine("Every file is in no_test_paths, so nothing but the docs checks runs.");
         output.WriteLine();
@@ -173,10 +177,13 @@ static class Program
             foreach (var s in selection.Suites)
             {
                 var prefix = $"{s.Suite.Id.PadRight(width)}  {s.Suite.Ring,-4}  {s.Suite.Runner,-7}  {s.Suite.Status,-7}  ";
+                var whys = s.Reasons.Where(r => !WholeRing(r))
+                    .Select(r => r.Files.Count == 0 ? r.Rule : $"{r.Rule}: {Files(r.Files)}")
+                    .Prepend(s.Reasons.Any(WholeRing) ? "the whole ring (above)" : null)
+                    .OfType<string>();
                 var first = true;
-                foreach (var reason in s.Reasons)
+                foreach (var why in whys)
                 {
-                    var why = reason.Files.Count == 0 ? reason.Rule : $"{reason.Rule}: {Files(reason.Files)}";
                     output.WriteLine((first ? prefix : new string(' ', prefix.Length)) + why);
                     first = false;
                 }

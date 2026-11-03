@@ -149,6 +149,20 @@ public class SelectorTests
     }
 
     [Fact]
+    public void Explain_names_a_whole_ring_cause_once_and_points_each_suite_at_it()
+    {
+        var selection = Fixture.Selector().Select(["newfolder/thing.txt"], ring: 0);
+        var output = new StringWriter();
+
+        Program.Explain(selection, "the files given", output);
+
+        var text = output.ToString();
+        Assert.Contains($"The whole ring runs, by {Selector.FailSafe}: newfolder/thing.txt", text);
+        Assert.Matches(@"transport +0 +local .*the whole ring \(above\)", text);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(text, "newfolder/thing.txt"));
+    }
+
+    [Fact]
     public void The_json_lists_each_suite_with_its_reasons_and_the_os_matrix()
     {
         var selection = Fixture.Selector().Select(["src/Relay/Program.cs"], ring: 1);
