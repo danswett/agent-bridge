@@ -69,24 +69,20 @@ async function openDemo(page, query) {
 }
 
 // The serious and critical violations on the page as it is, less the known ones, as
-// "rule: selector" lines that say what to fix.
+// "rule: selector: what to fix" lines.
 async function scan(page) {
   const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
-  const found = [];
-  for (const v of violations.filter((x) => FAILING.has(x.impact))) {
-    for (const node of v.nodes) {
-      // One selector, unless the element is inside a frame or a shadow root (one selector per
-      // level), which the app has none of: such a node is never taken for a known one.
-      const [selector, ...within] = node.target;
-      const target = node.target.join(' >>> ');
-      const known = within.length === 0 && await page.evaluate(({ selector, known }) => {
-        const el = document.querySelector(selector);
-        return known.some((s) => el?.matches(s));
-      }, { selector, known: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) });
-      if (!known) { found.push(`${v.id} (${v.impact}): ${target}: ${node.failureSummary.replace(/\s+/g, ' ')}`); }
-    }
-  }
-  return found;
+  const nodes = violations.filter((v) => FAILING.has(v.impact)).flatMap((v) => v.nodes.map((node) => ({ v, node })));
+  // Whether each is a known one, in one call. A node has one selector, unless it is inside a frame
+  // or a shadow root (one selector per level), which the app has none of: such a node is never
+  // taken for a known one.
+  const known = await page.evaluate((checks) => checks.map(({ target, selectors }) => {
+    if (target.length !== 1) { return false; }
+    const el = document.querySelector(target[0]);
+    return selectors.some((s) => el?.matches(s));
+  }), nodes.map(({ v, node }) => ({ target: node.target, selectors: KNOWN.filter((k) => k.rule === v.id).map((k) => k.selector) })));
+  return nodes.filter((_, i) => !known[i]).map(({ v, node }) =>
+    `${v.id} (${v.impact}): ${node.target.join(' >>> ')}: ${(node.failureSummary ?? v.help).replace(/\s+/g, ' ')}`);
 }
 
 for (const layout of LAYOUTS) {

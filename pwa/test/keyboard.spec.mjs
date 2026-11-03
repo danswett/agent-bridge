@@ -43,11 +43,15 @@ function where(regions) {
   let top = r.top;
   let left = r.left;
   for (let p = el.parentElement; p; p = p.parentElement) { top += p.scrollTop; left += p.scrollLeft; }
-  const probe = document.createElement('i');
-  probe.style.color = 'var(--ab-bridge)';
-  document.body.append(probe);
-  const focus = getComputedStyle(probe).color;
-  probe.remove();
+  // The focus colour, read once per page.
+  if (!window.__focusColour) {
+    const probe = document.createElement('i');
+    probe.style.color = 'var(--ab-bridge)';
+    document.body.append(probe);
+    window.__focusColour = getComputedStyle(probe).color;
+    probe.remove();
+  }
+  const focus = window.__focusColour;
   const s = getComputedStyle(el);
   const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1 && s.outlineColor !== 'rgba(0, 0, 0, 0)';
   let box = false;
@@ -80,7 +84,7 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
     stops.push(stop);
     if (await target.evaluate((e) => e === document.activeElement)) { return stops; }
   }
-  throw new Error(`${key} never reached ${target}: stopped on ${stops.slice(-5).map((s) => s.name).join(', ')}`);
+  throw new Error(`${key} never reached ${target.toString()}: stopped on ${stops.slice(-5).map((s) => s.name).join(', ')}`);
 }
 
 // WebKit, as Safari does unless "Press Tab to highlight each item" is on, tabs to form controls

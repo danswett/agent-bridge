@@ -15,10 +15,11 @@ const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
 const DELEGATES = 'demo-delegates';
 
-// The elements the catalogue animates in the PWA today, each of which the walk shows: the moving
-// part of a working and a delegating glyph, the in-flight progress ring, a usage bar, a delegate's
-// chevron (Disclosure), a session row (Arriving and leaving, Press), the pushed session (Push and
-// pop), a tab, the row menu (Menu and flyout), and the inspector (Pane and inspector).
+// The elements the catalogue animates in the PWA today, each of which the walk shows on screen:
+// the moving part of a working and a delegating glyph, the in-flight progress ring, a usage bar, a
+// delegate's chevron (Disclosure), a session row (Arriving and leaving, Press), the pushed session
+// (Push and pop), a tab (on a phone; a desktop has none), the row menu (Menu and flyout), and the
+// inspector (Pane and inspector; on a phone it holds the Tools tab).
 const ANIMATED = [
   '.glyph .glyph-spin', '.glyph .glyph-orbit', '.answer-status.progress', '.usage-fill', '.delegate-chevron',
   '.session .row-main', '.session-view', '.view-tab', '.row-menu', '.inspector', '.needs-you-list > li', 'details.reasoning > summary',
@@ -69,7 +70,9 @@ function moving({ crossFade, animated }) {
     const opacityOnly = a.transitionProperty === 'opacity' && typeof t.duration === 'number' && t.duration <= crossFade;
     if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty ?? 'animation'}`); }
   }
-  return { found: [...found], shown: animated.filter((sel) => document.querySelector(sel)) };
+  // Shown means drawn: in the layout, and not hidden.
+  const drawn = (e) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+  return { found: [...found], shown: animated.filter((sel) => [...document.querySelectorAll(sel)].some(drawn)) };
 }
 
 // Every view and change the catalogue animates, with what moves at each step.
@@ -132,8 +135,8 @@ async function walk(page, { phone }) {
 }
 
 for (const layout of [
-  { name: 'on a phone', viewport: { width: 390, height: 664 }, phone: true },
-  { name: 'on a desktop', viewport: { width: 1440, height: 900 }, phone: false },
+  { name: 'on a phone', viewport: { width: 390, height: 664 }, phone: true, absent: [] },
+  { name: 'on a desktop', viewport: { width: 1440, height: 900 }, phone: false, absent: ['.view-tab'] },
 ]) {
   test.describe(layout.name, () => {
     test.use({ viewport: layout.viewport, hasTouch: layout.phone });
@@ -143,7 +146,7 @@ for (const layout of [
       const { steps, seen } = await walk(page, layout);
       for (const { label, found } of steps) { expect.soft(found, label).toEqual([]); }
       // The walk showed everything the catalogue animates here, so each of them was read.
-      expect(seen.sort()).toEqual([...ANIMATED].sort());
+      expect(seen.sort()).toEqual(ANIMATED.filter((s) => !layout.absent.includes(s)).sort());
     });
 
     test('with motion allowed the same walk finds the glyphs turning, the progress ring and the usage bars easing', async ({ page }) => {
