@@ -28,7 +28,7 @@ test('an offline machine is listed after the online ones with when it was last s
   await expect(page.locator('#online')).toHaveAccessibleName('1 machine online');
 
   await row.getByRole('button', { name: 'Forget Travel laptop' }).click();
-  const armed = row.getByRole('button', { name: 'Forget Travel laptop: press again to confirm' });
+  const armed = row.getByRole('button', { name: 'Press again to forget Travel laptop' });
   await expect(armed).toHaveText('Press again to forget');
   await expect(armed).toHaveClass(/armed/);
   await expect(offline(page)).toHaveCount(1);
