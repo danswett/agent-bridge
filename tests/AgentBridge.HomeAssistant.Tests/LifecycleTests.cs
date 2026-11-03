@@ -310,6 +310,34 @@ public sealed class LifecycleTests : IDisposable
         Assert.Empty(after.PendingRetirement);
     }
 
+    // Found in review of #147: what protects a session is looked at again after the dashboard is
+    // read, not only before.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_hold_or_a_listing_that_begins_while_the_dashboard_is_read_keeps_the_entities_it_protects(bool hold)
+    {
+        sessions.Set(FakeSessions.Copilot(B));
+        await using var c = Connector();
+        await Run(c, 3);
+        sessions.End(B);
+        // The first read starts B's grace; the second, once it has passed, would retire it.
+        var reads = 0;
+        ha.DuringDashboardRead = () =>
+        {
+            if (++reads != 2) { return; }
+            if (hold) { sessions.Held = new DiscoveryHeld("an unrecognised codex process (pid 960)", [AgentKind.Codex]); }
+            else { sessions.Set(FakeSessions.Copilot(B)); }
+        };
+        await Run(c, 60);
+
+        Assert.True(reads >= 2);
+        Assert.True(ha.Exists($"sensor.{NodeB}_status"));
+        // Never removed, not even to be published again at once.
+        Assert.DoesNotContain(ha.To(HaContract.DiscoveryTopic("sensor", NodeB, "status")), p => p.Payload.Length == 0);
+        Assert.Equal(hold, c.PendingRetirement.Contains(NodeB));
+    }
+
     [Fact]
     public async Task A_dashboard_that_cannot_be_read_holds_every_retirement()
     {

@@ -965,7 +965,9 @@ whichever agent the hold is for: a session missing from a held pass may be one d
 not see. A host restarted under a hold once retired the entities of a Codex session that ran on
 (#147). The queue waits, logged once ("retires nothing while session discovery is held"), and
 carries on once a complete pass has removed what really ended. A session the host lists is never
-retired, even before this connector has published it again.
+retired, even before this connector has published it again. Both are checked again just before
+each session's entities go, since a hold can begin, or the session be found again, while the
+dashboard is read.
 
 **A host restart** re-runs the start: live sessions are republished onto their existing,
 pinned entities (no new ones), and the remembered queue is carried over. A session the host's

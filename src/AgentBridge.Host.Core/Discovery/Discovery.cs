@@ -695,10 +695,13 @@ internal static class RegistrationDiscovery
                 // Only the generation it was written by: a process that took an old registration's
                 // pid is a session yet to register, which is exactly what the hold is for.
                 if (running.TryGetValue(registration.ProcessId, out var holder) && OfGeneration(registration, holder)) { accounted?.Add(registration.ProcessId); }
-                // A live session whose runtime's command line could not be read: not one that ended.
-                else if (!registration.Ended && unread.TryGetValue(registration.ProcessId, out var runtime) && OfGeneration(registration, runtime))
+                else if (unread.TryGetValue(registration.ProcessId, out var runtime) && OfGeneration(registration, runtime))
                 {
-                    holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})");
+                    // A live session whose runtime's command line could not be read: not one that ended.
+                    if (!registration.Ended) { holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})"); }
+                    // One that says it ended stays ended, even with its runtime unreadable: a restart's
+                    // first pass would otherwise bring back what it remembered of it (#147).
+                    else { ended?.Add(registration.SessionId); }
                 }
                 if (!registration.Ended && registration.ProcessId <= 0) { holds?.Add($"a {name} registration names no process"); continue; }
                 // The same session registered under both the runtime and the legacy temp

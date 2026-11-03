@@ -170,12 +170,14 @@ in `agents` is held:
   ([ha-connector.md](../ha-connector.md#lifecycle)).
 
 A hold survives a restart of the host (#147). The serving host keeps the sessions it lists in
-`sessions-listed.json` in its profile's folder. The first pass after it starts brings back each
-of them of an agent that pass holds, as long as its own process is still running (the same pid,
-started at the same time) and no session found has that process now. A session such a pass
-cannot see, which only the hold was keeping, is therefore still listed after a restart, as it was
-before one. It is then kept like any other session a hold keeps, until a complete pass decides.
-A complete first pass is believed, as ever, and so is a registration that says the session ended.
+`sessions-listed.json` in its profile's folder. To the first pass after it starts, their processes
+count as known, so one whose runtime cannot be read holds its agent as it would have before the
+restart. That pass brings back each of them of an agent it holds, as long as its own process is
+still running (the same pid, started at the same time) and no session found has that process now.
+A session such a pass cannot see, which only the hold was keeping, is therefore still listed
+after a restart, as it was before one. It is then kept like any other session a hold keeps, until
+a complete pass decides. A complete first pass is believed, as ever, and so is a registration
+that says the session ended, even when its runtime cannot be read.
 
 Sessions of the other agents are removed and resumed as usual. `reason` says what holds it, in
 words for a person, at most 512 bytes; a client shows it as it is ("discovery held: …", as the

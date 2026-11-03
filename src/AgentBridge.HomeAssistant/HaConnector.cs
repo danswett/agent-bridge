@@ -1058,20 +1058,16 @@ public sealed partial class HaConnector : IAsyncDisposable
     // one it could not see, and a host restarted under a hold retired the entities of a Codex
     // session that ran on (#147). A session listed now is never retired, whether or not this
     // connector has published it yet. Once a complete pass has removed what really ended, the queue
-    // carries on where it was.
+    // carries on where it was. Both are looked at again just before each session's entities go:
+    // reading the dashboard and sending a removal take time in which discovery can be held, or find
+    // the session again (found in review).
     async Task RetireAsync(DateTimeOffset now, CancellationToken ct)
     {
-        if (source.Held is { } held)
-        {
-            if (!retirementHeld) { log($"Home Assistant connector retires nothing while session discovery is held ({held.Reason})"); }
-            retirementHeld = true;
-            return;
-        }
-        retirementHeld = false;
+        if (RetirementHeld()) { return; }
         List<string> nodes;
         // Listed but not yet published by this connector: skipped, not taken off the queue, so one
         // that ends before its first publication still has its old entities retired.
-        var listed = source.Snapshot().Select(s => HaContract.NodeId(s.Id)).ToHashSet(StringComparer.Ordinal);
+        var listed = Listed();
         lock (gate)
         {
             var live = published.Values.Select(p => p.Node).ToHashSet(StringComparer.Ordinal);
@@ -1090,6 +1086,8 @@ public sealed partial class HaConnector : IAsyncDisposable
             if (served.Contains(node, StringComparison.Ordinal)) { r.AbsentSince = null; continue; }
             if (r.AbsentSince is null) { r.AbsentSince = now; continue; }
             if (now - r.AbsentSince < options.RetireGrace) { continue; }
+            if (RetirementHeld()) { break; }
+            if (Listed().Contains(node)) { r.AbsentSince = null; continue; }
             foreach (var m in HaContract.SessionRemoval(node)) { await ha.PublishAsync(m.Topic, m.Payload, m.Retain, ct); }
             lock (gate) { retiring.Remove(node); }
             retired++;
@@ -1097,6 +1095,21 @@ public sealed partial class HaConnector : IAsyncDisposable
         }
         if (retired > 0) { SaveLedger(); }
     }
+
+    // Whether the host's discovery holds retirement now, said once each time it begins.
+    bool RetirementHeld()
+    {
+        if (source.Held is not { } held)
+        {
+            retirementHeld = false;
+            return false;
+        }
+        if (!retirementHeld) { log($"Home Assistant connector retires nothing while session discovery is held ({held.Reason})"); }
+        retirementHeld = true;
+        return true;
+    }
+
+    HashSet<string> Listed() => source.Snapshot().Select(s => HaContract.NodeId(s.Id)).ToHashSet(StringComparer.Ordinal);
 
     Task PublishAsync(string topic, JsonNode payload, bool retain, CancellationToken ct) =>
         ha.PublishAsync(topic, HaContract.Serialize(payload), retain, ct);

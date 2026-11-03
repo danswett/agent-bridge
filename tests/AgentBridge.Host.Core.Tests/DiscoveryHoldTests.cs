@@ -795,4 +795,43 @@ public class DiscoveryHoldTests
         Assert.NotNull(after.Held);
         Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
     }
+
+    // Found in review: a host that has just started knew no session's process, so the runtime of a
+    // resumed Copilot session (no lock) whose command line could not be read held nothing.
+    [Fact]
+    public async Task A_restart_keeps_a_session_whose_runtime_cannot_be_read_on_the_first_pass()
+    {
+        using var f = new Fixture();
+        var state = Path.Combine(f.Root, "profile", "sessions-listed.json");
+        var events = f.CopilotSession(A, lockPid: null);
+        Fixture.Append(events, Copilot.User("resumed", 1));
+        f.Processes.Run(AgentKind.Copilot, 300, $"node C:/npm/node_modules/@github/copilot/index.js --session-id {A}");
+        await using (var before = f.Source(stateFile: state))
+        {
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+
+        f.Processes.Unidentify(AgentKind.Copilot, 300);
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal(A, Assert.Single(after.Snapshot()).Id);
+        Assert.Equal("a copilot process that could not be read (pid 300)", after.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_restart_does_not_bring_back_a_session_whose_registration_says_it_ended_though_its_runtime_cannot_be_read()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), status: "ended", ended: true, updated: Fixture.T0.AddMinutes(5));
+        f.Processes.Unidentify(AgentKind.Codex, 950);
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+        Assert.Empty(after.Snapshot());
+    }
 }

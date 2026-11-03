@@ -47,9 +47,10 @@ public sealed class SessionSource : ISessionSource
     readonly Unaccounted _unaccounted;
     string? _heldLogged;
     DateTimeOffset _heldLoggedAt;
-    // Only on the pass: whether the first discovery pass has looked at StateFile (Restore), and
-    // what was last written to it.
+    // Only on the pass: whether the first discovery pass has looked at StateFile (Restore), what it
+    // read there (for that pass only), and what was last written to it.
     bool _restored;
+    List<DiscoveredSession>? _remembered;
     string? _saved;
     string? _saveProblem;
 
@@ -270,6 +271,9 @@ public sealed class SessionSource : ISessionSource
         DiscoveryHeld? held = null;
         if (discover)
         {
+            // What the host listed when it last ran, read once, for the first discovery pass
+            // (Discover's accounting and Restore).
+            if (!_restored && _options.StateFile is { } state) { _remembered = Load(state); }
             var observed = Discover();
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
@@ -278,6 +282,7 @@ public sealed class SessionSource : ISessionSource
             {
                 _restored = true;
                 found.AddRange(Restore(observed, found));
+                _remembered = null;
             }
             List<string> gone;
             lock (_gate)
@@ -362,6 +367,16 @@ public sealed class SessionSource : ISessionSource
             previous = _entries.Values.Where(e => e.Tracker.Discovered.ProcessId is not null)
                 .GroupBy(e => e.Tracker.Discovered.Agent)
                 .ToDictionary(g => g.Key, g => g.Select(e => new AgentProcess(e.Tracker.Discovered.ProcessId!.Value, e.Tracker.Discovered.ProcessStartedAt, null)).ToList());
+        }
+        // A host that has just started knew no session's process, so a runtime that cannot be read
+        // now held nothing, and a session only its own unreadable runtime still showed was dropped
+        // (found in review of #147). What it listed when it last ran counts as known, dated only:
+        // an undated one could be any process given its pid.
+        foreach (var s in _remembered ?? [])
+        {
+            if (s.ProcessId is not { } pid || s.ProcessStartedAt is null) { continue; }
+            if (!previous.TryGetValue(s.Agent, out var list)) { previous[s.Agent] = list = []; }
+            list.Add(new AgentProcess(pid, s.ProcessStartedAt, null));
         }
         var result = new List<AgentDiscovery>();
 
@@ -504,8 +519,7 @@ public sealed class SessionSource : ISessionSource
     List<DiscoveredSession> Restore(List<AgentDiscovery> observed, List<DiscoveredSession> found)
     {
         var restored = new List<DiscoveredSession>();
-        if (_options.StateFile is not { } path || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
-        var remembered = Load(path);
+        if (_remembered is not { Count: > 0 } remembered || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
         var ids = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
         var pids = found.Where(f => f.ProcessId is not null).Select(f => (f.Agent, f.ProcessId!.Value)).ToHashSet();
         foreach (var o in observed.Where(o => o.Holds.Count > 0))
