@@ -238,7 +238,8 @@
         </ListView>
 
         <Grid Grid.Row="2">
-            <!-- The conversation (§6.4): the main agent only, at the reading measure. -->
+            <!-- The conversation (§6.4): the main agent only, at the reading measure, centred in the
+                 pane as the PWA's is; the scroll bar stays at the pane's edge. -->
             <ScrollViewer
                 x:Name="ConversationScroll"
                 AutomationProperties.AutomationId="Conversation"
@@ -246,7 +247,7 @@
                 <local:ReadingColumn
                     x:Name="Conversation"
                     MaxWidth="{StaticResource AbLayoutReadingMax}"
-                    HorizontalAlignment="Left"
+                    HorizontalAlignment="Center"
                     Padding="24,8,24,24"
                     Spacing="24">
 
@@ -451,7 +452,7 @@
                 Padding="24,0,24,20"
                 Spacing="6"
                 MaxWidth="{StaticResource AbLayoutReadingMax}"
-                HorizontalAlignment="Left"
+                HorizontalAlignment="Center"
                 AutomationProperties.AutomationId="ReplyBox">
                 <TextBlock
                     Style="{StaticResource AbTypeMeta}"
