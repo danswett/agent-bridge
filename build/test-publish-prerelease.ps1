@@ -47,6 +47,8 @@ $global:PpPackArgs = $null
 $global:PpPublishRids = [Collections.Generic.List[string]]::new()
 $global:PpBuildsFor = $null
 $global:PpFeedExtra = $null
+$global:PpGeneratedNotes = $null
+$global:PpPublishedBody = $null
 
 # What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
 function global:Get-PpFull([string]$channel, [string]$version) {
@@ -81,10 +83,17 @@ function global:gh {
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'DELETE') {
         $id = [long]($a[3] -split '/')[-1]
         [void]$global:PpReleases.RemoveAll({ param($r) $r.id -eq $id })
+    } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'POST' -and $a[3] -eq "repos/$repo/releases/generate-notes") {
+        if ($global:PpGeneratedNotes -eq 'fail') { $global:LASTEXITCODE = 1; return }
+        @{ body = $global:PpGeneratedNotes } | ConvertTo-Json -Compress
     } elseif ($a[0] -eq 'api' -and $a[1] -eq '-X' -and $a[2] -eq 'PATCH') {
         $id = [long]($a[3] -split '/')[-1]
         $r = $global:PpReleases | Where-Object id -EQ $id
-        if ($a -contains 'draft=false') { $r.draft = $false; $global:PpTags.Add("refs/tags/$($r.tag_name)") }
+        $request = ($input -join "`n") | ConvertFrom-Json
+        if ($request.draft -eq $false) {
+            $global:PpPublishedBody = $request.body
+            $r.draft = $false; $global:PpTags.Add("refs/tags/$($r.tag_name)")
+        }
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'upload') {
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'list') {
         $global:PpReleases | Where-Object { -not $_.draft } | Select-Object -Last 1 | ForEach-Object tag_name
@@ -167,6 +176,8 @@ function Reset([int]$prereleases = 0) {
     $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear(); $global:PpPublishRids.Clear()
     $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpPackArgs = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
     $global:PpBuildsFor = $null; $global:PpFeedExtra = $null
+    $global:PpGeneratedNotes = "## What's Changed`n* A change (#200)`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
+    $global:PpPublishedBody = $null
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
     if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
 }
@@ -247,8 +258,43 @@ Check 'A new version goes up as a draft, then is published as a pre-release of t
     Assert ([bool]($global:PpCalls | Where-Object { $_ -like 'gh release upload v0.1.600 *assets.win.json*' })) 'assets.win.json was not uploaded'
     $r = $global:PpReleases | Where-Object tag_name -EQ 'v0.1.600'
     Assert ($r -and -not $r.draft -and $r.prerelease) "release: $($r | ConvertTo-Json -Compress)"
-    $patch = $global:PpCalls | Where-Object { $_ -like 'gh api -X PATCH*' }
-    Assert ($patch -match [regex]::Escape($commit)) 'the notes do not name the commit'
+    Assert ($global:PpPublishedBody.Contains($commit)) 'the notes do not name the commit'
+}
+
+Check 'Every generated change is published even when the notes exceed the Windows command-line limit' {
+    Reset 3
+    $global:PpGeneratedNotes = "## What's Changed`n" + ((1..250 | ForEach-Object { "* Change $_ $('a useful change ' * 10) (#$_)" }) -join "`n") +
+        "`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
+    Invoke-Publish '0.1.600'
+    Assert ($global:PpPublishedBody.Contains($global:PpGeneratedNotes)) 'the complete generated notes were not published'
+    Assert ($global:PpPublishedBody -like '*## Installation and updates*') 'installation guidance was lost'
+    Assert ((CallIndex '*releases/generate-notes*') -lt (CallIndex 'vpk upload github*')) 'notes were generated after uploading'
+}
+
+Check 'Release notes compare the previous published version to this exact commit, not a draft or an older release' {
+    Reset 3
+    New-PpRelease 'v0.1.100' $false
+    New-PpRelease 'v0.1.601' $true $true
+    Invoke-Publish '0.1.600'
+    $generate = $global:PpCalls | Where-Object { $_ -like '*releases/generate-notes*' }
+    Assert ($generate -like "*tag_name=v0.1.600 *target_commitish=$commit *previous_tag_name=v0.1.503") "generation: $generate"
+    Reset
+    Invoke-Publish '0.1.600'
+    $generate = $global:PpCalls | Where-Object { $_ -like '*releases/generate-notes*' }
+    Assert ($generate -notlike '*previous_tag_name*') "the first release had an invented predecessor: $generate"
+}
+
+Check 'Failed or empty generated notes leave releases unpublished and existing drafts untouched' {
+    foreach ($result in 'fail', '') {
+        Reset 3
+        New-PpRelease 'v0.1.600' $true $true
+        $global:PpGeneratedNotes = $result
+        $threw = $false
+        try { Invoke-Publish '0.1.600' } catch { $threw = $true }
+        Assert $threw 'failed notes were replaced by installation boilerplate'
+        Assert (@(Uploads).Count -eq 0 -and @(Deletes).Count -eq 0) 'a draft was uploaded or deleted before notes were available'
+        Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh api -X PATCH*' })) 'a release was published without notes'
+    }
 }
 
 Check 'x64 goes up exactly as before Arm64 builds: the win channel, creating the draft, under the names installed copies read' {
@@ -272,7 +318,7 @@ Check 'Arm64 joins the same draft in its own channel, and the release is publish
     Assert (@($global:PpReleases | Where-Object tag_name -EQ 'v0.1.600').Count -eq 1) 'not exactly one v0.1.600'
     $published = CallIndex 'gh api -X PATCH*'
     Assert ($published -gt (CallIndex '*--channel win-arm64*merge=True') -and $published -gt (CallIndex 'gh release upload v0.1.600 *assets.win-arm64.json*')) "calls: $($global:PpCalls -join '; ')"
-    $notes = $global:PpCalls[$published]
+    $notes = $global:PpPublishedBody
     Assert ($notes -like '*AgentBridgeApp-win-Setup.exe on an x64 PC*' -and $notes -like '*AgentBridgeApp-win-arm64-Setup.exe on a Windows on Arm PC*') "notes: $notes"
 }
 

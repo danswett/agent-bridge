@@ -332,6 +332,14 @@ connector's Install button on a machine the dashboard drives.
   first (GitHub's compare API; the commit alone when that cannot be read), and `pack-app.ps1
   -ReleaseNotes` packs them (`vpk pack --releaseNotes`), so they are in the feed's
   `NotesMarkdown` for an installed copy to show after it updates.
+  The public GitHub release additionally carries GitHub-generated change notes: merged PRs,
+  contributors and the full changelog, without the package notes' 15-commit cap.
+  `publish-prerelease.ps1` generates these under its publish lock, comparing the previous
+  published version (including pre-releases, excluding drafts) to this build's exact commit.
+  This includes changes from merges that did not publish. It retains the install instructions
+  and CI provenance; a failed or empty notes response stops publication before uploading or
+  replacing a draft, rather than silently publishing installation-only notes. PR dry runs
+  remain read-only and exercise the generation/failure behavior through stand-in tests.
 * **Deltas:** `pack-app.ps1 -DeltaFrom` empties its releases folder, downloads the latest
   release's full package of its own channel (`vpk download github --pre --channel <channel>`)
   and, if it is older, puts it there, so
