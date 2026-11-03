@@ -232,7 +232,9 @@ into one folder with one version. An app update is a host update, so they never 
   require HTTPS, regardless of release channel. For a local development server only, start the
   app with `AGENT_BRIDGE_DEVELOPMENT_UPDATE_FEEDS=1` in its environment to permit loopback HTTP
   (`localhost`, `127.0.0.1`, or `[::1]`). HTTP to other machines is refused even in that mode;
-  local directory overrides need no opt-in.
+  local directory overrides need no opt-in. UNC and file-URI authorities (including WebDAV shares)
+  are refused. Custom web feeds and their packages do not follow redirects; configure the final
+  HTTPS destination directly.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
