@@ -44,8 +44,12 @@ tmux receives separate arguments, with no generated shell command. Its argv pars
 also treats trailing semicolons as command separators, so those are escaped using
 the behavior of
 [cmd_parse_from_arguments](https://github.com/tmux/tmux/blob/3.6a/cmd-parse.y#L1000).
-Working-directory format markers are escaped. Reply text is literal input; Enter,
-Up, Down and Escape are deliberate separate keys. Unknown control sequences are
+Working-directory format markers are escaped. Literal reply text travels through
+stdin into a randomly named buffer on the private tmux server, then is pasted with
+bracketed-paste support; it never appears in a process's command-line arguments.
+The buffer is deleted after delivery or failure. Pane identity and held screen rows
+are checked again after loading, immediately before pasting. Enter, Up, Down and
+Escape are deliberate separate keys. Unknown control sequences are
 refused before any key. `KeyPlan.Proceed` and visible-row expectations remain in
 force. A lost command response, cancellation after dispatch, or failure after any
 possibly delivered key returns `Interrupted`, never a safe-to-retry result.
