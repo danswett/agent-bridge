@@ -104,6 +104,8 @@ public sealed class PromptMemory
     // turn seen running began, until a turn's end is accounted for.
     int? idle;
     bool wasRunning;
+    // The turn count last seen, in any state.
+    int? lastCount;
     DateTimeOffset? ran;
     readonly Dictionary<string, string> bySchedule = [];
 
@@ -115,9 +117,13 @@ public sealed class PromptMemory
         var from = a.UserMessageFrom ?? UserMessageFrom.Person;
         var text = a.UserMessage;
         var running = s.Status is SessionStatus.Working or SessionStatus.Waiting;
-        // From when it began, not from a question answered or a resume within it.
-        if (running && !wasRunning) { ran = s.StatusSince; }
+        int? count = a.TurnCount is >= 0 and int c ? c : null;
+        // From when it began, not from a question answered or a resume within it; a count that
+        // rose while it ran is a later turn begun, its idle between missed here.
+        var later = wasRunning && count > lastCount;
+        if (running && (!wasRunning || later)) { ran = s.StatusSince; }
         wasRunning = running;
+        if (count is not null) { lastCount = count; }
         // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the
         // one shown stays it, and the turns that end meanwhile wait to be put down to the words
         // that return.

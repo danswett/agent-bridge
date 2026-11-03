@@ -191,4 +191,16 @@ public sealed class PromptOriginTests
         Assert.Equal(new PromptMemory.Seen(false, null, false), m.Observe(Prompt(UserMessageFrom.Schedule, "4", null, turns: 4)));
         Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(1), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A", turns: 4)));
     }
+
+    [Fact]
+    public void A_repeat_whose_turn_began_with_the_idle_before_it_missed_is_dated_from_its_own_turn_not_the_last_ones()
+    {
+        var m = new PromptMemory();
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 3));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 3, since: Since.AddMinutes(1)));
+        // A question answered within it is not a new turn; a count risen while it runs is.
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 3, since: Since.AddMinutes(2)));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: 4, since: Since.AddMinutes(5)));
+        Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(5), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 5)));
+    }
 }
