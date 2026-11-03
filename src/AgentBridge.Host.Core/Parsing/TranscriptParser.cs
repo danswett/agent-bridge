@@ -71,10 +71,19 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
 
     protected static byte[] Marker(string text) => System.Text.Encoding.UTF8.GetBytes(text);
 
-    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true)
+    protected void Prompted(string text, UserMessageFrom? from = null, string? label = null)
     {
         S.UserMessage = text;
         S.FirstUserMessage ??= text;
+        S.UserMessageFrom = from;
+        S.UserMessageLabel = label;
+    }
+
+    // from and label: who wrote it, when not the person (#489). injected: context the agent was
+    // given rather than a prompt anybody sent, which starts the turn but leaves userMessage alone.
+    protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true, UserMessageFrom? from = null, string? label = null, bool injected = false)
+    {
+        if (!injected) { Prompted(text, from, label); }
         if (countsAsTurn) { S.Prompts++; }
         S.UncountedTurn = !countsAsTurn;
         // A new message starts a new turn: last turn's reasoning would otherwise sit under

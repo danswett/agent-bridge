@@ -131,6 +131,58 @@ public class DriverTests
         Assert.Equal((null, null), Driver(source.Get(Id)!));
     }
 
+    // An agent's reply carries no mark in the transcript; the host knows the turn it started (#489).
+    [Fact]
+    public async Task A_prompt_an_agents_reply_started_is_the_agents_and_the_next_one_typed_at_the_machine_is_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        // Armed, but its prompt has not come: the one shown is still the person's.
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11));
+        await source.RefreshAsync();
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+        Fixture.Append(events, Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("mine now", 13), Copilot.TurnStart(14));
+        await source.RefreshAsync();
+        Assert.Equal(("mine now", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+    }
+
+    [Fact]
+    public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.ToolStart("q1", "ask_user", new
+        {
+            message = "Which one?",
+            requestedSchema = new { properties = new { pick = new { type = "string", @enum = new[] { "a", "b" } } }, required = new[] { "pick" } },
+        }, 3));
+        await source.RefreshAsync();
+
+        drivers.For(Id).Answered(SessionDrivers.Agent, Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+
+        Assert.Equal(("go", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
+    }
+
     [Fact]
     public async Task An_arm_whose_turn_did_not_start_within_ten_minutes_leaves_the_turn_to_the_person()
     {

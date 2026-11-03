@@ -43,6 +43,76 @@ public class CopilotTests
         },
     };
 
+    // user.message lines as Copilot CLI writes them, by data.source (#489): none for a prompt typed in
+    // its window, "user" for one typed with an attachment, "schedule-<n>" for a scheduled prompt,
+    // "agent-<id>" for one an agent sent, and "memory", "system" and "skill-<name>" for context.
+    static string Sourced(string content, string? source, int s, object? more = null)
+    {
+        var data = new System.Text.Json.Nodes.JsonObject { ["content"] = content, ["interactionId"] = "i" + s, ["transformedContent"] = content };
+        if (source is not null) { data["source"] = source; }
+        if (more is not null) { foreach (var (k, v) in System.Text.Json.JsonSerializer.SerializeToNode(more)!.AsObject()) { data[k] = v?.DeepClone(); } }
+        return Copilot.Event("user.message", data, s);
+    }
+
+    static (string?, UserMessageFrom?, string?) From(Session s) => (s.Activity.UserMessage, s.Activity.UserMessageFrom, s.Activity.UserMessageLabel);
+
+    [Fact]
+    public async Task A_scheduled_prompt_is_the_schedules_with_its_number_and_the_persons_next_prompt_is_theirs_again()
+    {
+        await using var s = new Session_();
+
+        var scheduled = await s.After(Copilot.User("watch CI", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3),
+            Sourced("[Scheduled prompt #4] Check CI on #455 and report.", "schedule-4", 10, new { delivery = "idle", messageId = "m10", turnId = "t10" }), Copilot.TurnStart(11));
+        Assert.Equal(("[Scheduled prompt #4] Check CI on #455 and report.", UserMessageFrom.Schedule, "4"), From(scheduled));
+
+        var mine = await s.After(Copilot.TurnEnd(12), Copilot.User("thanks", 13), Copilot.TurnStart(14));
+        Assert.Equal(("thanks", (UserMessageFrom?)null, (string?)null), From(mine));
+    }
+
+    [Theory]
+    [InlineData("agent-1b2c3d4e-0000-4000-8000-000000000001", UserMessageFrom.Agent)]
+    [InlineData("autopilot", UserMessageFrom.Other)]
+    [InlineData("something-new", UserMessageFrom.Other)]
+    public async Task A_prompt_from_an_agent_or_anything_else_not_a_person_says_so(string source, UserMessageFrom from)
+    {
+        await using var s = new Session_();
+
+        var sent = await s.After(Sourced("Carry on with the next step.", source, 1), Copilot.TurnStart(2));
+
+        Assert.Equal(("Carry on with the next step.", from, (string?)null), From(sent));
+    }
+
+    [Fact]
+    public async Task A_prompt_typed_with_an_attachment_is_the_persons()
+    {
+        await using var s = new Session_();
+
+        var typed = await s.After(Sourced("open this repo in a browser", "user", 1, new { attachments = new[] { new { type = "file", path = "C:\\x.png" } } }), Copilot.TurnStart(2));
+
+        Assert.Equal(("open this repo in a browser", (UserMessageFrom?)null, (string?)null), From(typed));
+    }
+
+    [Theory]
+    [InlineData("memory", "")]
+    [InlineData("memory", "Remembered: the user prefers PowerShell.")]
+    [InlineData("system", "<system_notification> Shell command \"Build\" (shellId: 36) has completed successfully.</system_notification>")]
+    [InlineData("skill-docx", "<skill-context name=\"docx\"> Base directory for this skill: C:\\skills\\docx</skill-context>")]
+    public async Task Context_copilot_gave_the_agent_never_replaces_the_persons_message(string source, string content)
+    {
+        await using var s = new Session_();
+
+        var after = await s.After(Copilot.User("fix the build", 1), Copilot.TurnStart(2), Sourced(content, source, 3, new { agentTaskId = "task-1" }));
+
+        Assert.Equal(("fix the build", (UserMessageFrom?)null, (string?)null), From(after));
+    }
+
+    [Theory]
+    [InlineData("schedule-", null)]
+    [InlineData("schedule-4a", null)]
+    [InlineData("schedule-12", "12")]
+    public void A_schedule_is_labelled_only_by_its_number(string source, string? label) =>
+        Assert.Equal((UserMessageFrom.Schedule, label, false), CopilotParser.Source(source));
+
     [Fact]
     public async Task A_prompt_makes_it_working_tool_rounds_keep_it_working_and_a_turn_without_tool_requests_ends_it_idle()
     {

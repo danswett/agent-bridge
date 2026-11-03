@@ -94,6 +94,8 @@ public sealed class SessionDriver
     string? principal;
     DateTimeOffset? pendingAt;
     string? turnKey;
+    // The turn an agent's reply or launch started: its prompt is the agent's (userMessageFrom, #489).
+    string? agentTurn;
     // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and the arm
     // is for that turn alone. The opening turn may be here already (the session registered before
     // its launch was reported), so it is looked for as well as waited for; the turn after it is
@@ -128,6 +130,14 @@ public sealed class SessionDriver
     }
 
     (DriverKind?, string?) ShownLocked() => driver == SessionDrivers.Agent ? (DriverKind.Agent, principal) : (null, null);
+
+    // Whether the session's latest prompt is one an agent sent through the host: the turn it
+    // started was an agent's reply's or launch's. An answer continues a turn rather than starting
+    // one, so it never makes the prompt before it the agent's.
+    public bool PromptIsAgents
+    {
+        get { lock (gate) { return agentTurn is not null && agentTurn == turnKey; } }
+    }
 
     // A reply or a press of Send: shown at once, and armed for the prompt it is.
     public void ArmDriver(string by, DateTimeOffset now, string? agentPrincipal = null) => Apply(by, now, agentPrincipal, null, false, null);
@@ -203,6 +213,7 @@ public sealed class SessionDriver
                     driver = SessionDrivers.Human;
                     principal = null;
                 }
+                agentTurn = driver == SessionDrivers.Agent ? turn : null;
                 pendingAt = null;
                 openingPrompt = null;
             }
@@ -212,6 +223,7 @@ public sealed class SessionDriver
                 var head = opening[..Math.Min(80, opening.Length)];
                 if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && full.Activity.TurnCount >= 1))
                 {
+                    if (driver == SessionDrivers.Agent) { agentTurn = turn; }
                     pendingAt = null;
                     openingPrompt = null;
                 }
