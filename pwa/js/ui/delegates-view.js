@@ -148,9 +148,11 @@ export class DelegatesBlock {
 
 // The strip (and a phone's chip row): one item per delegate the main agent started, then "N
 // finished", and the finished ones while it is open. The item open in the inspector is pressed.
-// Each delegate's nested count, at any depth: descendants() for every one, in one pass. A parent
-// link that loops (a broken host) counts each delegate once, and never one under itself.
-function nestedCounts(list) {
+// How many delegates each of ids started, at any depth, as descendants() counts them: from one
+// parent-to-children map, and since the strip's delegates have no parent their trees don't
+// overlap, so it is one pass over the list. A parent link that loops (a broken host) counts each
+// delegate once, and never one under itself.
+function nestedCounts(list, ids) {
   const children = new Map();
   for (const a of list) {
     if (!a.parent || a.parent === a.id) { continue; }
@@ -158,16 +160,16 @@ function nestedCounts(list) {
     children.get(a.parent).push(a.id);
   }
   const counts = new Map();
-  for (const a of list) {
-    const seen = new Set([a.id]);
-    const stack = [...(children.get(a.id) ?? [])];
+  for (const top of ids) {
+    const seen = new Set([top]);
+    const stack = [...(children.get(top) ?? [])];
     while (stack.length) {
       const id = stack.pop();
       if (seen.has(id)) { continue; }
       seen.add(id);
       stack.push(...(children.get(id) ?? []));
     }
-    counts.set(a.id, seen.size - 1);
+    counts.set(top, seen.size - 1);
   }
   return counts;
 }
@@ -179,6 +181,9 @@ export class DelegateStrip {
   #selected = null;
   // The finished items as last drawn, so the fold opens as the one open finishes, once.
   #finishedIds = new Set();
+  // The nested counts and the list they were counted from: a refresh of the times alone, every
+  // few seconds, counts nothing again.
+  #counted = { list: null, counts: new Map() };
 
   // onSelect(id): an item pressed: its delegate, or null to let the one open go.
   constructor({ onSelect = () => {} } = {}) {
@@ -195,11 +200,11 @@ export class DelegateStrip {
     this.#selected = selected;
     const d = delegateList(session);
     const list = session?.subagents ?? [];
-    // The delegates the main agent started: no parent, or one the list doesn't have. Not depth 0,
-    // which is a row's place in its own group: a child that finished while its parent works is
-    // depth 0 among the finished, and would pass for one of the main agent's own here.
-    const ids = new Set(list.map((a) => a.id));
-    const top = (rows) => rows.filter((r) => !r.parent || r.parent === r.id || !ids.has(r.parent));
+    // The delegates the main agent started: those with no parent (or, from a broken host, itself).
+    // Not depth 0, which is a row's place in its own group: a child that finished while its parent
+    // works is depth 0 among the finished. Nor one whose parent the list left out: a delegate
+    // started it, not the main agent; the list says how many more weren't listed.
+    const top = (rows) => rows.filter((r) => !r.parent || r.parent === r.id);
     const active = d ? top(d.active) : [];
     const finished = d ? top(d.finished) : [];
     this.element.hidden = !d || (active.length === 0 && finished.length === 0 && !d.more);
@@ -210,8 +215,8 @@ export class DelegateStrip {
     if (selected && finishedNow.has(selected) && (selected !== was || !this.#finishedIds.has(selected))) { this.#open = true; }
     this.#finishedIds = finishedNow;
     const live = new Set();
-    // How many each started, at any depth: one pass over the list, not one per item.
-    const nested = nestedCounts(list);
+    if (this.#counted.list !== list) { this.#counted = { list, counts: nestedCounts(list, [...active, ...finished].map((r) => r.id)) }; }
+    const nested = this.#counted.counts;
     const els = active.map((r) => this.#item(r, nested, now, selected, live));
     if (finished.length) {
       this.fold.querySelector('.strip-name').textContent = `${finished.length} finished`;

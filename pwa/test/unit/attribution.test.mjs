@@ -324,6 +324,11 @@ test('the conversation hears the main agent\'s own delegates start together and 
   assert.equal(events[2].id, 'l');
 });
 
+test('a delegate that names itself its parent, from a broken host, is the main agent\'s own in the conversation', () => {
+  const events = delegateEvents({ subagents: [{ id: 's', parent: 's', name: 'Self', status: 'ended', outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }] }, NOW);
+  assert.deepEqual(events.map((e) => e.kind), ['start', 'end']);
+});
+
 test('a delegate event says Delegate before its name once, so no name reads there as the main agent\'s', () => {
   const said = (name) => delegateEvents({ subagents: [{ id: 'a1', name, status: 'ended', outcome: 'done', startedAt: minsAgo(3), endedAt: minsAgo(1) }] }, NOW)
     .map((e) => [e.before, e.name].filter(Boolean).join(' '));

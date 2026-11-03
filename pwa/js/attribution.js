@@ -268,7 +268,8 @@ const TOGETHER_MS = 60000;
 // name may read there as the main agent's. The Windows app says the same (Delegates.cs).
 export function delegateEvents(session, now = Date.now()) {
   const list = Array.isArray(session?.subagents) ? session.subagents : [];
-  const mine = list.filter((a) => !a.parent);
+  // A delegate that names itself its parent (a broken host) is taken as having none, as the lists do.
+  const mine = list.filter((a) => !a.parent || a.parent === a.id);
   const time = (iso) => Date.parse(iso ?? '');
   const name = (a) => delegateName(a);
   const events = [];

@@ -135,7 +135,7 @@ export class SessionCard {
   // (on a phone) Back. layout() -> { inspector, wide }: whether the inspector is a pane of its own
   // now, and whether the window is wide enough for one (the strip's width).
   // stale: why its machine's sessions can't be acted on now ({ reason, since }), or null.
-  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false }), viewing = () => true, stale = null }) {
+  constructor(session, { hostId = null, fetchDetail, fetchDelegate = null, machineName, labelled = false, answering = () => null, onSelect = () => {}, onPin = () => {}, onBack = () => {}, layout = () => ({ inspector: false, wide: false }), viewing = () => true, stale = null }) {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;

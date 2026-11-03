@@ -561,6 +561,18 @@ test.describe('at three panes', () => {
     await expect(c.locator('.strip-item[data-id="demo-agent-suite"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
+  test('a delegate whose parent the list left out is not one of the main agent\'s in the strip', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await page.evaluate(({ id, at }) => {
+      const d = window.agentBridgeDemo;
+      const s = d.host.get(id);
+      d.upsert({ ...s, updatedAt: at, subagentsMore: 1, subagents: [{ id: 'demo-agent-orphan', parent: 'demo-agent-unlisted', kind: 'task', name: 'Orphan', status: 'working', startedAt: at }, ...s.subagents] });
+    }, { id: SESSION, at: later() });
+    await expect(c.locator('.delegate-strip .strip-more')).toHaveText('1 more delegate not listed');
+    await expect(c.locator('.strip-item[data-id="demo-agent-orphan"]')).toHaveCount(0);
+  });
+
   test('the strip says how many delegates the host left out, and shows when that count is all there is', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
