@@ -1,7 +1,8 @@
 # Quality: the test harness, its rings and its plan
 
-*Proposed 2026-11-02, Pacific. Status: plan, for the owner's review. Nothing here changes CI
-yet.*
+*Proposed 2026-11-02, Pacific. Status: phase 0 under way, tracked in #357. Merged so far:
+test categories (#375), CodeQL, dependency review and workflow lint (#361), and coverage and
+timing (#363). §1 describes the starting point.*
 
 This folder tracks every test this repository runs, where and when each one runs, and what
 it costs. It also holds the plan for growing the tests into a harness we can repeat, from a
@@ -252,15 +253,22 @@ AGENTS.md's Tests section at it, to run before a push.
 
 ## 5. Coverage, timing, flakes and reports
 
-- **Coverage:** use `coverlet.collector` (Cobertura) for .NET, Node's built-in coverage and
-  Playwright's V8 coverage for the PWA, and `swift test --enable-code-coverage` for Apple.
-  ReportGenerator merges them per run.
+- **Coverage** (collected since #363, no gates yet): the `dotnet-coverage` tool (Cobertura,
+  pinned in `.config/dotnet-tools.json`) around `dotnet test` for .NET, with no test project
+  changed. Node's built-in coverage for the PWA's unit tests, later Playwright's V8 coverage,
+  and `swift test --enable-code-coverage` for Apple. ReportGenerator merges them per OS per run
+  into the `coverage-<os>` artifacts and the job summary. The baseline at #363: 86.3% of lines
+  and 76.5% of branches on Windows, 83.8% and 75.1% on Linux (which skips Windows-only tests),
+  and 76.4% of lines in the PWA. HostLauncher has no tests.
   - **Gates:** no global percentage, which mostly rewards trivial tests. Instead:
     1. **Diff coverage**: changed lines are at least 80% covered in ring 1. It's advisory for
        the first month, then required.
-    2. **A per-project floor** that only ratchets up, kept in `quality/coverage-floors.json`.
-- **Timing:** every run records each suite's duration and test count. A suite that grows
-  more than 50% slower than its catalog `baseline` gets flagged in the PR summary.
+    2. **A per-project floor, per OS,** that only ratchets up, kept in
+       `quality/coverage-floors.json`.
+- **Timing:** every `product` run already records each test's duration (TRX), and the job
+  summary lists per-project counts and times and the 10 slowest tests. Next, each suite's
+  duration is compared with its catalog `baseline`, and one that grows more than 50% slower
+  gets flagged in the PR summary.
 - **Flakes:** a test that fails, then passes on rerun with no change, is recorded as flaky
   with its run link. It's reported, never silently retried to green. Each flaky test gets an
   issue (label `flaky`) and a row in `quality/flaky.yml` with the issue and date.

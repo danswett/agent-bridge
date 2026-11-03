@@ -44,6 +44,8 @@ global_triggers:
   - global.json
   - '**/Directory.Build.*'
   - '**/Directory.Packages.props'
+  - .config/dotnet-tools.json       # coverage tools (#363)
+  - build/coverage.settings.xml
   - .github/workflows/**
   - quality/**
 
@@ -333,6 +335,9 @@ suites:
     platforms: [browser]
     runner: local
     triggers: [pwa/**, docs/protocol/**]
+    # CI runs it twice: as below, then with Node's coverage for the pwa-coverage artifact (#363).
+    # The coverage run skips only the markdown pathological-input timing test, which coverage
+    # slows past its limit; the first run still enforces it.
     command: cd pwa && node --test "test/unit/*.test.mjs"
     where: ci.yml pwa
     baseline: { files: 26 }
@@ -380,7 +385,7 @@ suites:
     # navigation, safe areas. WebKit in Playwright is not iOS Safari for push and install.
     platforms: [ios-device]
     runner: device
-    command: quality/checklists/iphone-pwa.md (manual, about 10 minutes)
+    command: manual checklist, about 10 minutes (to be written in phase 4 as quality/checklists/iphone-pwa.md)
     status: planned
 
   # ---------------------------------------------------------------- Apple clients
@@ -519,8 +524,11 @@ suites:
     select: always
     platforms: [linux-x64]
     runner: hosted
-    command: github/codeql-action for csharp, javascript-typescript, actions (and swift once apple/ lands)
-    status: planned
+    # Blocking only if the analysis breaks, or (code scanning's own check) on new high or
+    # critical alerts. Swift joins once apple/ lands on main.
+    command: see codeql.yml (csharp build-mode none, javascript-typescript, actions)
+    where: codeql.yml analyze
+    status: exists
 
   - id: dependency-review
     kind: security
@@ -528,17 +536,23 @@ suites:
     select: always
     platforms: [linux-x64]
     runner: hosted
-    command: actions/dependency-review-action; dotnet list package --vulnerable --include-transitive; npm audit --omit=dev
-    status: planned
+    # review blocks on high or critical vulnerabilities in newly added dependencies, and needs the
+    # repository's dependency graph (on since 2026-11-03). audit is advisory: existing ones.
+    command: see dependencies.yml (dependency-review-action; dotnet list package --vulnerable; npm audit --omit=dev)
+    where: dependencies.yml review, dependencies.yml audit
+    status: exists
 
   - id: secret-scan
     kind: security
     ring: 0
     select: always
-    platforms: [linux-x64]
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
     runner: local
-    command: gitleaks protect --staged (pre-commit) and GitHub secret scanning with push protection
-    status: planned
+    # GitHub secret scanning with push protection is on for the repository; the hook is opt-in
+    # (AGENTS.md, Secrets) and flags 13 known false positives (test keys, Azure role ids) only
+    # when a commit changes those lines.
+    command: pre-commit install, once per clone; then gitleaks runs on each commit (.pre-commit-config.yaml)
+    status: exists
 
   - id: container-scan
     kind: security
@@ -566,9 +580,11 @@ suites:
     select: affected
     platforms: [linux-x64]
     runner: hosted
-    triggers: [.github/workflows/**]
-    command: actionlint && zizmor .github/workflows
-    status: planned
+    triggers: [.github/workflows/**, .github/actions/**]
+    # actionlint blocks; shellcheck and zizmor are advisory until their existing findings (#360) are fixed.
+    command: see workflow-lint.yml (actionlint, shellcheck, zizmor)
+    where: workflow-lint.yml lint
+    status: exists
 
   - id: fuzz
     kind: security
@@ -646,7 +662,7 @@ suites:
     select: always
     platforms: [win-x64, macos-arm64, ios-device]
     runner: device
-    command: quality/checklists/screen-reader.md (Narrator, VoiceOver on Mac and iPhone)
+    command: manual checklist with Narrator, and VoiceOver on Mac and iPhone (to be written in phase 4 as quality/checklists/screen-reader.md)
     status: planned
 
   # ---------------------------------------------------------------- performance
