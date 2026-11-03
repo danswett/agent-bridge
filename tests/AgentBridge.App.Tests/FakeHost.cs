@@ -303,6 +303,9 @@ sealed class FakeProcesses : IProcesses
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
     public bool IsRunning(int pid) => Alive.Contains(pid);
     public void Kill(int pid) => Killed.Add(pid);
+    // Processes an earlier run of the app started, by pid and start time, that this can take on.
+    public HashSet<(int Pid, long StartedTicks)> Others { get; } = [];
+    public bool Adopt(int pid, long startedTicks) => Others.Contains((pid, startedTicks)) && Alive.Contains(pid);
 }
 
 // The test's UI thread, as a dispatcher: actions run one at a time on it.

@@ -590,13 +590,6 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
-    // Stopped from the app while starting, before anything could reach this through the pipe
-    // (HostHandover.StoppedFromTheApp, #106's review): not served at all.
-    if (handover.StoppedFromTheApp(identity.Folder))
-    {
-        Log($"stopped from the {Product.App} while starting; not serving");
-        return 0;
-    }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = new ReconnectBackoff();

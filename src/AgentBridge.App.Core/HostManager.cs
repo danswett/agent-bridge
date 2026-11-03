@@ -44,6 +44,9 @@ public interface IProcesses
     int Start(string path, IReadOnlyList<string> arguments);
     bool IsRunning(int pid);
     void Kill(int pid);
+    // Takes on a process another run of this app started, if pid is still that process (it
+    // started at startedTicks, UTC): from then on IsRunning and Kill ask that process itself.
+    bool Adopt(int pid, long startedTicks);
 }
 
 public sealed class SystemProcesses : IProcesses
@@ -72,6 +75,27 @@ public sealed class SystemProcesses : IProcesses
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    public bool Adopt(int pid, long startedTicks)
+    {
+        if (started.TryGetValue(pid, out var mine) && IsRunning(pid)) { return mine.StartTime.ToUniversalTime().Ticks == startedTicks; }
+        Process p;
+        try { p = Process.GetProcessById(pid); }
+        catch (ArgumentException) { return false; }
+        try
+        {
+            // The handle first, then the start time through it: the process checked is the one kept.
+            _ = p.SafeHandle;
+            if (!p.HasExited && p.StartTime.ToUniversalTime().Ticks == startedTicks)
+            {
+                started[pid] = p;
+                return true;
+            }
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        p.Dispose();
+        return false;
     }
 
     public void Kill(int pid)
@@ -256,15 +280,28 @@ public sealed class HostManager
         if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
         if (tasks.Exists(TaskName)) { await RunTaskAsync(ct); return; }
         if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
-        // A launcher this app started is still there, between crash restarts: the host it brings
-        // up next is waited for, as the task path waits for the task's run, rather than a second
-        // launcher started beside it and the first one's pid lost (#106 review).
+        // A launcher this app (or an earlier run of it) started is still there, between crash
+        // restarts: the host it brings up next is waited for, as the task path waits for the task's
+        // run, rather than a second launcher started beside it and the first one's pid lost (#106
+        // review, #420).
+        launcher ??= RecordedLauncher();
         if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
         await WaitAsync(running: true, StartTimeout, ct);
     }
 
-    // The launcher this app started directly (no logon task), which the task cannot end.
+    // The launcher this app started directly (no logon task), which the task cannot end, or one
+    // an earlier run of the app started, found by its record.
     int? launcher;
+
+    // A launcher an earlier run of this app started, by the record it keeps of itself
+    // (HostLauncherContract.LauncherRecord): with no logon task, nothing else knows it (#420).
+    int? RecordedLauncher()
+    {
+        string text;
+        try { text = File.ReadAllText(Path.Combine(layout.ProfileFolder, HostLauncherContract.LauncherRecord)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        return HostLauncherContract.TryParseLauncher(text, out var pid, out var started) && processes.Adopt(pid, started) ? pid : null;
+    }
 
     // The launcher's stop marker (HostLauncherContract.StopMarker): while it is there, a launcher
     // that is between crash restarts, or whose host has just ended, starts no host (#106).
@@ -425,6 +462,14 @@ public sealed class HostManager
             ClearStopped();
             throw;
         }
+        // Failed otherwise (timed out, cancelled) with the host still running: not stopped either,
+        // so no marker left to keep its launcher from restarting it after a crash or a host.restart
+        // (#420). A host that has gone keeps it: the stop got that far.
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            if (await IsRunningAsync(CancellationToken.None)) { ClearStopped(); }
+            throw;
+        }
     }
 
     // Through the host's pipe, as above.
@@ -458,11 +503,10 @@ public sealed class HostManager
     // restarts (3, 6, 12 s), or with the host it restarted still starting, before its pipe opens.
     // Neither answers on the pipe, so a stop through it alone "succeeded" and the launcher then
     // brought the host back (#106's independent review). With the marker written it stops at its
-    // next look; a host it was still starting is stopped through its pipe once that opens, or, if
-    // this has stopped waiting by then (a launcher from an earlier run of the app, which this cannot
-    // see; one ended below), stops itself, since a host the launcher runs looks for the marker once
-    // its pipe is open (HostHandover.StoppedFromTheApp). One still there after the start timeout is
-    // ended.
+    // next look; a host it was still starting is stopped through its pipe once that opens. One
+    // still there after the start timeout is ended, and the host with it, which is in the
+    // launcher's kill-on-close job (#420). A launcher an earlier run of the app started is found by
+    // its record.
     async Task EndLauncherAsync(CancellationToken ct)
     {
         var deadline = Time.GetUtcNow() + StartTimeout;
@@ -484,8 +528,11 @@ public sealed class HostManager
         launcher = null;
     }
 
-    bool LauncherRunning() =>
-        tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
+    bool LauncherRunning()
+    {
+        launcher ??= RecordedLauncher();
+        return tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
+    }
 
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)

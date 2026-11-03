@@ -10,7 +10,18 @@ var exe = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "
 var profileFolder = LauncherLog.ProfileFolder(args);
 var log = LauncherLog.For(profileFolder);
 // The app's Stop (HostLauncherContract.StopMarker): no host is started again while it is there.
-var stopMarker = profileFolder is null ? null : Path.Combine(profileFolder, AgentBridge.Local.HostLauncherContract.StopMarker);
+// And this launcher's record of itself, for an app opened after it started (#420).
+var files = profileFolder is null ? null : new LauncherFiles(profileFolder, log);
+DateTime startedUtc;
+using (var self = Process.GetCurrentProcess()) { startedUtc = self.StartTime.ToUniversalTime(); }
+// The host ends with this launcher (HostJob, #420). Without one it is still started and watched,
+// as before the job existed; only ending this launcher no longer ends it.
+HostJob? job = null;
+if (OperatingSystem.IsWindows())
+{
+    try { job = HostJob.Create(); }
+    catch (Win32Exception e) { log($"the host will not end with this launcher: {e.Message}"); }
+}
 var supervisor = new HostSupervisor
 {
     RunHost = async ct =>
@@ -39,19 +50,26 @@ var supervisor = new HostSupervisor
         }
         using (host)
         {
+            if (job is not null && OperatingSystem.IsWindows())
+            {
+                try { job.Add(host); }
+                catch (Win32Exception e) { log($"the host will not end with this launcher: {e.Message}"); }
+            }
             await host.WaitForExitAsync(ct);
             return host.ExitCode;
         }
     },
     Log = log,
-    Stopped = () => stopMarker is not null && File.Exists(stopMarker),
-    ClearStopped = () =>
-    {
-        try { if (stopMarker is not null) { File.Delete(stopMarker); } }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"an earlier stop could not be cleared: {e.Message}"); }
-    },
+    Stopped = () => files?.Stopped() ?? false,
+    ClearStopped = () => files?.ClearStopped(),
 };
-return await supervisor.RunAsync();
+files?.RecordSelf(Environment.ProcessId, startedUtc);
+try { return await supervisor.RunAsync(); }
+finally
+{
+    files?.ForgetSelf(Environment.ProcessId, startedUtc);
+    if (OperatingSystem.IsWindows()) { job?.Dispose(); }
+}
 
 // The host's own log (<profile>\logs\host.log), which the app shows, appended a line at a time
 // as the host appends it; written only while no host runs. Its folder by the host's own rule

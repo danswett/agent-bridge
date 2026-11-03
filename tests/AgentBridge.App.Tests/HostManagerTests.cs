@@ -480,9 +480,89 @@ public sealed class HostManagerTests : IAsyncLifetime
 
         Assert.StartsWith("refused: this connection is from pid 30", stop.Message);
         Assert.Equal(stop.Message, restart.Message);
+        Assert.False(File.Exists(StopMarker));
         Assert.Empty(processes.Killed);
         Assert.Empty(processes.Started);
         Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_stop_that_times_out_or_is_cancelled_with_the_host_still_running_leaves_no_stop_marker(bool cancelled)
+    {
+        // Answers the stop and goes on running, and ending it (a fake) changes nothing.
+        host.On(HostOps.Stop, _ => new { stopping = true });
+        host.Start();
+        using var cancel = new CancellationTokenSource();
+        if (cancelled) { await cancel.CancelAsync(); }
+
+        await Assert.ThrowsAnyAsync<Exception>(() => manager.StopAsync(cancel.Token));
+
+        Assert.False(File.Exists(StopMarker));
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Stopping_with_no_task_ends_a_launcher_an_earlier_run_of_the_app_started_but_never_a_process_since_given_its_pid(bool stillThatLauncher)
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        // No host answers: the launcher waits to restart one. Each look at the pipe takes a second.
+        var m = new HostManager(manager.Layout, tasks, processes, _ =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            throw new IOException("not listening");
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        // Recorded by the launcher itself, as it does; the process with pid 77 now is that launcher,
+        // or another that started later and was given its pid.
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { }).RecordSelf(77, startedUtc);
+        processes.Alive.Add(77);
+        processes.Others.Add((77, stillThatLauncher ? startedUtc.Ticks : startedUtc.AddMinutes(5).Ticks));
+
+        await m.StopAsync();
+
+        int[] ended = stillThatLauncher ? [77] : [];
+        Assert.Equal(ended, processes.Killed);
+        Assert.True(File.Exists(StopMarker));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Starting_with_no_task_while_a_launcher_an_earlier_run_of_the_app_started_restarts_its_host_starts_no_second_launcher()
+    {
+        var looked = false;
+        // That launcher's host comes up just after the first look.
+        var m = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            if (!looked) { looked = true; host.Start(); throw new IOException("not listening yet"); }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            Elevated = () => false,
+        };
+        var startedUtc = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        new AgentBridge.HostLauncher.LauncherFiles(manager.Layout.ProfileFolder, _ => { }).RecordSelf(77, startedUtc);
+        processes.Alive.Add(77);
+        processes.Others.Add((77, startedUtc.Ticks));
+
+        await m.StartAsync();
+
+        Assert.Empty(processes.Started);
+        Assert.True(await m.IsRunningAsync());
     }
 
     [Fact]
@@ -521,12 +601,14 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Looking_for_a_task_that_does_not_exist_answers_no()
+    public void Looking_for_or_ending_a_task_that_does_not_exist_answers_no_and_ends_nothing()
     {
         if (!OperatingSystem.IsWindows()) { return; }
 
         Assert.False(new WindowsLogonTasks().Exists("agent-bridge-test-" + Guid.NewGuid().ToString("N")));
         Assert.False(new WindowsLogonTasks().IsRunning("agent-bridge-test-" + Guid.NewGuid().ToString("N")));
+        // Ending one that is not there ends nothing, and is no error.
+        new WindowsLogonTasks().Stop("agent-bridge-test-" + Guid.NewGuid().ToString("N"));
     }
 
     public sealed class Refusing

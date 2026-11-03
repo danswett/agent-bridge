@@ -218,14 +218,19 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
   that the launcher checks after every host exit and every wait before starting the host again;
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
-  the run itself if it is still there after the 20 s start timeout. A host the launcher starts
-  also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
-  a host still starting when the launcher was ended, or under a launcher this app did not start
-  (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
-  or the host sees the marker. A host that refuses the app's connection (one of them elevated)
-  is a refused Stop: left running, with its launcher, and the marker cleared. Without the task,
-  a Start while the launcher the app started is between crash restarts waits for its host rather
-  than starting a second launcher. Every start clears the marker
+  the run itself if it is still there after the 20 s start timeout. The host is in the
+  launcher's kill-on-close job object, so it ends with the launcher however the launcher ends
+  (Task Scheduler's Stop, the app ending it, a crash): a host still starting never runs on
+  unwatched, believing a launcher will restart it (#420). The job allows silent breakaway, so
+  what the host starts (agent sessions) is not in it and runs on. The launcher also records
+  itself (`launcher.pid`: its pid and start time) in the profile's folder, so an app opened
+  after it started, with no logon task, finds it to wait for or end; a process since given its
+  pid is told apart by its start time. A Stop that fails otherwise (timed out, cancelled) with
+  the host still running clears the marker too. A host that refuses the app's connection (one
+  of them elevated) is a refused Stop: left running, with its launcher, and the marker cleared.
+  Without the task, a Start while a launcher the app (or an earlier run of it) started is
+  between crash restarts waits for its host rather than starting a second launcher. Every
+  start clears the marker
   (the app's Start, and a launcher starting, at sign-in or through the task).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.

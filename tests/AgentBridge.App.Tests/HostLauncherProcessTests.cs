@@ -1,0 +1,142 @@
+using System.Diagnostics;
+using AgentBridge.App.Core;
+using AgentBridge.HostLauncher;
+using AgentBridge.Local;
+using Xunit;
+
+// The launcher's hold on the host, and the app's on the launcher, with real processes (#420): the
+// host ends with its launcher but the agents it started do not, and a launcher is known by its
+// start time as well as its pid. Windows only, where the launcher runs.
+[Trait("Category", "Process")]
+public sealed class HostLauncherProcessTests : IDisposable
+{
+    readonly string folder = Directory.CreateTempSubdirectory("abl-").FullName;
+    readonly List<Process> started = [];
+
+    public void Dispose()
+    {
+        foreach (var p in started)
+        {
+            try { if (!p.HasExited) { p.Kill(); } }
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            p.Dispose();
+        }
+        try { Directory.Delete(folder, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    static string System32(string exe) => Path.Combine(Environment.SystemDirectory, exe);
+
+    Process Run(string exe, params string[] args)
+    {
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true };
+        foreach (var a in args) { start.ArgumentList.Add(a); }
+        var p = Process.Start(start)!;
+        started.Add(p);
+        return p;
+    }
+
+    // Only a dead process's pid can be reused, so a live one's is still its own.
+    static bool Alive(int pid)
+    {
+        try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
+        catch (ArgumentException) { return false; }
+    }
+
+    [Fact]
+    public async Task A_host_in_the_launchers_job_ends_with_the_launcher_and_an_agent_it_started_runs_on()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var go = Path.Combine(folder, "go");
+        var agentPid = Path.Combine(folder, "agent.pid");
+        // The "host": once in the job, it starts an "agent" of its own, and waits.
+        var host = Run(System32(@"WindowsPowerShell\v1.0\powershell.exe"), "-NoProfile", "-NonInteractive", "-Command",
+            $"while (-not (Test-Path '{go}')) {{ Start-Sleep -Milliseconds 50 }}; " +
+            $"$a = Start-Process -FilePath '{System32("PING.EXE")}' -ArgumentList '-n','300','127.0.0.1' -WindowStyle Hidden -PassThru; " +
+            $"Set-Content -Path '{agentPid}' -Value $a.Id; Start-Sleep -Seconds 300");
+        var job = HostJob.Create();
+        try
+        {
+            job.Add(host);
+            File.WriteAllText(go, "");
+            await Wait.UntilAsync(() => File.Exists(agentPid) && File.ReadAllText(agentPid).Trim().Length > 0, "the host to start its agent", TimeSpan.FromSeconds(60));
+            var agent = int.Parse(File.ReadAllText(agentPid).Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            try
+            {
+                // The launcher ends: its handle to the job closes, as it does when it is killed.
+                job.Dispose();
+
+                Assert.True(host.WaitForExit(TimeSpan.FromSeconds(30)), "the host outlived its launcher");
+                Assert.True(Alive(agent), "the agent ended with the host");
+            }
+            finally
+            {
+                try { using var a = Process.GetProcessById(agent); a.Kill(); }
+                catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            }
+        }
+        finally { job.Dispose(); }
+    }
+
+    [Fact]
+    public async Task A_process_this_started_is_known_until_it_exits_and_ending_it_afterwards_is_no_error()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var processes = new SystemProcesses();
+
+        var pid = processes.Start(System32("cmd.exe"), ["/c", "exit 0"]);
+
+        await Wait.UntilAsync(() => !processes.IsRunning(pid), "the process to exit", TimeSpan.FromSeconds(30));
+        processes.Kill(pid);
+        Assert.False(processes.IsRunning(pid));
+    }
+
+    [Fact]
+    public async Task A_launcher_an_earlier_run_of_the_app_started_is_taken_on_only_with_its_own_start_time_and_then_ended()
+    {
+        if (!OperatingSystem.IsWindows()) { return; }
+        var launcher = Run(System32("PING.EXE"), "-n", "300", "127.0.0.1");
+        var startedTicks = launcher.StartTime.ToUniversalTime().Ticks;
+        var processes = new SystemProcesses();
+
+        Assert.False(processes.Adopt(launcher.Id, startedTicks + 1));
+        Assert.True(processes.Adopt(launcher.Id, startedTicks));
+        Assert.True(processes.IsRunning(launcher.Id));
+        processes.Kill(launcher.Id);
+
+        Assert.True(launcher.WaitForExit(TimeSpan.FromSeconds(30)));
+        await Wait.UntilAsync(() => !processes.IsRunning(launcher.Id), "the launcher to be seen gone", TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void The_launcher_reads_and_clears_the_apps_stop_marker_in_the_profile_folder()
+    {
+        var files = new LauncherFiles(folder, _ => { });
+        Assert.False(files.Stopped());
+
+        File.WriteAllText(Path.Combine(folder, HostLauncherContract.StopMarker), "");
+        Assert.True(files.Stopped());
+        files.ClearStopped();
+
+        Assert.False(files.Stopped());
+        Assert.False(File.Exists(Path.Combine(folder, HostLauncherContract.StopMarker)));
+    }
+
+    [Fact]
+    public void A_launcher_removes_its_own_record_as_it_ends_but_never_one_a_later_launcher_wrote()
+    {
+        var record = Path.Combine(folder, HostLauncherContract.LauncherRecord);
+        var first = new DateTime(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+        var files = new LauncherFiles(folder, _ => { });
+
+        files.RecordSelf(77, first);
+        Assert.True(HostLauncherContract.TryParseLauncher(File.ReadAllText(record), out var pid, out var ticks));
+        Assert.Equal((77, first.Ticks), (pid, ticks));
+        files.ForgetSelf(77, first);
+        Assert.False(File.Exists(record));
+
+        files.RecordSelf(78, first.AddMinutes(1));
+        files.ForgetSelf(77, first);
+        Assert.True(File.Exists(record));
+    }
+}
