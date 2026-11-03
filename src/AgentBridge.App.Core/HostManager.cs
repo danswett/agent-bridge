@@ -31,6 +31,8 @@ public interface ILogonTasks
     void Run(string name);
     // Whether an instance of the task is running; false when there is no such task.
     bool IsRunning(string name);
+    // Ends the task's running instance, if any.
+    void Stop(string name);
 }
 
 // Starting and ending processes, behind an interface for the same reason.
@@ -44,16 +46,27 @@ public interface IProcesses
 
 public sealed class SystemProcesses : IProcesses
 {
+    // The processes this started, by handle: whether one runs, and ending it, are asked of the
+    // process itself, never of whatever has its pid by then (a launcher long gone, its pid reused).
+    readonly System.Collections.Concurrent.ConcurrentDictionary<int, Process> started = new();
+
     public int Start(string path, IReadOnlyList<string> arguments)
     {
         var start = new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(path)! };
         foreach (var a in arguments) { start.ArgumentList.Add(a); }
-        using var p = Process.Start(start) ?? throw new InvalidOperationException($"{path} did not start");
+        var p = Process.Start(start) ?? throw new InvalidOperationException($"{path} did not start");
+        started[p.Id] = p;
         return p.Id;
     }
 
     public bool IsRunning(int pid)
     {
+        if (started.TryGetValue(pid, out var mine))
+        {
+            if (!mine.HasExited) { return true; }
+            if (started.TryRemove(pid, out _)) { mine.Dispose(); }
+            return false;
+        }
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
@@ -61,6 +74,12 @@ public sealed class SystemProcesses : IProcesses
 
     public void Kill(int pid)
     {
+        if (started.TryGetValue(pid, out var mine))
+        {
+            try { if (!mine.HasExited) { mine.Kill(entireProcessTree: false); } }
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            return;
+        }
         try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: false); }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
     }
@@ -196,6 +215,21 @@ public sealed class HostManager
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or OperationCanceledException && !ct.IsCancellationRequested) { return false; }
     }
 
+    // As IsRunningAsync, for stopping: a host that refuses this app's connection (one of them
+    // elevated and the other not, LocalRefusedException) is running, and refused, so it and its
+    // launcher are left alone rather than taken for a host that is not there and ended by force.
+    async Task<bool> AnswersAsync(CancellationToken ct)
+    {
+        try
+        {
+            await using var ch = await connect(ct);
+            await ch.HelloAsync(ct);
+            return true;
+        }
+        catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or OperationCanceledException && !ct.IsCancellationRequested) { return false; }
+    }
+
     // Starts the host if it is not running: through the logon task when there is one, so it
     // runs as it would at sign-in, otherwise through its launcher. Waits until it answers. An
     // elevated app never starts it directly: the host would be elevated too, unable to type
@@ -203,12 +237,41 @@ public sealed class HostManager
     // task always runs it unelevated.
     public async Task StartAsync(CancellationToken ct = default)
     {
+        // Whatever starts it now, a stop asked for earlier is over (#106).
+        ClearStopped();
         if (await IsRunningAsync(ct)) { return; }
         if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
         if (tasks.Exists(TaskName)) { await RunTaskAsync(ct); return; }
         if (Elevated()) { throw new InvalidOperationException("this app is running as administrator, so it will not start the host; turn on starting the host at sign-in, or open the app normally"); }
-        processes.Start(layout.LauncherExe, layout.ServeArguments);
+        // A launcher this app started is still there, between crash restarts: the host it brings
+        // up next is waited for, as the task path waits for the task's run, rather than a second
+        // launcher started beside it and the first one's pid lost (#106 review).
+        if (launcher is not { } pid || !processes.IsRunning(pid)) { launcher = processes.Start(layout.LauncherExe, layout.ServeArguments); }
         await WaitAsync(running: true, StartTimeout, ct);
+    }
+
+    // The launcher this app started directly (no logon task), which the task cannot end.
+    int? launcher;
+
+    // The launcher's stop marker (HostLauncherContract.StopMarker): while it is there, a launcher
+    // that is between crash restarts, or whose host has just ended, starts no host (#106).
+    string StopMarker => Path.Combine(layout.ProfileFolder, HostLauncherContract.StopMarker);
+
+    void MarkStopped()
+    {
+        try
+        {
+            Directory.CreateDirectory(layout.ProfileFolder);
+            File.WriteAllText(StopMarker, "");
+        }
+        // The launcher is still ended below; the marker only spares it being ended by force.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    void ClearStopped()
+    {
+        try { File.Delete(StopMarker); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     // The task runs agent-bridge-hostw, which lasts as long as the host it waits for, and is
@@ -335,6 +398,25 @@ public sealed class HostManager
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public async Task StopAsync(CancellationToken ct = default)
     {
+        // A stop on purpose: the launcher must not start the host again after it (#106). Before
+        // the stop itself, so a host that crashes while stopping is not started again either.
+        MarkStopped();
+        try
+        {
+            await StopHostAsync(ct);
+            await EndLauncherAsync(ct);
+        }
+        catch (HostRefusedException)
+        {
+            // Not stopped: it runs on, and is still to be started again should it crash.
+            ClearStopped();
+            throw;
+        }
+    }
+
+    // Through the host's pipe, as above.
+    async Task StopHostAsync(CancellationToken ct)
+    {
         int? pid = null;
         try
         {
@@ -344,6 +426,9 @@ public sealed class HostManager
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
+        // Refused at the connection (one of the host and this app elevated, the other not): the
+        // host is there and said no, as a refused stop does (#106 review).
+        catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { }
         try { await WaitAsync(running: false, StopTimeout, ct); }
         catch (TimeoutException) when (pid is { } p)
@@ -355,6 +440,39 @@ public sealed class HostManager
         var deadline = DateTime.UtcNow + StopTimeout;
         while (pid is { } p && processes.IsRunning(p) && DateTime.UtcNow < deadline) { await Task.Delay(Poll, ct); }
     }
+
+    // The launcher (agent-bridge-hostw) outlives a host it is about to start again: between crash
+    // restarts (3, 6, 12 s), or with the host it restarted still starting, before its pipe opens.
+    // Neither answers on the pipe, so a stop through it alone "succeeded" and the launcher then
+    // brought the host back (#106's independent review). With the marker written it stops at its
+    // next look; a host it was still starting is stopped through its pipe once that opens, or, if
+    // this has stopped waiting by then (a launcher from an earlier run of the app, which this cannot
+    // see; one ended below), stops itself, since a host the launcher runs looks for the marker once
+    // its pipe is open (HostHandover.StoppedFromTheApp). One still there after the start timeout is
+    // ended.
+    async Task EndLauncherAsync(CancellationToken ct)
+    {
+        var deadline = Time.GetUtcNow() + StartTimeout;
+        while (LauncherRunning())
+        {
+            if (Time.GetUtcNow() > deadline)
+            {
+                if (tasks.Exists(TaskName)) { tasks.Stop(TaskName); }
+                if (launcher is { } pid) { processes.Kill(pid); }
+                break;
+            }
+            if (await AnswersAsync(ct))
+            {
+                await StopHostAsync(ct);
+                continue;
+            }
+            await Task.Delay(Poll, ct);
+        }
+        launcher = null;
+    }
+
+    bool LauncherRunning() =>
+        tasks.Exists(TaskName) && tasks.IsRunning(TaskName) || launcher is { } pid && processes.IsRunning(pid);
 
     // Restarting is stopping first, so a refused stop starts nothing either.
     public async Task RestartAsync(CancellationToken ct = default)
@@ -424,6 +542,17 @@ public sealed class WindowsLogonTasks : ILogonTasks
     {
         var task = Call(folder, "GetTask", name)!;
         try { Release(Call(task, "Run", (object?)null)); }
+        finally { Release(task); }
+        return true;
+    });
+
+    // IRegisteredTask.Stop: ends every running instance of it. A task that is gone has none.
+    public void Stop(string name) => Use(folder =>
+    {
+        object? task;
+        try { task = Call(folder, "GetTask", name); }
+        catch (Exception e) when (e is COMException or FileNotFoundException) { return false; }
+        try { Call(task!, "Stop", 0); }
         finally { Release(task); }
         return true;
     });

@@ -59,4 +59,51 @@ public sealed class HostHandoverTests : IDisposable
         await Assert.ThrowsAsync<IOException>(() => old);
         Assert.Single(serving);
     }
+
+    [Fact]
+    public async Task A_restart_under_the_logon_tasks_launcher_leaves_the_replacement_to_the_launcher_once_the_host_has_stopped()
+    {
+        var old = HostHandover.RunAsync(async handover =>
+        {
+            using var hostLock = HostLock.TryAcquire(profile, TimeSpan.Zero) ?? throw new InvalidOperationException("the lock was taken");
+            handover.Request();
+            await Task.Yield();
+            return 0;
+        }, StartReplacement, supervised: true);
+
+        Assert.Equal(AgentBridge.Local.HostLauncherContract.Restart, await old);
+        Assert.Empty(serving);
+        // Let go, so the one the launcher starts takes it.
+        using var next = HostLock.TryAcquire(profile, TimeSpan.Zero);
+        Assert.NotNull(next);
+    }
+
+    [Fact]
+    public async Task A_host_under_the_launcher_that_fails_on_its_way_out_of_a_restart_ends_as_a_crash_for_the_launcher_to_recover()
+    {
+        var old = HostHandover.RunAsync(async handover =>
+        {
+            handover.Request();
+            await Task.Yield();
+            throw new IOException("a disposal failed");
+        }, StartReplacement, supervised: true);
+
+        await Assert.ThrowsAsync<IOException>(() => old);
+        Assert.Empty(serving);
+    }
+
+    [Fact]
+    public async Task A_host_under_the_launcher_that_the_app_stopped_while_it_was_starting_does_not_serve_but_one_started_by_hand_does()
+    {
+        bool? beforeStop = null, underLauncher = null, byHand = null;
+        await HostHandover.RunAsync(h => { beforeStop = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
+        File.WriteAllText(Path.Combine(profile, AgentBridge.Local.HostLauncherContract.StopMarker), "");
+
+        await HostHandover.RunAsync(h => { underLauncher = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement, supervised: true);
+        await HostHandover.RunAsync(h => { byHand = h.StoppedFromTheApp(profile); return Task.FromResult(0); }, StartReplacement);
+
+        Assert.False(beforeStop);
+        Assert.True(underLauncher);
+        Assert.False(byHand);
+    }
 }

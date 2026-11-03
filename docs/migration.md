@@ -134,7 +134,10 @@ second snapshot the first's changes as the state to restore; the second is refus
 7. **Hand-over.** Writes `intake.json` (the runtime folder, and the agents' homes the
    installation recorded, whose hooks were re-pointed: the host reads sessions from those unless
    started with `--copilot-home`, `--claude-home` or `--codex-home`, since the host the app
-   starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for its heartbeat in the
+   starts may not share the `COPILOT_HOME` agent-ha-bridge was installed under), restarts the host, waits for the old host's
+   process to end (up to 5 minutes: its shutdown can take minutes while a usage probe finishes,
+   and a migration that judged it by the 45 s below undid itself while the replacement was still
+   to come), then up to 45 s for the new host's heartbeat in the
    runtime folder, and runs the installed hook as Copilot would (`copilot agent_stop`). The
    hook gives the same fixed reply whether or not it could spool, and a Copilot session's own
    `agent_stop` at the same moment would leave the same log line and drain the same way, so

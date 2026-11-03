@@ -130,17 +130,27 @@ sealed class FakeTasks : ILogonTasks
     // Or this, asked at each look and run, when set.
     public Func<bool>? StillRunningWhile;
     public List<string> Ignored { get; } = [];
+    // Instances ended by Stop (IRegisteredTask.Stop), after which that task reads not Running until run again.
+    public List<string> Ended { get; } = [];
+    readonly HashSet<string> ended = [];
+    public void Stop(string name)
+    {
+        Ended.Add(name);
+        ended.Add(name);
+    }
     public bool Exists(string name) => Registered.ContainsKey(name);
     public void Register(string name, string xml) => Registered[name] = xml;
     public void Delete(string name) => Registered.Remove(name);
     public void Run(string name)
     {
         if (StillRunningWhile?.Invoke() ?? StillRunningLooks > 0) { Ignored.Add(name); return; }
+        ended.Remove(name);
         Ran.Add(name);
         OnRun?.Invoke();
     }
     public bool IsRunning(string name)
     {
+        if (ended.Contains(name)) { return false; }
         if (StillRunningWhile is { } running) { return running(); }
         if (StillRunningLooks <= 0) { return false; }
         if (StillRunningLooks != int.MaxValue) { StillRunningLooks--; }
@@ -153,8 +163,10 @@ sealed class FakeProcesses : IProcesses
     public List<(string Path, IReadOnlyList<string> Args)> Started { get; } = [];
     public List<int> Killed { get; } = [];
     public Action? OnStart;
+    // The processes that run: a launcher the test says is still there.
+    public HashSet<int> Alive { get; } = [];
     public int Start(string path, IReadOnlyList<string> arguments) { Started.Add((path, arguments)); OnStart?.Invoke(); return 99; }
-    public bool IsRunning(int pid) => false;
+    public bool IsRunning(int pid) => Alive.Contains(pid);
     public void Kill(int pid) => Killed.Add(pid);
 }
 

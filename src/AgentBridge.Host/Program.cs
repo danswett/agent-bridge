@@ -198,7 +198,13 @@ switch (command)
             return 0;
         }
     case "serve":
-        return await HostHandover.RunAsync(ServeAsync, RestartSelf);
+        {
+            // Started by the logon task's launcher (#106), which then starts the replacement after
+            // host.restart. Cleared, so nothing this host starts inherits it.
+            var supervised = Environment.GetEnvironmentVariable(HostLauncherContract.Variable) == "1";
+            Environment.SetEnvironmentVariable(HostLauncherContract.Variable, null);
+            return await HostHandover.RunAsync(ServeAsync, RestartSelf, supervised);
+        }
     case "ha" when arguments.ElementAtOrDefault(1) == "shadow":
         {
             await using var source = new SessionSource(options);
@@ -511,6 +517,13 @@ async Task<int> ServeAsync(HostHandover handover)
         Log($"the local API is off, so apps on this machine cannot reach this host: {e.Message}");
     }
     await using var localLifetime = local;
+    // Stopped from the app while starting, before anything could reach this through the pipe
+    // (HostHandover.StoppedFromTheApp, #106's review): not served at all.
+    if (handover.StoppedFromTheApp(identity.Folder))
+    {
+        Log("stopped from the Agent Bridge app while starting; not serving");
+        return 0;
+    }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
 
     var backoff = TimeSpan.FromSeconds(1);
@@ -684,7 +697,8 @@ static (DevBoxIdentity? Identity, string? Problem) FindDevBox() =>
 static KeepAwakeOwner? AgentHaBridgeKeepAwakeOwner() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().KeepAwakeActive() : null;
 
 // host.restart: the same command again, without a window, started once this process has stopped
-// serving and let go of the profile's lock (HostHandover).
+// serving and let go of the profile's lock (HostHandover). Only for a host the logon task's
+// launcher does not watch; a watched one leaves this to the launcher.
 void RestartSelf()
 {
     var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true };

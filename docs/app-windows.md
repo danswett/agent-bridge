@@ -140,16 +140,41 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
 Per §3.1 and §3.2, a per-user scheduled task with a logon trigger, `InteractiveToken`
 and `LeastPrivilege`, so the host runs unelevated in the person's interactive session,
 where delivery can reach their consoles (§6.2). A task rather than a `Run` key because it
-restarts the host if it fails (every minute, as agent-ha-bridge's does), never stops it on
-battery or after 72 hours, and does not depend on Explorer's startup list. Non-admin users
-can register a task for themselves; nothing here needs elevation.
+never stops the host on battery or after 72 hours, and does not depend on Explorer's startup
+list. Non-admin users can register a task for themselves; nothing here needs elevation.
 
 * Name: `AgentBridgeHost_<profile>_<hash of the user SID>` (G3: never `AgentBridgeDaemon*`,
   which agent-ha-bridge and the G5 probe use).
 * Action: `agent-bridge-hostw.exe serve --profile <profile>`, a tiny `WinExe` beside the
-  host that starts `agent-bridge-host.exe` with no console window and waits for it, so the
-  task tracks the host's exit for its restart rule, and no console flashes at logon. The
-  host itself stays a console program for the CLI.
+  host that starts `agent-bridge-host.exe` with no console window and waits for it, so no
+  console flashes at logon. The host itself stays a console program for the CLI.
+* A host that crashes is started again by the launcher, not by Task Scheduler: the task's
+  restart-on-failure acts only when the task fails to launch, never when its process exits
+  with an error, so a crash used to leave the machine without a host until the next sign-in
+  (#106). The launcher starts it again after 3 s, 6 s and 12 s (each under the app's 20 s
+  start timeout, so a Start pressed meanwhile gets that host), then gives up and says so in
+  the host's log, which the app shows. A host that ran 10 minutes before crashing has its
+  attempts back. Only a crash counts, by exit code: an unhandled exception (0xE0434352) or
+  another NTSTATUS error or exception code (off Windows, a fatal signal such as SIGABRT),
+  including one on the way out of a `host.restart`. Under the launcher, `host.restart` ends
+  the host with code 75 once it has fully stopped, and the launcher starts the replacement at
+  once and keeps watching it. Everything stopped on purpose ends with a small code and is never
+  started again: 0 for a stop from the app, `host.stop`, an update or an uninstall; 2,
+  3 (another host has the profile) and 4 (refused); -1 when the app ends a host that would
+  not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
+  also covers the launcher, which no pipe reaches between crash restarts or while the host it
+  restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
+  that the launcher checks after every host exit and every wait before starting the host again;
+  waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
+  the run itself if it is still there after the 20 s start timeout. A host the launcher starts
+  also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
+  a host still starting when the launcher was ended, or under a launcher this app did not start
+  (one from before the app was last opened), stops too: either the app's Stop reaches its pipe
+  or the host sees the marker. A host that refuses the app's connection (one of them elevated)
+  is a refused Stop: left running, with its launcher, and the marker cleared. Without the task,
+  a Start while the launcher the app started is between crash restarts waits for its host rather
+  than starting a second launcher. Every start clears the marker
+  (the app's Start, and a launcher starting, at sign-in or through the task).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which

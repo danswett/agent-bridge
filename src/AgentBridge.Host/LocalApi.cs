@@ -104,13 +104,33 @@ public sealed class HostHandover
     // Asked for by host.restart, before the host is told to stop.
     public void Request() => Volatile.Write(ref requested, 1);
 
-    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement)
+    // Run by the logon task's launcher (#106).
+    public bool Supervised { get; private init; }
+
+    // Whether the app stopped this host while it was starting, which no pipe could tell it (#106's
+    // review): the app's Stop leaves the launcher's stop marker, and a host the launcher started is
+    // to look for it once its pipe is open. If the marker came first, the host sees it then; if
+    // the pipe came first, the app's Stop reaches the host through it. Either way it stops, even
+    // with its launcher gone or unknown to the app. Never for a host started any other way (by
+    // hand, after the app's Stop), which the marker does not concern.
+    public bool StoppedFromTheApp(string profileFolder) =>
+        Supervised && File.Exists(Path.Combine(profileFolder, HostLauncherContract.StopMarker));
+
+    public static async Task<int> RunAsync(Func<HostHandover, Task<int>> serve, Action startReplacement, bool supervised = false)
     {
-        var handover = new HostHandover();
-        try { return await serve(handover); }
+        var handover = new HostHandover { Supervised = supervised };
+        try
+        {
+            var code = await serve(handover);
+            // Under the logon task's launcher (#106) the launcher starts the replacement, and keeps
+            // watching it: one this host started would be watched by nothing.
+            return handover.Requested && supervised ? HostLauncherContract.Restart : code;
+        }
         finally
         {
-            if (handover.Requested) { startReplacement(); }
+            // A supervised host that fails on its way out ends as a crash instead, which the
+            // launcher starts again too.
+            if (handover.Requested && !supervised) { startReplacement(); }
         }
     }
 }
