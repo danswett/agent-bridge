@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AgentBridge.Host.Migration;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -10,12 +9,15 @@ using Xunit;
 // own wait is for the new host alone (#239's review).
 public sealed class MigrationHostTests : IAsyncLifetime
 {
+    static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+
     // Short: a Unix socket path must fit about 100 bytes.
     readonly string profile = Path.Combine(Path.GetTempPath(), "abm-" + Guid.NewGuid().ToString("N")[..8]);
     readonly TaskCompletionSource exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly FakeTimeProvider clock = new(new DateTimeOffset(2026, 11, 2, 18, 0, 0, TimeSpan.Zero));
-    readonly List<string> asked = [];
-    int? watched;
+    // Signals rather than polling: the stand-in was asked to restart, and the old host watched.
+    readonly TaskCompletionSource restartAsked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly TaskCompletionSource<int> watched = new(TaskCreationOptions.RunContinuationsAsynchronously);
     LocalServer server = null!;
 
     public Task InitializeAsync()
@@ -23,7 +25,7 @@ public sealed class MigrationHostTests : IAsyncLifetime
         Directory.CreateDirectory(profile);
         server = LocalServer.Start(LocalEndpoint.For(profile), (_, op, _) =>
         {
-            lock (asked) { asked.Add(op); }
+            if (op == HostOps.Restart) { restartAsked.TrySetResult(); }
             return Task.FromResult<object?>(op switch
             {
                 HostOps.Status => Status(),
@@ -43,9 +45,9 @@ public sealed class MigrationHostTests : IAsyncLifetime
     LocalMigrationHost Host() => new(profile)
     {
         Time = clock,
-        Watch = pid =>
+        Watch = (pid, _) =>
         {
-            watched = pid;
+            watched.TrySetResult(pid);
             return ct => exited.Task.WaitAsync(ct);
         },
     };
@@ -68,14 +70,14 @@ public sealed class MigrationHostTests : IAsyncLifetime
     {
         var restart = Host().RestartAsync(CancellationToken.None);
 
-        await UntilAsync(() => watched is not null && Asked(HostOps.Restart));
+        await Task.WhenAll(watched.Task, restartAsked.Task).WaitAsync(Patience);
         // Long past the migration's 45 s for the new host: the old one is still shutting down.
         clock.Advance(TimeSpan.FromMinutes(2));
         Assert.False(restart.IsCompleted);
         exited.SetResult();
 
         Assert.Null(await restart);
-        Assert.Equal(4242, watched);
+        Assert.Equal(4242, await watched.Task);
     }
 
     [Fact]
@@ -83,7 +85,7 @@ public sealed class MigrationHostTests : IAsyncLifetime
     {
         var restart = Host().RestartAsync(CancellationToken.None);
 
-        await UntilAsync(() => watched is not null && Asked(HostOps.Restart));
+        await Task.WhenAll(watched.Task, restartAsked.Task).WaitAsync(Patience);
         // A step at a time: the timeout's timer may not be set yet when the first is taken.
         while (!restart.IsCompleted)
         {
@@ -94,15 +96,21 @@ public sealed class MigrationHostTests : IAsyncLifetime
         Assert.Equal("it was still stopping after 5 minutes", await restart);
     }
 
-    bool Asked(string op) { lock (asked) { return asked.Contains(op); } }
-
-    static async Task UntilAsync(Func<bool> done)
+    [Fact]
+    public async Task A_process_with_the_old_hosts_pid_that_started_after_it_is_not_waited_on()
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (!done())
-        {
-            if (DateTime.UtcNow > deadline) { throw new TimeoutException("timed out"); }
-            await Task.Delay(10);
-        }
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var started = new DateTimeOffset(self.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        using var cancel = new CancellationTokenSource();
+
+        // The host said it started before this process did: this one only reuses its pid.
+        var reused = LocalMigrationHost.WatchProcess(self.Id, started.AddHours(-1))(cancel.Token);
+        // One that did start before the host said so is waited on.
+        var same = LocalMigrationHost.WatchProcess(self.Id, started.AddSeconds(1))(cancel.Token);
+
+        Assert.True(reused.IsCompletedSuccessfully);
+        Assert.False(same.IsCompleted);
+        cancel.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => same);
     }
 }

@@ -29,7 +29,11 @@ var supervisor = new HostSupervisor
             log($"the host could not be started: {e.Message}");
             return 1;
         }
-        if (host is null) { return 1; }
+        if (host is null)
+        {
+            log("the host could not be started: no process was created");
+            return 1;
+        }
         using (host)
         {
             await host.WaitForExitAsync(ct);

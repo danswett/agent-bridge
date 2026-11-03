@@ -215,9 +215,11 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
     // was still to come (#239's review). The 45 s now applies to the new host alone.
     public TimeSpan ShutdownTimeout { get; init; } = TimeSpan.FromMinutes(5);
     public TimeProvider Time { get; init; } = TimeProvider.System;
-    // Called before the host is asked to restart: what then waits for that process to end. By
-    // handle, so a pid reused once it has gone is never waited on.
-    public Func<int, Func<CancellationToken, Task>> Watch { get; init; } = WatchProcess;
+    // Called before the host is asked to restart, with its pid and when it said it started: what
+    // then waits for that process to end. By handle, so a pid reused once it has gone is never
+    // waited on, and only a process that started before the host said it had: one with that pid
+    // started later is another, and the host already gone.
+    public Func<int, DateTimeOffset, Func<CancellationToken, Task>> Watch { get; init; } = WatchProcess;
 
     public async Task<bool> RunningAsync(CancellationToken cancellationToken)
     {
@@ -237,8 +239,8 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         try
         {
             await using var channel = await AgentBridge.Local.LocalClient.ConnectAsync(AgentBridge.Local.LocalEndpoint.For(profileFolder), ct: cancellationToken);
-            var pid = (await channel.CallAsync<HostStatus>(HostOps.Status, ct: cancellationToken)).ProcessId;
-            gone = Watch(pid);
+            var status = await channel.CallAsync<HostStatus>(HostOps.Status, ct: cancellationToken);
+            gone = Watch(status.ProcessId, status.StartedAt);
             await channel.CallAsync(HostOps.Restart, ct: cancellationToken);
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
@@ -247,11 +249,21 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         return null;
     }
 
-    static Func<CancellationToken, Task> WatchProcess(int pid)
+    internal static Func<CancellationToken, Task> WatchProcess(int pid, DateTimeOffset startedAt)
     {
         Process process;
         try { process = Process.GetProcessById(pid); }
         catch (ArgumentException) { return _ => Task.CompletedTask; }
+        try
+        {
+            if (new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero) > startedAt)
+            {
+                process.Dispose();
+                return _ => Task.CompletedTask;
+            }
+        }
+        // Not to be looked at, or gone meanwhile: waited on, which ends at once if it has gone.
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
         return async ct =>
         {
             using (process) { await process.WaitForExitAsync(ct); }
