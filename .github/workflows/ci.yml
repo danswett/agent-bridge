@@ -104,39 +104,32 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Choose what to build and test
         # The whole solution when the whole ring runs (main, or a change to the solution, a
-        # workflow or quality/), as before. Otherwise solution filters of the selected test
-        # projects, which build only what they reference. The AOT checks below run their test
-        # projects with --no-build, so those are built whether or not their own tests were selected.
+        # workflow or quality/), as before. Otherwise a solution filter of the selected test
+        # projects, which builds only what they reference. The AOT checks below run their test
+        # projects with --no-build; the catalog gives those suites their project, so it's here.
         shell: pwsh
         run: |
           if ($env:WHOLE_SOLUTION -eq 'true') {
-            "DOTNET_BUILD=AgentBridge.slnx", "DOTNET_TEST=AgentBridge.slnx" | Add-Content $env:GITHUB_ENV
-            exit 0
-          }
-          $suites = @($env:SUITES | ConvertFrom-Json)
-          $tests = @($env:TEST_PROJECTS | ConvertFrom-Json)
-          $build = [System.Collections.Generic.List[string]]::new([string[]]$tests)
-          if ($env:RUNNER_OS -eq 'Windows' -and 'injector-aot' -in $suites) { $build.Add('tests/AgentBridge.Host.Delivery.Tests') }
-          if ($env:RUNNER_OS -eq 'Windows' -and 'hook-aot' -in $suites) { $build.Add('tests/AgentBridge.Hooks.Tests') }
-          function Write-Filter([string] $name, [string[]] $folders) {
-            if (-not $folders) { return '' }
+            $target = 'AgentBridge.slnx'
+          } elseif (($tests = @($env:TEST_PROJECTS | ConvertFrom-Json)).Count -eq 0) {
+            $target = ''
+          } else {
             # The catalog's check makes sure each folder holds exactly one project.
-            $projects = @($folders | Sort-Object -Unique | ForEach-Object { "$_/" + (Get-ChildItem $_ -Filter *.csproj).Name })
-            $path = Join-Path $env:RUNNER_TEMP $name
-            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = $projects } } | ConvertTo-Json -Depth 3 | Set-Content $path
-            Write-Host "${name}: $($projects -join ', ')"
-            $path
+            $projects = @($tests | ForEach-Object { "$_/" + (Get-ChildItem $_ -Filter *.csproj).Name })
+            $target = Join-Path $env:RUNNER_TEMP selected.slnf
+            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = $projects } } | ConvertTo-Json -Depth 3 | Set-Content $target
+            Write-Host "selected.slnf: $($projects -join ', ')"
           }
-          "DOTNET_BUILD=$(Write-Filter build.slnf $build)", "DOTNET_TEST=$(Write-Filter test.slnf $tests)" | Add-Content $env:GITHUB_ENV
+          "DOTNET_TARGET=$target" | Add-Content $env:GITHUB_ENV
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
       - run: dotnet tool restore
-        if: env.DOTNET_TEST != ''
+        if: env.DOTNET_TARGET != ''
       # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
       # and the compiler too.
       - name: dotnet build
-        if: env.DOTNET_BUILD != ''
+        if: env.DOTNET_TARGET != ''
         shell: pwsh
-        run: dotnet build $env:DOTNET_BUILD -c Release --nologo
+        run: dotnet build $env:DOTNET_TARGET -c Release --nologo
         timeout-minutes: 10
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
       # and killed, and the run fails naming the test in progress, instead of stalling the job.
@@ -145,16 +138,16 @@ jobs:
       # needs no package in the test projects. Coverage and the TRX timings are only reported
       # (quality/README.md §5): nothing here fails the run but the tests themselves.
       - name: dotnet test, with coverage and per-test times
-        if: env.DOTNET_TEST != ''
+        if: env.DOTNET_TARGET != ''
         shell: pwsh
-        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TEST -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
+        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
       - name: Coverage and timing report
         # Also after a failure: the slowest tests are most useful then. A fault in the report
         # itself must not fail the build, since nothing is gated on coverage yet.
-        if: (success() || failure()) && env.DOTNET_TEST != ''
+        if: (success() || failure()) && env.DOTNET_TARGET != ''
         continue-on-error: true
         shell: pwsh
         # The matrix now comes from the plan's output, so it reaches the script as data, not code.
