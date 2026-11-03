@@ -480,6 +480,21 @@ test('a recovery snapshot that loses an event before its sessions.synced confirm
   assert.deepEqual(opened, ['a', 'a']);
 });
 
+test('a recovery snapshot that loses its first upsert is not taken as whole: nothing pruned, nothing resent, and it is asked for again', async () => {
+  const { s, opened, t } = await playedMachine();
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  await flush();
+  await flush();
+  // seq 6, the new snapshot's first upsert (s1's), is lost; s2's and the end arrive.
+  t.host({ ev: 'session.upsert', seq: 7, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.deepEqual([s.route('a'), opened], [null, ['a']]);
+  assert.ok(s.sessions.get('a', 's1'), 'not pruned by a snapshot missing its upsert');
+  await flush();
+  await flush();
+  assert.equal(t.ops('sessions.subscribe').length, 3);
+});
+
 test('a sessions.synced from the subscription before, still on its way when a gap asked again, does not end the new snapshot', async () => {
   const { s, opened, t } = await playedMachine({ whole: false });
   t.host({ ev: 'session.upsert', seq: 4, data: asking('s2') });

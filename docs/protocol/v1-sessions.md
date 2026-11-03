@@ -144,9 +144,11 @@ Inside a channel, as in S4:
 | host → client | `{"ev": "session.upsert", "seq": 42, "data": {...}}` | **New:** an event the client subscribed to. It has no `id` or `re` |
 
 `seq` belongs to the channel, not to a subscription. It goes up by one for each event the
-host sends on that channel, and a later subscribe continues from where it is rather than
-restarting. A client doesn't know the starting value, so it takes the first event it
-receives as its baseline. If it later sees a gap (it shouldn't, since Noise is ordered),
+host sends on that channel, starting at 1, and a later subscribe continues from where it is
+rather than restarting. So a client expects 1 first and then one more each time, after
+subscribing again too: a first event above 1, or any other jump, is a gap (#427; a client
+that took its first event, or the first after subscribing again, as the baseline missed
+events lost just then). If it sees a gap (it shouldn't, since Noise is ordered),
 it calls `sessions.subscribe` again.
 
 ## Ops
@@ -248,7 +250,9 @@ subscription before it answers, so a `sessions.synced` received before the respo
 subscription's (its snapshot may still have been under way when the gap was seen), and taking
 it would end the new snapshot with only some of its sessions. A gap after the response,
 including one that `sessions.synced` itself reveals, means that snapshot can't be whole: the
-client subscribes again rather than taking it.
+client subscribes again rather than taking it. Likewise only upserts received after the
+response count towards the new snapshot: an earlier subscription's upsert of a session that
+ended before the new snapshot was taken would otherwise keep it on the list.
 
 ### Discovery held
 

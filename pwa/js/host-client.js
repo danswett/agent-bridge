@@ -187,7 +187,6 @@ export class HostClient {
   // on synced, any session from before that the snapshot did not include is dropped.
   async subscribe() {
     this.#snapshot = null;
-    this.#lastSeq = null;
     this.synced = false;
     const { id, done } = this.#request(Ops.sessionsSubscribe);
     this.#subscribing = id;
@@ -255,7 +254,10 @@ export class HostClient {
     // way back to a known state is a fresh snapshot.
     let gap = false;
     if (Number.isInteger(m.seq)) {
-      gap = this.#lastSeq !== null && m.seq !== this.#lastSeq + 1;
+      // A channel numbers its events from 1 and a later subscribe carries on from where it is, so
+      // the next is always one more than the last, and the first is 1. Taking whatever came first,
+      // on a channel or after subscribing again, as the baseline missed events lost just then.
+      gap = m.seq !== (this.#lastSeq ?? 0) + 1;
       this.#lastSeq = m.seq;
     }
     // Before anything of this event is applied or told: the snapshot under way is no longer the
