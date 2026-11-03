@@ -49,6 +49,7 @@ function where({ regions, known }) {
   const r = el.getBoundingClientRect();
   let top = r.top;
   let left = r.left;
+  // Every scrolled ancestor, the page's own (<html>) included.
   for (let p = el.parentElement; p; p = p.parentElement) { top += p.scrollTop; left += p.scrollLeft; }
   // The focus colour, read once per page.
   if (!window.__focusColour) {
@@ -59,8 +60,11 @@ function where({ regions, known }) {
     probe.remove();
   }
   const focus = window.__focusColour;
+  // A colour that shows: not transparent, and not of alpha 0.
+  const opaque = (c) => !!c && c !== 'transparent' && !/^rgba\(.*,\s*0(\.0*)?\)$/.test(c);
   const s = getComputedStyle(el);
-  const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1 && s.outlineColor !== 'rgba(0, 0, 0, 0)';
+  const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1 && opaque(s.outlineColor);
+  const shadow = s.boxShadow !== 'none' && (s.boxShadow.match(/rgba?\([^)]*\)/g) ?? []).some(opaque);
   let box = false;
   for (let p = el.parentElement, i = 0; p && i < 3 && !box; p = p.parentElement, i += 1) {
     box = p.matches(':focus-within') && getComputedStyle(p).borderTopColor === focus;
@@ -73,7 +77,7 @@ function where({ regions, known }) {
     matches: known.filter((sel) => el.matches(sel)),
     top, left, height: r.height,
     visible: el.matches(':focus-visible'),
-    shown: outline || s.boxShadow !== 'none' || box,
+    shown: outline || shadow || box,
   };
 }
 

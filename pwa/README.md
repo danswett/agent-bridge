@@ -495,7 +495,7 @@ running another checkout's tests at the same time.
   is focused directly and then pressed with Enter.
 * `test/reduced-motion.spec.mjs`, in demo mode (#356): with `prefers-reduced-motion: reduce`, every
   view and change ui.md §5.3's catalogue animates is walked through, and no element runs an
-  animation or a transition but an opacity cross-fade of at most `crossFade` (83 ms); with motion
+  animation or a transition but an opacity cross-fade no longer than the tokens' `crossFade`; with motion
   allowed the same walk finds the glyphs, the progress ring and the usage bars moving.
 * `test/e2e/e2e.spec.mjs`, through the spike dev stack's real relay with a fake GitHub:
   sign-in, key proof, presence, a Noise channel to a Node fixture host, the snapshot, live
