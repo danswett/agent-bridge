@@ -8,8 +8,8 @@
     <job>=true|false     for each job in -Jobs: whether a selected suite's where: names it
     suites               the selected suite ids, as a JSON array
     test-projects        the test project folders of the suites ci.yml's product job runs, as JSON
-    whole-solution       true when the whole ring runs, so product builds and tests AgentBridge.slnx
-                         as it always did, rather than a filter of the selected projects
+    whole-solution       true when the whole ring runs, so product tests AgentBridge.slnx as it
+                         always did, rather than a filter of the selected projects
     product-os           product's runners, from its selected suites' platforms (all three when the
                          whole ring runs), as a JSON array
   and a "what runs and why" table to GITHUB_STEP_SUMMARY. Locally, without those variables, it

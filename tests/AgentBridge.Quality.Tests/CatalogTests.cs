@@ -16,7 +16,8 @@ public class CatalogTests
 
         Assert.NotEmpty(catalog.Suites);
         Assert.Empty(catalog.Validate(graph.CsprojCount).Select(p => p.Message));
-        Assert.All(catalog.Suites.Where(s => s.Project is not null), s => Assert.True(graph[s.Project!]?.IsTestProject, $"{s.Id}: {s.Project}"));
+        // A perf suite's project is the benchmark or tool it runs (dotnet run), not a test project.
+        Assert.All(catalog.Suites.Where(s => s.Project is not null), s => Assert.True(s.Kind == "perf" ? graph[s.Project!] is not null : graph[s.Project!]?.IsTestProject, $"{s.Id}: {s.Project}"));
     }
 
     // Files a CI job checks without owning them, which neither the project graph nor a folder

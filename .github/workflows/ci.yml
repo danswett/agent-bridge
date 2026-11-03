@@ -102,11 +102,11 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
-      - name: Choose what to build and test
+      - name: Choose what to test
         # The whole solution when the whole ring runs (main, or a change to the solution, a
         # workflow or quality/), as before. Otherwise a solution filter of the selected test
-        # projects, which builds only what they reference. The AOT checks below run their test
-        # projects with --no-build; the catalog gives those suites their project, so it's here.
+        # projects. The AOT checks below run their test projects too; the catalog gives those
+        # suites their project, so it's here.
         shell: pwsh
         run: |
           if ($env:WHOLE_SOLUTION -eq 'true') {
@@ -125,11 +125,10 @@ jobs:
       - run: dotnet tool restore
         if: env.DOTNET_TARGET != ''
       # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
-      # and the compiler too.
-      - name: dotnet build
-        if: env.DOTNET_TARGET != ''
-        shell: pwsh
-        run: dotnet build $env:DOTNET_TARGET -c Release --nologo
+      # and the compiler too. Always the whole solution, even when only some tests run: projects
+      # no test references (the benchmarks, perf-hook's driver) are compiled nowhere else on a
+      # pull request, and one broken there would first fail main's build.
+      - run: dotnet build AgentBridge.slnx -c Release --nologo
         timeout-minutes: 10
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
       # and killed, and the run fails naming the test in progress, instead of stalling the job.

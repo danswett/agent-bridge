@@ -242,9 +242,10 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      job runs only when it's true; on `main` every job runs whatever the plan says;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
      the build scripts, the relay container);
-   - `product`'s test projects, built and tested through a solution filter, still under
+   - `product`'s test projects, tested through a solution filter, still under
      `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
-     `AgentBridge.slnx` as before;
+     `AgentBridge.slnx` as before. The whole solution is always built, since projects no
+     test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
      ring runs).
 

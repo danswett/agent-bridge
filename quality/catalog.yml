@@ -18,7 +18,8 @@
 #   status     R  exists | partial | planned
 #   project       for .NET suites: the directory of the test project, relative to the repository
 #                 root, holding exactly one .csproj (the selector fails if it holds none or more).
-#                 The selector derives what reaches it from ProjectReferences
+#                 The selector derives what reaches it from ProjectReferences. A perf suite names
+#                 the benchmark or tool project it runs instead, which isn't a test project
 #   triggers      path globs that make it affected (for .NET suites, in addition to the graph)
 #   command       how to run it; required once status is exists. Prose ("see ci.yml ...") marks
 #                 a suite only CI can run
@@ -776,23 +777,31 @@ suites:
     ring: 2
     select: always
     # BenchmarkDotNet: Noise handshake and transport, protocol serialize and parse, upsert
-    # building, transcript tailing, session ordering, markdown. Ring 1 runs them in dry mode
-    # (does it still run) when affected; ring 2 records numbers; ring 3 compares on the lab's
-    # quiet machine, since hosted runners vary too much to gate on.
+    # building, transcript tailing, session ordering, markdown (quality/perf.md). Ring 2 records
+    # numbers (perf.yml, main and by hand); ring 3 is to compare on the lab's quiet machine,
+    # since hosted runners vary too much to gate on. A dry run in ring 1 is still to come.
     platforms: [linux-x64, win-x64]
     runner: hosted
-    status: planned
+    project: tests/AgentBridge.Benchmarks
+    # Prose, so run.ps1 skips it: the <placeholders> would not parse as a command.
+    command: see perf.yml perf (dotnet run -c Release --project tests/AgentBridge.Benchmarks -- --filter '*' --summary <file.json>)
+    where: perf.yml perf
+    status: exists
 
   - id: perf-hook
     kind: perf
-    ring: 1
+    ring: 2
     select: affected
     # Every agent waits on the hook at every event: its start-to-reply time, cold and warm,
-    # with the host up and down, against a budget set from the first baseline.
-    platforms: [win-x64, win-arm64, linux-x64]
+    # with the host up and down (quality/perf.md). Recorded on main by perf.yml; the ring 1
+    # budget comes once it is set from these baselines. win-arm64 is not measured yet.
+    platforms: [win-x64, linux-x64]
     runner: hosted
+    project: tests/AgentBridge.PerfHook
     triggers: [src/AgentBridge.Hook/**, src/AgentBridge.Hooks/**]
-    status: planned
+    command: see perf.yml perf (dotnet publish src/AgentBridge.Hook -c Release -r <rid> -o <dir>; dotnet run -c Release --project tests/AgentBridge.PerfHook -- --hook <dir>/agent-bridge-host-hook[.exe] --out <file.json>)
+    where: perf.yml perf
+    status: exists
 
   - id: perf-host
     kind: perf
