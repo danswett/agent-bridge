@@ -43,7 +43,7 @@ public sealed class MacAgentHaBridgeProbe : IAgentHaBridgeProbe
 
     // GetProcessesByName silently drops processes whose name/path cannot be read on
     // macOS. G5 needs to distinguish a complete empty scan from an unreadable daemon.
-    internal static MacDaemonObservation Observe(IMacDaemonNative native)
+    internal static MacDaemonObservation Observe(IMacDaemonNative native, Func<string, bool>? include = null)
     {
         var user = native.UserId;
         if (user is null or 0) { return new(false, user ?? 0, []); }
@@ -84,7 +84,7 @@ public sealed class MacAgentHaBridgeProbe : IAgentHaBridgeProbe
             if (before != after || path is null || !Path.IsPathFullyQualified(path) || path.Contains('\0'))
             { return new(false, user.Value, found); }
             var name = Path.GetFileName(path);
-            if (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+            if (include?.Invoke(name) ?? (name.Equals("pwsh", StringComparison.OrdinalIgnoreCase) || name.Equals("powershell", StringComparison.OrdinalIgnoreCase)))
             { found.Add(new(pid, after.UserId, after.RealUserId, after.SavedUserId)); }
         }
         return new(true, user.Value, found);
