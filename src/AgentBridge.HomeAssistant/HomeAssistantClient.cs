@@ -173,14 +173,19 @@ public sealed class HomeAssistantClient : IHomeAssistant
     readonly Func<Uri, CancellationToken, Task<WebSocket>> connect;
     readonly HaAuthGuard auth;
     readonly HaCredential credential;
+    readonly TimeProvider time;
 
     // auth: the host's guard, shared by every caller that uses a Home Assistant token. Without
     // one, the client keeps its own, so even a client on its own never repeats a refused login.
-    public HomeAssistantClient(Uri baseUrl, string token, HttpClient http, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, HaAuthGuard? auth = null)
+    // time: the clock the body's share of http.Timeout is measured and cancelled on. A test's
+    // fake clock decides the order of "the body arrived" and "the time ran out". Two real timers
+    // decided it on a loaded runner, and sometimes in the wrong order (#413).
+    public HomeAssistantClient(Uri baseUrl, string token, HttpClient http, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, HaAuthGuard? auth = null, TimeProvider? time = null)
     {
         this.baseUrl = new Uri(baseUrl.ToString().TrimEnd('/') + "/");
         this.token = token;
         this.http = http;
+        this.time = time ?? TimeProvider.System;
         this.auth = auth ?? new HaAuthGuard();
         credential = this.auth.Credential(this.baseUrl, token);
         this.connect = connect ?? (async (uri, ct) =>
@@ -365,7 +370,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     {
         using var lease = await auth.EnterAsync(credential, cancellationToken);
         SendCheck.Value?.Invoke();
-        var started = Stopwatch.GetTimestamp();
+        var started = time.GetTimestamp();
         // The headers first, and the refusal recorded from them: Home Assistant counted it when it
         // answered, however its body then goes.
         var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -378,12 +383,9 @@ public sealed class HomeAssistantClient : IHomeAssistant
         if (completion == HttpCompletionOption.ResponseHeadersRead) { return response; }
         // The body as ResponseContentRead would have read it: within what is left of the one timeout
         // the headers began, not a second one of its own.
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (http.Timeout != Timeout.InfiniteTimeSpan)
-        {
-            var left = http.Timeout - Stopwatch.GetElapsedTime(started);
-            deadline.CancelAfter(left > TimeSpan.Zero ? left : TimeSpan.Zero);
-        }
+        var left = http.Timeout == Timeout.InfiniteTimeSpan ? Timeout.InfiniteTimeSpan : http.Timeout - time.GetElapsedTime(started);
+        using var expiry = new CancellationTokenSource(left == Timeout.InfiniteTimeSpan || left > TimeSpan.Zero ? left : TimeSpan.Zero, time);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, expiry.Token);
         try
         {
             await response.Content.LoadIntoBufferAsync(deadline.Token);
