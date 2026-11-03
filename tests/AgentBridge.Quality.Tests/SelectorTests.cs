@@ -109,6 +109,15 @@ public class SelectorTests
     }
 
     [Fact]
+    public void A_clean_tree_still_runs_the_sentinels_of_its_ring()
+    {
+        var selection = Fixture.Selector().Select([], ring: 0);
+
+        Assert.Equal(["protocol"], Fixture.Ids(selection));
+        Assert.Equal("affected", selection.Mode);
+    }
+
+    [Fact]
     public void Ring_two_runs_everything_up_to_it_whatever_changed()
     {
         var selection = Fixture.Selector().Select(["README.md"], ring: 2);
