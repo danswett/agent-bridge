@@ -147,9 +147,11 @@ roster as offered, keeping what it had:
 * `v`, `account`, `generation` match; `seq` and `prev` extend the verifier's chain;
 * the signature verifies under `by`'s `sign` key, and `by` is an active person's device
   (`app`, `pwa`, `phone`) in the state before this entry;
-* `add`: the id is the hash of `dh`; the id was never in this generation before on its own
-  branch (a removed key is never re-added; a re-approved device makes a new key pair; the same
-  add on both sides of a fork is one device); a person's device has `sign` and a host has none;
+* `add`: `device.id` is `hex(SHA-256(dh)[0..15])`, lowercase, the first 16 bytes of the SHA-256
+  of the 65 decoded bytes of `dh` (the relay's and transfer's device id); the id was never in
+  this generation before on its own branch (a removed key is never re-added; a re-approved
+  device makes a new key pair; the same add on both sides of a fork is one device); a person's
+  device has `sign` and a host has none;
 * `remove`: the id is active; it is not the last active person's device (removing that is a
   reset, §5.5);
 * `rename`: the id is active;
