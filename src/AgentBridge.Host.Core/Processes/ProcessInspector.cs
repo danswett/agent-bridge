@@ -605,9 +605,12 @@ public static partial class CommandLine
                 if (Named(a) || Package(a)) { return At(i); }
                 continue;
             }
-            // npx's command to run, as one argument; one level is all it takes.
-            if (WrapperCommandOptions.Contains(a) && i + 1 < arguments.Count && depth == 0
-                && FindCodex(Split(arguments[i + 1]), depth + 1) is { } command)
+            // npx's command to run, as one argument, separate or inline (`--call="codex exec"`);
+            // one level is all it takes.
+            var eq = a.IndexOf('=');
+            var call = eq > 0 && WrapperCommandOptions.Contains(a[..eq]) ? a[(eq + 1)..]
+                : WrapperCommandOptions.Contains(a) && i + 1 < arguments.Count ? arguments[i + 1] : null;
+            if (call is not null && depth == 0 && FindCodex(Split(call), depth + 1) is { } command)
             {
                 return command;
             }
