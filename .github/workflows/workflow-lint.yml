@@ -36,33 +36,45 @@ jobs:
       ACTIONLINT_VERSION: 1.7.12
       # From the release's actionlint_1.7.12_checksums.txt, so a replaced asset fails here.
       ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      # Pinned rather than the runner image's copy, so a new image cannot change what the
+      # shellcheck step reports. Shellcheck publishes no checksums: this is the hash of the
+      # release's shellcheck-v0.11.0.linux.x86_64.tar.gz when it was pinned.
+      SHELLCHECK_VERSION: 0.11.0
+      SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install actionlint
+      - name: Install actionlint and shellcheck
         run: |
+          mkdir -p "$RUNNER_TEMP/lint-tools"
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           curl -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
           echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/actionlint"
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/actionlint" actionlint
-          echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/lint-tools" actionlint
+          tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/$tarball"
+          echo "$SHELLCHECK_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/lint-tools" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          echo "$RUNNER_TEMP/lint-tools" >> "$GITHUB_PATH"
       - name: actionlint
-        # Shellcheck and pyflakes are off here and reported by the next step instead.
+        # Shellcheck is off here and reported by the next step instead. Pyflakes is off in both:
+        # no step uses `shell: python`, and the runner's copy would be unpinned.
         run: |
           # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
           actionlint -shellcheck= -pyflakes= \
             -format '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint {{$err.Kind}}::{{$err.Message}}\n{{end}}'
       - name: shellcheck, through actionlint (advisory)
+        # Runs after a failed actionlint step too, but not in a cancelled job: there is no one
+        # left to read it.
         if: success() || failure()
         # actionlint exits 1 for findings and above 1 when it could not run; only the latter
         # fails the step.
         run: |
           code=0
           # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
-          actionlint \
-            -format '{{range $err := .}}{{if or (eq $err.Kind "shellcheck") (eq $err.Kind "pyflakes")}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{$err.Message}}\n{{end}}{{end}}' \
+          actionlint -shellcheck="$RUNNER_TEMP/lint-tools/shellcheck" -pyflakes= \
+            -format '{{range $err := .}}{{if eq $err.Kind "shellcheck"}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{$err.Message}}\n{{end}}{{end}}' \
             || code=$?
           if [ "$code" -gt 1 ]; then exit "$code"; fi
       - name: zizmor (advisory)

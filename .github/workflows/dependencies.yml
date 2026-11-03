@@ -60,7 +60,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $json = dotnet list AgentBridge.slnx package --vulnerable --include-transitive --format json
           if ($LASTEXITCODE) { $json; exit $LASTEXITCODE }
-          $report = $json | ConvertFrom-Json
+          # One document, not one per line: pwsh captures a command's output as lines.
+          $report = ($json -join "`n") | ConvertFrom-Json
           foreach ($problem in @($report.problems)) { if ($problem) { Write-Output "::warning title=dotnet list package::$(Format-CommandData $problem.text)" } }
           # One line per package, version and advisory, however many projects and frameworks
           # reach it.
@@ -89,7 +90,7 @@ jobs:
           function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
           $json = npm audit --omit=dev --json
           $code = $LASTEXITCODE
-          $report = $json | ConvertFrom-Json
+          $report = ($json -join "`n") | ConvertFrom-Json
           if ($report.error) { Write-Output "::error title=npm audit::$(Format-CommandData $report.error.summary)"; exit 1 }
           $found = @($report.vulnerabilities.PSObject.Properties | ForEach-Object Value)
           if ($code -and -not $found.Count) { $json; exit $code }
