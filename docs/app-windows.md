@@ -161,7 +161,13 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   once and keeps watching it. Everything stopped on purpose ends with a small code and is never
   started again: 0 for a stop from the app, `host.stop`, an update or an uninstall; 2,
   3 (another host has the profile) and 4 (refused); -1 when the app ends a host that would
-  not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off.
+  not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
+  also covers the launcher, which no pipe reaches between crash restarts or while the host it
+  restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
+  that the launcher checks after every host exit and every wait before starting the host again;
+  waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
+  the run itself if it is still there after the 20 s start timeout. Every start clears the marker
+  (the app's Start, and a launcher starting, at sign-in or through the task).
 * The app starts the host through the task when it is registered (so it runs the same way
   at logon and on demand), and directly otherwise.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which

@@ -382,6 +382,7 @@ sealed class NoLogonTasks : ILogonTasks
     public void Delete(string name) { }
     public void Run(string name) { }
     public bool IsRunning(string name) => false;
+    public void Stop(string name) { }
 }
 
 sealed class NoProcesses : IProcesses

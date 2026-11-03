@@ -231,6 +231,74 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.True(await manager.IsRunningAsync());
     }
 
+    string StopMarker => Path.Combine(manager.Layout.ProfileFolder, HostLauncherContract.StopMarker);
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_while_the_launcher_waits_to_restart_a_crashed_host_ends_its_task_run()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var timed = new HostManager(manager.Layout, tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        timed.SetStartAtSignIn(true);
+        // No host answers, while the launcher's run goes on (a launcher that never looks at the
+        // marker): each look at it takes a second.
+        tasks.StillRunningWhile = () => { clock.Advance(TimeSpan.FromSeconds(1)); return true; };
+
+        await timed.StopAsync();
+
+        Assert.Equal([timed.TaskName], tasks.Ended);
+        Assert.True(File.Exists(StopMarker));
+        Assert.False(await timed.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Stopping_while_the_launcher_is_still_starting_a_restarted_host_stops_that_host_once_it_answers()
+    {
+        manager.SetStartAtSignIn(true);
+        var stopped = false;
+        var started = false;
+        host.On(HostOps.Stop, d => { stopped = true; _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        // The launcher's run lasts until its host ends; the host it was starting opens its pipe the
+        // next time anyone looks, and does whether or not the stop waited for it.
+        tasks.StillRunningWhile = () =>
+        {
+            if (!started && !stopped) { started = true; host.Start(); }
+            return !stopped;
+        };
+
+        await manager.StopAsync();
+        _ = tasks.IsRunning(manager.TaskName);
+
+        Assert.True(stopped);
+        Assert.Empty(tasks.Ended);
+        Assert.False(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task Starting_after_a_stop_clears_the_stop_marker_and_the_host_runs()
+    {
+        manager.SetStartAtSignIn(true);
+        host.On(HostOps.Stop, d => { _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+        tasks.OnRun = () => host.Start();
+
+        await manager.StopAsync();
+        Assert.True(File.Exists(StopMarker));
+        await manager.StartAsync();
+
+        Assert.False(File.Exists(StopMarker));
+        Assert.True(await manager.IsRunningAsync());
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_start_through_the_task_that_brings_no_host_up_is_still_reported_and_not_run_again()

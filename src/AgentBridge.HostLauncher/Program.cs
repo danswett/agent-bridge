@@ -7,7 +7,10 @@ using AgentBridge.HostLauncher;
 // sign-in. A host that crashed is started again a few times (HostSupervisor, #106); one that
 // stopped on purpose never is. The host stays a console program for the CLI. docs/app-windows.md.
 var exe = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "agent-bridge-host.exe" : "agent-bridge-host");
-var log = LauncherLog.For(args);
+var profileFolder = LauncherLog.ProfileFolder(args);
+var log = LauncherLog.For(profileFolder);
+// The app's Stop (HostLauncherContract.StopMarker): no host is started again while it is there.
+var stopMarker = profileFolder is null ? null : Path.Combine(profileFolder, AgentBridge.Local.HostLauncherContract.StopMarker);
 var supervisor = new HostSupervisor
 {
     RunHost = async ct =>
@@ -41,6 +44,12 @@ var supervisor = new HostSupervisor
         }
     },
     Log = log,
+    Stopped = () => stopMarker is not null && File.Exists(stopMarker),
+    ClearStopped = () =>
+    {
+        try { if (stopMarker is not null) { File.Delete(stopMarker); } }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log($"an earlier stop could not be cleared: {e.Message}"); }
+    },
 };
 return await supervisor.RunAsync();
 
@@ -49,15 +58,22 @@ return await supervisor.RunAsync();
 // (Identity.DefaultRoot), repeated here so the launcher stays a few kilobytes.
 static class LauncherLog
 {
-    public static Action<string> For(string[] args)
+    // The profile's folder, or null for a name the host would refuse.
+    public static string? ProfileFolder(string[] args)
     {
         var i = Array.IndexOf(args, "--profile");
         var profile = i >= 0 && i + 1 < args.Length ? args[i + 1] : "default";
-        if (profile.Length is 0 or > 64 || profile is "." or ".." || !profile.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')) { return _ => { }; }
+        if (profile.Length is 0 or > 64 || profile is "." or ".." || !profile.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')) { return null; }
         var root = OperatingSystem.IsWindows()
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-bridge");
-        var file = Path.Combine(root, profile, "logs", "host.log");
+        return Path.Combine(root, profile);
+    }
+
+    public static Action<string> For(string? profileFolder)
+    {
+        if (profileFolder is null) { return _ => { }; }
+        var file = Path.Combine(profileFolder, "logs", "host.log");
         return message =>
         {
             try

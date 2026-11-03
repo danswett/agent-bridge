@@ -29,14 +29,23 @@ public sealed class HostSupervisor
     // A host that ran this long before crashing has its attempts back: a crash a day is not a loop.
     public TimeSpan Healthy { get; init; } = TimeSpan.FromMinutes(10);
     public bool Windows { get; init; } = OperatingSystem.IsWindows();
+    // Whether the app has stopped the host on purpose (HostLauncherContract.StopMarker), and
+    // forgetting such a stop: a launcher starting is itself a start on purpose.
+    public Func<bool> Stopped { get; init; } = () => false;
+    public Action ClearStopped { get; init; } = () => { };
 
     public async Task<int> RunAsync(CancellationToken ct = default)
     {
+        ClearStopped();
         var crashes = 0;
         while (true)
         {
             var started = Time.GetTimestamp();
             var code = await RunHost(ct);
+            // A Stop from the app while the host was ending, crashing or starting, or while this
+            // waited to start it again, which the host's pipe could not hear (#106's review): it is
+            // looked for just before every start after the first, so none follows a stop.
+            if (Stopped()) { return code == AgentBridge.Local.HostLauncherContract.Restart || IsCrash(code, Windows) ? Stop(code) : code; }
             // host.restart, the host fully stopped: its replacement, at once and still watched.
             if (code == AgentBridge.Local.HostLauncherContract.Restart)
             {
@@ -53,7 +62,14 @@ public sealed class HostSupervisor
             var wait = Backoff[crashes++];
             Log($"the host crashed (exit code {Describe(code)}); starting it again in {wait.TotalSeconds:0} s (attempt {crashes} of {Backoff.Count})");
             await (Delay ?? ((d, c) => Task.Delay(d, Time, c)))(wait, ct);
+            if (Stopped()) { return Stop(code); }
         }
+    }
+
+    int Stop(int code)
+    {
+        Log("the host was stopped from the Agent Bridge app; not starting it again");
+        return code;
     }
 
     public static bool IsCrash(int code, bool windows)

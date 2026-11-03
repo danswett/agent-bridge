@@ -11,6 +11,10 @@ public sealed class HostSupervisorTests
     readonly FakeTimeProvider clock = new(Make.T0);
     readonly List<TimeSpan> waits = [];
     readonly List<string> logged = [];
+    // The app's stop marker, as the launcher sees it; and what the next wait or run does to it.
+    bool stopped;
+    Action? duringWait;
+    Action? duringRun;
 
     // Each run of the host lasts `ran`, then exits with the next code.
     HostSupervisor Supervising(Queue<int> codes, TimeSpan? ran = null, Func<int, TimeSpan>? lasted = null, bool windows = true)
@@ -22,13 +26,58 @@ public sealed class HostSupervisorTests
             {
                 clock.Advance(lasted?.Invoke(runs) ?? ran ?? TimeSpan.FromSeconds(5));
                 runs++;
+                duringRun?.Invoke();
                 return Task.FromResult(codes.Dequeue());
             },
             Time = clock,
-            Delay = (d, _) => { waits.Add(d); clock.Advance(d); return Task.CompletedTask; },
+            Delay = (d, _) => { waits.Add(d); clock.Advance(d); duringWait?.Invoke(); return Task.CompletedTask; },
             Log = logged.Add,
             Windows = windows,
+            Stopped = () => stopped,
+            ClearStopped = () => stopped = false,
         };
+    }
+
+    [Fact]
+    public async Task A_stop_from_the_app_during_the_wait_after_a_crash_starts_no_host_again()
+    {
+        var codes = new Queue<int>([UnhandledException, 0]);
+        duringWait = () => stopped = true;
+
+        var exit = await Supervising(codes).RunAsync();
+
+        Assert.Equal(UnhandledException, exit);
+        Assert.Equal([0], codes.ToArray());
+        Assert.Contains("the host was stopped from the Agent Bridge app; not starting it again", logged);
+    }
+
+    [Fact]
+    public async Task A_stop_from_the_app_while_the_host_crashed_or_asked_to_restart_starts_no_host_again()
+    {
+        foreach (var code in new[] { UnhandledException, AgentBridge.Local.HostLauncherContract.Restart })
+        {
+            var codes = new Queue<int>([code, 0]);
+            duringRun = () => stopped = true;
+
+            var exit = await Supervising(codes).RunAsync();
+
+            Assert.Equal(code, exit);
+            Assert.Equal([0], codes.ToArray());
+            Assert.Empty(waits);
+        }
+    }
+
+    [Fact]
+    public async Task A_launcher_that_starts_clears_an_earlier_stop_so_a_crash_is_still_recovered()
+    {
+        stopped = true;
+        var codes = new Queue<int>([UnhandledException, 0]);
+
+        var exit = await Supervising(codes).RunAsync();
+
+        Assert.Equal(0, exit);
+        Assert.Empty(codes);
+        Assert.False(stopped);
     }
 
     [Fact]

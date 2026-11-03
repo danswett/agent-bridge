@@ -130,17 +130,27 @@ sealed class FakeTasks : ILogonTasks
     // Or this, asked at each look and run, when set.
     public Func<bool>? StillRunningWhile;
     public List<string> Ignored { get; } = [];
+    // Instances ended by Stop (IRegisteredTask.Stop), after which none reads Running.
+    public List<string> Ended { get; } = [];
+    bool ended;
+    public void Stop(string name)
+    {
+        Ended.Add(name);
+        ended = true;
+    }
     public bool Exists(string name) => Registered.ContainsKey(name);
     public void Register(string name, string xml) => Registered[name] = xml;
     public void Delete(string name) => Registered.Remove(name);
     public void Run(string name)
     {
         if (StillRunningWhile?.Invoke() ?? StillRunningLooks > 0) { Ignored.Add(name); return; }
+        ended = false;
         Ran.Add(name);
         OnRun?.Invoke();
     }
     public bool IsRunning(string name)
     {
+        if (ended) { return false; }
         if (StillRunningWhile is { } running) { return running(); }
         if (StillRunningLooks <= 0) { return false; }
         if (StillRunningLooks != int.MaxValue) { StillRunningLooks--; }
