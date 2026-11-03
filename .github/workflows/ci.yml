@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      # dotnet-coverage and ReportGenerator, pinned in dotnet-tools.json.
+      # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
       - run: dotnet tool restore
       # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
       # and the compiler too.
@@ -458,9 +458,10 @@ jobs:
             "test/unit/*.test.mjs" || echo "::warning::Some PWA unit tests failed under coverage; see unit.log in the pwa-coverage artifact. The run without coverage passed."
           sed -n '/start of coverage report/,/end of coverage report/p' "$RUNNER_TEMP/pwa-coverage/unit.log"
           awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} /^BRF:/{bf+=$2} /^BRH:/{bh+=$2} /^FNF:/{ff+=$2} /^FNH:/{fh+=$2}
+            function pct(hit, found) { return found ? sprintf("%.1f (%d / %d)", 100*hit/found, hit, found) : "n/a" }
             END {
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
-              printf "| %.1f (%d / %d) | %.1f (%d / %d) | %.1f (%d / %d) |\n", 100*lh/lf, lh, lf, 100*bh/bf, bh, bf, 100*fh/ff, fh, ff
+              print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$RUNNER_TEMP/pwa-coverage/lcov.info" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: success() || failure()

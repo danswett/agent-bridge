@@ -42,8 +42,12 @@ function Escape-Cell([string] $text) { $text.Replace('|', '\|').Replace("`r", ' 
 ''
 '### Coverage'
 ''
+$summary = $null
 if ($CoverageSummary -and (Test-Path -LiteralPath $CoverageSummary)) {
-    $summary = Get-Content -LiteralPath $CoverageSummary -Raw | ConvertFrom-Json
+    try { $summary = Get-Content -LiteralPath $CoverageSummary -Raw | ConvertFrom-Json }
+    catch { "_The coverage summary could not be read: $($_.Exception.Message)_" }
+}
+if ($summary) {
     '| Project | Assembly | Line % | Branch % | Lines covered |'
     '|---|---|---:|---:|---:|'
     foreach ($a in $summary.coverage.assemblies | Sort-Object { $projectOf[$_.name] ?? $_.name }) {
@@ -53,35 +57,43 @@ if ($CoverageSummary -and (Test-Path -LiteralPath $CoverageSummary)) {
     }
     $s = $summary.summary
     "| **All** | | **$($s.linecoverage)** | **$($s.branchcoverage)** | $($s.coveredlines) / $($s.coverablelines) |"
-} else {
+} elseif (-not ($CoverageSummary -and (Test-Path -LiteralPath $CoverageSummary))) {
     '_No coverage summary: the tests did not get far enough to write one._'
 }
 
 $suites = @()
 $tests = @()
+$unreadable = @()
 foreach ($trx in Get-ChildItem $TestResults -Filter *.trx -Recurse -ErrorAction SilentlyContinue) {
-    $run = ([xml](Get-Content -LiteralPath $trx.FullName -Raw)).TestRun
-    $storage = @($run.TestDefinitions.UnitTest)[0].storage
-    $suite = if ($storage) { [IO.Path]::GetFileNameWithoutExtension($storage) } else { $trx.BaseName }
-    $suite = $testProjects[$suite] ?? $suite
-    $counters = $run.ResultSummary.Counters
-    $suites += [pscustomobject]@{
-        Suite   = $suite
-        Total   = [int]$counters.total
-        Passed  = [int]$counters.passed
-        Failed  = [int]$counters.failed
-        Skipped = [int]$counters.total - [int]$counters.executed
-        Seconds = ([datetimeoffset]$run.Times.finish - [datetimeoffset]$run.Times.start).TotalSeconds
-    }
-    foreach ($r in @($run.Results.UnitTestResult)) {
-        if ($r.duration) {
-            $tests += [pscustomobject]@{
-                Suite   = $suite
-                Name    = $r.testName
-                Outcome = $r.outcome
-                Seconds = [timespan]::Parse($r.duration, [cultureinfo]::InvariantCulture).TotalSeconds
+    # A test host killed mid-write can leave a TRX that does not parse; the others still report.
+    try {
+        $run = ([xml](Get-Content -LiteralPath $trx.FullName -Raw)).TestRun
+        $storage = @($run.TestDefinitions.UnitTest)[0].storage
+        $suite = if ($storage) { [IO.Path]::GetFileNameWithoutExtension($storage) } else { $trx.BaseName }
+        $suite = $testProjects[$suite] ?? $suite
+        $counters = $run.ResultSummary.Counters
+        $suiteRow = [pscustomobject]@{
+            Suite   = $suite
+            Total   = [int]$counters.total
+            Passed  = [int]$counters.passed
+            Failed  = [int]$counters.failed
+            Skipped = [int]$counters.total - [int]$counters.executed
+            Seconds = ([datetimeoffset]$run.Times.finish - [datetimeoffset]$run.Times.start).TotalSeconds
+        }
+        $testRows = foreach ($r in @($run.Results.UnitTestResult)) {
+            if ($r.duration) {
+                [pscustomobject]@{
+                    Suite   = $suite
+                    Name    = $r.testName
+                    Outcome = $r.outcome
+                    Seconds = [timespan]::Parse($r.duration, [cultureinfo]::InvariantCulture).TotalSeconds
+                }
             }
         }
+        $suites += $suiteRow
+        $tests += @($testRows)
+    } catch {
+        $unreadable += "$($trx.Name): $($_.Exception.Message)"
     }
 }
 
@@ -98,6 +110,7 @@ if ($suites) {
 } else {
     '_No TRX files: the tests did not get far enough to write them._'
 }
+foreach ($u in $unreadable) { "_Not read: $(Escape-Cell $u)_" }
 
 ''
 "### The $Slowest slowest tests"
