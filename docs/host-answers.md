@@ -32,8 +32,9 @@ options, Enter, the words and Enter, and its own code marks that path "not re-ve
 answers in the person's name. And a Claude multi-select left empty, which agent-ha-bridge
 refuses for Claude too. Both can be added once walked live.
 
-macOS and Linux do not offer `sessions.answer` yet (tmux delivery comes later); an answer
-sent anyway is refused with "not supported on this platform yet".
+macOS can offer `sessions.answer` through the [managed tmux backend](macos-managed-delivery.md).
+Only panes launched and still owned by this host run are eligible; G5 and the same
+question/screen checks remain mandatory. Linux delivery remains unsupported.
 
 ## The keys (Copilot)
 
