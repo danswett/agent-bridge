@@ -228,7 +228,11 @@ into one folder with one version. An app update is a host update, so they never 
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
-  `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+  `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM). Remote URL overrides
+  require HTTPS, regardless of release channel. For a local development server only, start the
+  app with `AGENT_BRIDGE_DEVELOPMENT_UPDATE_FEEDS=1` in its environment to permit loopback HTTP
+  (`localhost`, `127.0.0.1`, or `[::1]`). HTTP to other machines is refused even in that mode;
+  local directory overrides need no opt-in.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and
