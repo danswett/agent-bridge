@@ -532,7 +532,7 @@ public sealed class SessionSource : ISessionSource
                 // never put back on a stranger.
                 if (s.ProcessId is not { } pid || s.ProcessStartedAt is not { } started || pids.Contains((s.Agent, pid))) { continue; }
                 if (!running.Any(p => p.Id == pid && p.StartedAt is { } at && (at - started).Duration() <= TimeSpan.FromSeconds(1))) { continue; }
-                restored.Add(s);
+                restored.Add(Located(s));
                 ids.Add(s.Id);
                 pids.Add((s.Agent, pid));
             }
@@ -544,7 +544,17 @@ public sealed class SessionSource : ISessionSource
         return restored;
     }
 
-    // What StateFile says was listed; nothing when it cannot be read whole.
+    // A remembered session with its files found as discovery finds them. Only a session's identity
+    // is kept across a restart, never a path: what the file says is not trusted to say where to read.
+    DiscoveredSession Located(DiscoveredSession s) => s.Agent switch
+    {
+        AgentKind.Copilot when Path.Combine(_options.CopilotHome, "session-state", s.Id) is var dir =>
+            s with { StateDirectory = dir, TranscriptPath = Path.Combine(dir, "events.jsonl") },
+        AgentKind.Claude => s with { TranscriptPath = FindClaudeTranscript(s.Id) },
+        _ => s with { TranscriptPath = FindCodexTranscript(s.Id) },
+    };
+
+    // What StateFile says was listed, as identities alone; nothing when it cannot be read whole.
     List<DiscoveredSession> Load(string path)
     {
         try
@@ -560,8 +570,7 @@ public sealed class SessionSource : ISessionSource
                 if (string.IsNullOrWhiteSpace(id) || RegistrationDiscovery.SafeKey(id) != id) { continue; }
                 var agent = Json.Str(e, "agent") switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, "codex" => AgentKind.Codex, _ => (AgentKind?)null };
                 if (agent is null) { continue; }
-                sessions.Add(new DiscoveredSession(id, agent.Value, Json.Str(e, "transcript"), Json.Str(e, "stateDirectory"), Json.Int(e, "pid"),
-                    ProcessStartedAt: Json.Time(e, "processStartedAt")));
+                sessions.Add(new DiscoveredSession(id, agent.Value, null, null, Json.Int(e, "pid"), ProcessStartedAt: Json.Time(e, "processStartedAt")));
             }
             return sessions;
         }
@@ -592,8 +601,6 @@ public sealed class SessionSource : ISessionSource
                 w.WriteStartObject();
                 w.WriteString("id", d.Id);
                 w.WriteString("agent", d.Agent.ToString().ToLowerInvariant());
-                if (d.TranscriptPath is { } transcript) { w.WriteString("transcript", transcript); }
-                if (d.StateDirectory is { } state) { w.WriteString("stateDirectory", state); }
                 if (d.ProcessId is { } pid) { w.WriteNumber("pid", pid); }
                 if (d.ProcessStartedAt is { } started) { w.WriteString("processStartedAt", started.ToString("o", CultureInfo.InvariantCulture)); }
                 w.WriteEndObject();
@@ -603,6 +610,13 @@ public sealed class SessionSource : ISessionSource
         }
         var json = Encoding.UTF8.GetString(buffer.WrittenSpan);
         if (json == _saved) { return; }
+        // Never more than the next start would read.
+        if (buffer.WrittenCount > MaxStateBytes)
+        {
+            if (_saveProblem != "too large") { Log($"not keeping the listed sessions for the next start: {sessions.Count} would take more than {MaxStateBytes / 1024 / 1024} MiB"); }
+            _saveProblem = "too large";
+            return;
+        }
         var partial = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {

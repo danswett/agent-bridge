@@ -796,6 +796,26 @@ public class DiscoveryHoldTests
         Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
     }
 
+    // Found in review: only a session's identity is kept across a restart, and its files are found
+    // again as discovery finds them, whatever the file says.
+    [Fact]
+    public async Task A_restart_reads_a_kept_session_from_where_discovery_finds_it_not_from_a_path_in_the_file()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+        var decoy = Path.Combine(f.Root, "elsewhere", "decoy.jsonl");
+        Fixture.Append(decoy, Codex.Event(new { type = "user_message", message = "not this one" }, 1));
+        var kept = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(state))!;
+        kept["sessions"]![0]!["transcript"] = decoy;
+        File.WriteAllText(state, kept.ToJsonString());
+
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal("still running", after.Get(C)!.Activity.UserMessage);
+        Assert.DoesNotContain("elsewhere", File.ReadAllText(state), StringComparison.Ordinal);
+    }
+
     // Found in review: a host that has just started knew no session's process, so the runtime of a
     // resumed Copilot session (no lock) whose command line could not be read held nothing.
     [Fact]

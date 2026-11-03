@@ -167,8 +167,8 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly Dictionary<string, string> problems = new(StringComparer.Ordinal);
     readonly SemaphoreSlim passes = new(1, 1);
     bool started;
-    // Whether the last retirement pass waited for the host's discovery hold, so that is said once.
-    bool retirementHeld;
+    // What held the last retirement pass, if the host's discovery did, so it is said once.
+    string? retirementHeldFor;
     bool allDirty;
     string? pausedFor;
     DateTimeOffset retryAt = DateTimeOffset.MinValue;
@@ -1096,16 +1096,17 @@ public sealed partial class HaConnector : IAsyncDisposable
         if (retired > 0) { SaveLedger(); }
     }
 
-    // Whether the host's discovery holds retirement now, said once each time it begins.
+    // Whether the host's discovery holds retirement now, said once each time it begins or its
+    // reason changes.
     bool RetirementHeld()
     {
         if (source.Held is not { } held)
         {
-            retirementHeld = false;
+            retirementHeldFor = null;
             return false;
         }
-        if (!retirementHeld) { log($"Home Assistant connector retires nothing while session discovery is held ({held.Reason})"); }
-        retirementHeld = true;
+        if (retirementHeldFor != held.Reason) { log($"Home Assistant connector retires nothing while session discovery is held ({held.Reason})"); }
+        retirementHeldFor = held.Reason;
         return true;
     }
 
