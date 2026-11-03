@@ -819,7 +819,7 @@ public sealed class FleetTests : IAsyncLifetime
         await remoteHost.SendAsync(UsageProtocol.Update, claude);
         await Wait.UntilAsync(() => main.Usage.Rows.Count == 2 && local.Status?.Account is not null, "both machines' usage, and this machine's account");
         // Read as the UI thread would: the rows are redrawn on it whenever anything changes.
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         UsageRowViewModel Row(AgentKind agent) => OnUi(() => main.Usage.Rows.Single(r => r.Agent == agent));
         await Wait.UntilAsync(() => Row(AgentKind.Claude).ReadOn == "read on Build server", "the build server's reading, marked as its");
         // This machine's own reading needs no saying where it came from.
@@ -863,7 +863,7 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await localHost.SendAsync(UsageProtocol.Update, new UsageReport([Copilot(Make.T0), passedOn]));
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2 && local.Status?.Account?.AccountId == "1", "both readings, for account 1");
 
         // Signed in to account 2; the host's next report, without the VM's reading, has not come yet.
@@ -893,7 +893,7 @@ public sealed class FleetTests : IAsyncLifetime
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await localHost.SendAsync(UsageProtocol.Update, expired);
         await remoteHost.SendAsync(UsageProtocol.Update, failed);
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.Error) == "rate limited", "the build server's failure");
     }
 
@@ -908,7 +908,7 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await localHost.SendAsync(UsageProtocol.Update, new UsageReport([byGone]));
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the laptop's reading, kept");
         await localHost.SendAsync(UsageProtocol.Update, UsageReport.Empty);
 
@@ -939,7 +939,7 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await remoteHost.SendAsync(UsageProtocol.Update, claude);
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 1 && local.Status?.Account?.AccountId == "1", "the build server's reading, for account 1");
 
         // Both this machine's host and the fleet are on account 2 by the time the fleet looks, and
@@ -970,7 +970,7 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"), ("second-id", "Laptop"));
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.Count) == 2 && local.Status?.Account?.AccountId == "1", "both machines' readings, for account 1");
 
         // This machine's host signs in to account 2 before the fleet has followed it.
@@ -999,7 +999,7 @@ public sealed class FleetTests : IAsyncLifetime
         await BothMachinesAsync();
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
         await remoteHost.SendAsync(UsageProtocol.Update, claude);
-        static T OnUi<T>(Func<T> read) { lock (TestUi.Gate) { return read(); } }
+        static T OnUi<T>(Func<T> read) => TestUi.Read(read);
         await Wait.UntilAsync(() => OnUi(() => main.Usage.Rows.SingleOrDefault()?.ReadOn) == "read on Build server" && local.Status?.Account?.AccountId == "1", "the build server's reading");
 
         // Its channel drops: its hello goes, its last report stays.
