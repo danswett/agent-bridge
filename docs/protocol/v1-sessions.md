@@ -48,7 +48,8 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
 
 A host that is broken, older than its spec or hostile may leave a required field out or send a
 value of the wrong JSON type (a number where a string belongs, a string where a boolean or number
-belongs, an object where a list belongs). Absent and `null` already mean the same thing. A client
+belongs, an object where a list belongs). A string holding half a surrogate pair (`"\uD800"`) is
+not text a client can rely on reading, and counts as the wrong type. Absent and `null` already mean the same thing. A client
 reads every host record (results and event data alike) by these rules (#446):
 
 1. **A field of the wrong type reads as absent.** A required one, missing or unreadable, takes its
@@ -76,8 +77,8 @@ with the wrong type):
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
 | `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
-| `Field` | `name` | `type`, `options` (whole), `allowOther` |
-| `Option` | | `value` |
+| `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
+| `Option` | | `value`, `label` |
 | `DiscoveryHeld` | `reason` | |
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
@@ -93,7 +94,10 @@ with the wrong type):
 
 So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
 no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
-number, or one of whose options has no `value`, is not shown at all, while its session is. Launch
+number, or one of whose options has no `value` or a `label` that is not text, is not shown at
+all, while its session is: a choice is never shown without the words it was asked with, or under
+its bare value instead. A field or option with no `title`, `description` or `label` at all is
+read as usual. Launch
 options whose `defaults.permissions` can't be read are refused whole, so nothing is launched with
 a permission mode the client guessed.
 

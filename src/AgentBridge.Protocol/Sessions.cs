@@ -469,7 +469,9 @@ public sealed record Field
 {
     [Strict(Strictness.Identity)]
     public required string Name { get; init; }
+    [Strict(Strictness.Security)]
     public string? Title { get; init; }
+    [Strict(Strictness.Security)]
     public string? Description { get; init; }
     [Strict(Strictness.Security)]
     public required FieldType Type { get; init; }
@@ -481,7 +483,7 @@ public sealed record Field
     public bool? Required { get; init; }
 }
 
-public sealed record Option([property: Strict(Strictness.Security)] string Value, string? Label = null);
+public sealed record Option([property: Strict(Strictness.Security)] string Value, [property: Strict(Strictness.Security)] string? Label = null);
 
 // One page of sessions.list. Next is absent on the last page. DiscoveryHeld is present while
 // the host's discovery is incomplete (DiscoveryHeld below).

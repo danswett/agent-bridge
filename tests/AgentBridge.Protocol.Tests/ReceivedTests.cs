@@ -152,6 +152,9 @@ public class ReceivedTests
     [InlineData("allowOther")]
     [InlineData("option")]
     [InlineData("null-option")]
+    [InlineData("title")]
+    [InlineData("description")]
+    [InlineData("label")]
     public void A_question_with_a_field_or_choice_it_cannot_read_is_dropped_whole_rather_than_shown_without_it(string broken)
     {
         var node = Session();
@@ -164,9 +167,57 @@ public class ReceivedTests
             case "allowOther": field["allowOther"] = "true"; break;
             case "option": field["options"]![1]!["value"] = false; break;
             case "null-option": field["options"]!.AsArray().Add(null); break;
+            // The words a choice is asked with: never shown as a bare key or value instead.
+            case "title": field["title"] = 5; break;
+            case "description": field["description"] = new JsonArray(); break;
+            case "label": field["options"]![0]!["label"] = true; break;
         }
 
         Assert.Null(Read(node).Question);
+    }
+
+    [Fact]
+    public void A_field_or_choice_with_no_title_description_or_label_at_all_is_still_shown()
+    {
+        var node = Session();
+        var field = node["question"]!["fields"]![0]!.AsObject();
+        field.Remove("title");
+        field.Remove("description");
+        field["options"]![0]!.AsObject().Remove("label");
+
+        var q = Read(node).Question!;
+
+        Assert.Equal((null, "yes", "Deny"), (q.Fields[0].Options![0].Label, q.Fields[0].Options![0].Value, q.Fields[0].Options![1].Label));
+    }
+
+    // "\uD800" is valid JSON that .NET cannot decode: GetString throws InvalidOperationException,
+    // which escaped the cleaner, and the launch page (catching JsonException) was left loading.
+    static Session ReadText(JsonNode node, string replace, string with) =>
+        Received.Read<Session>(JsonDocument.Parse(node.ToJsonString().Replace(replace, with, StringComparison.Ordinal)).RootElement);
+
+    [Fact]
+    public void Text_holding_half_a_surrogate_pair_reads_as_absent()
+    {
+        var s = ReadText(Session(), "\"Fix the build\"", "\"Fix \\uD800 the build\"");
+
+        Assert.Equal(("s1", (string?)null), (s.Id, s.Title));
+        Assert.NotNull(s.Question);
+    }
+
+    [Fact]
+    public void Text_holding_half_a_surrogate_pair_in_a_strict_field_refuses_its_record()
+    {
+        Assert.Null(ReadText(Session(), "\"Approve once\"", "\"Approve \\uDC00 once\"").Question);
+        var e = Assert.Throws<MalformedRecordException>(() => ReadText(Session(), "\"id\":\"s1\"", "\"id\":\"s\\uD800\""));
+        Assert.Equal("$.id", e.Path);
+    }
+
+    [Fact]
+    public void A_property_name_holding_half_a_surrogate_pair_is_no_field_of_the_record()
+    {
+        var s = ReadText(Session(), "\"processId\"", "\"process\\uD800Id\"");
+
+        Assert.Equal(("s1", (int?)null), (s.Id, s.ProcessId));
     }
 
     [Fact]

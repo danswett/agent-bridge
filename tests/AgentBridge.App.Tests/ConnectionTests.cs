@@ -118,7 +118,8 @@ public sealed class ConnectionTests : IAsyncLifetime
 
         await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["agent"] = "copilot" });
         await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
-        await host.SendAsync(HostOps.StatusEvent, new System.Text.Json.Nodes.JsonObject { ["processId"] = "4242" });
+        // What the host sent stays out of the log: the time converter's own message quotes it.
+        await host.SendAsync(HostOps.StatusEvent, new System.Text.Json.Nodes.JsonObject { ["startedAt"] = "the owner's 4242" });
         await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
         // Missing a required field other than its id, and one of the wrong type: kept, as the PWA keeps it.
         var partial = JsonSerializer.SerializeToNode(Make.Session("s3", status: SessionStatus.Working), ProtocolJson.Options)!.AsObject();
@@ -131,6 +132,29 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.Equal((SessionStatus.Idle, (string?)null), (conn.Sessions.Get("s3")!.Status, conn.Sessions.Get("s3")!.Title));
         Assert.Single(logged, l => l.StartsWith($"refused a {Events.SessionUpsert} ", StringComparison.Ordinal));
         Assert.Single(logged, l => l.StartsWith($"refused a {HostOps.StatusEvent} ", StringComparison.Ordinal));
+        Assert.DoesNotContain(logged, l => l.Contains("4242", StringComparison.Ordinal));
+    }
+
+    // Usage and update state are read on connecting, before the sessions are subscribed. One the
+    // app could not read ended the connection there, and every connection after read the same
+    // thing: it reconnected for good and never showed a session.
+    [Fact]
+    public async Task Usage_or_update_state_the_app_cannot_read_is_refused_and_the_sessions_still_arrive()
+    {
+        await using var odd = new FakeHost();
+        odd.Capabilities.Add(UpdateProtocol.Capability);
+        odd.Sessions.Add(Make.Session("s1"));
+        odd.On(UsageProtocol.Subscribe, _ => "none");
+        odd.On(UpdateProtocol.Subscribe, _ => new System.Text.Json.Nodes.JsonArray());
+        odd.Start();
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(odd.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Get("s1") is not null, "the snapshot");
+        Assert.Equal(1L, conn.ConnectionNumber);
+        Assert.Single(logged, l => l.StartsWith($"refused a {UsageProtocol.Subscribe} ", StringComparison.Ordinal));
+        Assert.Single(logged, l => l.StartsWith($"refused a {UpdateProtocol.Subscribe} ", StringComparison.Ordinal));
     }
 
     [Fact]

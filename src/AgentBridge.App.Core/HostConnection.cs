@@ -166,16 +166,16 @@ public sealed class HostConnection : IAsyncDisposable
                 if (!Subscribes) { }
                 else if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
-                    var usage = await ch.ReadAsync<UsageReport>(UsageProtocol.Subscribe, UsageAsk(hello), ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
+                    var usage = await ExtraAsync<UsageReport>(ch, UsageProtocol.Subscribe, UsageAsk(hello), ct);
+                    if (usage is not null) { ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } }); }
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
                 else { ui.Post(() => Usage = UsageReport.Empty); }
                 var heardUpdate = Interlocked.Read(ref updateEvents);
                 if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability))
                 {
-                    var update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
-                    ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } });
+                    var update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
+                    if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } }); }
                 }
                 else { ui.Post(() => Update = null); }
                 if (Subscribes) { await SubscribeSessionsAsync(ch, ct); }
@@ -232,6 +232,20 @@ public sealed class HostConnection : IAsyncDisposable
         }
     }
 
+    // Usage and update state ride along with the sessions: a reading of either the app cannot read
+    // is refused, and the connection goes on with the one it had. Thrown, it ended the connection
+    // before the sessions were subscribed, and every connection after read the same thing: the app
+    // reconnected for good and showed no sessions (#446).
+    async Task<T?> ExtraAsync<T>(IClientChannel ch, string op, object? data, CancellationToken ct) where T : class
+    {
+        try { return await ch.ReadAsync<T>(op, data, ct: ct); }
+        catch (MalformedRecordException e)
+        {
+            Refused(op, e);
+            return null;
+        }
+    }
+
     async Task SubscribeSessionsAsync(IClientChannel ch, CancellationToken ct)
     {
         // The snapshot is marked before the request goes, so no upsert of it is missed.
@@ -264,16 +278,16 @@ public sealed class HostConnection : IAsyncDisposable
         if (hello.Capabilities.Contains(UsageProtocol.Capability))
         {
             var heardUsage = Interlocked.Read(ref usageEvents);
-            var usage = await ch.ReadAsync<UsageReport>(UsageProtocol.Get, UsageAsk(hello), ct: ct);
-            ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
+            var usage = await ExtraAsync<UsageReport>(ch, UsageProtocol.Get, UsageAsk(hello), ct);
+            if (usage is not null) { ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } }); }
         }
         if (hello.Capabilities.Contains(UpdateProtocol.Capability))
         {
             // Subscribed again rather than read: a host first seen without updates was followed
             // only from a refresh, and subscribing where it already is changes nothing there.
             var heardUpdate = Interlocked.Read(ref updateEvents);
-            var update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
-            ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } });
+            var update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
+            if (update is not null) { ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } }); }
         }
         else { ui.Post(() => { if (Update is not null) { Update = null; Changed?.Invoke(); } }); }
         await SubscribeSessionsAsync(ch, ct);
@@ -290,7 +304,7 @@ public sealed class HostConnection : IAsyncDisposable
         var heardUpdate = Interlocked.Read(ref updateEvents);
         if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability) && Hello?.Capabilities.Contains(UpdateProtocol.Capability) != true)
         {
-            update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+            update = await ExtraAsync<UpdateState>(ch, UpdateProtocol.Subscribe, null, ct);
         }
         ui.Post(() =>
         {
@@ -331,10 +345,17 @@ public sealed class HostConnection : IAsyncDisposable
     void Apply(ChannelEvent ev)
     {
         try { ApplyOne(ev); }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException)
-        {
-            if (refusedKinds.TryAdd(ev.Name, 0)) { log($"refused a {ev.Name} the app could not read ({e.GetType().Name}: {e.Message}); any more are refused without a word"); }
-        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException) { Refused(ev.Name, e); }
+    }
+
+    // Said once for each kind of message, by the type of failure and where it was, never with the
+    // message's text: a converter's message quotes the value it could not read (UtcTimeConverter
+    // the time string it was given), and what a host sends is not the log's to keep.
+    void Refused(string kind, Exception e)
+    {
+        if (!refusedKinds.TryAdd(kind, 0)) { return; }
+        var where = e is JsonException { Path: { } path } ? $" at {path}" : "";
+        log($"refused a {kind} the app could not read ({e.GetType().Name}{where}); any more are refused without a word");
     }
 
     // Host records are read as the spec says (Received): a field that cannot be read is absent,

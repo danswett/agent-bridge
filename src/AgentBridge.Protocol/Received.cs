@@ -39,21 +39,40 @@ public sealed class MalformedRecordException(string path, string why)
 public static class Received
 {
     public static T Read<T>(JsonElement data) where T : class =>
-        Clean(data, typeof(T), "$", strict: false).Deserialize<T>(ProtocolJson.Options) ?? throw new MalformedRecordException("$", "no record");
+        Strictly<T>(Clean(data, typeof(T), "$", strict: false), "$") ?? throw new MalformedRecordException("$", "no record");
+
+    // The strict read, with every way it can fail made the one way a reader handles: a converter
+    // that cannot decode its text throws InvalidOperationException or FormatException, which a
+    // caller catching JsonException (the launch page) never saw.
+    static T? Strictly<T>(JsonNode? node, string path)
+    {
+        try { return node.Deserialize<T>(ProtocolJson.Options); }
+        catch (Exception x) when (x is InvalidOperationException or FormatException or NotSupportedException or ArgumentException) { throw Bad(path, "unreadable"); }
+    }
+
+    // A string's text. One holding half a surrogate pair ("\uD800") is valid JSON that .NET
+    // cannot decode (GetString throws InvalidOperationException): it is unreadable, like a number
+    // where text belongs.
+    static string Text(JsonElement e, string path)
+    {
+        if (e.ValueKind != JsonValueKind.String) { throw Bad(path, "not a string"); }
+        try { return e.GetString()!; }
+        catch (InvalidOperationException) { throw Bad(path, "not text"); }
+    }
 
     static JsonNode? Clean(JsonElement e, Type type, string path, bool strict)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
         if (t == typeof(JsonElement)) { return JsonNode.Parse(e.GetRawText()); }
-        if (t == typeof(string)) { return e.ValueKind == JsonValueKind.String ? JsonValue.Create(e.GetString()) : throw Bad(path, "not a string"); }
+        if (t == typeof(string)) { return JsonValue.Create(Text(e, path)); }
         if (t == typeof(bool)) { return e.ValueKind is JsonValueKind.True or JsonValueKind.False ? JsonValue.Create(e.GetBoolean()) : throw Bad(path, "not a boolean"); }
         // An enum string the reader does not know is the converter's to read ([UnknownAs], as the
         // spec says); anything but a string is not an enum value at all.
-        if (t.IsEnum) { return e.ValueKind == JsonValueKind.String ? JsonValue.Create(e.GetString()) : throw Bad(path, "not a string"); }
+        if (t.IsEnum) { return JsonValue.Create(Text(e, path)); }
         if (t == typeof(DateTimeOffset))
         {
-            return e.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(e.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _)
-                ? JsonValue.Create(e.GetString()) : throw Bad(path, "not a time");
+            var s = Text(e, path);
+            return DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _) ? JsonValue.Create(s) : throw Bad(path, "not a time");
         }
         if (Numbers.TryGetValue(t, out var fits)) { return e.ValueKind == JsonValueKind.Number && fits(e) ? JsonNode.Parse(e.GetRawText()) : throw Bad(path, $"not a {t.Name}"); }
         var info = Meta.GetTypeInfo(t);
@@ -62,9 +81,17 @@ public static class Received
             JsonTypeInfoKind.Object => CleanObject(e, info, path),
             JsonTypeInfoKind.Enumerable => CleanList(e, info.ElementType!, path, strict),
             JsonTypeInfoKind.Dictionary => CleanMap(e, info.ElementType!, path, strict),
-            // A type with a converter of its own reads itself, strictly.
-            _ => JsonNode.Parse(e.GetRawText()),
+            // A type with a converter of its own reads itself, strictly, here: what it cannot read
+            // is this field unreadable, not the whole message.
+            _ => Converted(e, t, path),
         };
+    }
+
+    static JsonNode? Converted(JsonElement e, Type t, string path)
+    {
+        try { _ = e.Deserialize(t, ProtocolJson.Options); }
+        catch (Exception x) when (x is JsonException or InvalidOperationException or FormatException or NotSupportedException or ArgumentException) { throw Bad(path, "unreadable"); }
+        return JsonNode.Parse(e.GetRawText());
     }
 
     // The records' shapes as ProtocolJson.Options reads them, from a copy of it, so asking for them
@@ -90,7 +117,11 @@ public static class Received
         // Matched as ProtocolJson.Options reads them: case-insensitively, the last of a repeated
         // name winning.
         var given = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in e.EnumerateObject()) { given[p.Name] = p.Value; }
+        foreach (var p in e.EnumerateObject())
+        {
+            // A name .NET cannot decode is no field of the record's.
+            if (Name(p) is { } name) { given[name] = p.Value; }
+        }
         var o = new JsonObject();
         foreach (var f in Shape(info))
         {
@@ -130,11 +161,22 @@ public static class Received
         var o = new JsonObject();
         foreach (var p in e.EnumerateObject())
         {
-            var at = $"{path}.{p.Name}";
-            try { o[p.Name] = p.Value.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(p.Value, value, at, strict: false); }
+            try
+            {
+                // A map's keys are the host's data, so they stay out of the path, which is logged.
+                var at = $"{path}.*";
+                var key = Name(p) ?? throw Bad(at, "a key that is not text");
+                o[key] = p.Value.ValueKind == JsonValueKind.Null ? throw Bad(at, "null") : Clean(p.Value, value, at, strict: false);
+            }
             catch (MalformedRecordException) when (!strict) { }
         }
         return o;
+    }
+
+    static string? Name(JsonProperty p)
+    {
+        try { return p.Name; }
+        catch (InvalidOperationException) { return null; }
     }
 
     // What a required field reads as when it is missing or unreadable.
