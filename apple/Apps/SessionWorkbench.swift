@@ -6,7 +6,7 @@ struct SessionWorkbench: View {
     @State private var search = ""
     @State private var showingConnection = false
     @State private var showingMachines = false
-    @State private var showingActions = false
+    @State private var showingMobileInspector = false
     @State private var showingLaunch = false
     @State private var needsOnly = false
     @FocusState private var searchFocused: Bool
@@ -49,14 +49,10 @@ struct SessionWorkbench: View {
     }
 
     var body: some View {
-        #if os(macOS)
-            VStack(spacing: 0) {
-                navigation
-                connectionFooter
-            }
-        #else
-            navigation.safeAreaInset(edge: .bottom) { connectionFooter }
-        #endif
+        VStack(spacing: 0) {
+            navigation
+            connectionFooter
+        }
     }
 
     private var navigation: some View {
@@ -135,6 +131,7 @@ struct SessionWorkbench: View {
             store.startOnce()
         }
         .onChange(of: store.selectedSessionID) {
+            showingMobileInspector = false
             store.notifications.focus(machineID: selected?.host?.hello?["machine"]?["id"]?.string, sessionID: selected?.session.id)
             if let selected {
                 store.markRead(selected)
@@ -217,21 +214,12 @@ struct SessionWorkbench: View {
                 .frame(minWidth: 270, idealWidth: 320, maxWidth: 460, maxHeight: .infinity, alignment: .topLeading)
             }
         #else
-            let answerAvailable = canAnswer(entry)
-            reader(entry, layout: .combined)
-                .toolbar {
-                    if let host = entry.host, !entry.ended {
-                        ToolbarItem {
-                            Button(entry.session.question == nil ? "Reply / Actions" : answerAvailable ? "Answer" : "View Question", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
-                                .disabled(!host.isLive)
-                        }
-                    }
-                }
-                .sheet(isPresented: $showingActions) {
-                    if let host = entry.host {
-                        SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
-                    }
-                }
+            MobileSessionWorkspace(entry: entry, store: store, showingInspector: $showingMobileInspector) {
+                reader(entry, layout: .conversation)
+            } inspector: {
+                reader(entry, layout: .inspector)
+            }
+            .id(entry.id)
         #endif
     }
 
@@ -269,7 +257,7 @@ struct SessionWorkbench: View {
                   let draft = BridgeDelegatePresentation.stopDraft(delegateID: id, existing: host.replyDrafts[session.id] ?? "") else { return }
             host.replyDrafts[session.id] = draft
             #if os(iOS)
-                showingActions = true
+                showingMobileInspector = false
             #endif
         }
     }
