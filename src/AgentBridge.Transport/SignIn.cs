@@ -8,6 +8,9 @@ public sealed record SignInResult(string Token, string AccountId, string Login);
 
 public static class SignIn
 {
+    public const string DevicePage = "https://github.com/login/device";
+    public static bool IsDevicePage(string? uri) => uri == DevicePage;
+
     // GitHub's device flow, through the relay: the relay holds the OAuth app's client id,
     // exchanges the GitHub token for its own account token, and keeps neither secret nor
     // GitHub token. show(userCode, verificationUri) tells the person what to enter where.
@@ -16,7 +19,8 @@ public static class SignIn
         var start = await http.PostAsync(new Uri(relay, "/v1/auth/device"), null, ct);
         start.EnsureSuccessStatusCode();
         var s = await start.Content.ReadFromJsonAsync<JsonElement>(ct);
-        show(s.GetProperty("userCode").GetString()!, s.GetProperty("verificationUri").GetString()!);
+        if (!IsDevicePage(s.GetProperty("verificationUri").GetString())) { throw new InvalidOperationException("The relay returned an untrusted sign-in page."); }
+        show(s.GetProperty("userCode").GetString()!, DevicePage);
         var deviceCode = s.GetProperty("deviceCode").GetString()!;
         var interval = s.GetProperty("interval").GetInt32();
         var deadline = DateTime.UtcNow.AddSeconds(s.GetProperty("expiresIn").GetInt32());

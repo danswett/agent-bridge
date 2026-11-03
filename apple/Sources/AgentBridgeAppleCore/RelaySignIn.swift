@@ -15,7 +15,21 @@ public struct RelayAccount: Codable, Sendable, Equatable {
 public struct RelayDeviceCode: Decodable, Sendable {
     public let deviceCode: String
     public let userCode: String
-    public let verificationUri: URL
+    // Compare the wire string before a URL parser can normalize an untrusted spelling.
+    private let verificationUriString: String
+    public var verificationUri: URL {
+        URL(string: "https://github.com/login/device")!
+    }
+
+    fileprivate var hasTrustedPage: Bool {
+        verificationUriString == verificationUri.absoluteString
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceCode, userCode, interval, expiresIn
+        case verificationUriString = "verificationUri"
+    }
+
     public let interval: Int
     public let expiresIn: Int
 }
@@ -93,8 +107,7 @@ public struct RelaySignIn: Sendable {
         let code = try JSONDecoder().decode(RelayDeviceCode.self, from: data)
         guard !code.deviceCode.isEmpty, !code.userCode.isEmpty, code.expiresIn > 0,
               code.expiresIn <= 3600, code.interval > 0, code.interval <= 60,
-              code.verificationUri.scheme == "https", code.verificationUri.host == "github.com",
-              code.verificationUri.user == nil, code.verificationUri.password == nil
+              code.hasTrustedPage
         else { throw RelayError.invalidMessage }
         return code
     }

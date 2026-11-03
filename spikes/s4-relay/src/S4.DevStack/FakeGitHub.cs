@@ -30,7 +30,7 @@ public sealed class FakeGitHub
             var device = Convert.ToHexString(RandomNumberGenerator.GetBytes(20)).ToLowerInvariant();
             var user = $"{RandomNumberGenerator.GetHexString(4)}-{RandomNumberGenerator.GetHexString(4)}".ToUpperInvariant();
             codes[device] = new Code { UserCode = user };
-            return Results.Ok(new { device_code = device, user_code = user, verification_uri = $"{Url}/login/device", interval = 1, expires_in = 900 });
+            return Results.Ok(new { device_code = device, user_code = user, verification_uri = "https://github.com/login/device", interval = 1, expires_in = 900 });
         });
         app.MapPost("/login/oauth/access_token", async (HttpRequest req) =>
         {

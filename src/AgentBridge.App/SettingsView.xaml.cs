@@ -70,7 +70,7 @@ public sealed partial class SettingsView : UserControl
             var data = new DataPackage();
             data.SetText(code);
             Clipboard.SetContent(data);
-            if (Uri.TryCreate(uri, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps) { await Windows.System.Launcher.LaunchUriAsync(u); }
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(uri));
         }
         // async void: an escape would end the app. The code and the page are on screen anyway.
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or UnauthorizedAccessException) { }

@@ -7,9 +7,11 @@ export async function startDeviceFlow(base) {
   const r = await fetch(`${base}/v1/auth/device`, { method: 'POST' });
   if (!r.ok) { throw new Error(`sign-in is unavailable (${r.status})`); }
   const s = await r.json();
+  const devicePage = 'https://github.com/login/device';
+  if (s.verificationUri !== devicePage) { throw new Error('The relay returned an untrusted sign-in page.'); }
   return {
     userCode: String(s.userCode ?? ''),
-    verificationUri: String(s.verificationUri ?? ''),
+    verificationUri: devicePage,
     expiresIn: Number(s.expiresIn) || 900,
     // Polls until the code is entered, refused or expired. `signal` cancels.
     async wait(signal) {

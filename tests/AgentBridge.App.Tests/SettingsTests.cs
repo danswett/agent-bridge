@@ -304,6 +304,23 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.False(settings.CanSignIn);
     }
 
+    [Fact]
+    public async Task Settings_only_offers_a_code_and_destination_for_the_exact_device_page()
+    {
+        await Connected();
+        using var rows = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "testdata", "device-pages.json")));
+        foreach (var row in rows.RootElement.EnumerateArray())
+        {
+            var page = row.GetProperty("uri").GetString();
+            var valid = row.GetProperty("valid").GetBoolean();
+            host.Status = FakeHost.StatusOf() with { SignIn = new SignInStatus(SignInState.Pending, "ABCD", page) };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => connection.Status?.SignIn.VerificationUri == page, "the device page status");
+            Assert.Equal(valid ? page : null, settings.SignInUri);
+            Assert.Equal(valid ? "ABCD" : null, settings.SignInCode);
+        }
+    }
+
     // Home Assistant refusing this machine is shown in the host's words, a rejected token and a ban
     // alike, and goes when the host says it has; each change is announced, so the page redraws.
     [Fact]

@@ -109,8 +109,8 @@ public sealed class SettingsViewModel : Observable
         _ => "Not signed in",
     };
     public bool SignInPending => Status?.SignIn.State == SignInState.Pending;
-    public string? SignInCode => Status?.SignIn.UserCode;
-    public string? SignInUri => Status?.SignIn.VerificationUri;
+    public string? SignInCode => SignInUri is null ? null : Status?.SignIn.UserCode;
+    public string? SignInUri => Transport.SignIn.IsDevicePage(Status?.SignIn.VerificationUri) ? Transport.SignIn.DevicePage : null;
     public string? SignInError => Status?.SignIn.State == SignInState.Failed ? Status.SignIn.Error : null;
     public bool CanSignIn => HostRunning && !SignInPending && Status?.Relay.State != RelayState.Off;
 

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\AgentBridge.Transport\AgentBridge.Transport.csproj" />
     <ProjectReference Include="..\..\src\AgentBridge.Relay\AgentBridge.Relay.csproj" />
     <ProjectReference Include="..\..\tools\AgentBridge.RelaySmoke\AgentBridge.RelaySmoke.csproj" />
+    <None Include="../../apple/Tests/AgentBridgeAppleCoreTests/Resources/device-pages.json" Link="testdata/device-pages.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="testdata\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
