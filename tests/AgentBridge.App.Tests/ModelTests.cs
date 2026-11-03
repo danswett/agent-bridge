@@ -538,6 +538,38 @@ public sealed class MarkdownTests
         var line = NeedsYouEntry.LineOf(Make.Form() with { Message = text });
         Assert.StartsWith("*a *a", line, StringComparison.Ordinal);
     }
+
+    // The shared vectors (tests/fixtures/approvals/literal-intentions.json): a permission prompt whose
+    // intention tries to open a fence or draw Markdown (#212), as a host builds it, drawn as Markdown
+    // draws it (Home Assistant's card; the app's card draws an approval exactly as written, #323).
+    public static TheoryData<string> LiteralIntentions => [.. LiteralCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<System.Text.Json.Nodes.JsonObject> LiteralCases() =>
+        System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "literal-intentions.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(LiteralIntentions))]
+    public void A_permission_prompt_draws_the_agents_intention_as_its_words_and_what_is_approved_as_code(string name)
+    {
+        var c = LiteralCases().Single(c => (string)c["name"]! == name);
+        var prompt = new System.Text.Json.Nodes.JsonObject { ["kind"] = (string)c["kind"]!, ["intention"] = (string)c["intention"]! };
+        if ((string)c["kind"]! == "commands") { prompt["fullCommandText"] = (string)c["command"]!; }
+        else { prompt["fileName"] = (string)c["file"]!; prompt["diff"] = (string)c["diff"]!; }
+        using var data = System.Text.Json.JsonDocument.Parse(new System.Text.Json.Nodes.JsonObject { ["requestId"] = "r1", ["promptRequest"] = prompt }.ToJsonString());
+        var blocks = MarkdownModel.Parse(AgentBridge.Host.Core.Parsing.CopilotPermission.Describe(data.RootElement)!.Message);
+        string[] code = (string)c["kind"]! == "commands" ? [(string)c["command"]!] : [(string)c["file"]!, (string)c["diff"]!];
+        static string Words(string s) => string.Join(' ', s.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+        // "Allow **shell**?", then the intention as paragraphs of plain text, then the code, whole.
+        Assert.Equal([new MdText("Allow "), new MdText((string)c["kind"]! == "commands" ? "shell" : "edit", MdStyle.Bold), new MdText("?")], Assert.IsType<MdParagraph>(blocks[0]).Inlines);
+        Assert.Equal(code, blocks.TakeLast(code.Length).Select(b => Assert.IsType<MdCode>(b).Text));
+        var prose = blocks.Skip(1).SkipLast(code.Length).ToList();
+        Assert.All(prose, b => Assert.IsType<MdParagraph>(b));
+        var inlines = prose.SelectMany(b => ((MdParagraph)b).Inlines).ToList();
+        Assert.All(inlines, i => Assert.True(i is MdBreak || (i is MdText { Style: MdStyle.None }) || (i is MdLink l && l.Text == l.Url), $"{i} in {name}"));
+        Assert.Equal(Words((string)c["intention"]!), Words(string.Concat(inlines.Select(i => i switch { MdText x => x.Text, MdLink l => l.Text, _ => " " }))));
+    }
 }
 
 public sealed class UsageTests

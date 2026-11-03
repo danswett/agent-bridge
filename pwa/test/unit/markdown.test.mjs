@@ -474,3 +474,30 @@ test('a link after thousands of unclosed ones is still a link', () => {
   parsesLinearly((n) => '[a](('.repeat(n) + '[b](https://ok.example/)', 5000);
   assert.deepEqual(walk(parseMarkdown('[a](('.repeat(20000) + '[b](https://ok.example/)')).hrefs, ['https://ok.example/']);
 });
+
+// The shared vectors (tests/fixtures/approvals/literal-intentions.json): what a host sends for a
+// Copilot permission prompt whose intention tries to open a fence or draw Markdown (#212). The
+// card draws the intention as its words and what is approved as code, whole.
+test('a permission prompt draws the agent\'s intention as its words and what is approved as code', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { cases } = JSON.parse(readFileSync(new URL('../../../tests/fixtures/approvals/literal-intentions.json', import.meta.url), 'utf8'));
+  const words = (s) => s.split(/\s+/).filter(Boolean).join(' ');
+  // A line break is a space between words.
+  const spoken = (n) => (typeof n === 'string' ? n : n.tag === 'br' ? ' ' : (n.children ?? []).map(spoken).join(''));
+  assert.ok(cases.length >= 15);
+  for (const c of cases) {
+    const nodes = parseMarkdown(c.message);
+    const code = c.kind === 'commands' ? [c.command] : [c.file, c.diff];
+    assert.deepEqual(nodes[0], { tag: 'p', children: ['Allow ', { tag: 'strong', children: [c.kind === 'commands' ? 'shell' : 'edit'] }, '?'] }, c.name);
+    assert.deepEqual(nodes.slice(-code.length).map((n) => [n.tag, textOf(n)]), code.map((t) => ['pre', t]), c.name);
+    const prose = nodes.slice(1, -code.length);
+    const r = walk(prose);
+    // Paragraphs of text: no emphasis, code, heading, list, quote, table or rule, and a link only
+    // where its words are its address.
+    assert.ok(r.tags.every((t) => t === 'p' || t === 'br' || t === 'a'), `${c.name}: ${r.tags.join()}`);
+    for (const a of prose.flatMap(function links(n) { return typeof n === 'string' ? [] : n.tag === 'a' ? [n] : (n.children ?? []).flatMap(links); })) {
+      assert.equal(textOf(a).replace(/\/+$/, ''), a.attrs.href.replace(/\/+$/, ''), c.name);
+    }
+    assert.equal(words(prose.map(spoken).join(' ')), words(c.intention), c.name);
+  }
+});

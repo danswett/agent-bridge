@@ -770,6 +770,12 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     reference that would decode to such a character (`&#x202E;`), the agent's own words closing
     the command's fence, a link, an image or HTML, text after a block, or a line in a block shaped
     as a fence (`ApprovalShape`). Both say the same notes above an approval.
+  - **The agent's own words in an approval** (its intention, a tool's title or description) are
+    text, never Markdown: a host escapes them (#212), so nothing that reads an approval as Markdown
+    can take them for a fence around the command or a link's words in place of where it goes.
+    Every card draws an approval as its source, so the PWA's, the Windows app's and Home
+    Assistant's show their backslashes. A toast shows the words without their escapes, the command
+    as written.
   - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never
