@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- The source of specimen.png: open it beside woff2/ and capture the whole page, 1000 CSS px wide, at 2× (see README.md). -->
+<meta charset="utf-8">
+<title>Agent Bridge Mono</title>
+<style>
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-Regular.woff2") format("woff2"); font-weight: 400; font-style: normal; }
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-Italic.woff2") format("woff2"); font-weight: 400; font-style: italic; }
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-SemiBold.woff2") format("woff2"); font-weight: 600; font-style: normal; }
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-SemiBoldItalic.woff2") format("woff2"); font-weight: 600; font-style: italic; }
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-Bold.woff2") format("woff2"); font-weight: 700; font-style: normal; }
+  @font-face { font-family: "Agent Bridge Mono"; src: url("woff2/AgentBridgeMono-BoldItalic.woff2") format("woff2"); font-weight: 700; font-style: italic; }
+  html { background: #17191D; }
+  body { margin: 0; width: 1000px; display: flex; align-items: flex-start; padding: 28px 22px; box-sizing: border-box; }
+  .panel { flex: 1; padding: 22px 21px; font-family: "Agent Bridge Mono", monospace; }
+  .dark { background: #202327; color: #E8EAED; --text2: #9AA0A8; --code: #191B1F; --line: transparent; }
+  .light { background: #F9F9F9; color: #1A1A1A; --text2: #616161; --code: #FFFFFF; --line: #E5E5E5; }
+  h1 { margin: 0; font-size: 30px; font-weight: 600; line-height: 1.2; }
+  .caption { font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; font-size: 10px; color: var(--text2); margin: 2px 0 18px; }
+  .confusables { font-size: 17px; line-height: 26px; margin-bottom: 20px; overflow-wrap: anywhere; }
+  .styles { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 0; font-size: 11px; line-height: 17px; margin-bottom: 18px; }
+  .rows { font-size: 8px; line-height: 16.5px; }
+  .rows div { display: flex; justify-content: space-between; }
+  .rows .meta { color: var(--text2); }
+  pre { font: 8.4px/14px "Agent Bridge Mono", monospace; background: var(--code); border: 1px solid var(--line); border-radius: 4px; padding: 10px 11px; margin: 10px 0 14px; white-space: pre; overflow: hidden; }
+  .symbols { font-size: 10px; }
+  b { font-weight: 600; }
+</style>
+<body>
+  <section class="panel dark"></section>
+  <section class="panel light"></section>
+  <template id="specimen">
+    <h1>Agent Bridge Mono</h1>
+    <div class="caption">Iosevka 34.9.1 · IoskeleyMono configuration · tailed l · 600 width · SIL OFL 1.1</div>
+    <div class="confusables">0O o 1lI| i! rn m 5S 2Z 8B {}[]() &lt;&gt; =&gt; != ~</div>
+    <div class="styles">
+      <span>Regular agent-3a91</span><i>Italic agent-3a91</i>
+      <b>Semi Bold agent-3a91</b><b><i>Semi Bold Italic agent-3a91</i></b>
+      <strong style="font-weight: 700">Bold agent-3a91</strong><strong style="font-weight: 700"><i>Bold Italic agent-3a91</i></strong>
+    </div>
+    <div class="rows">
+      <div><span>✓ dotnet test --filter RestartAfterResume</span><span class="meta">4:02</span></div>
+      <div><span><b>task</b> Bisect RestartAfterResume</span><span class="meta">3:10</span></div>
+      <div class="meta">5e59309 · C:\Users\dswett\repos\wt\agent-ha-bridge</div>
+    </div>
+<pre>// Status precedence, first match wins (ui.md §2.2)
+if (session.Question is { } q) return Status.Waiting;      // rule 1
+if (Json.Str(e, "agentId") is { Length: &gt; 0 } id)
+    work.AgentActive(id, at);   // 0x1F == 31  l1I|  O0o</pre>
+    <div class="symbols">⠋⠙⠹⠸ ⌘ ⌥ ⏎ → ⇒ ┌─┬─┐ ▉▓▒░ ● ◆ ✓ ✗ αβγ ЖЯ é ñ ß €</div>
+  </template>
+  <script>
+    for (const panel of document.querySelectorAll('.panel')) { panel.append(document.getElementById('specimen').content.cloneNode(true)); }
+  </script>
+</body>
