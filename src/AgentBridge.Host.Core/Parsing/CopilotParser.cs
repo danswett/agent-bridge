@@ -103,7 +103,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 {
                     var (from, label, injected) = Source(Json.Str(data, "source"));
                     if (injected) { break; }
-                    Prompted(text, from, label);
+                    Prompted(text, from, label, Json.Str(e, "id"));
                     S.Prompts++;
                     S.OwnReasoning = null;
                 }
@@ -350,7 +350,7 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                         // "steering" even when no turn is running, and those typed while idle
                         // or sent by the bridge are "idle" and carry parentAgentTaskId.
                         var (from, label, injected) = Source(Json.Str(data, "source"));
-                        UserPrompt(text, at, from: from, label: label, injected: injected);
+                        UserPrompt(text, at, from: from, label: label, injected: injected, key: Json.Str(e, "id"));
                     }
                     _turnAskedForTools = false;
                     break;

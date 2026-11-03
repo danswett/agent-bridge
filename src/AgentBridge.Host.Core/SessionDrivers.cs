@@ -94,10 +94,12 @@ public sealed class SessionDriver
     string? principal;
     DateTimeOffset? pendingAt;
     string? turnKey;
-    // The prompt an agent's reply or launch sent, by its text (userMessageFrom, #489), and whether
-    // a turn it started is still waiting for its text. By text, not by turn: Codex counts a turn
-    // before its text arrives, and a turn no prompt started (a notice) changes the count but not
-    // the prompt, so a turn key would hand one prompt's sender to another.
+    // The prompt an agent's reply or launch sent (userMessageFrom, #489), and whether a turn it
+    // started is still waiting for it. Known by the prompt itself (its record, else its words), not
+    // by turn: Codex counts a turn before its text arrives, and a turn no prompt started (a notice)
+    // changes the count but not the prompt, so a turn key handed one prompt's sender to another.
+    // By record where the parser knows it, so the same words sent by the person and by an agent are
+    // two prompts.
     string? agentPrompt;
     bool awaitingAgentPrompt;
     string? lastMessage;
@@ -199,7 +201,9 @@ public sealed class SessionDriver
     // drives it: the arm that was waiting for it, or nobody, and then the person at the machine
     // does. Otherwise a launch's opening turn, once seen, spends its arm. Returns whether the shown
     // driver changed; it raises nothing, since whoever observes is about to show the session.
-    public bool Observe(Session full, DateTimeOffset now, TimeSpan arm)
+    // prompt: which prompt the session's userMessage is (SessionTracker.PromptKey); without one, its
+    // words stand for it.
+    public bool Observe(Session full, DateTimeOffset now, TimeSpan arm, string? prompt = null)
     {
         // A turn is a prompt started: TurnCount counts those whose turn has finished, one fewer
         // while one is in progress, so an agent's turn ending is no new turn. The count alone: its
@@ -228,13 +232,13 @@ public sealed class SessionDriver
                 var head = opening[..Math.Min(80, opening.Length)];
                 if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && full.Activity.TurnCount >= 1))
                 {
-                    if (driver == SessionDrivers.Agent) { (agentPrompt, awaitingAgentPrompt) = (message, false); }
+                    if (driver == SessionDrivers.Agent) { (agentPrompt, awaitingAgentPrompt) = (Prompt(full, prompt), false); }
                     pendingAt = null;
                     openingPrompt = null;
                 }
             }
             // The agent's turn's own text: the first message it brings that is new.
-            var said = full.Activity.UserMessage is { } m2 ? Collapse(m2) : null;
+            var said = Prompt(full, prompt);
             if (awaitingAgentPrompt && said is not null && said != lastMessage)
             {
                 (agentPrompt, awaitingAgentPrompt) = (said, false);
@@ -246,4 +250,7 @@ public sealed class SessionDriver
     }
 
     static string Collapse(string text) => Regex.Replace(text, @"\s+", " ").Trim();
+
+    static string? Prompt(Session full, string? prompt) =>
+        full.Activity.UserMessage is null ? null : prompt ?? Collapse(full.Activity.UserMessage);
 }

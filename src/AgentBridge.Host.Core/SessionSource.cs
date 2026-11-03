@@ -727,7 +727,7 @@ public sealed class SessionSource : ISessionSource
         if (_drivers is not null)
         {
             // From what the transcript says, not the ending override: a new turn decides who drives it.
-            _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm);
+            _drivers.For(full.Id).Observe(full, _time.GetUtcNow(), _drivers.Arm, entry.Tracker.PromptKey);
             var (driver, principal) = _drivers.Shown(full.Id);
             shown = shown with { Driver = driver, DriverPrincipal = principal };
             // A prompt an agent sent through the host carries no mark of it in the transcript:

@@ -226,6 +226,31 @@ public class DriverTests
         Assert.Equal((SessionStatus.Working, "the agent's words", UserMessageFrom.Agent), (s.Status, s.Activity.UserMessage, s.Activity.UserMessageFrom));
     }
 
+    // Known by its words alone, an agent's "continue" after the person's was the person's, and the
+    // person's next "continue" the agent's. Each is its own record.
+    [Fact]
+    public async Task The_same_words_sent_by_the_person_and_by_an_agent_are_each_their_senders()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("continue", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("continue", 10), Copilot.TurnStart(11), Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Id)!.Activity.UserMessageFrom);
+
+        Fixture.Append(events, Copilot.User("continue", 13), Copilot.TurnStart(14));
+        await source.RefreshAsync();
+        Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
+    }
+
     [Fact]
     public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
     {

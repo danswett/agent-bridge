@@ -430,6 +430,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         // task_started counted the turn; a user message only says what it is.
         S.UserMessage = text;
         S.FirstUserMessage ??= text;
+        S.UserMessageKey = at?.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture);
         S.Pending.Clear();
         S.SetStatus(SessionStatus.Working);
         S.Activity(at);

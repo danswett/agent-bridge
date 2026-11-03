@@ -243,6 +243,10 @@ internal sealed class SessionTracker
         };
     }
 
+    // Which prompt the session's userMessage is, for the driver (#489): its record where the parser
+    // knows it, beside its words, so the same words sent again are another prompt.
+    public string? PromptKey => _state.UserMessage is { } text ? (_state.UserMessageKey ?? "") + "\n" + text : null;
+
     // The sub-agents with a question pending.
     HashSet<string> Waiting() => [.. _state.Pending.Where(q => q.Agent is not null).Select(q => q.Agent!)];
 
