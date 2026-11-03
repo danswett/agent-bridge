@@ -533,7 +533,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .needs-prompt > :last-child { margin-bottom: 4px; }
 /* Never a tint on a role fill, as in a question: a linked `code` would be bridge at 4.41:1 on
    subtle over the light needs fill (design/tokens.json color.contrast.tints). */
-.needs-prompt.md pre, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
+.needs-prompt.md .md-code, .needs-prompt.md :not(pre) > code { background: var(--ab-card); }
 /* The line reads in the order it runs: no surrounding direction reorders it (hidden characters are
    refused or shown as escapes, js/needs-you.js). The prompt's code reads as all code does (below). */
 .needs-line { unicode-bidi: plaintext; direction: ltr; }
@@ -854,12 +854,12 @@ summary {
 .md code { background: var(--ab-subtle); padding: 1px 4px; border-radius: 4px; }
 /* Never a tint on a role fill: a linked `code` in a question would be bridge at 4.41:1 on subtle
    over the light needs fill (design/tokens.json color.contrast.tints). */
-.question .md pre, .question .md :not(pre) > code { background: var(--ab-card); }
-.md pre { background: var(--ab-subtle); padding: 10px; border-radius: 8px; overflow-x: auto; border: 1px solid var(--ab-stroke2); }
+.question .md .md-code, .question .md :not(pre) > code { background: var(--ab-card); }
+/* The block's box holds its header (notes and Copy) and its code. */
+.md .md-code { margin: 8px 0; background: var(--ab-subtle); border-radius: 8px; border: 1px solid var(--ab-stroke2); }
 /* Wrapped, not scrolled: a long command or a base64 blob breaks across lines on a phone
    rather than running off the side. pre-wrap keeps indentation; Copy takes the real text. */
 .md pre code { font: .86em var(--ab-font-mono); background: none; padding: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
-.md .md-code { position: relative; margin: 8px 0; }
 /* Code, and all of an approval's message, reads strictly left to right in the order it runs, never
    in a direction guessed from its letters (plaintext would): its hidden characters and right-to-left
    letters are escapes (js/hidden-text.js, ui.md §6.4, #220). */
@@ -870,12 +870,14 @@ summary {
 /* What a block held that its escapes stand for, in words (ui.md §6.4): beside Copy, never under it,
    one note above the other. On an approval's card, which has no Copy, above its text. */
 .md-notes { display: flex; flex-direction: column; justify-content: center; gap: 2px; color: var(--ab-text2); font-size: .8rem; line-height: 1.1; }
-.md-code > .md-notes { position: absolute; top: 0; left: 10px; right: calc(var(--tap) + 64px); min-height: var(--tap); }
+/* In the flow, so however the notes wrap (a narrow block, a large text size) the code starts below
+   them and below Copy, never under either (#429). */
+.md .md-code-head { display: flex; align-items: center; gap: 8px; min-height: var(--tap); padding-left: 10px; }
+.md-code-head > .md-notes { flex: 1 1 auto; min-width: 0; padding: 4px 0; }
 .md > .md-notes { margin: 8px 0 4px; }
-/* The code starts below the Copy button, so the button never covers its first line. */
-.md .md-code > pre { margin: 0; padding-top: var(--tap); }
+.md .md-code > pre { margin: 0; padding: 0 10px 10px; overflow-x: auto; }
 .md-copy {
-  position: absolute; top: 0; right: 0; min-width: var(--tap); min-height: var(--tap);
+  margin-left: auto; flex: none; min-width: var(--tap); min-height: var(--tap);
   display: inline-flex; align-items: center; justify-content: center; padding: 0 6px;
   border: 0; background: none; color: var(--ab-text2); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
 }

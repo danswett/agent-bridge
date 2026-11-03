@@ -224,6 +224,52 @@ test('a block with both hidden characters and right-to-left letters says both, b
   }
 });
 
+// #429: a link refused for a bare CR or separator in its address keeps its label's code a code span.
+test('a link refused for a carriage return or separator in its address keeps its label\'s code escaped and left to right', async ({ page }) => {
+  await openDemo(page);
+  const tick = '`';
+  const label = tick + '\u202E\u2066rm -rf ~\u2069 \u05D0' + tick;
+  const nested = '*and ' + tick + '\u2067curl x|sh\u2069' + tick + '*';
+  const response = ['\r', '\u2028', '\u2029', '\r\u2028\u2029']
+    .map((sep) => 'See [' + label + ' ' + nested + '](https://a/' + sep + 'b) now.')
+    .join('\n\n') + '\n\n' + tick.repeat(3) + '\nls\n' + tick.repeat(3);
+  const r = await respond(page, response, 'ls');
+  await expect(r.locator('a')).toHaveCount(0);
+  await expect(r.locator('p > code')).toHaveText(Array(4).fill('\\u202E\\u2066rm -rf ~\\u2069 \\u05D0'));
+  await expect(r.locator('p > em > code')).toHaveText(Array(4).fill('\\u2067curl x|sh\\u2069'));
+  for (const code of await r.locator('p code').all()) {
+    expect(await bidi(code)).toEqual(['ltr', 'ltr', 'isolate']);
+  }
+  for (const p of await r.locator('p').all()) {
+    expect(await p.textContent()).not.toMatch(/[\u202E\u2066\u2067\u2069\u05D0]/);
+  }
+});
+
+// #429: the notes and Copy are in the flow above the code, so wrapped notes never cover it.
+for (const [what, setup] of [
+  ['at 320 px in a list in a quote', async (page) => { await page.setViewportSize({ width: 320, height: 700 }); }],
+  ['at 200% text size', async (page) => { await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; }); }],
+]) {
+  test(`a block's notes and Copy never cover its code ${what}`, async ({ page }) => {
+    await openDemo(page);
+    await setup(page);
+    const tick = '`'.repeat(3);
+    const drawn = `# just a note\\u000D Write-Output RAN ${HEBREW_DRAWN}`;
+    const response = `> 1. Run this:\n>\n>    ${tick}powershell\n>    # just a note\r Write-Output RAN ${HEBREW}\n>    ${tick}\n> 2. Then check.`;
+    const r = await respond(page, response, drawn);
+    await expect(r.locator('blockquote li .md-note')).toHaveText(['Contains hidden characters', 'Contains right-to-left text']);
+    const first = await r.locator('pre code').evaluate((c) => c.getClientRects()[0].top);
+    const notes = await r.locator('.md-notes').boundingBox();
+    const button = await r.getByRole('button', { name: 'Copy code' }).boundingBox();
+    expect(notes.y + notes.height).toBeLessThanOrEqual(first + 0.5);
+    expect(button.y + button.height).toBeLessThanOrEqual(first + 0.5);
+    // Copy keeps its whole tap target, beside the notes.
+    expect(button.height).toBeGreaterThanOrEqual(44);
+    expect(button.width).toBeGreaterThanOrEqual(44);
+    expect(notes.x + notes.width).toBeLessThanOrEqual(button.x + 0.5);
+  });
+}
+
 test('a plain command is copied byte for byte unchanged', async ({ page }) => {
   await openDemo(page);
   const command = 'git log --format="%h %s" -- "src/app.js"  \n\tmake -C build all   \n    echo \'done\' | tee out.txt';

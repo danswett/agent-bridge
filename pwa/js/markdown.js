@@ -533,7 +533,15 @@ function build(node, doc) {
   }
   if (node.tag === 'a') {
     const href = safeHref(a.href);
-    if (!href) { return doc.createTextNode(revealLineSeparators(textOf(node))); }
+    // A link that is no link (its address refused here, or holding a bare CR or separator,
+    // parseMarkdown) keeps its words drawn as they would be inside it: a code span in its label
+    // stays a code span, escaped and isolated. Flattened to text, its bidi controls and
+    // right-to-left letters drew raw (#429).
+    if (!href) {
+      const words = doc.createDocumentFragment();
+      for (const child of node.children ?? []) { words.append(build(child, doc)); }
+      return words;
+    }
     e.setAttribute('href', href);
     e.setAttribute('target', '_blank');
     e.setAttribute('rel', 'noopener noreferrer nofollow');
@@ -550,7 +558,7 @@ const COPY_RESET_MS = 1500;
 // A code block with a Copy button in its top-right corner. On a phone, a long command (a
 // 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
 // is copied is exactly what the block draws (codeText), not as it is wrapped on screen.
-// The button sits beside the <pre>, not in it, so the block's own text stays the code.
+// The button sits above the <pre>, not in it, so the block's own text stays the code.
 // The block reads strictly left to right (dir="ltr", isolated in app.css), never in a direction
 // guessed from its letters.
 function codeBlock(raw, doc) {
@@ -586,12 +594,17 @@ function codeBlock(raw, doc) {
       delete button.dataset.copy;
     }, COPY_RESET_MS);
   });
+  // The notes and Copy sit in a header above the code, in the flow: its real height pushes the code
+  // down, however the notes wrap in a narrow block or at a large text size. Laid over the code's
+  // padding instead, two wrapped notes covered its first lines (#429).
+  const head = doc.createElement('div');
+  head.className = 'md-code-head';
+  const notes = notesOf(raw, doc);
+  if (notes) { head.append(notes); }
+  head.append(button);
   const wrap = doc.createElement('div');
   wrap.className = 'md-code';
-  wrap.append(button);
-  const notes = notesOf(raw, doc);
-  if (notes) { wrap.append(notes); }
-  wrap.append(pre, status);
+  wrap.append(head, pre, status);
   return wrap;
 }
 
