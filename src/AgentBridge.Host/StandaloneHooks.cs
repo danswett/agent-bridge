@@ -94,7 +94,7 @@ public sealed class StandaloneHooks(
     public async Task InstallAsync(string agent, bool dryRun, TextWriter output, CancellationToken ct = default)
     {
         Preflight(agent, removing: false);
-        using var held = dryRun ? null : Lock();
+        using var held = dryRun ? null : Lock(profile);
         Preflight(agent, removing: false);
         var launcher = Launchers.Find(agent)!;
         var launch = LaunchSettings();
@@ -135,7 +135,7 @@ public sealed class StandaloneHooks(
         }
         // Save ownership first: an interrupted install can be safely retried or removed.
         DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), ownerBefore);
-        Refresh(profile, hookSource);
+        RefreshFiles(profile, hookSource);
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
         else
         {
@@ -155,7 +155,7 @@ public sealed class StandaloneHooks(
     public async Task RemoveAsync(string agent, bool dryRun, TextWriter output, CancellationToken ct = default)
     {
         Preflight(agent, removing: true);
-        using var held = dryRun ? null : Lock();
+        using var held = dryRun ? null : Lock(profile);
         Preflight(agent, removing: true);
         string? executable = null;
         var present = false;
@@ -196,7 +196,7 @@ public sealed class StandaloneHooks(
         output.WriteLine("Removed. Existing sessions keep their hooks until they end; other settings and Codex hook trust were left alone.");
     }
 
-    FileStream Lock()
+    static FileStream Lock(string profile)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(profile)!);
         return new FileStream(Path.Combine(Path.GetDirectoryName(profile)!, "migration.lock"),
@@ -204,6 +204,12 @@ public sealed class StandaloneHooks(
     }
 
     public static void Refresh(string profile, string source)
+    {
+        using var held = Lock(profile);
+        RefreshFiles(profile, source);
+    }
+
+    static void RefreshFiles(string profile, string source)
     {
         var folder = Path.Combine(profile, "hooks");
         var hook = Path.Combine(folder, "agent-bridge-host-hook.exe");

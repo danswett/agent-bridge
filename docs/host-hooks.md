@@ -43,7 +43,8 @@ checks the legacy daemon before intake or delivery. Fresh setup never writes the
 home, changes a legacy task or starts a host automatically.
 Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
 finishes on the previous image, and an interrupted replacement restores that image before
-retrying. Equivalent Windows profile casing does not leave owned Claude commands behind
+retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
+Equivalent Windows profile casing does not leave owned Claude commands behind
 when removing or reinstalling hooks.
 
 Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into

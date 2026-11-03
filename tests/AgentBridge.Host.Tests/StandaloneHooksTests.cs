@@ -203,6 +203,23 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
+    public async Task Startup_refresh_does_not_race_a_hook_setup_or_migration_holding_the_shared_lock()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        var previous = File.ReadAllBytes(Hook);
+        File.WriteAllText(Source, "the next hook version");
+        using (new FileStream(Path.Combine(Path.GetDirectoryName(Profile)!, "migration.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Throws<IOException>(() => StandaloneHooks.Refresh(Profile, Source));
+            Assert.Equal(previous, File.ReadAllBytes(Hook));
+        }
+
+        StandaloneHooks.Refresh(Profile, Source);
+        Assert.Equal("the next hook version", File.ReadAllText(Hook));
+    }
+
+    [Fact]
     public async Task An_interrupted_refresh_restores_the_previous_hook_even_when_the_new_source_is_missing()
     {
         await Setup.InstallAsync("copilot", false, TextWriter.Null);
