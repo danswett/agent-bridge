@@ -30,7 +30,7 @@ static partial class SelfTest
         try
         {
             host.UpdateLayout();
-            await Task.Delay(100);
+            await Until(() => Find<TextBlock>(md).Any(t => t.Text == LongCommand && t.ActualHeight > 0), TimeSpan.FromSeconds(5));
             var code = Find<TextBlock>(md).FirstOrDefault(t => t.Text == LongCommand);
             var line = code is null ? 0 : code.LineHeight;
             check(code is { TextWrapping: TextWrapping.Wrap } && code.ActualHeight >= 2 * line && Find<ScrollViewer>(md).Count == 0,

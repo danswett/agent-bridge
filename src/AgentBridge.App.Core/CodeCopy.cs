@@ -34,7 +34,7 @@ public sealed class CodeCopy : Observable
 
     // What the block draws: its text without the blank lines a fence may end with, as the app
     // always drew it. Copy still takes them, as the PWA's does.
-    public string Shown => Text.TrimEnd('\n');
+    public string Shown => Text.TrimEnd('\r', '\n');
 
     public string Label { get => label; private set => Set(ref label, value); }
 
