@@ -27,6 +27,7 @@ public sealed class AgentReadinessService(
     AgentReadinessReport? report;
     Task loop = Task.CompletedTask;
     long revision;
+    int started;
 
     public TimeSpan Interval { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan VersionTimeout { get; init; } = TimeSpan.FromSeconds(3);
@@ -41,7 +42,10 @@ public sealed class AgentReadinessService(
             })],
         } : null;
 
-    public void Start() => loop = Task.WhenAll(HearAsync(stop.Token), PollAsync(stop.Token));
+    public void Start()
+    {
+        if (Interlocked.Exchange(ref started, 1) == 0) { loop = Task.WhenAll(HearAsync(stop.Token), PollAsync(stop.Token)); }
+    }
 
     async Task PollAsync(CancellationToken ct)
     {
@@ -111,7 +115,14 @@ public sealed class AgentReadinessService(
             if (executable is null) { return row; }
             row = row with { Executable = executable, Installation = new(ReadinessState.Working, "Executable found using the launch configuration.") };
             if (readOnly() is { } why) { return row with { VersionCheck = new(ReadinessState.Blocked, $"Version command not run while the host is read-only: {why}") }; }
-            var result = await commands.RunAsync(executable, ["--version"], VersionTimeout, ct);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(VersionTimeout);
+            CommandResult result;
+            try { result = await commands.RunAsync(executable, ["--version"], VersionTimeout, limit.Token).WaitAsync(limit.Token); }
+            catch (OperationCanceledException) when (limit.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                result = new CommandResult(true, true, -1, "");
+            }
             var version = result.Ran && !result.TimedOut && result.ExitCode == 0
                 ? Regex.Match(result.Output, @"\b\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?\b", RegexOptions.CultureInvariant).Value : "";
             return row with

@@ -29,6 +29,8 @@ a fresh host scan. CLI sign-in, trust and new-session activation stay explicitly
 this is not yet the first-run installer or repair flow. Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
+Home Assistant setup, configuration and verification are outside the first-run design
+while its model is redesigned (#384); existing integrations are unchanged.
 
 * **Same protocol as the relay channel.** The pipe carries the v1 messages exactly as a
   Noise channel does (`{id, op, data}`, `{re, ok, result|error}`, `{ev, seq, data}`), so

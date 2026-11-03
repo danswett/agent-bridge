@@ -433,6 +433,7 @@ public sealed class SettingsViewModel : Observable
     {
         if (!HostRunning || !host.Can(HostOps.AgentReadinessCapability)) { throw new InvalidOperationException(AgentsState); }
         await host.CallAsync<AgentReadinessReport>(HostOps.AgentsRefresh, timeout: TimeSpan.FromSeconds(20));
+        await host.RefreshStatusAsync();
     });
 
     public Task CheckForUpdatesAsync() => RunAsync(async () =>

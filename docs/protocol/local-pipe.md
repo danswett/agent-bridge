@@ -196,6 +196,9 @@ Launch's executable locator and running launch configuration, not an app-side PA
 Installed executables get `--version` with a three-second timeout each; a failed version
 probe does not make an installed CLI missing. A read-only host (including one beside the
 legacy bridge) runs no version commands and reports hook setup blocked.
+The guard is checked again before each process: if the legacy bridge starts during a
+scan, subsequent commands are blocked. Earlier observations remain evidence from before
+that transition; `readOnlyReason` reports the reason observed at scan completion.
 
 This first slice reports all four launchers (Agency, Copilot, Claude and Codex).
 Ownership records and enabled intake are evidence, not proof that registrations are
@@ -208,6 +211,8 @@ Agency shares Copilot's hook evidence; it does not prove that an Agency test ses
 Neither old events nor a matching ownership marker imply end-to-end readiness.
 
 Scan completions and newly handled hook events publish whole `host.status` events.
+After a manual scan, Settings also reads status explicitly so a delayed or absent event
+does not leave the old report displayed; a newer status event or connection wins the race.
 Settings drops displayed agent rows on disconnect and explains an older host's missing
 capability instead of presenting its agents as not installed.
 

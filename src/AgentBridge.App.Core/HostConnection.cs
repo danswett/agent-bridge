@@ -128,6 +128,20 @@ public sealed class HostConnection : IAsyncDisposable
     public async Task<T> ReadAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) where T : class =>
         Received.Read<T>(await CallAsync(op, data, timeout, ct));
 
+    public async Task RefreshStatusAsync(CancellationToken ct = default)
+    {
+        var now = Volatile.Read(ref current);
+        if (now is null || !now.Channel.IsOpen || now.Instance is null) { throw new HostNotRunningException("not connected to the Bridge Host"); }
+        var heard = Interlocked.Read(ref statusEvents);
+        var status = await now.Channel.CallAsync<HostStatus>(HostOps.Status, ct: ct);
+        ui.Post(() =>
+        {
+            if (!ReferenceEquals(Volatile.Read(ref current), now) || Interlocked.Read(ref statusEvents) != heard) { return; }
+            Status = status;
+            Changed?.Invoke();
+        });
+    }
+
     async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)

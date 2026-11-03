@@ -99,7 +99,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         foreach (var o in owned) { await o.DisposeAsync(); }
         authorization.Dispose();
         hostKey.Dispose();
-        await readiness.DisposeAsync();
+        if (readiness is not null) { await readiness.DisposeAsync(); }
         await source.DisposeAsync();
         f.Dispose();
         try { Directory.Delete(profile, recursive: true); } catch (IOException) { }

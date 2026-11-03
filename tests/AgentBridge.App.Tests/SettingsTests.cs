@@ -129,7 +129,6 @@ public sealed class SettingsTests : IAsyncLifetime
         host.On(HostOps.AgentsRefresh, _ =>
         {
             host.Status = host.Status with { Agents = Readiness("2.3.4") };
-            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
             return host.Status.Agents;
         });
         await settings.CheckAgentsAsync();

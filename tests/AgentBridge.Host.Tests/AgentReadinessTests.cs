@@ -39,8 +39,11 @@ public sealed class AgentReadinessTests : IDisposable
 
     string Profile => Path.Combine(f.Root, "profile");
     IntakeState.AgentHomes Homes => new(f.CopilotHome, f.ClaudeHome, f.CodexHome);
-    AgentReadinessService Service(LaunchConfig? config = null, HookIntake? intake = null) =>
-        new(Profile, Homes, config ?? LaunchConfig.Default, locator, commands, () => readOnly, intake, f.Time);
+    AgentReadinessService Service(LaunchConfig? config = null, HookIntake? intake = null, TimeSpan? timeout = null) =>
+        new(Profile, Homes, config ?? LaunchConfig.Default, locator, commands, () => readOnly, intake, f.Time)
+        {
+            VersionTimeout = timeout ?? TimeSpan.FromSeconds(3),
+        };
     static AgentReadiness Agent(AgentReadinessReport report, string id) => report.Agents.Single(a => a.Id == id);
     public void Dispose() => f.Dispose();
 
@@ -202,6 +205,75 @@ public sealed class AgentReadinessTests : IDisposable
 
         Assert.Single(commands.Calls);
         Assert.All(reports, r => Assert.Equal("2.3.4", Agent(r, "claude").Version));
+    }
+
+    [Fact]
+    public async Task A_runner_that_ignores_its_timeout_cannot_hold_a_scan_forever()
+    {
+        locator.Installed["claude"] = "claude.exe";
+        var release = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        commands.Run = _ => release.Task;
+        await using var service = Service(timeout: TimeSpan.FromMilliseconds(50));
+        try
+        {
+            var agent = Agent(await service.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(5)), "claude");
+            Assert.Equal(ReadinessState.NeedsAction, agent.VersionCheck.State);
+            Assert.Contains("timed out", agent.VersionCheck.Detail);
+        }
+        finally { release.TrySetResult(new CommandResult(true, false, 0, "1.2.3")); }
+    }
+
+    [Fact]
+    public async Task Shutdown_cancels_an_active_scan_even_when_its_runner_ignores_cancellation()
+    {
+        locator.Installed["claude"] = "claude.exe";
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        commands.Run = _ => { entered.TrySetResult(); return release.Task; };
+        var service = Service();
+        var pending = service.RefreshAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var disposing = service.DisposeAsync().AsTask();
+        try
+        {
+            await disposing.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+            Assert.Null(service.Snapshot);
+        }
+        finally
+        {
+            release.TrySetResult(new CommandResult(true, false, 0, "1.2.3"));
+            await disposing;
+        }
+    }
+
+    [Fact]
+    public async Task Starting_twice_does_not_create_another_polling_loop()
+    {
+        await using var service = Service();
+        service.Start();
+        service.Start();
+
+        Assert.Single(locator.Asked, a => a.Id == "agency");
+    }
+
+    [Fact]
+    public async Task A_legacy_bridge_starting_during_a_scan_blocks_the_remaining_probes()
+    {
+        foreach (var launcher in Launchers.All) { locator.Installed[launcher.Id] = launcher.Command; }
+        commands.Run = _ =>
+        {
+            readOnly = "agent-ha-bridge started during detection";
+            return Task.FromResult(new CommandResult(true, false, 0, "1.2.3"));
+        };
+        await using var service = Service();
+
+        var report = await service.RefreshAsync();
+
+        Assert.Single(commands.Calls);
+        Assert.Equal(readOnly, report.ReadOnlyReason);
+        Assert.Equal(ReadinessState.Working, report.Agents[0].VersionCheck.State);
+        Assert.All(report.Agents.Skip(1), a => Assert.Equal(ReadinessState.Blocked, a.VersionCheck.State));
     }
 
     [Fact]

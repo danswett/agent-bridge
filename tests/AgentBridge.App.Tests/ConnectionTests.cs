@@ -197,6 +197,49 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_newer_status_event_wins_over_a_manual_read_waiting_for_the_UI()
+    {
+        var ui = new HoldingDispatcher();
+        await using var watching = host.Connect(ui);
+        await Wait.UntilAsync(() => watching.State == LinkState.Connected && watching.Status is not null, "the status");
+        var shown = new List<int>();
+        watching.Changed += () => shown.Add(watching.Status!.ProcessId);
+        ui.Hold();
+        try
+        {
+            host.Status = host.Status with { ProcessId = 111 };
+            await watching.RefreshStatusAsync();
+            await host.SendAsync(HostOps.StatusEvent, host.Status with { ProcessId = 222 });
+            await watching.CallAsync<HostStatus>(HostOps.Status);
+        }
+        finally { ui.Release(); }
+
+        Assert.Equal(222, watching.Status!.ProcessId);
+        Assert.DoesNotContain(111, shown);
+    }
+
+    [Fact]
+    public async Task A_manual_status_read_from_a_closed_connection_is_not_applied_later()
+    {
+        var ui = new HoldingDispatcher();
+        await using var watching = host.Connect(ui);
+        await Wait.UntilAsync(() => watching.State == LinkState.Connected && watching.Status is not null, "the status");
+        var shown = new List<int>();
+        watching.Changed += () => shown.Add(watching.Status!.ProcessId);
+        ui.Hold();
+        try
+        {
+            host.Status = host.Status with { ProcessId = 111 };
+            await watching.RefreshStatusAsync();
+            await host.StopAsync();
+            await Wait.UntilAsync(() => watching.HostInstance is null, "the connection closed");
+        }
+        finally { ui.Release(); }
+
+        Assert.DoesNotContain(111, shown);
+    }
+
+    [Fact]
     public async Task A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again()
     {
         await Wait.UntilAsync(() => connection.State == LinkState.Connected && connection.Sessions.Get("s1") is not null, "the snapshot");
