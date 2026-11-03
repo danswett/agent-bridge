@@ -11,7 +11,7 @@
             Section("Startup") {
                 Toggle("Open Agent Bridge at login", isOn: Binding(get: {
                     status == .enabled || status == .requiresApproval
-                }, set: setEnabled))
+                }, set: { setEnabled($0) }))
                 if status == .requiresApproval {
                     Text("Allow Agent Bridge in Login Items to finish enabling it.").font(.caption)
                     Button("Open Login Items Settings") { SMAppService.openSystemSettingsLoginItems() }
