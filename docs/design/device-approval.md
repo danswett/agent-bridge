@@ -172,7 +172,7 @@ The exact field set per `op`:
 | `genesis` | `device` (a person's), `approval` (`method: genesis`, no `transcript`); no `prev` |
 | `add` | `prev`, `device`, `approval` |
 | `remove` | `prev`, `target` (`{ "id": <device id>, "add": <entry hash of the add it revokes> }`), optional `voidGrants` (only ever `true`), optional `cosigner` |
-| `rename` | `prev`, `target`, `name` |
+| `rename` | `prev`, `target` (`{ "id", "add" }`, as for `remove`), `name` |
 | `merge` | `prev` (two to four) |
 
 **Strict parsing** (all three implementations, with shared negative vectors in R1). The body
@@ -242,9 +242,13 @@ only if:
   then gives the remover no power it lacks anyway: everything the target added is junior to the
   target and so to the remover, which could remove it through the cascade. It is one flag rather
   than a list of entries, so it fits however many entries the target signed;
-* `rename`: the target is active and is `by` itself or junior to it. Each device may be renamed
-  at most 8 times in a generation. A device's name is set by its **latest** non-void renames: those
-  with no non-void rename of the same device among their descendants. If concurrent branches
+* `rename`: like a removal, its `target` names the device id and the add it applies to, which must
+  be active in the parents' state and be `by` itself or junior to it. The 8-rename quota belongs to
+  that add. A device's name is set only by renames naming its **active** add, so a rename of a
+  fabricated copy of a device (an add of its `dh` that turns out subordinate or void) neither
+  changes the real device's name nor spends its quota. Among those, the name comes from the
+  **latest** non-void renames: those with no non-void rename of the same add among their
+  descendants. If concurrent branches
   leave more than one, the one with the smallest entry hash wins, in every verifier and delivery
   order, and the Devices page marks the name as changed concurrently. Without a rename, the name
   is the one in its add;
@@ -254,7 +258,7 @@ only if:
   * per generation, at most **512 adds** and **4,096 entries other than removals**, and 64 active
     devices;
   * per signer (the add that made `by` active, above), at most **64 adds, 64 merges and 64
-    removals**; and each device may be
+    removals**; and each add may be
     renamed at most 8 times.
 
   An entry that would exceed a cap or its signer's budget is refused and reported. **Removals are
@@ -1259,6 +1263,9 @@ Each slice adds its own. Together they cover:
   * two established devices rename one junior device on sibling branches: the rename with the
     smaller entry hash wins in both delivery orders and at every verifier, and a later rename that
     descends from both supersedes it;
+  * H adds A's public key on its own branch where A is absent (A and H concurrent) and renames
+    that copy eight times: after the merge the copy is subordinate, A's name is unchanged, and A
+    can still be renamed eight times;
   * the genesis approves A and B itself, and is lost: A and B together remove it (their lineages
     meet only at the genesis, which the cut removes);
   * the genesis device removes itself with `voidGrants`: its adds, renames and merges are void,
