@@ -453,6 +453,9 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
                 }
             }
             catch (OperationCanceledException) { }
+            // Once End has cancelled it, the source goes with the polling that used it (Dispose
+            // may run twice, which it allows).
+            finally { if (stop.IsCancellationRequested) { stop.Dispose(); } }
         });
     }
 
@@ -463,6 +466,7 @@ internal sealed class CodexWatch(UsageProbes probes, int own, TimeProvider clock
         {
             if (ended) { return seen; }
             stop.Cancel();
+            if (polling is not { IsCompleted: false }) { stop.Dispose(); }
             Observe();
             ended = true;
             return seen;
