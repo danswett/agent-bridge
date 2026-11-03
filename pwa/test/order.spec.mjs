@@ -375,3 +375,24 @@ for (const width of [900, 1440]) {
     });
   });
 }
+
+
+test('closed ended history is deferred and unrelated live updates retain its rows', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
+  const ended = page.locator('.ended-group');
+  await expect(ended.locator('summary')).toHaveText('Ended · 1');
+  await expect(ended.locator('.ended')).toHaveCount(0);
+  await ended.locator('summary').click();
+  await expect(ended.locator('.ended')).toHaveCount(1);
+  await page.evaluate(() => { window.__endedRow = document.querySelector('.ended'); });
+  await upsert(page, CODEX, { updatedAt: later() });
+  await expect.poll(() => page.evaluate(() => document.querySelector('.ended') === window.__endedRow)).toBe(true);
+  await ended.locator('summary').click();
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), DELEGATING);
+  await expect(ended.locator('summary')).toHaveText('Ended · 2');
+  await expect(ended.locator('.ended')).toHaveCount(1);
+  await ended.locator('summary').click();
+  await expect(ended.locator('.ended')).toHaveCount(2);
+  expect(await page.evaluate(() => document.querySelector('.ended:last-child') === window.__endedRow)).toBe(true);
+});
