@@ -22,8 +22,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly Probe probe = new();
     readonly Screen console = new();
-    // The reply's time: it moves on only while something waits on it, the reply between its looks or a
-    // test's agent before it draws or records what comes late, so neither races the wall clock (#486).
+    // The reply's time: it moves on only while the reply waits between its looks, so its looks and
+    // its timeouts do not race the wall clock (#486).
     readonly PollClock clock = new();
     SessionSource source = null!;
     AttachmentStore store = null!;
@@ -131,10 +131,10 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
 
     static string Typed(KeyPlan plan) => string.Concat(plan.Sends.Select(s => s.Text));
 
-    // What the agent does 300 ms after it is typed into, on the reply's clock. The wait begins as
-    // the keys land, so the clock cannot run past it first, and what it does is done before the
-    // reply's next look. Real delays and Task.Run raced the reply's 25 ms looks (#486).
-    void Later(Action then) => Task.Delay(TimeSpan.FromMilliseconds(300), clock).ContinueWith(_ => then(), TaskContinuationOptions.ExecuteSynchronously);
+    // What the agent does only after the reply has looked at it once more, as it was typed into.
+    // Real delays and Task.Run raced the reply's 25 ms looks; a timer on the reply's own clock could
+    // still fire before the reply's first look, and the test pass without what it is about (#486).
+    void Later(Action then) => clock.OnNextWait(then);
 
     // ---- Claude Code ----
 
@@ -283,12 +283,18 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         console.OnInject = plan =>
         {
             if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("drawn late")); return; }
-            // At the first look the box shows only the start of the words; the rest comes after.
+            // The box shows only the start of the words until it has been looked at so; the rest comes after.
             console.Rows = ClaudeIdle("dra");
-            Later(() => console.Rows = ClaudeIdle("drawn late"));
+        };
+        var part = ClaudeIdle("dra");
+        var lookedAtPart = 0;
+        console.AfterRead = rows =>
+        {
+            if (rows.SequenceEqual(part)) { lookedAtPart++; console.Rows = ClaudeIdle("drawn late"); }
         };
 
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "drawn late")).Outcome);
+        Assert.Equal(1, lookedAtPart);
         Assert.Equal(2, console.Plans.Count);
     }
 
@@ -638,8 +644,16 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
             return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
-            FailReads ? throw new IOException("the console went away") : Task.FromResult(new ConsoleScreen([.. Rows], null));
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            if (FailReads) { throw new IOException("the console went away"); }
+            var rows = Rows;
+            AfterRead?.Invoke(rows);
+            return Task.FromResult(new ConsoleScreen([.. rows], null));
+        }
+
+        // What the agent does once it has been looked at, with what was seen.
+        public Action<List<string>>? AfterRead;
 
         public volatile bool FailReads;
     }
