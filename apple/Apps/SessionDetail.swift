@@ -62,17 +62,30 @@ struct SessionDetail<InspectorControls: View>: View {
                     }
                 }
                 if let message = session.activity?["userMessage"]?.string, !message.isEmpty {
-                    Section("You") { Text(message) }
+                    Section {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("You", systemImage: "person.crop.circle").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            Text(message).textSelection(.enabled)
+                        }
+                        .frame(maxWidth: 680, alignment: .leading)
+                        .padding(16)
+                        .background(.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    }
                 }
                 if session.response?.isEmpty == false || session.responseTruncated {
-                    Section("\(session.agent.capitalized) response") {
-                        if let response = session.response, !response.isEmpty {
-                            BridgeMarkdown(response)
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("\(session.agent.capitalized) response", systemImage: "sparkle").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            if let response = session.response, !response.isEmpty {
+                                BridgeMarkdown(response)
+                            }
+                            if session.responseTruncated {
+                                Text(session.response?.isEmpty == false ? "Earlier response text was omitted by the host." : "The main agent’s response was omitted by the host’s message limit.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
-                        if session.responseTruncated {
-                            Text(session.response?.isEmpty == false ? "Earlier response text was omitted by the host." : "The main agent’s response was omitted by the host’s message limit.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        .frame(maxWidth: 680, alignment: .leading)
+                        .padding(.vertical, 12)
                     }
                 }
                 if showDetails, let reasoning = session.reasoning, !reasoning.isEmpty {
