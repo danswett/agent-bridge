@@ -325,9 +325,15 @@ internal sealed class BackgroundWork
     // Claude notifies an agent's end only once it has no live background agents of its own
     // (its task-notification says so), so every one under it has stopped by then, whether or
     // not its own notice was read.
-    public void DescendantsStopped(string agentId, DateTimeOffset? at)
+    // One woken since (its run started after, or spare says a message woke it after) is a run
+    // the end said nothing of.
+    public void DescendantsStopped(string agentId, DateTimeOffset? at, Func<string, bool>? spare = null)
     {
-        foreach (var agent in _agents.Values.Where(a => a.Working && Under(a, agentId)).ToList()) { Stop(agent, at, SubagentOutcome.Done); }
+        foreach (var agent in _agents.Values.Where(a => a.Working && Under(a, agentId)).ToList())
+        {
+            if (at is { } end && (agent.Since > end || spare?.Invoke(agent.Id) == true)) { continue; }
+            Stop(agent, at, SubagentOutcome.Done);
+        }
     }
 
     bool Under(Agent agent, string ancestor)

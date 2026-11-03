@@ -280,7 +280,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         }
         receivers.AddRange(nicknames.Keys);
         receivers = [.. receivers.Distinct(StringComparer.Ordinal)];
-        switch (Json.Str(item, "tool"))
+        // A call that failed did what it says to no one; the states it reports still hold.
+        switch (Json.Str(item, "status") == "failed" ? null : Json.Str(item, "tool"))
         {
             case "spawn_agent":
                 foreach (var id in receivers)
@@ -314,7 +315,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             || !kinds.EnumerateArray().Any(k => k.ValueKind == JsonValueKind.String && k.GetString() == NotificationKind)) { return false; }
         if (ContentText(p) is not { } text || !text.StartsWith(NotificationStart, StringComparison.Ordinal)) { return false; }
         // Only what is between the tags is the notice's JSON.
-        var close = text.IndexOf(NotificationEnd, NotificationStart.Length, StringComparison.Ordinal);
+        // The last closing tag: a result can quote one.
+        var close = text.LastIndexOf(NotificationEnd, StringComparison.Ordinal);
         if (close < 0) { return false; }
         var start = text.IndexOf('{', NotificationStart.Length);
         if (start < 0 || start > close) { return false; }

@@ -92,7 +92,9 @@ internal sealed class ClaudeSubagents
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
         if (meta.ValueKind != JsonValueKind.Object || Json.Str(meta, "parentAgentId") is not { } parent || !IsId(parent)) { return true; }
-        var (startedAt, prompt) = Head(Path.Combine(dir, Prefix + id + ".jsonl"), id);
+        // A transcript there but unreadable (locked, say) is tried again with the record.
+        if (Head(Path.Combine(dir, Prefix + id + ".jsonl"), id) is not { } head) { return false; }
+        var (startedAt, prompt) = head;
         record = new Record(id, parent, Json.Int(meta, "spawnDepth") ?? 2, Json.Str(meta, "description"), Json.Str(meta, "agentType"),
             Json.Str(meta, "toolUseId"), Json.Str(meta, "requestShape") == "background", startedAt, prompt);
         return true;
@@ -102,7 +104,7 @@ internal sealed class ClaudeSubagents
     // stamped with its agentId. One too long to read whole is dated by its own timestamp, read as
     // far as it goes, with no prompt; one with no newline yet is read whole, and again later if it
     // is not complete.
-    static (DateTimeOffset? At, string? Prompt) Head(string path, string id)
+    static (DateTimeOffset? At, string? Prompt)? Head(string path, string id)
     {
         byte[] bytes;
         long length;
@@ -113,7 +115,8 @@ internal sealed class ClaudeSubagents
             bytes = new byte[(int)Math.Min(length, MaxHeadBytes)];
             stream.ReadExactly(bytes);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, null); }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return (null, null); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
         var newline = Array.IndexOf(bytes, (byte)'\n');
         if (newline < 0)
         {

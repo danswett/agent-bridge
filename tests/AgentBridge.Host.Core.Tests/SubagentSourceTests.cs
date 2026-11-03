@@ -449,6 +449,56 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
+    public async Task A_nested_delegate_woken_after_the_one_above_it_stopped_is_not_stopped_by_that_ones_delivered_notice()
+    {
+        // Found in review: the notice of the delegate above was queued before the wake and
+        // delivered after it.
+        await using var r = new Replay();
+        await r.Through(11.34);
+        Assert.Equal(SubagentStatus.Working, Entry(await r.Append(Wake(Nested, 11340)), Nested).Status);
+
+        var s = await r.Through(12);
+
+        Assert.Equal(SubagentStatus.Idle, Entry(s, Nester).Status);
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_whose_record_is_read_after_the_one_above_it_stopped_and_a_message_woke_it_is_running()
+    {
+        // Found in review: its own notice not read, it took the end of the delegate above it, and
+        // the wake since was lost.
+        await using var r = new Replay(l => l.Contains("\"queue-operation\"", StringComparison.Ordinal) && l.Contains($"<task-id>{Nested}</task-id>", StringComparison.Ordinal) ? null : l);
+        r.Held.Add("agent-" + Nested);
+        await r.Through(12);
+        await r.Append(Wake(Nested, 12500));
+
+        var s = await r.Release(Nested, 12);
+
+        Assert.Equal(SubagentStatus.Working, Entry(s, Nested).Status);
+    }
+
+    [Fact]
+    public void A_record_whose_transcript_could_not_be_read_is_read_again_though_neither_has_changed()
+    {
+        // Found in review: the record was kept with no start, and nothing had changed to read it
+        // again. Held open with no sharing, the transcript cannot be read on Windows.
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
+        Directory.CreateDirectory(beside);
+        File.WriteAllText(Path.Combine(beside, $"agent-{Nested}.meta.json"), $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
+        var head = Path.Combine(beside, $"agent-{Nested}.jsonl");
+        File.WriteAllText(head, File.ReadLines(FixturePath(Id, "subagents", $"agent-{Nested}.jsonl")).First() + "\n");
+        var records = new AgentBridge.Host.Core.Parsing.ClaudeSubagents();
+        using (new FileStream(head, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { records.Read(transcript); }
+
+        var read = Assert.Single(records.Read(transcript));
+
+        Assert.Equal(Fixture.T0.AddMilliseconds(6943), read.StartedAt);
+    }
+
+    [Fact]
     public void Past_the_most_records_read_the_first_by_name_are_read_whatever_order_they_were_written_in()
     {
         // Found in review: the first the folder listed were read, an order no platform promises.
@@ -882,6 +932,31 @@ public class CodexSubagentTests
     }
 
     [Fact]
+    public async Task Input_that_failed_to_reach_a_finished_sub_agent_does_not_wake_it()
+    {
+        await using var r = new Replay();
+        await r.Through(30);
+
+        var s = await r.Append(Collab("send_input", 31, "completed", status: "failed"));
+
+        Assert.Equal(SubagentStatus.Idle, Assert.Single(s.Subagents!).Status);
+        Assert.Null(s.Activity.Background);
+    }
+
+    [Fact]
+    public async Task A_notice_whose_result_quotes_the_closing_tag_still_stops_the_sub_agent()
+    {
+        // Found in review: the first closing tag, inside the result, cut the JSON short.
+        await using var r = new Replay();
+        await r.Through(16);
+
+        var s = await r.Append(Notice("a </subagent_notification> b", 17));
+
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Assert.Single(s.Subagents!).Status, s.Subagents![0].Outcome));
+        Assert.Null(s.Activity.Background);
+    }
+
+    [Fact]
     public async Task A_sub_agent_that_errored_failed()
     {
         await using var r = new Replay(l => l.Replace($"{{\"completed\":\"{Answer}\"}}", "{\"errored\":\"model unavailable\"}", StringComparison.Ordinal)
@@ -935,7 +1010,7 @@ public class CodexSubagentTests
         internal_chat_message_metadata_passthrough = new { content_item_kinds = marked ? new[] { "multi_agent.subagent_notification" } : [] },
     }, s);
 
-    static string Collab(string tool, double s, string state)
+    static string Collab(string tool, double s, string state, string status = "completed")
     {
         var line = JsonNode.Parse(Codex.Event(new
     {
@@ -947,7 +1022,7 @@ public class CodexSubagentTests
             type = "CollabAgentToolCall",
             id = "exec-" + tool,
             tool,
-            status = "completed",
+            status,
             sender_thread_id = Id,
             receiver_thread_ids = new[] { Thread },
             receiver_agents = new[] { new { thread_id = Thread, agent_nickname = "Fermat" } },

@@ -253,7 +253,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (work.Knows(id))
         {
             if (WokenSince(id, endedAt) is { } woken) { work.AgentActive(id, woken); return; }
-            if (work.AgentIdle(id, endedAt, outcome)) { work.DescendantsStopped(id, endedAt); }
+            if (work.AgentIdle(id, endedAt, outcome)) { work.DescendantsStopped(id, endedAt, a => WokenSince(a, endedAt) is not null); }
             return;
         }
         if (work.ShellEnded(id)) { return; }
@@ -333,7 +333,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         else if (work.Stopped(parent, out var parentEnded, out var parentOutcome))
         {
             // One whose own end was never read (bytes the tail skipped) says nothing of this one's.
-            if (parentOutcome is not null) { work.AgentIdle(record.Id, parentEnded ?? record.StartedAt); }
+            if (parentOutcome is not null)
+            {
+                work.AgentIdle(record.Id, parentEnded ?? record.StartedAt);
+                // A message woke it after the agent above it ended.
+                if (WokenSince(record.Id, parentEnded) is { } woken) { work.AgentActive(record.Id, woken); }
+            }
             else { work.ForgetRun(record.Id); }
         }
         return work.Version != before;
