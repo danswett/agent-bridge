@@ -195,7 +195,9 @@ or import from relay presence:
 
 Missing or wrongly typed key, role or expiry fields return a field-specific error
 before the requested mutation. Store validation still checks the full curve key,
-known role and future expiry.
+known role and future expiry. Expiry timestamps must include `Z` or a numeric UTC
+offset; offset-less timestamps and bare dates are rejected, not interpreted in the
+host's local time zone.
 
 The owner must transfer each full key over an independently authenticated,
 owner-controlled path, including host keys. A key learned from the relay or a

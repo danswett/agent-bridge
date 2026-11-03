@@ -120,6 +120,7 @@ public sealed class RemoteAuthorization : IDisposable
                     if (!data.TryGetProperty("role", out var roleValue) || roleValue.ValueKind != JsonValueKind.String
                         || roleValue.GetString() is not { } role) { throw new ArgumentException("a peer role is required"); }
                     if (!data.TryGetProperty("expiresAt", out var expiryValue) || expiryValue.ValueKind != JsonValueKind.String
+                        || !expiryValue.TryGetDateTime(out var timestamp) || timestamp.Kind == DateTimeKind.Unspecified
                         || !expiryValue.TryGetDateTimeOffset(out var expiry)) { throw new ArgumentException("a valid expiry timestamp is required"); }
                     return Store.Put(key, role, expiry);
                 case "host.peers.revoke":

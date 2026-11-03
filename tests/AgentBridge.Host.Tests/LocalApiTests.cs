@@ -582,6 +582,8 @@ public sealed class LocalApiTests : IAsyncLifetime
     [InlineData("host.peers.put", """{"publicKey":"$key","role":null}""", "a peer role is required")]
     [InlineData("host.peers.put", """{"publicKey":"$key","role":"person"}""", "a valid expiry timestamp is required")]
     [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"later"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"2099-01-02T03:04:05"}""", "a valid expiry timestamp is required")]
+    [InlineData("host.peers.put", """{"publicKey":"$key","role":"person","expiresAt":"2099-01-02"}""", "a valid expiry timestamp is required")]
     [InlineData("host.peers.revoke", "{}", "a full public key is required")]
     [InlineData("host.peers.revoke", "null", "a full public key is required")]
     [InlineData("host.peers.revoke", """{"publicKey":42}""", "a full public key is required")]
@@ -603,6 +605,22 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal(error, refused.Message);
         Assert.Equal(before, File.ReadAllText(path));
         Assert.False(Assert.Single(authorization.Store.Pins).Revoked);
+    }
+
+    [Fact]
+    public async Task An_explicit_offset_pin_expiry_preserves_the_owners_instant()
+    {
+        using var person = P256KeyPair.Generate();
+        var app = await ConnectAsync();
+        await app.CallAsync("host.peers.reset");
+
+        await app.CallAsync("host.peers.put", new
+        {
+            publicKey = B64Url.Encode(person.Public), role = "person", expiresAt = "2099-01-02T03:04:05-08:00",
+        });
+
+        Assert.Equal(new DateTimeOffset(2099, 1, 2, 11, 4, 5, TimeSpan.Zero),
+            Assert.Single(authorization.Store.Pins).ExpiresAt);
     }
 
     [Fact]
