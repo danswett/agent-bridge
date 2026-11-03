@@ -12,6 +12,13 @@ namespace AgentBridge.HomeAssistant;
 
 internal sealed class HaPublicationReceipts
 {
+    sealed class LocalTurn
+    {
+        public readonly SemaphoreSlim Queue = new(1, 1);
+        public int Users;
+    }
+    static readonly object turnsGate = new();
+    static readonly Dictionary<string, LocalTurn> turns = new(StringComparer.Ordinal);
     readonly string folder;
     readonly string path;
     readonly string dashboard;
@@ -118,12 +125,26 @@ internal sealed class HaPublicationReceipts
     T Locked<T>(Func<T> action, CancellationToken cancellationToken = default)
     {
         var mutexPath = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
-        using var mutex = new Mutex(false, "AgentBridgePublication_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mutexPath))));
+        var name = "AgentBridgePublication_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mutexPath)));
+        using var mutex = new Mutex(false, name);
+        LocalTurn turn;
+        lock (turnsGate)
+        {
+            if (!turns.TryGetValue(name, out turn!)) { turns[name] = turn = new(); }
+            turn.Users++;
+        }
         var held = false;
+        var localHeld = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var elapsed = Stopwatch.StartNew();
+            // A Windows mutex is not FIFO: a hot read loop can reacquire it for
+            // seconds while another local caller starves. Queue local callers
+            // asynchronously, retaining the same total bounded wait and the
+            // named mutex for cross-process exclusion.
+            localHeld = turn.Queue.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).GetAwaiter().GetResult();
+            if (!localHeld) { throw new IOException("Publication receipt is busy; no shared write is authorized."); }
             while (!held && elapsed.Elapsed < TimeSpan.FromSeconds(5))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -138,6 +159,11 @@ internal sealed class HaPublicationReceipts
         finally
         {
             if (held) { mutex.ReleaseMutex(); }
+            if (localHeld) { turn.Queue.Release(); }
+            lock (turnsGate)
+            {
+                if (--turn.Users == 0) { turns.Remove(name); turn.Queue.Dispose(); }
+            }
         }
     }
 }
