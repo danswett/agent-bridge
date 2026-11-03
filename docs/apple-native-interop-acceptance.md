@@ -124,3 +124,21 @@ this evidence.
 5. Record which steps actually ran, host/client revisions, receipt text and
    per-marker counts. An unconfirmed outcome, a read-only host, or a missing
    receipt fault means that part of the test stays open.
+
+**November 2, 2026 physical result.** The signed iPadOS 27.2 development client
+(debug image UUID `7BE52F8F-72C0-36E8-A402-69C38BC1598B`) launched a fresh
+Copilot session in Bridge Sessions on Mac host `e153a80` with permissions set
+to Ask. The opening turn received READY. The tester asserted the complete draft
+before sending `Reply with BRIDGE-1102-ACK`. The physical screen showed
+**Delivered**, the Mac transcript contained exactly one user turn equal to that
+text, and the assistant answered `BRIDGE-1102-ACK`. A preliminary UI test had
+sent only the shorter `Reply with BRIDGE-1102`; that was a separate turn.
+
+For recovery, a temporary signed test build based on `ce059c3` discarded the
+real delivered result at the client before applying it and reconnected only
+that session's client transport. The fault matched the disposable session and
+second marker once. The iPad showed **Check Delivery Again**. Tapping it retried
+the retained operation and showed **Delivered**. The Mac recorded one user turn
+equal to `Reply only RECOVERY1102` and one agent answer `RECOVERY1102`.
+The ordinary signed client was restored afterward. This exercises loss at the
+client's receipt boundary. The shared relay was not faulted.

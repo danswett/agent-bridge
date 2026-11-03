@@ -104,8 +104,10 @@ selecting one showed the conversation, an editable reply with a staged image,
 and the session inspector. This verifies physical sign-in, discovery, session
 data and composer presentation. It does not establish delivery of that draft.
 
+A later [physical reply and recovery test](apple-native-interop-acceptance.md#physical-reply-and-receipt-recovery) launched a fresh Copilot session on the Mac, confirmed one delivered user turn, and verified a lost-receipt retry without a second turn.
+
 Still pending: the remaining real .NET-host/relay interoperability cases covering
-multi-machine reconnect, answer/reply/stop receipts, attachment delivery, launch,
+multi-machine reconnect, answer and stop receipts, attachment delivery, other launch flows,
 folder trust, copy/resume and remote update requests; OS notification
 authorization/delivery and Mac login registration; physical iPhone and minimum-supported-OS devices; and VoiceOver
 plus large-text interaction testing. These are validation gaps for implemented
