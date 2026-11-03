@@ -15,10 +15,12 @@
     <Project Path="src/AgentBridge.Transport/AgentBridge.Transport.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/AgentBridge.AppleInterop/AgentBridge.AppleInterop.csproj" />
     <Project Path="tools/AgentBridge.Rehearsal/AgentBridge.Rehearsal.csproj" />
     <Project Path="tools/AgentBridge.RelaySmoke/AgentBridge.RelaySmoke.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/AgentBridge.AppleInterop.Tests/AgentBridge.AppleInterop.Tests.csproj" />
     <Project Path="tests/AgentBridge.App.Tests/AgentBridge.App.Tests.csproj" />
     <Project Path="tests/AgentBridge.ConsoleEcho/AgentBridge.ConsoleEcho.csproj" />
     <Project Path="tests/AgentBridge.HomeAssistant.Tests/AgentBridge.HomeAssistant.Tests.csproj" />

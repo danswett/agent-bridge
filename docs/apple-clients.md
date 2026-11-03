@@ -4,6 +4,10 @@ The native SwiftUI clients live in [`apple/`](../apple/README.md). They share a
 Swift 6 protocol library and tested client state across macOS 15+, iOS 18+ and
 iPadOS 18+. XcodeGen builds both applications from `apple/project.yml`.
 
+For a disposable product relay and .NET session host, see
+[the isolated interoperability harness](apple-interop.md). It exercises real
+protocol services with synthetic transcripts and does not type into real agents.
+
 The workbench supports local Mac sockets and remote machines through the same
 GitHub device sign-in, relay proof and Noise XX protocol used by Windows and the
 PWA. Tokens and per-account device identities stay in Keychain. Remote session
