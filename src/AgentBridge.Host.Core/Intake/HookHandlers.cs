@@ -124,6 +124,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
         string status;
         var activity = "";
         var approval = false;
+        string? asked = null;
         switch (eventName)
         {
             case "SessionStart":
@@ -138,7 +139,8 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             case "PermissionRequest":
                 (status, approval) = ("waiting", true);
                 activity = $"Needs approval: {Str(e, "tool_name") ?? ""}";
-                if (Command(e) is { Length: > 0 } asked) { activity = $"Needs approval: {Cut(asked, 300)}"; }
+                asked = Command(e);
+                if (asked is { Length: > 0 }) { activity = $"Needs approval: {Cut(asked, 300)}"; }
                 break;
             case "PreToolUse":
                 status = "working";
@@ -182,7 +184,7 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
             // agent-ha-bridge's generation: the session's node id and the time, so an answer
             // made for one approval is never typed into the next.
             approvalId = $"{NodeId(sessionId)}-{NextDecisionMs()}";
-            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled));
+            WriteApprovalMarker(sessionId, approvalId, activity, At(spooled), Str(e, "tool_name"), asked);
         }
         return notice with { OwnerPid = owner > 0 ? owner : null, Status = status, ApprovalId = approvalId };
     }
@@ -246,15 +248,28 @@ internal sealed class HookHandlers(string runtimeRoot, string claudeHome, IProce
     }
 
     // As Write-CodexApprovalMarker: the gate an answer is typed through (AnswerService reads it
-    // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it).
-    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at) =>
+    // afresh before typing, and agent-ha-bridge's Set-CodexApprovalAttempt claims it). Question
+    // stays the activity line agent-ha-bridge's reader expects; the tool and the whole command go
+    // beside it, so what a client approves is all of what runs (#209). A command past CommandMax
+    // (more than any question can carry) is kept to its start, and says so.
+    void WriteApprovalMarker(string sessionId, string decisionId, string question, string at, string? tool, string? command) =>
         WriteJson(ApprovalPath(sessionId), w =>
         {
             w.WriteString("SessionId", sessionId);
             w.WriteString("DecisionId", decisionId);
             w.WriteString("Question", question);
             w.WriteString("Created", at);
+            if (!string.IsNullOrEmpty(tool)) { w.WriteString("Tool", tool); }
+            if (!string.IsNullOrEmpty(command))
+            {
+                w.WriteString("Command", command.Length > CommandMax ? command[..CommandMax] : command);
+                if (command.Length > CommandMax) { w.WriteBoolean("CommandCut", true); }
+            }
         });
+
+    // Twice the most a question's message carries (Limits.QuestionMessage): whatever is cut here is
+    // cut again there, and marked truncated either way.
+    internal const int CommandMax = 2 * AgentBridge.Protocol.Limits.QuestionMessage;
 
 
     // Approval markers a lifecycle event retired but that could not be removed yet (a reader held

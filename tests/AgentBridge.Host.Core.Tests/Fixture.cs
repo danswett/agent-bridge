@@ -136,9 +136,12 @@ internal sealed class Fixture : IDisposable
         File.WriteAllText(Path.Combine(CodexRegistrations, id + ".json"), json.ToJsonString());
     }
 
-    // agent-ha-bridge's <id>.approval.json, as Write-CodexApprovalMarker writes it, and as
-    // Set-CodexApprovalAttempt rewrites it once it has typed into the approval.
-    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null)
+    // An <id>.approval.json as this host's hook writes it (Write-CodexApprovalMarker's fields, and
+    // the tool and whole command beside them, #209), or with legacy as agent-ha-bridge's hook
+    // writes it (the 300-character activity line alone); and as Set-CodexApprovalAttempt rewrites
+    // it once it has typed into the approval.
+    public string CodexApprovalMarker(string id, string decisionId, string question = "Needs approval: git push", DateTimeOffset? created = null, JsonNode? attempted = null, string? owner = null,
+        string? command = "git push", bool legacy = false)
     {
         Directory.CreateDirectory(CodexRegistrations);
         var json = new JsonObject
@@ -148,6 +151,11 @@ internal sealed class Fixture : IDisposable
             ["Question"] = question,
             ["Created"] = (created ?? T0).ToString("o"),
         };
+        if (!legacy)
+        {
+            json["Tool"] = "Bash";
+            if (command is not null) { json["Command"] = command; }
+        }
         if (attempted is not null)
         {
             json["DeliveryAttempted"] = attempted;

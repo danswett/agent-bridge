@@ -609,7 +609,7 @@ permission prompts goes beyond it, at the user's request:
 | Copilot CLI | Any other permission request (hooks, memory, workflows, extensions), a request to run outside the sandbox, one whose details cannot be read, or any on a host with `permissions.remoteApproval` off | `approval` | No: `answerAtMachine` | |
 | Claude Code | `AskUserQuestion`: one to four questions, each a `choice` or a `multi` of its options | `form` | Yes, but not with free text (no field has `allowOther`), and a `multi` needs at least one option | The `tool_result` for its `tool_use` id records every question's answer as typed |
 | Claude Code | Permission prompt (from agent-ha-bridge's hook) | `approval` | No: `answerAtMachine` | |
-| Codex | Approval recorded by agent-ha-bridge's hook | `approval` | Yes | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
+| Codex | Approval recorded by its `PermissionRequest` hook (agent-ha-bridge's, or this host's intake) | `approval`: `Allow **<tool>**?` and the whole command in a fence longer than any run of backticks inside it. One whose marker holds only the hook's 300-character preview, or whose command is past 16,384 characters, is `truncated` (#209) | Yes, unless `truncated` | Never: Codex records nothing that says how an approval was answered, so a typed one is `unconfirmed` |
 | Codex | Approval seen only in the rollout, or one agent-ha-bridge already typed into | `approval` | No: `answerAtMachine` | |
 
 #### Copilot permission prompts

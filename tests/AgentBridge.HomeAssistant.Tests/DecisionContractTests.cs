@@ -337,6 +337,22 @@ public sealed class DecisionContractTests
         if (message is not null) { Assert.Equal(message, body); }
     }
 
+    // A Codex approval as the host builds it from its hook's marker (#209): the whole command is
+    // answered on the card's tap, and a marker holding only the hook's 300-character preview is
+    // answered in the terminal.
+    [Fact]
+    public void A_Codex_approval_carrying_its_whole_command_is_tapped_on_the_card_and_a_preview_only_one_goes_to_the_terminal()
+    {
+        var command = "git push origin main && " + new string('x', 400);
+        var whole = QuestionMapper.CodexApproval("node-1", "Bash", command, false, "Needs approval: " + command[..297] + "...", DateTimeOffset.UnixEpoch, atMachine: false);
+        var preview = QuestionMapper.CodexApproval("node-2", null, null, false, "Needs approval: " + command[..297] + "...", DateTimeOffset.UnixEpoch, atMachine: false);
+
+        var tapped = HaDecision.Plan(whole, AgentKind.Codex);
+        Assert.True(tapped.AnswerOnTap);
+        Assert.Contains($"```\n{command}\n```", tapped.Question);
+        Assert.True(HaDecision.Plan(preview, AgentKind.Codex).TerminalOnly);
+    }
+
     [Fact]
     public void A_delegate_whose_name_needs_neutralising_leaves_an_ordinary_approval_answerable_on_the_card()
     {

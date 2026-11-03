@@ -411,6 +411,23 @@ public sealed class IntakeTests : IDisposable
     }
 
     [Fact]
+    public void A_Codex_approvals_marker_carries_the_tool_and_the_whole_command_beside_the_cut_activity_line()
+    {
+        _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
+        var intake = Running();
+        var command = "echo `date` && " + new string('x', 500);
+        Spooled("0001", "codex", "hook", new { session_id = "x1", hook_event_name = "PermissionRequest", tool_name = "shell", tool_input = new { command } }, 50, 60);
+        Spooled("0002", "codex", "hook", new { session_id = "x2", hook_event_name = "PermissionRequest", tool_name = "shell", tool_input = new { command = new string('y', HookHandlers.CommandMax + 5) } }, 50, 60);
+        intake.Pass();
+
+        var marker = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x1.json"), "x1");
+        Assert.Equal(ApprovalMarkerState.Present, marker.State);
+        Assert.Equal(("Needs approval: " + command[..297] + "...", "shell", command, false), (marker.Question, marker.Tool, marker.Command, marker.CommandCut));
+        var cut = ApprovalMarkerRead.Read(Path.Combine(_f.CodexRegistrations, "x2.json"), "x2");
+        Assert.Equal((HookHandlers.CommandMax, true), (cut.Command!.Length, cut.CommandCut));
+    }
+
+    [Fact]
     public void The_next_Codex_event_retires_the_approval_marker_whichever_input_answered_it()
     {
         _f.Processes.Run(AgentKind.Codex, 60, "codex.exe");
