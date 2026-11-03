@@ -37,7 +37,7 @@ public sealed class ToastResponder
     public Func<string?, string, AgentBridge.Protocol.Session?> SessionOf { get; init; } = (_, _) => null;
 
     bool AsksApproval(ToastAction action) =>
-        SessionOf(action.Machine, action.Session!)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval } q && q.Id == action.Question;
+        action.Session is { } session && SessionOf(action.Machine, session)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval } q && q.Id == action.Question;
 
     // The gates on an answer from a toast, beyond its being one: it carries this build's mark (an
     // older build's button may be Approve once), and its question is not known to be an approval.

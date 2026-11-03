@@ -430,8 +430,8 @@ its question ([ui.md](design/ui.md) §7, #372): its body is plain text the OS cu
 300 characters, so it can't show the whole command or the escapes the card gives hidden and
 bidi characters. A button on a toast an older build left in Notification Center, which may
 say Approve once, only opens too: the app answers from a toast only when its arguments carry
-this build's mark (the argument `v=2`, `ToastXml.AnswerVersionKey` and `AnswerVersion`) and
-never for a question it knows is an approval. The answer goes to the host over the pipe
+this build's mark (the argument `v=2`: `ToastXml.AnswerVersionKey`, `ToastXml.AnswerVersion`)
+and never for a question it knows is an approval. The answer goes to the host over the pipe
 with a fresh request id, and a follow-up toast says what became of it. A session's toasts
 share one tag, so a question replaces only its own, and a question answered anywhere
 withdraws it. A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
