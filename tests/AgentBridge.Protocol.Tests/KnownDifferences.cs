@@ -4,28 +4,29 @@
 // until its entry here goes.
 public static class KnownDifferences
 {
-    // #446: a host record missing a required field, or with one of the wrong JSON type. C# refuses
-    // the record; the PWA reads the field as absent or as its default, and drops a record only
-    // when it has no identity to file it under.
-    static readonly string[] TolerantReaders =
+    // #446 (v1-sessions.md "Malformed records"): a strict field missing or of the wrong type. C#
+    // refuses the record: it is filed or decided on by that field. The PWA reads it, the field
+    // absent or its default.
+    static readonly string[] StrictFields =
     [
-        "AttachmentState/wrong-type-received", "AttachmentDiscarded/wrong-type-discarded",
-        "AnswerResult/wrong-type-reason", "ReplyResult/wrong-type-reason", "StopResult/wrong-type-reason",
-        "LaunchedTransfer/missing-session", "LaunchedTransfer/missing-bytes", "LaunchedWith/missing-agent", "LaunchedWith/missing-permissions",
-        "LaunchedWith/wrong-type-agent", "LaunchResult/wrong-type-session", "LaunchTuning/wrong-type-model", "LaunchAgent/missing-label",
-        "LaunchAgent/missing-kind", "LaunchWorkspace/missing-path", "ResumableSession/missing-agent", "ResumableSession/missing-title",
-        "LaunchOptions/missing-defaults", "LaunchOptions/wrong-type-busy", "TrustQuestion/missing-agent", "TrustQuestion/missing-kind",
-        "TrustQuestion/missing-label", "TrustQuestion/missing-askedAt", "TrustQuestion/missing-answerable", "TrustAnswerResult/wrong-type-session",
-        "MachineInfo/wrong-type-id", "HelloResult/wrong-type-protocol", "ToolCall/missing-id", "ToolCall/missing-name", "ToolCall/missing-status",
-        "ToolCall/missing-startedAt", "ToolCall/wrong-type-id", "Option/wrong-type-value", "Field/missing-type", "Question/missing-id",
-        "Question/missing-kind", "Question/missing-message", "Question/missing-askedAt", "Question/wrong-type-id", "Background/wrong-type-agents",
-        "ActivitySource/wrong-type-response", "OwnActivity/wrong-type-response", "Activity/wrong-type-response", "Subagent/missing-kind",
-        "Subagent/missing-status", "Session/missing-agent", "Session/missing-status", "Session/missing-statusSince", "Session/missing-updatedAt",
-        "Session/missing-activity", "SessionList/wrong-type-next", "DiscoveryChanged/wrong-type-discoveryHeld", "SessionsSynced/wrong-type-revision",
-        "UpdateResult/missing-outcome", "UpdateResult/missing-at", "UpdateResult/wrong-type-from", "UpdateState/wrong-type-current",
-        "UpdateCommandResult/wrong-type-reason", "UsageWindow/missing-key", "UsageWindow/missing-label", "UsageWindow/wrong-type-key",
-        "AgentUsage/missing-agent", "AgentUsage/missing-label", "AgentUsage/missing-source", "AgentUsage/missing-measuredAt",
-        "AgentUsage/wrong-type-label", "UsageReport/wrong-type-agents",
+        "ActivitySource/wrong-type-response", "Field/missing-type", "HelloResult/wrong-type-protocol", "MachineInfo/wrong-type-id",
+        "LaunchedWith/missing-permissions", "LaunchOptions/missing-defaults", "Option/wrong-type-value", "Question/missing-id",
+        "Question/missing-kind", "Question/missing-message", "Question/wrong-type-id", "ToolCall/missing-id", "ToolCall/wrong-type-id",
+        "TrustQuestion/missing-agent", "TrustQuestion/missing-answerable", "TrustQuestion/missing-kind",
+        "Question/a-choice-that-cannot-be-read", "Question/a-choice-label-that-is-not-text", "Question/a-delegate-that-is-not-an-id",
+        "DiscoveryChanged/wrong-type-discoveryHeld",
+    ];
+
+    // #446: a required field missing, or one of the wrong type, that both read past. C# reads it as
+    // its type's default, as the vector's reads says ("", 0, 0001-01-01T00:00:00.000Z); the PWA
+    // fills in no time, no number, or a label from the record's id or kind.
+    static readonly string[] OtherDefaults =
+    [
+        "AgentUsage/missing-label", "AgentUsage/missing-measuredAt", "AgentUsage/wrong-type-label", "LaunchAgent/missing-label",
+        "LaunchedTransfer/missing-bytes", "LaunchedTransfer/missing-session", "LaunchedWith/missing-agent", "LaunchedWith/wrong-type-agent",
+        "Question/missing-askedAt", "ResumableSession/missing-title", "Session/missing-statusSince", "Session/missing-updatedAt",
+        "SessionsSynced/wrong-type-revision", "Subagent/missing-status", "ToolCall/missing-name", "ToolCall/missing-startedAt",
+        "TrustQuestion/missing-askedAt", "TrustQuestion/missing-label", "UpdateResult/missing-at", "UsageWindow/missing-label",
     ];
 
     // #447: checkLaunch does not run TransferProtocol.Check on a launch's transfer.
@@ -37,9 +38,15 @@ public static class KnownDifferences
 
     public static readonly IReadOnlyList<KnownDifference> All =
     [
-        .. TolerantReaders.Select(v => new KnownDifference(v, 446, "pwa", "read",
-            "refuses the record: it cannot be deserialized",
+        .. StrictFields.Select(v => new KnownDifference(v, 446, "pwa", "read",
+            "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
             "reads it, the field absent or its default")),
+        .. OtherDefaults.Select(v => new KnownDifference(v, 446, "pwa", "read",
+            "reads it, the field its type's default",
+            "reads it, the field absent or filled in from another")),
+        new("SessionsSynced/not-a-record", 446, "pwa", "read",
+            "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
+            "reads it as a synced with no revision, which ends the snapshot"),
         .. UncheckedTransfer.Select(v => new KnownDifference(v, 447, "pwa", "check",
             "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
             "checkLaunch takes it")),

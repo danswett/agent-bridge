@@ -41,6 +41,87 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
   is cut and flagged, never mid-character.
 * Text is Markdown where the type says so (agent responses, questions), otherwise plain.
   Clients render Markdown without raw HTML.
+* **A record a client can't fully read is read as below** ([Malformed records](#malformed-records)),
+  never by failing the whole connection.
+
+## Malformed records
+
+A host that is broken, older than its spec or hostile may leave a required field out or send a
+value of the wrong JSON type (a number where a string belongs, a string where a boolean or number
+belongs, an object where a list belongs). A string holding half a surrogate pair (`"\uD800"`) is
+not text a client can rely on reading, and counts as the wrong type. Absent and `null` already mean the same thing. A client
+reads every host record (results and event data alike) by these rules (#446):
+
+1. **A field of the wrong type reads as absent.** A required one, missing or unreadable, takes its
+   type's default: `""`, `0`, `false`, `[]`, an empty record, the time
+   `0001-01-01T00:00:00.000Z`, or for an enum the value an unknown one reads as (above), never
+   its first. An enum value has to be a string; an unknown string reads as the table above says.
+2. **An entry of a list that can't be read** (`null`, the wrong type, or a record refused under 3)
+   **is left out**, and the list is kept.
+3. **A record is refused, never defaulted, when a strict field is missing (where required) or of
+   the wrong type.** These are the fields it is filed or acted on under (*identity*), and the
+   ones a person decides on or that prove who asked (*security*). A strict list is refused whole
+   if any entry can't be read: a question is never shown with a choice left out.
+4. A refused record held by another record's field reads as that field absent: a session whose
+   question is refused is kept, without a question. A refused record in a list is left out
+   (rule 2). Only a refused **top-level** record refuses its message: the client drops that one
+   result or event, logs it (once for each kind of message is enough), and carries on reading
+   the channel. One bad message never ends a client's event stream.
+
+Strict fields (`required` where the record requires them; any other is refused only when present
+with the wrong type):
+
+| Record | Identity | Security |
+|---|---|---|
+| `HelloResult` | `protocol` | |
+| `MachineInfo` | `id` | |
+| `Session` | `id` | |
+| `Subagent` | `id` | |
+| `ToolCall` | `id` | |
+| `Activity` | | `source` |
+| `ActivitySource` | | `response`, `reasoning` |
+| `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
+| `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
+| `Option` | | `value`, `label` |
+| `DiscoveryHeld` | `reason` | `agents` (whole) |
+| `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
+| `session.remove` data | `id` | |
+| `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
+| `UsageReader` | `id` | |
+| `AgentUsage` | `readBy` | |
+| `LaunchAgent` ([v1-launch.md](v1-launch.md)) | `id` | |
+| `LaunchWorkspace` | `label` | |
+| `ResumableSession` | `id`, `launcher` | |
+| `LaunchDefaults`, `LaunchedWith` | | `permissions` |
+| `LaunchedTransfer` | `from` | |
+| `TrustQuestion` | | `id`, `agent`, `kind`, `folder`, `root`, `rootNote`, `warning`, `answerable` |
+| `SignedCommand` ([v1-transfer.md](v1-transfer.md)) | | `body`, `by`, `mac` |
+| `TransferResult` | | `blob`, `size`, `sha256`, `agent`, `launcher`, `files` |
+
+So, for example, a session with no `status` reads as `idle`, one whose `title` is a number has
+no title, and a `ToolCall` with no `id` is left out of `history`. A question whose `message` is a
+number, or one of whose options has no `value` or a `label` that is not text, is not shown at
+all, while its session is: a choice is never shown without the words it was asked with, or under
+its bare value instead. A field or option with no `title`, `description` or `label` at all is
+read as usual. Launch
+options whose `defaults.permissions` can't be read are refused whole, so nothing is launched with
+a permission mode the client guessed. A session whose `activity.source` can't be read keeps an
+empty `activity` (rule 4: the required field takes its default): read as absent, a delegate's
+text would be shown as the main agent's.
+
+The shared vectors ([vectors/](vectors/README.md)) work these rules through for every record a
+host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
+refused because a strict field is involved. A `sessions.synced` or `discovery.changed` whose
+`discoveryHeld` can't be read is refused whole: read as absent, a hold the host still has would
+read as lifted.
+
+This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
+`session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as
+before: a request with a required field missing or of the wrong type is refused. The machine's
+own management records on the local pipe (`host.status` and the like,
+[local-pipe.md](local-pipe.md)) are read strictly too; the app refuses such a message the same
+way, without ending its stream. C#: `Received.Read<T>` and `[Strict]` in
+`src/AgentBridge.Protocol/Received.cs`.
 
 ## Test vectors
 

@@ -29,17 +29,26 @@ Each record file holds `records`, keyed by the C# record's name:
   "valid": [
     { "name": "text", "json": { … } },
     // A valid vector with "reads" is not what a writer sends (an unknown enum value, a field
-    // from a newer version), but a reader takes it and holds what "reads" shows.
+    // from a newer version, a field missing or of the wrong type that a reader reads past), but a
+    // reader takes it and holds what "reads" shows.
     { "name": "…", "json": { … }, "reads": { … } }
   ],
   "refused": [
-    // "parse": the record cannot be read at all (a required field missing, a field of the
-    // wrong JSON type). Otherwise the check named, with its reason word for word.
+    // "parse": the reader refuses the record (for a host's, a strict field missing or of the
+    // wrong JSON type; for any other, any required field missing or any field of the wrong
+    // type). Otherwise the check named, with its reason word for word.
     { "name": "missing-request", "json": { … }, "refusedBy": "parse" },
     { "name": "a-slash-command", "json": { … }, "refusedBy": "Replies.Check", "reason": "a reply cannot start with /, …" }
   ]
 }
 ```
+
+A record a host sends a client (`"direction": "host"`, but for `push.json`'s) is read as
+[v1-sessions.md, Malformed records](../v1-sessions.md#malformed-records) says (#446): a field the
+reader can't read is absent and a missing required one its type's default, so most `missing-…`
+and `wrong-type-…` vectors of such a record are valid, with what they read as; only a strict
+field refuses it. Every other record (what a client sends, one host's to another, a push) is
+read as written: any required field missing or field of the wrong type refuses it.
 
 A vector that needs more than its record names a `context`, which the file's `contexts` holds
 once. For example, the question an answer answers. A vector is named `<Record>/<name>`.
@@ -58,8 +67,8 @@ replay until its entry goes.
 ## Who replays them
 
 - **C#:** `tests/AgentBridge.Protocol.Tests/ProtocolVectorTests.cs`. Each valid vector reads into
-  its record and writes back as it `reads`. Each refused vector fails to parse, or its check gives
-  its reason. Every record in `AgentBridge.Protocol` has valid vectors.
+  its record (a host's through `Received.Read`) and writes back as it `reads`. Each refused vector
+  fails to read, or its check gives its reason. Every record in `AgentBridge.Protocol` has valid vectors.
   `tests/AgentBridge.Host.Tests/SignedCommandVectorTests.cs` verifies every signed command with
   `SignedCommands.Verify`, and `PushVectorTests.cs` there holds every valid `push.subscribe` to the
   host's own check (`PushNotifier.Problem`).

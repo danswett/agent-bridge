@@ -80,7 +80,7 @@ public sealed class MachineUpdateViewModel : Observable
         Changed();
         try
         {
-            var result = await machine.Host.CallAsync<UpdateCommandResult>(op, new UpdateCommand(Guid.NewGuid().ToString()), TimeSpan.FromSeconds(15));
+            var result = await machine.Host.ReadAsync<UpdateCommandResult>(op, new UpdateCommand(Guid.NewGuid().ToString()), TimeSpan.FromSeconds(15));
             note = result.Outcome == UpdateAck.Accepted ? null : Line(result.Reason ?? "it refused");
         }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or OperationCanceledException or InvalidOperationException

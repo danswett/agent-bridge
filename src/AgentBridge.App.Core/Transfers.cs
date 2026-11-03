@@ -63,8 +63,8 @@ public static class Transfers
         if (ch is not RelayClientChannel { Channel.PeerStatic: { } key }) { return null; }
         var hello = await ch.HelloAsync(ct);
         if (!hello.Capabilities.Contains(TransferProtocol.ServeCapability)) { return null; }
-        var options = (await ch.CallAsync(LaunchProtocol.Options, null, optionsTimeout, ct)).Deserialize<LaunchOptions>(ProtocolJson.Options);
-        var resumable = options?.Resumable.Where(r => LaunchProtocol.Agents.Contains(r.Launcher)).ToList() ?? [];
+        var options = await ch.ReadAsync<LaunchOptions>(LaunchProtocol.Options, null, optionsTimeout, ct);
+        var resumable = options.Resumable.Where(r => LaunchProtocol.Agents.Contains(r.Launcher)).ToList() ?? [];
         if (resumable.Count == 0) { return null; }
         return new TransferSource(hostId, hello.Machine.Name is { Length: > 0 } n ? n : presenceName, [.. key], resumable);
     }

@@ -35,9 +35,7 @@
             "outcome": "failed",
             "at": "2026-10-28T04:22:43.182Z"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "missing-outcome",
           "json": {
@@ -46,7 +44,13 @@
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
             "at": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "failed",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
         },
         {
           "name": "missing-at",
@@ -56,7 +60,13 @@
             "to": "0.1.200",
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "updated",
+            "from": "0.1.199",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "0001-01-01T00:00:00.000Z"
+          }
         },
         {
           "name": "wrong-type-from",
@@ -67,9 +77,15 @@
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
             "at": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "updated",
+            "to": "0.1.200",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "UpdateState": {
       "direction": "host",
@@ -139,9 +155,7 @@
             "phase": "idle",
             "automatic": false
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-current",
           "json": {
@@ -162,9 +176,26 @@
               "at": "2026-10-28T04:22:43.182Z"
             }
           },
-          "refusedBy": "parse"
+          "reads": {
+            "installer": true,
+            "available": "0.1.201",
+            "notes": "Fixes the flaky reconnect.",
+            "checkedAt": "2026-10-28T04:22:43.182Z",
+            "phase": "downloading",
+            "progress": 40,
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "automatic": true,
+            "last": {
+              "outcome": "updated",
+              "from": "0.1.199",
+              "to": "0.1.200",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "UpdateCommand": {
       "direction": "client",
@@ -227,9 +258,7 @@
           "reads": {
             "outcome": "refused"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-reason",
           "json": {
@@ -253,51 +282,39 @@
             },
             "reason": 42
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "accepted",
+            "state": {
+              "current": "0.1.200",
+              "installer": true,
+              "available": "0.1.201",
+              "notes": "Fixes the flaky reconnect.",
+              "checkedAt": "2026-10-28T04:22:43.182Z",
+              "phase": "checking",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "automatic": true,
+              "last": {
+                "outcome": "updated",
+                "from": "0.1.199",
+                "to": "0.1.200",
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          }
         }
-      ]
+      ],
+      "refused": []
     }
   },
   "knownDifferences": [
-    {
-      "vector": "UpdateResult/missing-outcome",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
     {
       "vector": "UpdateResult/missing-at",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "UpdateResult/wrong-type-from",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "UpdateState/wrong-type-current",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "UpdateCommandResult/wrong-type-reason",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     }
   ]
 }

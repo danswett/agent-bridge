@@ -40,6 +40,11 @@ public class ProtocolVectorTests
     static Type TypeOf(string record) =>
         typeof(Session).Assembly.GetType($"AgentBridge.Protocol.{record}") ?? throw new InvalidOperationException($"no record is called {record}");
 
+    // A record a host sends is read as a client reads it (v1-sessions.md "Malformed records").
+    static object Read(string file, JsonObject entry, JsonNode json, string record) => ProtocolVectors.ReadLeniently(entry["direction"]!.GetValue<string>(), file)
+        ? Received.Read(JsonSerializer.SerializeToElement(json), TypeOf(record))
+        : json.Deserialize(TypeOf(record), ProtocolJson.Options)!;
+
     [Fact]
     public void The_committed_vectors_are_the_ones_the_records_generate()
     {
@@ -53,7 +58,7 @@ public class ProtocolVectorTests
     public void A_valid_vector_reads_into_its_record_and_writes_back_as_it_reads(string file, string record, string name)
     {
         var (entry, vector, context) = Find(file, record, "valid", name);
-        var value = vector["json"]!.Deserialize(TypeOf(record), ProtocolJson.Options)!;
+        var value = Read(file, entry, vector["json"]!, record);
 
         var back = JsonSerializer.SerializeToNode(value, TypeOf(record), ProtocolJson.Options);
         var expected = vector["reads"] ?? vector["json"];
@@ -65,16 +70,15 @@ public class ProtocolVectorTests
     [MemberData(nameof(Refused))]
     public void A_refused_vector_is_refused_for_the_reason_it_gives(string file, string record, string name)
     {
-        var (_, vector, context) = Find(file, record, "refused", name);
-        var json = vector["json"]!.ToJsonString();
+        var (entry, vector, context) = Find(file, record, "refused", name);
         var by = vector["refusedBy"]!.GetValue<string>();
 
         if (by == "parse")
         {
-            Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, TypeOf(record), ProtocolJson.Options));
+            Assert.ThrowsAny<JsonException>(() => Read(file, entry, vector["json"]!, record));
             return;
         }
-        var value = JsonSerializer.Deserialize(json, TypeOf(record), ProtocolJson.Options)!;
+        var value = Read(file, entry, vector["json"]!, record);
         Assert.Equal(vector["reason"]!.GetValue<string>(), VectorChecks.Run(by, value, context));
     }
 

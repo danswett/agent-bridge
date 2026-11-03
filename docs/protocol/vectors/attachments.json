@@ -472,18 +472,20 @@
             "received": 20480,
             "complete": true
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-received",
           "json": {
             "received": "many",
             "complete": false
           },
-          "refusedBy": "parse"
+          "reads": {
+            "received": 0,
+            "complete": false
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "AttachmentDiscarded": {
       "direction": "host",
@@ -499,17 +501,18 @@
           "json": {
             "discarded": false
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-discarded",
           "json": {
             "discarded": "yes"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "discarded": false
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "AttachmentRef": {
       "direction": "client",
@@ -573,22 +576,5 @@
       ]
     }
   },
-  "knownDifferences": [
-    {
-      "vector": "AttachmentState/wrong-type-received",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "AttachmentDiscarded/wrong-type-discarded",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    }
-  ]
+  "knownDifferences": []
 }

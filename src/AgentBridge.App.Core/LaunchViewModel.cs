@@ -404,7 +404,7 @@ public sealed partial class LaunchViewModel : Observable
         _ = SourcesAsync(m, load);
         LaunchOptions? got = null;
         string? failed = null;
-        try { got = Known(await m.Host.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout)); }
+        try { got = Known(await m.Host.ReadAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout)); }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { failed = e.Message; }
         // This machine's pipe lists its folder-trust questions read-only: whether this app may
         // answer one is its host's word through the relay.
@@ -764,7 +764,7 @@ public sealed partial class LaunchViewModel : Observable
     static LaunchResult? Result(Delivery e)
     {
         if (e.Result.ValueKind != JsonValueKind.Object) { return null; }
-        try { return e.Result.Deserialize<LaunchResult>(ProtocolJson.Options); }
+        try { return Received.Read<LaunchResult>(e.Result); }
         catch (JsonException) { return null; }
     }
 

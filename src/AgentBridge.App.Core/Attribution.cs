@@ -138,7 +138,7 @@ public static class Attribution
     {
         var result = await host.CallAsync(Ops.SessionGet, new { id = session, agent }, timeout ?? TimeSpan.FromSeconds(15));
         if (result.ValueKind != JsonValueKind.Object || result.TryGetProperty("missing", out var missing) && missing.ValueKind == JsonValueKind.True) { return null; }
-        var entry = result.Deserialize<Subagent>(ProtocolJson.Options);
-        return entry is not null && entry.Id == agent ? entry : throw new HostErrorException("the machine answered with something other than that delegate");
+        var entry = Received.Read<Subagent>(result);
+        return entry.Id == agent ? entry : throw new HostErrorException("the machine answered with something other than that delegate");
     }
 }

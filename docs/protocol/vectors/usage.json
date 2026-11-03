@@ -27,9 +27,7 @@
             "label": "5-hour",
             "percent": 3
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "missing-key",
           "json": {
@@ -41,7 +39,16 @@
             "startsAt": "2026-10-28T04:22:43.182Z",
             "resetsAt": "2026-11-27T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "key": "",
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
         },
         {
           "name": "missing-label",
@@ -54,20 +61,16 @@
             "startsAt": "2026-10-28T04:22:43.182Z",
             "resetsAt": "2026-11-27T04:22:43.182Z"
           },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-percent",
-          "json": {
+          "reads": {
             "key": "premium",
-            "label": "Premium requests",
+            "label": "",
+            "percent": 42.5,
             "used": 127.5,
             "limit": 300,
             "unit": "requests",
             "startsAt": "2026-10-28T04:22:43.182Z",
             "resetsAt": "2026-11-27T04:22:43.182Z"
-          },
-          "refusedBy": "parse"
+          }
         },
         {
           "name": "wrong-type-key",
@@ -75,6 +78,30 @@
             "key": 42,
             "label": "Premium requests",
             "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          },
+          "reads": {
+            "key": "",
+            "label": "Premium requests",
+            "percent": 42.5,
+            "used": 127.5,
+            "limit": 300,
+            "unit": "requests",
+            "startsAt": "2026-10-28T04:22:43.182Z",
+            "resetsAt": "2026-11-27T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-percent",
+          "json": {
+            "key": "premium",
+            "label": "Premium requests",
             "used": 127.5,
             "limit": 300,
             "unit": "requests",
@@ -189,9 +216,7 @@
             "windows": [],
             "measuredAt": "2026-10-28T04:22:43.182Z"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "missing-agent",
           "json": {
@@ -213,7 +238,26 @@
             ],
             "measuredAt": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agent": "unknown",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
         },
         {
           "name": "missing-label",
@@ -236,7 +280,26 @@
             ],
             "measuredAt": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agent": "copilot",
+            "label": "",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
         },
         {
           "name": "missing-source",
@@ -259,7 +322,26 @@
             ],
             "measuredAt": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "none",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
         },
         {
           "name": "missing-measuredAt",
@@ -282,7 +364,26 @@
               }
             ]
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agent": "copilot",
+            "label": "Copilot",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "0001-01-01T00:00:00.000Z"
+          }
         },
         {
           "name": "wrong-type-label",
@@ -306,9 +407,29 @@
             ],
             "measuredAt": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agent": "copilot",
+            "label": "",
+            "account": "octocat",
+            "plan": "Pro+",
+            "source": "api",
+            "windows": [
+              {
+                "key": "premium",
+                "label": "Premium requests",
+                "percent": 42.5,
+                "used": 127.5,
+                "limit": 300,
+                "unit": "requests",
+                "startsAt": "2026-10-28T04:22:43.182Z",
+                "resetsAt": "2026-11-27T04:22:43.182Z"
+              }
+            ],
+            "measuredAt": "2026-10-28T04:22:43.182Z"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "UsageRequest": {
       "direction": "client",
@@ -384,91 +505,52 @@
           "json": {
             "agents": []
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-agents",
           "json": {
             "agents": "wrong"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agents": []
+          }
         }
-      ]
+      ],
+      "refused": []
     }
   },
   "knownDifferences": [
-    {
-      "vector": "UsageWindow/missing-key",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "UsageWindow/missing-label",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "UsageWindow/wrong-type-key",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "AgentUsage/missing-agent",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
     {
       "vector": "AgentUsage/missing-label",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "AgentUsage/missing-source",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "AgentUsage/missing-measuredAt",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "AgentUsage/wrong-type-label",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
-      "vector": "UsageReport/wrong-type-agents",
+      "vector": "UsageWindow/missing-label",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     }
   ]
 }
