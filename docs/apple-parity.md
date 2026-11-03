@@ -92,10 +92,17 @@ substitute for the full VoiceOver acceptance below.
 
 The signed Mac client was also checked with two connected machines and live sessions. Typing into the persistent reply field enabled Send; the draft was cleared without sending a test into an existing session. This checks the live layout and capability state, not delivery.
 
+On a physical iPad, switching to Safari for device authorization exposed a lost
+connection during token polling. After the retry fix, the owner completed GitHub
+authorization. The signed app showed two connected machines and two live sessions;
+selecting one showed the conversation, an editable reply with a staged image,
+and the session inspector. This verifies physical sign-in, discovery, session
+data and composer presentation. It does not establish delivery of that draft.
+
 Still pending: the remaining real .NET-host/relay interoperability cases covering
-sign-in, multi-machine reconnect, answer/reply/stop receipts, attachments, launch,
+multi-machine reconnect, answer/reply/stop receipts, attachment delivery, launch,
 folder trust, copy/resume and remote update requests; OS notification
-authorization/delivery and Mac login registration; physical and minimum-supported-OS devices; and VoiceOver
+authorization/delivery and Mac login registration; physical iPhone and minimum-supported-OS devices; and VoiceOver
 plus large-text interaction testing. These are validation gaps for implemented
 code, distinct from the platform dependencies above. Live hooks, Home Assistant
 and installed daemons must remain untouched. Final-head CI, Copilot review and

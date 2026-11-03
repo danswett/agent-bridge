@@ -92,7 +92,9 @@ profiles or live agents.
 
 Validated locally with Xcode 27.2 / Swift 6.4.2. The Mac UI was exercised through
 accessibility against the isolated fixture; iPhone/iPad layouts are checked in
-simulators. Unsigned builds do not establish release signing or Keychain/device
+simulators. A signed physical iPad completed GitHub authorization and displayed
+live sessions, the inline editor and the inspector through the public relay.
+Unsigned builds do not establish release signing or Keychain/device
 entitlement readiness. Real relay/.NET-host interoperability, OS notification
 permission/delivery, minimum-OS devices and VoiceOver still need acceptance tests.
 
