@@ -83,6 +83,7 @@ static partial class SelfTest
                 $"draws the navigation's design icons in a visible colour ({navIcons.Count} found)");
             CheckDesign(window, Check);
             await CheckInlineMono(window, Check);
+            await CheckCodeBlocks(window, Check, outFile);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);

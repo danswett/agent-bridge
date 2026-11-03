@@ -221,7 +221,7 @@
                                                     <!-- An approval answered here shows its prompt whole: everything Approve once allows. -->
                                                     <local:MarkdownView
                                                         AutomationProperties.AutomationId="NeedsYouPrompt"
-                                                        WrapCode="True"
+                                                        CodeLeftToRight="True"
                                                         Markdown="{x:Bind Prompt}"
                                                         Visibility="{x:Bind local:Ui.Show(HasPrompt)}" />
                                                     <TextBlock Style="{StaticResource AbSecondaryText}" FontSize="12" Text="{x:Bind Meta, Mode=OneWay}" />

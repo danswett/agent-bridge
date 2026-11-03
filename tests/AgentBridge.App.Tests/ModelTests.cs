@@ -48,6 +48,59 @@ public sealed class MarkdownTests
         Assert.Equal(2, table.Rows.Count);
         Assert.Equal(new MdText("2"), table.Rows[1][1].Single());
     }
+
+    static string CopyOf(string markdown)
+    {
+        var copied = new List<string>();
+        var copy = new CodeCopy(Assert.Single(MarkdownModel.Parse(markdown).OfType<MdCode>()), t => { copied.Add(t); return true; });
+        Assert.True(copy.Copy());
+        return Assert.Single(copied);
+    }
+
+    [Fact]
+    public void A_long_command_is_copied_exactly_as_one_line()
+    {
+        const string command = "pwsh -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\me\\repos\\agent-bridge\\tools\\rehearsal\\run-rehearsal.ps1\" -Profile dev -Machine DEV-VM2 -Checklist docs\\parity-checklist.md -Evidence out\\evidence -Verbose  ";
+
+        Assert.Equal(command, CopyOf($"Run this:\n\n```powershell\n{command}\n```\n"));
+    }
+
+    [Fact]
+    public void A_multi_line_block_is_copied_with_its_line_breaks_tabs_and_trailing_spaces()
+    {
+        const string body = "build:\n\tdotnet build -c Release  \n\n    dotnet test";
+
+        Assert.Equal(body, CopyOf($"```make\n{body}\n```"));
+    }
+
+    [Fact]
+    public void Wrapping_on_screen_does_not_change_the_copied_text()
+    {
+        var command = "echo " + string.Concat(Enumerable.Repeat("dGhlIGJsb2Igd3JhcHM=", 30));
+        var code = Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Parse($"```\n{command}\n\n```")));
+        var copy = new CodeCopy(code, _ => true);
+
+        // The block draws one unbroken line, which the view soft-wraps, and copy takes the block itself.
+        Assert.Equal(command, copy.Shown);
+        Assert.Equal(command + "\n", copy.Text);
+    }
+
+    [Fact]
+    public void Copy_says_copied_then_copy_again_and_a_refused_clipboard_says_copy_failed()
+    {
+        var time = new FakeTimeProvider();
+        var copy = new CodeCopy(new MdCode("git status", null), _ => true, time: time);
+
+        Assert.Equal("Copy", copy.Label);
+        copy.Copy();
+        Assert.Equal("Copied", copy.Label);
+        time.Advance(CodeCopy.ResetAfter);
+        Assert.Equal("Copy", copy.Label);
+
+        var refused = new CodeCopy(new MdCode("git status", null), _ => throw new System.Runtime.InteropServices.COMException("clipboard busy"), time: time);
+        Assert.False(refused.Copy());
+        Assert.Equal("Copy failed", refused.Label);
+    }
 }
 
 public sealed class UsageTests
