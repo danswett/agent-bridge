@@ -78,25 +78,27 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
 // What a session's view remembers of its prompts, to fold a schedule's repeats and date them. A
 // session carries only its latest prompt, so "the same as last time" is what this view saw. A new
 // prompt is one whose words or sender changed, or, with the same words, a finished turn more than
-// this view has seen idle and can put down to the prompts it knows: a schedule sending the same
-// text again shows once its turn is done, since a turn of the same prompt (an agent's reply to a
-// delegate reporting back) looks the same while it runs. turnCount is read only while idle, where
-// it is every prompt sent; while a turn runs it can be one less or not (a turn no prompt started,
-// such as Claude's for a notice, takes none off). It repeats when its schedule's previous prompt,
-// seen here, had the same text. Seen for the first time, nothing is folded: a wrong "same as last
-// time" would hide a prompt that changed. Its age is when its turn began (statusSince, seen while
-// it ran); a prompt first seen after its turn has no age to show. pwa/js/prompt-origin.js, case
-// for case.
+// this view saw once that prompt had settled (been seen idle, its own turn counted). turnCount is
+// read only while idle, where it is every prompt sent; while a turn runs it can be one less or
+// not (a turn no prompt started, such as Claude's for a notice, takes none off). So a schedule
+// sending the same text again shows once its turn is done, and turns that end before a prompt
+// has settled are never put down to it, since they can be its own or an earlier prompt's whose end
+// this view missed. It repeats when its schedule's previous prompt, seen here, had the same text.
+// Seen for the first time, nothing is folded: a wrong "same as last time" would hide a prompt
+// that changed. Its age is when its turn began (statusSince when it started running, seen here);
+// a prompt first seen after its turn has no age to show. pwa/js/prompt-origin.js, case for case.
 public sealed class PromptMemory
 {
+    // The prompt shown.
     string? current;
     bool currentSeen;
     bool repeat;
+    bool settled;
     DateTimeOffset? at;
-    // The most turns seen finished, while idle; the prompts seen arrive whose turns it doesn't hold
-    // yet; and when the latest turn seen running began.
+    // The most turns seen finished, while idle; whether the session ran when last seen; and when the
+    // turn seen running began, until a turn's end is accounted for.
     int? idle;
-    int owed;
+    bool wasRunning;
     DateTimeOffset? ran;
     readonly Dictionary<string, string> bySchedule = [];
 
@@ -109,30 +111,36 @@ public sealed class PromptMemory
         var text = a.UserMessage;
         var key = text is null ? null : $"{from}\n{a.UserMessageLabel}\n{text}";
         var running = s.Status is SessionStatus.Working or SessionStatus.Waiting;
-        if (running) { ran = s.StatusSince; }
-        // More than ever seen idle here: a host can say idle a moment before it counts the turn done.
+        // From when it began, not from a question answered or a resume within it.
+        if (running && !wasRunning) { ran = s.StatusSince; }
+        wasRunning = running;
+        int? turns = s.Status == SessionStatus.Idle && a.TurnCount is >= 0 and int n ? n : null;
         var more = 0;
-        if (s.Status == SessionStatus.Idle && a.TurnCount is >= 0 and int turns)
+        if (turns is { } t)
         {
-            if (idle is { } before) { more = Math.Max(0, turns - before); } else { owed = 0; }
-            idle = Math.Max(idle ?? -1, turns);
+            if (idle is { } before) { more = Math.Max(0, t - before); }
+            idle = Math.Max(idle ?? -1, t);
         }
+        var began = ran;
+        if (turns is not null) { ran = null; }
         DateTimeOffset? when;
+        bool nowSettled;
         if (!currentSeen || current != key)
         {
-            // New words: a turn it starts is still to be counted, or is among those just counted.
-            if (running) { owed++; } else { more = Math.Max(0, more - 1); }
-            owed = Math.Max(0, owed - more);
             when = running ? s.StatusSince : null;
+            // Seen idle, its own turn is among those counted.
+            nowSettled = turns is not null;
         }
         else
         {
-            var unexplained = more - owed;
-            owed = Math.Max(0, owed - more);
-            if (unexplained <= 0) { return new(repeat, at, false); }
-            // The same words sent again, its turn over now: dated by the turn seen running before.
-            when = ran;
-            ran = null;
+            if (!settled || more == 0)
+            {
+                if (turns is not null) { settled = true; }
+                return new(repeat, at, false);
+            }
+            // The same words sent again, its turn over now: dated by when that turn began.
+            when = began;
+            nowSettled = true;
         }
         repeat = false;
         if (from == UserMessageFrom.Schedule && text is not null)
@@ -142,6 +150,7 @@ public sealed class PromptMemory
             bySchedule[label] = text;
         }
         at = when;
+        settled = nowSettled;
         var fresh = currentSeen;
         (current, currentSeen) = (key, true);
         return new(repeat, at, fresh);

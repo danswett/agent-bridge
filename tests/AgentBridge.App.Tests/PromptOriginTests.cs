@@ -129,15 +129,30 @@ public sealed class PromptOriginTests
     }
 
     [Fact]
-    public void A_host_saying_idle_before_it_counts_the_turn_done_is_not_a_new_prompt_and_one_that_doesnt_count_never_folds()
+    public void Turns_that_end_before_a_new_prompt_has_settled_are_not_put_down_to_it_even_with_an_earlier_prompts_end_missed()
     {
         var m = new PromptMemory();
-        var at = Since.AddMinutes(1);
-        m.Observe(Prompt(UserMessageFrom.Schedule, "4"));
-        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "Other words", SessionStatus.Working, since: at));
-        Assert.False(m.Observe(Prompt(UserMessageFrom.Schedule, "4", "Other words")).Fresh);
-        Assert.Equal(new PromptMemory.Seen(false, at, false), m.Observe(Prompt(UserMessageFrom.Schedule, "4", "Other words", turns: 4)));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A"));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A", SessionStatus.Working));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "B", SessionStatus.Working, turns: 4));
+        Assert.Equal(new PromptMemory.Seen(false, Since, false), m.Observe(Prompt(UserMessageFrom.Schedule, "4", "B", turns: 5)));
+    }
 
+    [Fact]
+    public void A_repeat_is_dated_by_when_its_turn_began_not_by_a_question_answered_within_it_and_one_never_seen_running_has_no_age()
+    {
+        var m = new PromptMemory();
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4"));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, since: Since.AddMinutes(1)));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Waiting, since: Since.AddMinutes(2)));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, since: Since.AddMinutes(3)));
+        Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(1), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 4)));
+        Assert.Equal(new PromptMemory.Seen(true, null, true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: 5)));
+    }
+
+    [Fact]
+    public void A_host_that_doesnt_count_turns_never_has_a_repeat_folded()
+    {
         var uncounted = new PromptMemory();
         uncounted.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: null));
         uncounted.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: null));
