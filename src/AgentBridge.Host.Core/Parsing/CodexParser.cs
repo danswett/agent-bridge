@@ -264,7 +264,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     {
         var work = S.Background;
         var sender = Text.NonBlank(Json.Str(item, "sender_thread_id"));
-        var parent = sender is null || _thread is null || string.Equals(sender, _thread, StringComparison.OrdinalIgnoreCase) ? null : sender;
+        var parent = sender is null || _thread is null || string.Equals(sender, _thread, StringComparison.Ordinal) ? null : sender;
         var nicknames = new Dictionary<string, (string? Nickname, string? Role)>(StringComparer.Ordinal);
         if (Json.Arr(item, "receiver_agents") is { } agents)
         {

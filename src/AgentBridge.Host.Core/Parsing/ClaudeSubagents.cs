@@ -58,7 +58,10 @@ internal sealed class ClaudeSubagents
             if (_read.TryGetValue(name, out var known) && known.Written == info.LastWriteTimeUtc && known.Length == info.Length
                 && (known.Record is null || known.Record.StartedAt is not null || known.Head == Stamp(head))) { continue; }
             var stamp = Stamp(head);
-            _read[name] = (info.LastWriteTimeUtc, info.Length, stamp, info.Length <= MaxMetaBytes ? Parse(file, dir, id) : null);
+            if (info.Length > MaxMetaBytes) { _read[name] = (info.LastWriteTimeUtc, info.Length, stamp, null); continue; }
+            // One that could not be read is not remembered, so it is tried again on the next read.
+            if (Parse(file, dir, id, out var record)) { _read[name] = (info.LastWriteTimeUtc, info.Length, stamp, record); }
+            else { _read.Remove(name); }
         }
         foreach (var gone in _read.Keys.Where(k => !names.Contains(k)).ToList()) { _read.Remove(gone); }
         return Known();
@@ -76,19 +79,23 @@ internal sealed class ClaudeSubagents
 
     List<Record> Known() => [.. _read.Values.Select(v => v.Record).OfType<Record>().OrderBy(r => r.Depth).ThenBy(r => r.Id, StringComparer.Ordinal)];
 
-    static Record? Parse(string file, string dir, string id)
+    // Whether the record could be read (it may still be no nested agent's: record null), so one
+    // read mid-write or while locked is tried again.
+    static bool Parse(string file, string dir, string id, out Record? record)
     {
+        record = null;
         JsonElement meta;
         try
         {
             using var doc = JsonDocument.Parse(ReadShared(file, MaxMetaBytes));
             meta = doc.RootElement.Clone();
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
-        if (meta.ValueKind != JsonValueKind.Object || Json.Str(meta, "parentAgentId") is not { } parent || !IsId(parent)) { return null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return false; }
+        if (meta.ValueKind != JsonValueKind.Object || Json.Str(meta, "parentAgentId") is not { } parent || !IsId(parent)) { return true; }
         var (startedAt, prompt) = Head(Path.Combine(dir, Prefix + id + ".jsonl"), id);
-        return new Record(id, parent, Json.Int(meta, "spawnDepth") ?? 2, Json.Str(meta, "description"), Json.Str(meta, "agentType"),
+        record = new Record(id, parent, Json.Int(meta, "spawnDepth") ?? 2, Json.Str(meta, "description"), Json.Str(meta, "agentType"),
             Json.Str(meta, "toolUseId"), Json.Str(meta, "requestShape") == "background", startedAt, prompt);
+        return true;
     }
 
     // When the agent started and what it was asked: its transcript's first entry, the prompt,

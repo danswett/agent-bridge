@@ -430,6 +430,25 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
+    public void A_record_that_could_not_be_read_is_read_again_though_it_has_not_changed()
+    {
+        // Found in review: a failed read was remembered like a record of no nested agent's. Held
+        // open with no sharing, the record cannot be read on Windows; elsewhere it can be anyway.
+        using var f = new Fixture();
+        var transcript = f.ClaudeTranscript(Id);
+        var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
+        Directory.CreateDirectory(beside);
+        var meta = Path.Combine(beside, $"agent-{Nested}.meta.json");
+        File.WriteAllText(meta, $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
+        var records = new AgentBridge.Host.Core.Parsing.ClaudeSubagents();
+        using (new FileStream(meta, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { records.Read(transcript); }
+
+        var read = records.Read(transcript);
+
+        Assert.Equal(Nested, Assert.Single(read).Id);
+    }
+
+    [Fact]
     public void Past_the_most_records_read_the_first_by_name_are_read_whatever_order_they_were_written_in()
     {
         // Found in review: the first the folder listed were read, an order no platform promises.

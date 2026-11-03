@@ -253,8 +253,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (work.Knows(id))
         {
             if (WokenSince(id, endedAt) is { } woken) { work.AgentActive(id, woken); return; }
-            work.AgentIdle(id, endedAt, outcome);
-            work.DescendantsStopped(id, endedAt);
+            if (work.AgentIdle(id, endedAt, outcome)) { work.DescendantsStopped(id, endedAt); }
             return;
         }
         if (work.ShellEnded(id)) { return; }
