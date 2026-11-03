@@ -63,7 +63,11 @@ const cssMotions = (page) => page.evaluate(() => window.__css.filter((m) => !/^0
 // What the tokens say an entry takes, going in and going out, in ms.
 const tokens = (page) => page.evaluate(() => {
   const css = getComputedStyle(document.documentElement);
-  const ms = (name) => parseFloat(css.getPropertyValue(name)) || 0;
+  // As motion.js reads them: a number with ms or s.
+  const ms = (name) => {
+    const m = /^(-?[\d.]+)(ms|s)$/.exec(css.getPropertyValue(name).trim());
+    return m ? Number(m[1]) * (m[2] === 's' ? 1000 : 1) : 0;
+  };
   const out = {};
   for (const entry of ['push', 'pane', 'tab', 'disclosure', 'list-item', 'glyph', 'activity-dot', 'selection', 'press', 'acknowledge', 'toast', 'menu', 'scroll', 'reorder']) {
     out[entry.replace(/-(\w)/g, (_, c) => c.toUpperCase())] = [ms(`--ab-motion-${entry}-duration`), ms(`--ab-motion-${entry}-exit-duration`)].filter((v) => v > 0);
@@ -862,6 +866,41 @@ test('bringing a question already in sight into view starts no wait for a later 
   expect(arriving).toBe(false);
   await expect.poll(answers).toBe(before + 1);
 });
+test('where the browser sends no scrollend, as Safari doesn\'t, a question scrolled into sight still takes no click as the scroll comes to rest', async ({ page }) => {
+  await page.addInitScript(() => {
+    const add = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, ...rest) { return type === 'scrollend' ? undefined : add.call(this, type, ...rest); };
+  });
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 200 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await page.evaluate((long) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-noend', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    const s = d.host.get('019a1b2c-codex-example');
+    d.upsert({ ...s, activity: { ...s.activity, response: long }, status: 'waiting', statusSince: t, updatedAt: t, question });
+  }, long);
+  const v = await open(page, CODEX);
+  await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; });
+  // From Needs you. Headless Chromium lands a smooth scroll in one step, so the steps of one that
+  // takes its time, as Safari's does, are sent over 450 ms; 300 ms after the last, past 500 ms
+  // from the start but within 500 ms of where it came to rest, the question still holds its
+  // clicks back.
+  const held = await page.evaluate(async (id) => {
+    const el = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+    document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    for (let i = 0; i < 5; i += 1) {
+      await new Promise((r) => setTimeout(r, 90));
+      el.dispatchEvent(new Event('scroll'));
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    return el.closest('.session-view').querySelector('.question-slot .question').hasAttribute('data-arriving');
+  }, CODEX);
+  expect(held).toBe(true);
+});
 test('a session that goes while its machine is still sending its list leaves at once, with no copy fading', async ({ page }) => {
   await openDemo(page);
   await upsert(page, 'demo-unsettled', { agent: 'copilot', title: 'Goes while unsettled', status: 'idle', startedAt: later(), updatedAt: later() });
@@ -875,4 +914,54 @@ test('a session that goes while its machine is still sending its list leaves at 
   await expect(row(page, 'demo-unsettled')).toHaveCount(0);
   expect((await motions(page)).filter((m) => m.id === 'ab-motion-listItem')).toHaveLength(before);
   await page.evaluate(() => { window.agentBridgeDemo.client.synced = true; });
+});
+
+test('a copy of a row that leaves draws its words where they were, in their own colour and font', async ({ page }) => {
+  await openDemo(page);
+  const r = await page.evaluate(async () => {
+    const { leave } = await import('./js/ui/motion.js');
+    const texts = (root) => {
+      const out = [];
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        const b = range.getBoundingClientRect();
+        if (!b.width || !n.data.trim()) { continue; }
+        const cs = getComputedStyle(n.parentElement);
+        out.push({ text: n.data, x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), color: cs.color, font: cs.font });
+      }
+      return out;
+    };
+    const el = document.querySelector('.session');
+    const before = texts(el);
+    leave(el, 'listItem').pause();
+    return { before, copy: texts(window.__shadows.at(-1)) };
+  });
+  expect(r.before.length).toBeGreaterThan(1);
+  expect(r.copy).toEqual(r.before);
+});
+
+test('search hides rows without fading copies of them, and a session that ends fades once, not again as the list updates', async ({ page }) => {
+  await openDemo(page);
+  await upsert(page, 'demo-hidden', { agent: 'copilot', title: 'Zebra quartz', status: 'idle', startedAt: later(), updatedAt: later() });
+  await expect(row(page, 'demo-hidden')).toHaveCount(1);
+  const fades = async () => (await motions(page)).filter((m) => m.id === 'ab-motion-listItem').length;
+  const before = await fades();
+  const others = await page.locator('.session').filter({ visible: true }).count();
+  await page.keyboard.press('Control+k');
+  await page.locator('#search').fill('zebra quartz');
+  await expect(page.locator('.session').filter({ visible: true })).toHaveCount(1);
+  await page.locator('#search').fill('');
+  await expect(page.locator('.session').filter({ visible: true })).toHaveCount(others);
+  expect(await fades()).toBe(before);
+  // Gone, it is listed under Ended, which has no card of its own to fade.
+  await page.evaluate(() => window.agentBridgeDemo.remove('demo-hidden'));
+  await expect(row(page, 'demo-hidden')).toHaveCount(0);
+  await expect(page.locator('.ended[data-id="demo-hidden"]')).toHaveCount(1);
+  expect(await fades()).toBe(before + 1);
+  await upsert(page, CODEX, { updatedAt: later(2000) });
+  await upsert(page, CODEX, { updatedAt: later(3000) });
+  await page.waitForTimeout(100);
+  expect(await fades()).toBe(before + 1);
 });

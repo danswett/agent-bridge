@@ -690,9 +690,10 @@ export class SessionCard {
   }
 
   // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
-  // to go, again from where it lands, since that takes the browser's own time. Only that scroll's
-  // end, heard for a little while: a question already in sight makes no scroll, and a scroll the
-  // person makes later must not hold the question's buttons back. A newer scroll replaces it.
+  // to go, again from each step of it until it lands, since that takes the browser's own time. Only
+  // that scroll, heard for a little while: a question already in sight makes no scroll, and a
+  // scroll the person makes later must not hold the question's buttons back. A newer scroll
+  // replaces it.
   #scrollTo(view, behavior) {
     const sc = this.els.scroll;
     this.#scrollEnd?.abort();
@@ -704,7 +705,11 @@ export class SessionCard {
     view.scrollIntoView({ block: 'nearest', behavior });
     this.#guard();
     if (!moves || behavior !== 'smooth') { return; }
+    // Every step of the scroll re-arms it, so it runs out only after the question has stopped
+    // moving: `scroll` fires in every engine, where `scrollend` (which also ends the listening)
+    // isn't in all of them yet.
     const ended = this.#scrollEnd = new AbortController();
+    sc.addEventListener('scroll', () => this.#guard(), { signal: ended.signal, passive: true });
     sc.addEventListener('scrollend', () => { this.#guard(); ended.abort(); }, { signal: ended.signal });
     setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }

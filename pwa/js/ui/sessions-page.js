@@ -84,6 +84,7 @@ export class SessionsPage {
   #painted = false;
   #frame = 0;
   #unwatchLane = null;
+  #unwatchNews = null;
   #inspectorHidden = false;
   // What had focus in the list when a session was opened on a phone.
   #returnTo = null;
@@ -170,7 +171,7 @@ export class SessionsPage {
     // before the change that brought it, and its machine has sent its whole list. Read as the
     // change comes, since the list draws before the lane does.
     let news = false;
-    hosts.sessions.onChange(() => { news = this.view.drawn; });
+    this.#unwatchNews = hosts.sessions.onChange(() => { news = this.view.drawn; });
     this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) });
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
@@ -563,6 +564,8 @@ export class SessionsPage {
     this.#listening = null;
     this.#unwatchLane?.();
     this.#unwatchLane = null;
+    this.#unwatchNews?.();
+    this.#unwatchNews = null;
     this.answers.clear();
     this.replies.clear();
     this.stops.clear();

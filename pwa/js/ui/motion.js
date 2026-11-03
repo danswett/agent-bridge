@@ -83,7 +83,9 @@ export function stopTravel(el) {
     const target = a.effect?.target;
     if (a.id !== 'ab-motion-push' || !target?.contains?.(el)) { continue; }
     try {
-      a.effect.setKeyframes(a.effect.getKeyframes().map(({ offset, opacity }) => (opacity === undefined ? { offset } : { offset, opacity })));
+      // Every keyframe keeps its place and an opacity (1 where it had none), so what is left is a
+      // valid fade that carries on from where it is.
+      a.effect.setKeyframes(a.effect.getKeyframes().map(({ computedOffset, opacity }) => ({ offset: computedOffset, opacity: opacity ?? 1 })));
     } catch {
       a.finish();
     }
@@ -152,7 +154,7 @@ export function watchPresses(doc = globalThis.document) {
     const el = pressed;
     pressed = null;
     if (!el) { return; }
-    const t = timing('press', { exit: true, doc });
+    const t = timing('press', { doc });
     clearTimeout(timers.get(el));
     if (!(t.duration > 0)) { delete el.dataset.press; return; }
     el.dataset.press = 'released';
@@ -286,6 +288,33 @@ const BREAKS = new Set(['br', 'wbr']);
 // HTML whose children are a value or code rather than what it shows.
 const OPAQUE = new Set(['textarea', 'select', 'script', 'style', 'noscript', 'template', 'iframe', 'object', 'embed', 'video', 'audio', 'canvas']);
 
+// What draws a row, a glyph, a menu or a dot, and only that: reading every computed property of
+// every node took 20-30 ms for one row, more than a frame, as a list updated. What is left out
+// (animation, transition, cursor, pointer and selection behaviour, custom properties, masks)
+// a still, fading copy doesn't show.
+const DRAWS = [
+  'display', 'box-sizing', 'position', 'top', 'right', 'bottom', 'left', 'z-index', 'float', 'clear',
+  'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'aspect-ratio', 'object-fit',
+  'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+  'overflow-x', 'overflow-y', 'vertical-align', 'visibility', 'opacity', 'transform', 'transform-origin', 'translate', 'rotate', 'scale',
+  'flex-direction', 'flex-wrap', 'flex-grow', 'flex-shrink', 'flex-basis', 'order',
+  'justify-content', 'justify-items', 'justify-self', 'align-content', 'align-items', 'align-self', 'row-gap', 'column-gap',
+  'grid-template-columns', 'grid-template-rows', 'grid-template-areas', 'grid-auto-flow', 'grid-auto-columns', 'grid-auto-rows',
+  'grid-column-start', 'grid-column-end', 'grid-row-start', 'grid-row-end',
+  ...['top', 'right', 'bottom', 'left'].flatMap((s) => [`border-${s}-width`, `border-${s}-style`, `border-${s}-color`]),
+  'border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius',
+  'outline-width', 'outline-style', 'outline-color', 'outline-offset', 'box-shadow',
+  'background-color', 'background-image', 'background-size', 'background-position-x', 'background-position-y', 'background-repeat', 'background-origin', 'background-clip',
+  'color', 'font-family', 'font-size', 'font-weight', 'font-style', 'font-stretch', 'font-variant-caps', 'font-variant-numeric',
+  'font-feature-settings', 'font-variation-settings', 'line-height', 'letter-spacing', 'word-spacing', 'text-align', 'text-indent', 'text-transform',
+  'text-decoration-line', 'text-decoration-style', 'text-decoration-color', 'text-decoration-thickness', 'text-underline-offset',
+  'text-overflow', 'text-shadow', 'white-space-collapse', 'text-wrap-mode', 'white-space', 'word-break', 'overflow-wrap', 'hyphens', 'tab-size',
+  'direction', 'unicode-bidi', 'writing-mode', '-webkit-line-clamp', '-webkit-box-orient', '-webkit-text-fill-color', 'list-style-type', 'list-style-position',
+  'border-collapse', 'border-spacing', 'table-layout',
+  'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-linecap', 'stroke-linejoin', 'stroke-dasharray', 'stroke-dashoffset',
+  'filter', 'backdrop-filter', 'mix-blend-mode', 'isolation', 'clip-path',
+];
+
 function inlineCopy(el) {
   const doc = el.ownerDocument;
   const copy = (node) => {
@@ -306,14 +335,11 @@ function inlineCopy(el) {
     } else {
       return null;
     }
-    for (let i = 0; i < cs.length; i += 1) {
-      const p = cs[i];
-      if (p.startsWith('--') || p.startsWith('animation') || p.startsWith('transition') || p === 'cursor') { continue; }
-      // Nothing that names a resource (a background or mask image, a list marker): a copy fetches
-      // nothing, and app.css draws none of what a row shows with one.
+    for (const p of DRAWS) {
       const value = cs.getPropertyValue(p);
-      if (value.includes('url(')) { continue; }
-      c.style.setProperty(p, value);
+      // Nothing that names a resource (a background image, a clip path): a copy fetches nothing,
+      // and app.css draws none of what a row shows with one.
+      if (value && !value.includes('url(')) { c.style.setProperty(p, value); }
     }
     if (node.namespaceURI === HTML && OPAQUE.has(node.localName)) { return c; }
     for (const child of node.childNodes) { const k = copy(child); if (k) { c.append(k); } }
