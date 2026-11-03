@@ -59,7 +59,11 @@ final class HostStore: Identifiable {
     private(set) var isConnecting = false
     private(set) var status = "Not connected"
     private(set) var discoveryHold: String?
-    private(set) var connectionID = UUID()
+    private(set) var connectionID = UUID() {
+        // The host stages files for one connection. Hidden sessions keep their text drafts.
+        didSet { attachmentDrafts.removeAll() }
+    }
+
     private(set) var attempts: [String: MutationAttempt] = [:]
     var replyDrafts: [String: String] = [:]
     var attachmentDrafts: [String: [(UUID, String)]] = [:]
@@ -195,7 +199,6 @@ final class HostStore: Identifiable {
     }
 
     func stop() {
-        attachmentDrafts = [:]
         generation = UUID()
         connectionID = UUID()
         task?.cancel()
@@ -385,9 +388,9 @@ final class HostStore: Identifiable {
                 snapshotTimer?.cancel()
                 isLive = false
                 isConnecting = false
+                connectionID = UUID()
                 onDisconnected?()
                 status = Task.isCancelled ? "Disconnected" : "\(error.localizedDescription) Reconnecting…"
-                connectionID = UUID()
             }
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
             delay = min(delay * 2, 15)

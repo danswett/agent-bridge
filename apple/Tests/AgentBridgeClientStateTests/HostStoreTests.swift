@@ -69,6 +69,27 @@ private actor FixtureHost {
     Issue.record("State did not settle")
 }
 
+@MainActor @Test func automaticDisconnectExpiresAttachmentsForEverySessionAndKeepsReplyText() async throws {
+    let fixture = FixtureHost()
+    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await fixture.connection() }
+    host.start()
+    defer { host.stop() }
+    try await until { host.isLive }
+    let previousConnection = host.connectionID
+    let drafts = ["s1": "Selected reply", "s2": "Another session's draft"]
+    host.replyDrafts = drafts
+    host.attachmentDrafts = ["s1": [(UUID(), "selected.txt")], "s2": [(UUID(), "background.pdf")]]
+    var attachmentCountAtDisconnect: Int?
+    host.onDisconnected = { [weak host] in attachmentCountAtDisconnect = host?.attachmentDrafts.count }
+
+    await fixture.close()
+    try await until { !host.isLive && host.connectionID != previousConnection }
+
+    #expect(attachmentCountAtDisconnect == 0)
+    #expect(host.attachmentDrafts.isEmpty)
+    #expect(host.replyDrafts == drafts)
+}
+
 @MainActor @Test func uncertainReplyKeepsItsIdentityWhenTheSameHostReconnects() async throws {
     let first = FixtureHost(loseReply: true)
     let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await first.connection() }

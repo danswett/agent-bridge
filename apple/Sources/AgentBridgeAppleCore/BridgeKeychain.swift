@@ -41,7 +41,14 @@ public enum BridgeKeychain {
          kSecUseDataProtectionKeychain: true, kSecAttrSynchronizable: false]
     }
 
-    private static func failure(_ status: OSStatus) -> RelayError {
-        .refused("Keychain access failed (\(status)). Unlock this device and try again.")
+    static func failure(_ status: OSStatus) -> RelayError {
+        switch status {
+        case errSecMissingEntitlement:
+            .refused("Keychain access failed (\(status)). This app build is missing a required Keychain entitlement. Install a correctly signed build.")
+        case errSecInteractionNotAllowed:
+            .refused("Keychain interaction is unavailable (\(status)). Unlock this device, return to Agent Bridge, and try again.")
+        default:
+            .refused("Keychain access failed (\(status)). Please try again.")
+        }
     }
 }

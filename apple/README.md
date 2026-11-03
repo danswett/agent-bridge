@@ -13,7 +13,18 @@ open AgentBridgeApple.xcodeproj
 ```
 
 Select **AgentBridgeMac** or **AgentBridgeMobile**. Choose a signing team for
-physical devices. `project.yml` is authoritative; generated projects are ignored.
+the runnable Mac app and physical mobile devices. `project.yml` is authoritative;
+generated projects are ignored. To build the Mac app from a terminal:
+
+```sh
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bash scripts/build-macos.sh
+```
+
+Apple Development signing is required even for local Mac use: the data protection
+Keychain requires a provisioned application identity. The Mac target declares one
+private Keychain group, and this script verifies the signed app identity, group
+and embedded development profile. An unsigned compile-check build cannot sign in;
+error `-34018` means its required entitlement is missing, not that the Mac is locked.
 
 The Mac app observes an already-running host's `default` profile. Change the
 profile in **Connection Settings**. Sign in with the same GitHub account as your
@@ -22,9 +33,10 @@ one used by the Windows app. Custom relays require HTTPS; authentication and blo
 HTTP requests refuse redirects. Tokens and device keys are scoped to the relay
 and GitHub account and stored in this installation's Keychain.
 
-The app does not install, restart, migrate or reconfigure a local host. Mac/Linux
-hosts currently advertise read-only session capabilities. Actions work only when
-the connected host offers them, such as a capable remote Windows host.
+The app does not install, restart, migrate or reconfigure a local host. The Mac
+host supports actions on sessions launched by its own managed terminal backend;
+existing sessions remain read-only. Linux delivery remains unsupported. Actions
+work only when the connected host offers them.
 
 ## Workflows
 
@@ -86,6 +98,6 @@ notarization, signed installers and release update channels are deferred by choi
 
 See [`docs/apple-parity.md`](../docs/apple-parity.md). iOS notifications currently
 operate while the app is open; background APNs needs provider and entitlement
-integration. Mac self-updates, host installation and the missing Mac host action backends remain
-separate platform work. Native login-item registration still needs OS acceptance. The Windows
+integration. Mac self-updates and host installation remain separate platform work.
+Native login-item registration still needs OS acceptance. The Windows
 Task Scheduler/registry/Velopack implementations are not Apple platform APIs.
