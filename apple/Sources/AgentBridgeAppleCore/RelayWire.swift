@@ -26,9 +26,9 @@ public enum RelayWire {
         guard bytes.count.isMultiple(of: 2) else { throw Failure.invalidHex }
         func nibble(_ byte: UInt8) throws -> UInt8 {
             switch byte {
-            case 48 ... 57: return byte - 48
-            case 65 ... 70: return byte - 55
-            case 97 ... 102: return byte - 87
+            case 48 ... 57: byte - 48
+            case 65 ... 70: byte - 55
+            case 97 ... 102: byte - 87
             default: throw Failure.invalidHex
             }
         }
