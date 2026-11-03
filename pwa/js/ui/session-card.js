@@ -182,12 +182,14 @@ export class SessionCard {
     e.actions = h('div', { class: 'header-actions' }, e.pin, e.detailsButton, e.inspectorButton, e.more);
     e.header = h('header', { class: 'session-header' }, e.back, h('div', { class: 'header-main' }, e.titleText, e.statusLine), e.actions);
     // The delegate strip (§6.3): at three panes under the header; on a phone a chip row.
-    // Its item pressed again lets the delegate go, unless the inspector is hidden: then it shows it.
+    // Its item pressed again lets the delegate go, if it is on screen. Out of sight, it shows it:
+    // the inspector hidden, or (with no inspector pane) another tab chosen over it, which a tab
+    // chosen before the window narrowed leaves too.
     this.strip = new DelegateStrip({
       onSelect: (id) => {
         if (id !== null) { this.openDelegate(id); return; }
         const { inspector, wide } = this.layout();
-        if (wide && !inspector) { this.openDelegate(this.#delegate); } else { this.closeDelegate(); }
+        if ((wide && !inspector) || (!inspector && this.#tab !== 'delegates')) { this.openDelegate(this.#delegate); } else { this.closeDelegate(); }
       },
     });
 

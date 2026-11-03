@@ -406,6 +406,21 @@ test.describe('where the inspector is not a pane of its own', () => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
+  test('a chip pressed for its delegate open behind another tab shows it, and pressed again lets it go', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const chip = c.locator('.delegate-strip .strip-item[data-id="demo-agent-suite"]');
+    await chip.click();
+    await expect(pane(page)).toBeVisible();
+    await c.getByRole('tab', { name: 'Conversation' }).click();
+    await expect(pane(page)).toBeHidden();
+    await chip.click();
+    await expect(pane(page)).toBeVisible();
+    await expect(pane(page)).toHaveAttribute('data-id', 'demo-agent-suite');
+    await chip.click();
+    await expect(pane(page)).toHaveCount(0);
+  });
+
   test('on a phone the Delegates tab holds the block, and it fits', async ({ page }) => {
     await openDemo(page);
     const c = card(page);

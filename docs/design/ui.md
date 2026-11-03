@@ -572,8 +572,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Choosing:** at three panes a strip item shows its delegate in the inspector, in place of
   Details and Tools, bringing a hidden inspector back; pressed again, it lets go. Below three
   panes the Delegates tab lists every delegate under its parent, finished ones folded, and the
-  one opened is pushed in the list's place with "All delegates" to go back. A delegate stays
-  open across a resize, and as it finishes (its fold opens).
+  one opened is pushed in the list's place with "All delegates" to go back. A phone's chip
+  pressed again lets its delegate go too, unless another tab hides it: then it shows it. A
+  delegate stays open across a resize, and as it finishes (its fold opens).
 - **A host that lists none** (Claude, Codex, a host before sub-agents) gets no strip; its
   Delegates tab, while it counts background agents, says only how many.
 - **One action:** "Ask main agent to stop it". It pre-fills a reply to the main agent, after
