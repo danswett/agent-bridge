@@ -32,7 +32,25 @@ public abstract class MigrationFixture : IAsyncLifetime
     private protected async Task Migrated()
     {
         var report = await _f.Migrator().MigrateAsync(dryRun: false);
-        Assert.True(report.Ok, report.ToString());
+        if (report.Ok) { return; }
+
+        // Rollback may have removed its spool. Diagnostics must preserve the migration error.
+        var details = new List<string>(report.Lines);
+        try
+        {
+            var log = SpoolContract.LogPath(_f.Runtime);
+            details.Add("Fixture hook log (last 10 lines):");
+            details.AddRange(File.Exists(log) ? File.ReadLines(log).TakeLast(10) : ["missing"]);
+            var spool = SpoolContract.SpoolDirectory(_f.Runtime);
+            details.Add("Remaining fixture spool files (up to 10):");
+            details.AddRange(Directory.Exists(spool)
+                ? Directory.EnumerateFiles(spool).Take(10).Select(p => Path.GetFileName(p)) : ["missing"]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            details.Add($"Fixture diagnostics unavailable: {ex.GetType().Name}");
+        }
+        Assert.Fail(string.Join(Environment.NewLine, details));
     }
 
     private protected async Task RolledBack()
