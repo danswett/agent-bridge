@@ -588,7 +588,13 @@ static partial class SelfTest
             check(pill is { ActualWidth: 3, ActualHeight: 16 } && Colour(pill.Fill) == want, $"marks the page shown with a 3×16 Bridge pill in {theme} ({(pill is null ? "none" : $"{pill.ActualWidth}×{pill.ActualHeight} {Colour(pill.Fill)}")}, wanted {want})");
             var caption = window.AppWindow.TitleBar;
             var wanted = MainWindow.CaptionColours(theme);
-            check(wanted is { } c && caption.ButtonForegroundColor == c.Text && caption.ButtonInactiveForegroundColor == c.Inactive && caption.ButtonHoverBackgroundColor == c.Hover && caption.ButtonPressedBackgroundColor == c.Pressed,
+            bool Painted() => wanted is { } c && caption.ButtonForegroundColor == c.Text && caption.ButtonInactiveForegroundColor == c.Inactive && caption.ButtonHoverBackgroundColor == c.Hover && caption.ButtonPressedBackgroundColor == c.Pressed;
+            // #424: painted from Root.ActualThemeChanged, which WinUI raises on a later tick than the
+            // one that sets the theme (about 30 ms later on an x64 desktop). On a busy Arm64 runner
+            // that tick once came after the 300 ms above, and the check read the Light theme's paint
+            // in Dark.
+            await Until(Painted, TimeSpan.FromSeconds(10));
+            check(Painted(),
                 $"draws the caption buttons in the design's {theme} text and fills ({caption.ButtonForegroundColor?.ToString() ?? "system"}, wanted {wanted?.Text.ToString() ?? "none"})");
             // A control that follows WinUI's accent: an accent button.
             var button = new Button { Content = "Bridge", Style = (Style)Application.Current.Resources["AccentButtonStyle"], Opacity = 0, IsHitTestVisible = false };
