@@ -2,7 +2,7 @@ namespace AgentBridge.Quality.Tests;
 
 public class CatalogTests
 {
-    // The one test that reads the live repository: the selector is only as good as its ability
+    // One of the few tests that read the live repository: the selector is only as good as its ability
     // to read the real catalog, so a schema change there must fail here, not in CI's plan job.
     [Fact]
     public void The_repository_catalog_keeps_its_schema_and_every_project_it_names_is_a_test_project()
@@ -17,6 +17,29 @@ public class CatalogTests
         Assert.NotEmpty(catalog.Suites);
         Assert.Empty(catalog.Validate(graph.CsprojCount).Select(p => p.Message));
         Assert.All(catalog.Suites.Where(s => s.Project is not null), s => Assert.True(graph[s.Project!]?.IsTestProject, $"{s.Id}: {s.Project}"));
+    }
+
+    // Files a CI job checks without owning them, which neither the project graph nor a folder
+    // glob would reach: what generate.mjs writes outside design/, and what the dev stack links in
+    // from other spikes. Each once slipped past a pull request's selection (#443's review).
+    [Theory]
+    [InlineData("src/AgentBridge.App.Core/DesignLayout.cs", "design-gen")]
+    [InlineData("pwa/index.html", "design-gen")]
+    [InlineData("pwa/manifest.webmanifest", "design-gen")]
+    [InlineData("spikes/s2-noise-interop/dotnet/Noise.cs", "pwa-e2e")]
+    [InlineData("spikes/s2-noise-interop/web/noise-p256.js", "pwa-e2e")]
+    [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]
+    public void A_file_a_job_checks_from_outside_its_folders_selects_that_suite_in_the_repository_catalog(string file, string suite)
+    {
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "AgentBridge.slnx")))
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("No AgentBridge.slnx above the test's output.");
+        var selector = new Selector(Catalog.Load(Path.Combine(root, "quality", "catalog.yml")), ProjectGraph.Load(root));
+
+        var selection = selector.Select([file], ring: 1);
+
+        Assert.True(File.Exists(Path.Combine(root, file)), $"{file} no longer exists; update this test");
+        Assert.Contains(suite, Fixture.Ids(selection));
     }
 
     [Fact]
