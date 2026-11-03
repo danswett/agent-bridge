@@ -49,6 +49,17 @@ struct SessionWorkbench: View {
     }
 
     var body: some View {
+        #if os(macOS)
+            VStack(spacing: 0) {
+                navigation
+                connectionFooter
+            }
+        #else
+            navigation.safeAreaInset(edge: .bottom) { connectionFooter }
+        #endif
+    }
+
+    private var navigation: some View {
         NavigationSplitView {
             List(selection: $store.selectedSessionID) {
                 if search.isEmpty, !needsOnly, !needsYou.isEmpty {
@@ -109,7 +120,6 @@ struct SessionWorkbench: View {
                 ContentUnavailableView("Select a session", systemImage: "terminal", description: Text("Activity and questions appear here."))
             }
         }
-        .safeAreaInset(edge: .bottom) { connectionFooter }
         .tint(.teal)
         .sheet(isPresented: $showingConnection) { ConnectionView(store: store) }
         .sheet(isPresented: $showingMachines) { MachinesView(store: store) }
@@ -166,30 +176,63 @@ struct SessionWorkbench: View {
         }
     }
 
-    private func detail(_ entry: SessionEntry) -> some View {
-        let answerAvailable = canAnswer(entry)
-        return SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
-                             machineName: entry.machineName, canAnswer: answerAvailable,
-                             onLoadHistory: entry.host.map { host in
-                                 { @MainActor @Sendable id in
-                                     // Leaving the detail must not cancel the shared transport.
-                                     try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
-                                 }
-                             }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry))
+    private func reader(_ entry: SessionEntry, layout: SessionDetailLayout) -> some View {
+        SessionDetail(session: entry.session, readOnlyReason: entry.host?.readOnlyReason,
+                      machineName: entry.machineName, canAnswer: canAnswer(entry),
+                      onLoadHistory: entry.host.map { host in
+                          { @MainActor @Sendable id in
+                              // Leaving the detail must not cancel the shared transport.
+                              try await Task { try await host.call("session.get", data: ["id": .string(id)]) }.value
+                          }
+                      }, onLoadDelegate: delegateLoader(for: entry), onAskMainToStop: delegateStopDraft(for: entry), layout: layout)
             .id(entry.id)
-            .toolbar {
-                if let host = entry.host, !entry.ended {
-                    ToolbarItem {
-                        Button(entry.session.question == nil ? "Reply / Actions" : answerAvailable ? "Answer" : "View Question", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
-                            .disabled(!host.isLive)
+    }
+
+    @ViewBuilder private func detail(_ entry: SessionEntry) -> some View {
+        #if os(macOS)
+            HSplitView {
+                VStack(spacing: 0) {
+                    reader(entry, layout: .conversation)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if let host = entry.host, !entry.ended {
+                        Divider()
+                        SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .composer)
+                            .id(entry.id)
+                            .frame(maxHeight: 280)
                     }
                 }
-            }
-            .sheet(isPresented: $showingActions) {
-                if let host = entry.host {
-                    SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
+                .frame(minWidth: 360, idealWidth: 660, maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    Label("Session inspector", systemImage: "sidebar.right")
+                        .font(.headline).padding(.horizontal, 16).padding(.vertical, 12)
+                        .accessibilityAddTraits(.isHeader)
+                    Divider()
+                    reader(entry, layout: .inspector)
+                    if let host = entry.host, !entry.ended {
+                        Divider()
+                        SessionActions(sessionID: entry.session.id, store: store, host: host, presentation: .inspector)
+                            .id(entry.id).padding(14).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
+                .frame(minWidth: 270, idealWidth: 320, maxWidth: 460, maxHeight: .infinity, alignment: .topLeading)
             }
+        #else
+            let answerAvailable = canAnswer(entry)
+            reader(entry, layout: .combined)
+                .toolbar {
+                    if let host = entry.host, !entry.ended {
+                        ToolbarItem {
+                            Button(entry.session.question == nil ? "Reply / Actions" : answerAvailable ? "Answer" : "View Question", systemImage: entry.session.question == nil ? "paperplane" : "questionmark.bubble") { showingActions = true }
+                                .disabled(!host.isLive)
+                        }
+                    }
+                }
+                .sheet(isPresented: $showingActions) {
+                    if let host = entry.host {
+                        SessionActions(sessionID: entry.session.id, store: store, host: host).id(entry.id)
+                    }
+                }
+        #endif
     }
 
     private func canAnswer(_ entry: SessionEntry) -> Bool {
@@ -225,7 +268,9 @@ struct SessionWorkbench: View {
                   session.delegates.contains(where: { $0.id == id && $0.status != "ended" }),
                   let draft = BridgeDelegatePresentation.stopDraft(delegateID: id, existing: host.replyDrafts[session.id] ?? "") else { return }
             host.replyDrafts[session.id] = draft
-            showingActions = true
+            #if os(iOS)
+                showingActions = true
+            #endif
         }
     }
 

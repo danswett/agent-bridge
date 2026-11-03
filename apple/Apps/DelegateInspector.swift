@@ -7,6 +7,7 @@ struct DelegateInspector: View {
     let onLoad: (@MainActor (String, String) async throws -> JSONValue)?
     let onSelect: (String) -> Void
     var onAskMainToStop: (() -> Void)?
+    var onBack: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @AppStorage("bridge.reading.showDetails") private var showDetails = true
     @State private var loader = BridgeHistoryLoader(subject: .delegate)
@@ -23,132 +24,145 @@ struct DelegateInspector: View {
     }
 
     var body: some View {
-        NavigationStack {
-            TimelineView(.periodic(from: .now, by: 10)) { clock in
-                Form {
-                    if let entry {
-                        Section {
-                            Text("Delegate").font(.caption).foregroundStyle(.secondary)
-                            Label(entry.name, systemImage: entry.symbol).font(.title3)
-                                .accessibilityLabel(BridgeDelegateLabel.titled(entry.name))
-                            LabeledContent("Status", value: entry.statusText)
-                            if let model = content.fetched?.model ?? entry.model {
-                                LabeledContent("Model", value: model)
-                            }
-                            LabeledContent("Kind", value: entry.kind == "background" ? "Background" : "Task")
-                            LabeledContent("ID") { Text(entry.id).textSelection(.enabled) }.fontDesign(.monospaced)
-                            if let started = entry.startedAt {
-                                LabeledContent("Started", value: SessionPresentation.timestamp(started))
-                            }
-                            if let ended = entry.endedAt {
-                                LabeledContent("Finished", value: SessionPresentation.timestamp(ended))
-                            }
-                            if let duration = BridgeDelegatePresentation.duration(from: entry.startedAt, to: entry.endedAt ?? clock.date) {
-                                LabeledContent("Duration", value: duration)
-                            }
-                        }
-                        if !content.task.isEmpty {
-                            Section("Task") { BridgeMarkdown(content.task).textSelection(.enabled) }
-                        }
-                        if !content.latest.isEmpty {
-                            Section("Latest") {
-                                BridgeMarkdown(content.latest).textSelection(.enabled)
-                                if content.latestTruncated {
-                                    Text("Earlier delegate response text was omitted by the host.").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        if showDetails, let reasoning = content.fetched?.reasoning, !reasoning.isEmpty {
-                            Section { DisclosureGroup("Reasoning") { BridgeMarkdown(reasoning).textSelection(.enabled) } }
-                        }
-                        if showDetails {
-                            let tools = BridgeDelegatePresentation.tools(content.fetched ?? entry, listed: entry)
-                            if !tools.isEmpty {
-                                Section("Recent tools") {
-                                    ForEach(tools) { tool in
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Label(tool.name, systemImage: tool.status == "failed" ? "xmark.circle" : tool.status == "running" ? "circle.dashed" : "checkmark.circle")
-                                                .font(.body.monospaced())
-                                            if let summary = tool.summary {
-                                                Text(summary).foregroundStyle(.secondary)
-                                            }
-                                            if let duration = BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date) {
-                                                Text("\(tool.status.capitalized) · \(duration)").font(.caption).foregroundStyle(.secondary)
-                                            }
-                                        }
-                                        .accessibilityElement(children: .ignore)
-                                        .accessibilityAddTraits(.isStaticText)
-                                        .accessibilityLabel(tool.name)
-                                        .accessibilityValue([tool.status.capitalized, tool.summary,
-                                                             BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date)]
-                                                .compactMap(\.self).joined(separator: ", "))
-                                    }
-                                }
-                            }
-                        }
-                        if !nested.isEmpty {
-                            Section("Nested delegates") { DelegateRows(entries: nested, all: session.delegates, now: clock.date, onSelect: onSelect) }
-                        }
-                        Section {
-                            if loader.isLoading {
-                                ProgressView("Loading delegate…")
-                            }
-                            if let error = loader.error {
-                                Text(error).foregroundStyle(.secondary)
-                            }
-                            if let loaded = loader.loadedAt {
-                                Text("Loaded \(SessionPresentation.timestamp(loaded))").font(.caption).foregroundStyle(.secondary)
-                            }
-                            if onLoad != nil {
-                                Button("Refresh Delegate", action: refresh).disabled(loader.isLoading)
-                            } else {
-                                Text("Full delegate details require a connected host.").foregroundStyle(.secondary)
-                            }
-                        }
-                        if let onAskMainToStop, entry.status != "ended", BridgeDelegateLabel.safeID(entry.id) != nil {
-                            Section {
-                                Button("Ask main agent to stop it", action: onAskMainToStop)
-                                Text("This prepares a reply naming the delegate by ID. Review it and press Send; nothing is sent now.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    } else {
-                        ContentUnavailableView("Delegate no longer listed", systemImage: "person.crop.circle.badge.questionmark",
-                                               description: Text("The host no longer includes this delegate in the session."))
-                    }
-                }
-                .formStyle(.grouped)
-                // Selectable control labels can recurse through AppKit accessibility
-                // when this sheet changes delegates. Only prose and IDs are selectable.
-                .textSelection(.disabled)
+        if let onBack {
+            VStack(alignment: .leading, spacing: 0) {
+                Button("Session details", systemImage: "chevron.backward", action: onBack)
+                    .padding(12)
+                    .accessibilityLabel("Back to session details")
+                contents
             }
-            .navigationTitle("Delegate details")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear {
+        } else {
+            NavigationStack {
+                contents
+                    .navigationTitle("Delegate details")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            }
+            #if os(macOS)
+            .frame(minWidth: 480, idealWidth: 620, minHeight: 500, idealHeight: 720)
+            #endif
+        }
+    }
+
+    private var contents: some View {
+        TimelineView(.periodic(from: .now, by: 10)) { clock in
+            Form {
                 if let entry {
-                    content.update(entry); loader.activate(sessionID: delegateID); refresh()
+                    Section {
+                        Text("Delegate").font(.caption).foregroundStyle(.secondary)
+                        Label(entry.name, systemImage: entry.symbol).font(.title3)
+                            .accessibilityLabel(BridgeDelegateLabel.titled(entry.name))
+                        LabeledContent("Status", value: entry.statusText)
+                        if let model = content.fetched?.model ?? entry.model {
+                            LabeledContent("Model", value: model)
+                        }
+                        LabeledContent("Kind", value: entry.kind == "background" ? "Background" : "Task")
+                        LabeledContent("ID") { Text(entry.id).textSelection(.enabled) }.fontDesign(.monospaced)
+                        if let started = entry.startedAt {
+                            LabeledContent("Started", value: SessionPresentation.timestamp(started))
+                        }
+                        if let ended = entry.endedAt {
+                            LabeledContent("Finished", value: SessionPresentation.timestamp(ended))
+                        }
+                        if let duration = BridgeDelegatePresentation.duration(from: entry.startedAt, to: entry.endedAt ?? clock.date) {
+                            LabeledContent("Duration", value: duration)
+                        }
+                    }
+                    if !content.task.isEmpty {
+                        Section("Task") { BridgeMarkdown(content.task).textSelection(.enabled) }
+                    }
+                    if !content.latest.isEmpty {
+                        Section("Latest") {
+                            BridgeMarkdown(content.latest).textSelection(.enabled)
+                            if content.latestTruncated {
+                                Text("Earlier delegate response text was omitted by the host.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if showDetails, let reasoning = content.fetched?.reasoning, !reasoning.isEmpty {
+                        Section { DisclosureGroup("Reasoning") { BridgeMarkdown(reasoning).textSelection(.enabled) } }
+                    }
+                    if showDetails {
+                        let tools = BridgeDelegatePresentation.tools(content.fetched ?? entry, listed: entry)
+                        if !tools.isEmpty {
+                            Section("Recent tools") {
+                                ForEach(tools) { tool in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Label(tool.name, systemImage: tool.status == "failed" ? "xmark.circle" : tool.status == "running" ? "circle.dashed" : "checkmark.circle")
+                                            .font(.body.monospaced())
+                                        if let summary = tool.summary {
+                                            Text(summary).foregroundStyle(.secondary)
+                                        }
+                                        if let duration = BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date) {
+                                            Text("\(tool.status.capitalized) · \(duration)").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityAddTraits(.isStaticText)
+                                    .accessibilityLabel(tool.name)
+                                    .accessibilityValue([tool.status.capitalized, tool.summary,
+                                                         BridgeDelegatePresentation.duration(from: tool.startedAt, to: tool.endedAt ?? clock.date)]
+                                            .compactMap(\.self).joined(separator: ", "))
+                                }
+                            }
+                        }
+                    }
+                    if !nested.isEmpty {
+                        Section("Nested delegates") { DelegateRows(entries: nested, all: session.delegates, now: clock.date, onSelect: onSelect) }
+                    }
+                    Section {
+                        if loader.isLoading {
+                            ProgressView("Loading delegate…")
+                        }
+                        if let error = loader.error {
+                            Text(error).foregroundStyle(.secondary)
+                        }
+                        if let loaded = loader.loadedAt {
+                            Text("Loaded \(SessionPresentation.timestamp(loaded))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if onLoad != nil {
+                            Button("Refresh Delegate", action: refresh).disabled(loader.isLoading)
+                        } else {
+                            Text("Full delegate details require a connected host.").foregroundStyle(.secondary)
+                        }
+                    }
+                    if let onAskMainToStop, entry.status != "ended", BridgeDelegateLabel.safeID(entry.id) != nil {
+                        Section {
+                            Button("Ask main agent to stop it", action: onAskMainToStop)
+                            Text("This prepares a reply naming the delegate by ID. Review it and press Send; nothing is sent now.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    ContentUnavailableView("Delegate no longer listed", systemImage: "person.crop.circle.badge.questionmark",
+                                           description: Text("The host no longer includes this delegate in the session."))
                 }
             }
-            .onChange(of: entry) { old, entry in
-                guard let entry else { loader.deactivate(); return }
-                if old == nil {
-                    loader.activate(sessionID: delegateID)
-                }
-                content.update(entry)
-                needsRefresh = true
+            .formStyle(.grouped)
+            // Selectable control labels can recurse through AppKit accessibility
+            // when this sheet changes delegates. Only prose and IDs are selectable.
+            .textSelection(.disabled)
+        }
+        .onAppear {
+            if let entry {
+                content.update(entry); loader.activate(sessionID: delegateID); refresh()
+            }
+        }
+        .onChange(of: entry) { old, entry in
+            guard let entry else { loader.deactivate(); return }
+            if old == nil {
+                loader.activate(sessionID: delegateID)
+            }
+            content.update(entry)
+            needsRefresh = true
+            refreshIfDue()
+        }
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 refreshIfDue()
             }
-            .task {
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                    refreshIfDue()
-                }
-            }
-            .onDisappear { loader.deactivate() }
         }
-        #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 620, minHeight: 500, idealHeight: 720)
-        #endif
+        .onDisappear { loader.deactivate() }
     }
 
     private func refreshIfDue() {
