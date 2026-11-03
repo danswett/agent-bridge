@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readUsage, mergeUsage, latestUsage, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
+import { readUsage, mergeUsage, latestUsage, usageKey, severity, until, ago, elapsed, pace, showsError, machineStatus, machineFacts, isStale, amount, readOn, UsageBook } from '../../js/usage.js';
 
 const NOW = Date.parse('2026-10-28T20:00:00.000Z');
 const iso = (ms) => new Date(NOW + ms).toISOString();
@@ -79,9 +79,10 @@ test('of one machines keyed and keyless failures with no reading newer than eith
   assert.deepEqual(latestUsage([{ agents: [keyed, { ...keyless, measuredAt: iso(0) }] }].map(readUsage)).map((r) => r.accountKey ?? null), [null]);
 });
 
-test('keyless readings that name no machine are never merged with each other', () => {
+test('keyless readings that name no machine are never merged with each other, each keyed the same every time', () => {
   const codex = (percent) => ({ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-percent * 1000), windows: [{ key: 'primary', label: '5h limit', percent }] });
   assert.deepEqual(mergeUsage([{ agents: [codex(10)] }, { agents: [codex(20)] }].map(readUsage)).map((r) => r.windows[0].percent).sort(), [10, 20]);
+  assert.equal(usageKey(codex(10)), usageKey(codex(10)));
 });
 
 test('one machines keyed and keyless readings taken at the same moment are one row, the first reported', () => {
@@ -216,6 +217,14 @@ test('a kept reading is not shown once it is two weeks old, though nothing has b
   now += 2 * 24 * H;
   assert.deepEqual(book.entries(), []);
   assert.equal(book.empty, true);
+});
+
+test('a kept reading that names no machine is dropped when the cache loads, and what is kept is saved', () => {
+  let kept = null;
+  const book = new UsageBook({ now: () => NOW });
+  book.useCache({ entries: [claude({ accountKey: null }), claude({ readBy: { id: 'vm-id', name: 'Rehearsal VM' } })], save: (e) => { kept = e; } });
+  assert.deepEqual(book.entries().map(readOn), ['read on Rehearsal VM']);
+  assert.deepEqual(kept.map((e) => e.readBy.id), ['vm-id']);
 });
 
 test('a forgotten machine takes what it read with it, even where another host passes it on, and signing out keeps nothing', () => {
