@@ -861,6 +861,7 @@ public class DiscoveryHoldTests
 
     [Theory]
     [InlineData(@"C:\Users\u\.local\bin\claude.exe auth status", true)]
+    [InlineData("\"C:\\Users\\u\\AppData\\Roaming\\npm\\\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"    auth status", true)]
     [InlineData("node C:/npm/node_modules/@anthropic-ai/claude-code/cli.js auth status", true)]
     [InlineData("claude auth status --json", false)]
     [InlineData("claude auth login", false)]

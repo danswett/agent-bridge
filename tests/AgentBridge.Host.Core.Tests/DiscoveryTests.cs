@@ -207,8 +207,9 @@ public class DiscoveryTests
         Assert.Empty(source.Snapshot());
     }
 
-    // Claude Code 2.1.316's sessions/<pid>.json for the host's /usage probe, as rehearsal-m wrote it
-    // (E11), with its ids and paths replaced: kind interactive, entrypoint sdk-cli, nothing about flags.
+    // Claude Code 2.1.316's sessions/<pid>.json for the host's /usage probe, field for field as
+    // rehearsal-m wrote it (E11), with its ids, machine and paths replaced: kind interactive,
+    // entrypoint sdk-cli, and nothing about the probe's options.
     static void ClaudeUsageProbeFile(Fixture f, int pid, string cwd)
     {
         var dir = Path.Combine(f.ClaudeHome, "sessions");
@@ -220,14 +221,21 @@ public class DiscoveryTests
             ["sessionId"] = B,
             ["cwd"] = cwd,
             ["startedAt"] = at,
+            ["procStart"] = 134381435191194245,
             ["version"] = "2.1.316",
             ["peerProtocol"] = 1,
+            ["peerFeatures"] = new System.Text.Json.Nodes.JsonArray("notify_idle", "artifact_yield"),
             ["kind"] = "interactive",
             ["entrypoint"] = "sdk-cli",
-            ["name"] = "usage-probe-6a8f",
+            ["pidDomain"] = "win32:machine",
+            ["asksForConvertedSkills"] = new System.Text.Json.Nodes.JsonArray(),
+            ["messagingSocketPath"] = @"\\.\pipe\LOCAL\cc-msg-0123456789abcdef",
+            ["name"] = "usage-probe-e6",
+            ["nameSource"] = "derived",
+            ["nameSince"] = at,
             ["status"] = "idle",
-            ["updatedAt"] = at + 1400,
-            ["messagingSocketPath"] = @"\\.\pipe\claude-peer-redacted",
+            ["updatedAt"] = at - 73,
+            ["statusUpdatedAt"] = at - 73,
         };
         File.WriteAllText(Path.Combine(dir, pid.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".json"), json.ToJsonString());
     }
@@ -237,7 +245,7 @@ public class DiscoveryTests
     {
         using var f = new Fixture();
         ClaudeUsageProbeFile(f, 710, @"C:\Users\u\AppData\Local\AgentBridge\live\usage-probe");
-        f.Processes.Run(AgentKind.Claude, 710, @"C:\Users\u\.local\bin\claude.exe -p /usage --safe-mode --no-session-persistence --output-format json");
+        f.Processes.Run(AgentKind.Claude, 710, "\"C:\\Users\\u\\AppData\\Roaming\\npm\\\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"    -p /usage --safe-mode --no-session-persistence --output-format json");
         await using var source = f.Source();
 
         await source.RefreshAsync();
