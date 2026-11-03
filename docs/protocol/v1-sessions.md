@@ -1014,7 +1014,8 @@ command); the shapes are in `tests/fixtures/claude`.
   is queued in the session's transcript too), or when the delegate above it ends.
 * Starts and ends are read from the skimmed part of the transcript too. Where the host could
   not read everything before the window, a run the skim saw start is listed with no
-  `outcome` and not counted, since its end may be in what was not read. Nothing a delegate
+  `outcome` and not counted, since its end may be in what was not read, and no delivery is
+  taken as owed across what was not read. Nothing a delegate
   writes is in the session's transcript, so `activity.source` is never set.
 
 ### Background work (Codex)

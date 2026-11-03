@@ -254,13 +254,17 @@ internal sealed class BackgroundWork
     }
 
     // A run's end said before the notice that says it again (Codex's wait returning with the
-    // agent's state, then its subagent_notification): that notice is owed to this run, and spent
-    // on it rather than ending one a message has started since.
+    // agent's state, then its subagent_notification; Claude's queued notice, then its delivery):
+    // that notice is owed to this run, and spent on it rather than ending one a message has
+    // started since. So is one for a run whose end was not known yet (its start only skimmed past
+    // bytes never read); the same end said again owes nothing more.
     public void AgentRunEnded(string agentId, DateTimeOffset? at, SubagentOutcome outcome)
     {
         if (!_agents.TryGetValue(agentId, out var agent)) { return; }
-        if (agent.Working) { EndRun(agent, at, outcome); }
-        else { Outcome(agent, at, outcome); }
+        if (agent.Working) { EndRun(agent, at, outcome); return; }
+        if (agent.Outcome is not null) { return; }
+        Outcome(agent, at, outcome);
+        agent.IdleOwed++;
     }
 
     // Closed for good by its starter (Codex's close_agent, or a state saying it is shut down):
@@ -276,10 +280,15 @@ internal sealed class BackgroundWork
     // Bytes were never read (TranscriptTail's skim budget spent): a run the skim saw start may
     // have ended there. Kept listed, as between runs with no outcome known, until the window says
     // more; left running, a Claude or Codex delegate, whose own events are not in the session's
-    // transcript, read as running for as long as its CLI lived.
+    // transcript, read as running for as long as its CLI lived. A notice owed may have been there
+    // too: kept owed, it would be spent on the end of a run started after, which then ran for good.
     public void ForgetRuns()
     {
-        foreach (var agent in _agents.Values.Where(a => a.Working).ToList()) { ForgetRun(agent); }
+        foreach (var agent in _agents.Values)
+        {
+            agent.IdleOwed = 0;
+            if (agent.Working) { ForgetRun(agent); }
+        }
     }
 
     public void ForgetRun(string agentId)
@@ -490,9 +499,11 @@ internal sealed class BackgroundWork
         Version++;
     }
 
-    public void ShellEnded(string? id)
+    public bool ShellEnded(string? id)
     {
-        if (id is not null && _shells.Remove(id)) { Version++; }
+        if (id is null || !_shells.Remove(id)) { return false; }
+        Version++;
+        return true;
     }
 
     public void ForgetShells()

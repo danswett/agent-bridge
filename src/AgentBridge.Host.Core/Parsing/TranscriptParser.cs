@@ -76,6 +76,7 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
         S.UserMessage = text;
         S.FirstUserMessage ??= text;
         if (countsAsTurn) { S.Prompts++; }
+        S.UncountedTurn = false;
         // A new message starts a new turn: last turn's reasoning would otherwise sit under
         // this turn's status.
         S.ForgetReasoning();

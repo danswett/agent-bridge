@@ -31,6 +31,8 @@ public class ClaudeSubagentTests
         readonly string[] _lines;
         readonly Dictionary<string, (string Meta, string[] Lines)> _agents = [];
         readonly Dictionary<string, int> _written = [];
+        // Agents whose files are not written yet, whatever the time.
+        public readonly HashSet<string> Held = [];
         int _next;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
@@ -58,6 +60,7 @@ public class ClaudeSubagentTests
             Fixture.Append(_transcript, [.. batch]);
             foreach (var (name, (meta, lines)) in _agents)
             {
+                if (Held.Contains(name)) { continue; }
                 var from = _written[name];
                 var to = from;
                 while (to < lines.Length && At(lines[to]) < until) { to++; }
@@ -69,6 +72,13 @@ public class ClaudeSubagentTests
             }
             await Source.RefreshAsync();
             return Source.Get(Id)!;
+        }
+
+        // Writes a held agent's files as far as the replay has reached.
+        public async Task<Session> Release(string agent, double second)
+        {
+            Held.Remove("agent-" + agent);
+            return await Through(second);
         }
 
         // A delegate's record written before anything of its own transcript is.
@@ -314,6 +324,40 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
+    public async Task A_turn_for_a_notice_leaves_the_prompts_already_answered_counted()
+    {
+        // Found in review: it is not a prompt in progress, so the count does not go back.
+        await using var r = new Replay();
+
+        Assert.Equal(1, (await r.Through(9.25)).Activity.TurnCount);
+        var s = await r.Through(9.3);
+
+        Assert.Equal(SessionStatus.Working, s.Status);
+        Assert.Equal(1, s.Activity.TurnCount);
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_found_between_its_queued_notice_and_its_delivery_is_not_stopped_again_by_the_delivery()
+    {
+        // Found in review: its record is read only after the queue said it stopped, a message
+        // wakes it, and then the queue's remove (its delivery to the delegate above) arrives.
+        await using var r = new Replay();
+        r.Held.Add("agent-" + Nested);
+        await r.Through(10.23);
+
+        var found = Entry(await r.Release(Nested, 10.23), Nested);
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (found.Status, found.Outcome));
+
+        var wake = JsonNode.Parse(Claude.Assistant(0, "tool_use", Claude.ToolUse("toolu_wake", "SendMessage", new JsonObject { ["to"] = Nested, ["summary"] = "Again", ["message"] = "Show them again." })))!;
+        wake["timestamp"] = Fixture.T0.AddMilliseconds(10240).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        Assert.Equal(SubagentStatus.Working, Entry(await r.Append(wake.ToJsonString()), Nested).Status);
+
+        var s = await r.Through(10.3);
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+    }
+
+    [Fact]
     public async Task A_delegate_whose_notice_is_not_completed_failed()
     {
         await using var r = new Replay(l => l.Contains($"<task-id>{Files}</task-id>", StringComparison.Ordinal) ? l.Replace("<status>completed</status>", "<status>failed</status>", StringComparison.Ordinal) : l);
@@ -379,13 +423,14 @@ public class CodexSubagentTests
         int _threadNext;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null)
+        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null, Func<string[], long>? tail = null)
         {
             _rollout = _f.CodexTranscript(Id);
             _thread = _f.CodexTranscript(Thread);
             _f.CodexRegistration(Id, 950, _rollout);
             _f.Processes.Run(AgentKind.Codex, 950);
             _lines = [.. Recorded(Id).SelectMany(l => (edit is null ? l : edit(l)).Split('\n'))];
+            if (tail is not null) { tailBytes = tail(_lines); }
             Source = skim is null ? _f.Source(tailBytes) : _f.Source(tailBytes, maxSkim: skim(_lines));
         }
 
@@ -521,6 +566,37 @@ public class CodexSubagentTests
     }
 
     [Fact]
+    public async Task A_wait_read_just_after_bytes_never_read_still_owes_the_notice_that_follows()
+    {
+        // Found in review: the skim covers the spawn, the window begins at the wait, and a
+        // message wakes the thread before the notice of the run the wait ended arrives.
+        static bool Wait(string l) => l.Contains("\"tool\":\"wait\"", StringComparison.Ordinal);
+        await using var r = new Replay(l => Wait(l) ? l + "\n" + Collab("send_input", 22.93, "running") : l,
+            skim: lines => ClaudeSubagentTests.Through(lines, l => l.Contains("\"spawn_agent\"", StringComparison.Ordinal)),
+            tail: lines => lines.SkipWhile(l => !Wait(l)).TakeWhile(l => !l.Contains("\"timestamp\":\"2026-10-28T04:00:24", StringComparison.Ordinal))
+                .Sum(l => System.Text.Encoding.UTF8.GetByteCount(l) + 1L));
+
+        var thread = Assert.Single((await r.Through(23)).Subagents!);
+
+        Assert.Equal(SubagentStatus.Working, thread.Status);
+    }
+
+    [Fact]
+    public async Task A_notice_owed_in_bytes_never_read_is_not_spent_on_a_later_run()
+    {
+        // Found in review: the skim covers the spawn and the wait, the notice is never read, and
+        // later input starts a run whose notice comes with no wait.
+        await using var r = new Replay(tailBytes: 2 * 1024, skim: lines => ClaudeSubagentTests.Through(lines, l => l.Contains("\"tool\":\"wait\"", StringComparison.Ordinal)));
+        Assert.Equal(SubagentOutcome.Done, Assert.Single((await r.Through(200)).Subagents!).Outcome);
+
+        Assert.Equal(1, (await r.Append(Collab("send_input", 210, "running"))).Activity.Background!.Agents);
+        var s = await r.Append(Notice("done again", 220));
+
+        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Assert.Single(s.Subagents!).Status, s.Subagents![0].Outcome));
+        Assert.Null(s.Activity.Background);
+    }
+
+    [Fact]
     public async Task A_sub_agent_that_errored_failed()
     {
         await using var r = new Replay(l => l.Replace($"{{\"completed\":\"{Answer}\"}}", "{\"errored\":\"model unavailable\"}", StringComparison.Ordinal)
@@ -558,18 +634,20 @@ public class CodexSubagentTests
         Assert.Equal(SubagentStatus.Ended, Assert.Single((await r.Append(Collab("close_agent", 16, "shutdown"))).Subagents!).Status);
         Assert.Equal(1, (await r.Append(Collab("resume_agent", 17, "running"))).Activity.Background!.Agents);
 
-        var s = await r.Append(Codex.Item(new
-        {
-            type = "message",
-            id = "msg_notice",
-            role = "user",
-            content = new[] { new { type = "input_text", text = $"<subagent_notification>\n{{\"agent_path\":\"{Thread}\",\"status\":{{\"completed\":\"done again\"}}}}\n</subagent_notification>" } },
-        }, 18));
+        var s = await r.Append(Notice("done again", 18));
 
         var thread = Assert.Single(s.Subagents!);
         Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done, "done again"), (thread.Status, thread.Outcome, thread.Line));
         Assert.Null(s.Activity.Background);
     }
+
+    static string Notice(string text, int s) => Codex.Item(new
+    {
+        type = "message",
+        id = "msg_notice",
+        role = "user",
+        content = new[] { new { type = "input_text", text = $"<subagent_notification>\n{{\"agent_path\":\"{Thread}\",\"status\":{{\"completed\":\"{text}\"}}}}\n</subagent_notification>" } },
+    }, s);
 
     static string Collab(string tool, double s, string state)
     {

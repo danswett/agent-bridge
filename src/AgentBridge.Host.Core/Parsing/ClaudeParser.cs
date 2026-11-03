@@ -56,21 +56,24 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     ];
 
     const string NoticeStart = "<task-notification>";
-    const int KeepUnclaimed = 64;
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
 
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
     // Ends of agents not known yet: a nested agent is known only from its own record, which
-    // can be read after the session's transcript says it stopped.
-    readonly Dictionary<string, (SubagentOutcome Outcome, DateTimeOffset? At)> _unclaimed = new(StringComparer.Ordinal);
+    // can be read after the session's transcript says it stopped. Owed: queued, its delivery not
+    // read yet. As many as there can be records (ClaudeSubagents); past that, a record with no
+    // end kept is not known to be running.
+    readonly Dictionary<string, (SubagentOutcome Outcome, DateTimeOffset? At, bool Owed)> _unclaimed = new(StringComparer.Ordinal);
+    bool _unclaimedDropped;
 
     public override void Reset()
     {
         base.Reset();
         _responseMessage = null;
         _unclaimed.Clear();
+        _unclaimedDropped = false;
     }
 
     // A command or delegate the skim saw start may have ended in bytes never read; counted, it
@@ -215,12 +218,18 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             work.DescendantsStopped(id, at);
             return;
         }
-        work.ShellEnded(id);
-        if (!_unclaimed.ContainsKey(id) && _unclaimed.Count >= KeepUnclaimed)
+        if (work.ShellEnded(id)) { return; }
+        if (_unclaimed.TryGetValue(id, out var known) && known.Owed && !queued)
+        {
+            _unclaimed[id] = known with { Owed = false };
+            return;
+        }
+        if (!_unclaimed.ContainsKey(id) && _unclaimed.Count >= ClaudeSubagents.MaxRecords)
         {
             _unclaimed.Remove(_unclaimed.MinBy(p => p.Value.At ?? DateTimeOffset.MinValue).Key);
+            _unclaimedDropped = true;
         }
-        _unclaimed[id] = (outcome, at);
+        _unclaimed[id] = (outcome, at, queued);
     }
 
     // A sub-agent another one started, known from its own record: listed as working unless the
@@ -245,7 +254,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var before = work.Version;
         work.AgentStarted(record.ToolUseId, record.Id, record.StartedAt, record.Background, info);
         work.AgentPrompt(record.Id, record.Prompt);
-        if (_unclaimed.Remove(record.Id, out var end)) { work.AgentIdle(record.Id, end.At, end.Outcome); }
+        if (_unclaimed.Remove(record.Id, out var end))
+        {
+            if (end.Owed) { work.AgentRunEnded(record.Id, end.At, end.Outcome); }
+            else { work.AgentIdle(record.Id, end.At, end.Outcome); }
+        }
+        else if (_unclaimedDropped) { work.ForgetRun(record.Id); }
         else if (work.Stopped(parent, out var parentEnded, out var parentOutcome))
         {
             // One whose own end was never read (bytes the tail skipped) says nothing of this one's.
@@ -289,6 +303,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         {
             // A turn of the main agent's, about a delegate or a command that stopped: neither
             // the person's message nor a prompt counted, and the text in it is the delegate's.
+            S.UncountedTurn = true;
             S.SetStatus(SessionStatus.Working);
             S.Activity(at);
             return;

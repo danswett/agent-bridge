@@ -12,7 +12,7 @@ namespace AgentBridge.Host.Core.Parsing;
 // it was given (tests/fixtures/claude). Read only, and bounded in files and bytes.
 internal sealed class ClaudeSubagents
 {
-    const int MaxRecords = 256;
+    public const int MaxRecords = 256;
     const int MaxMetaBytes = 16 * 1024;
     const int MaxHeadBytes = 64 * 1024;
     const string Prefix = "agent-";

@@ -232,7 +232,7 @@ internal sealed class SessionTracker
                 CurrentTool = effective == SessionStatus.Working ? _state.Tools.Current() : null,
                 History = history,
                 UserMessage = Limits.KeepStart(_state.UserMessage, Limits.UserMessage),
-                TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle ? 0 : 1)) : null,
+                TurnCount = _state.Seen ? Math.Max(0, _state.Prompts - (effective == SessionStatus.Idle || _state.UncountedTurn ? 0 : 1)) : null,
                 Compactions = _state.Seen ? _state.Compactions : null,
                 Background = Protocol.Background.Of(agents, shells),
                 Source = source,
