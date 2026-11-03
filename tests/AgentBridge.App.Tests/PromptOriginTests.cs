@@ -158,4 +158,16 @@ public sealed class PromptOriginTests
         uncounted.Observe(Prompt(UserMessageFrom.Schedule, "4", status: SessionStatus.Working, turns: null));
         Assert.False(uncounted.Observe(Prompt(UserMessageFrom.Schedule, "4", turns: null)).Repeat);
     }
+
+    [Fact]
+    public void A_line_break_in_a_label_never_makes_a_new_prompt_look_the_same_and_words_a_host_leaves_out_never_make_the_same_one_look_new()
+    {
+        var joined = new PromptMemory();
+        joined.Observe(Prompt(UserMessageFrom.Schedule, "4", "B\nC"));
+        Assert.True(joined.Observe(Prompt(UserMessageFrom.Schedule, "4\nB", "C", SessionStatus.Working)).Fresh);
+        var omitted = new PromptMemory();
+        omitted.Observe(Prompt(UserMessageFrom.Schedule, "4", "A"));
+        Assert.Equal(new PromptMemory.Seen(false, null, false), omitted.Observe(Prompt(UserMessageFrom.Schedule, "4", null)));
+        Assert.Equal(new PromptMemory.Seen(false, null, false), omitted.Observe(Prompt(UserMessageFrom.Schedule, "4", "A")));
+    }
 }

@@ -157,7 +157,9 @@ public sealed partial class SessionCardViewModel : Observable
     readonly PromptMemory prompts = new();
     PromptMemory.Seen promptSeen;
     bool promptOpen;
-    public PromptOrigin? Prompt => PromptOrigin.Of(session, promptSeen.Repeat);
+    // Worked out once an update, not on every binding: it reveals and trims the whole prompt.
+    PromptOrigin? prompt;
+    public PromptOrigin? Prompt => prompt;
     public bool HasPrompt => Prompt is not null;
     public bool PromptIsSchedule => Prompt?.Schedule == true;
     public bool PromptIsDriven => Prompt is { Schedule: false };
@@ -274,6 +276,7 @@ public sealed partial class SessionCardViewModel : Observable
         synced = true;
         session = next;
         promptSeen = prompts.Observe(next);
+        prompt = PromptOrigin.Of(next, promptSeen.Repeat);
         if (promptSeen.Fresh) { promptOpen = false; }
         Sync();
         Delegates.Update(next, ctx.Time.GetUtcNow());

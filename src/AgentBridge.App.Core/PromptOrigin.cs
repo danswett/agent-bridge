@@ -90,8 +90,7 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
 public sealed class PromptMemory
 {
     // The prompt shown.
-    string? current;
-    bool currentSeen;
+    (UserMessageFrom From, string? Label, string Text)? current;
     bool repeat;
     bool settled;
     DateTimeOffset? at;
@@ -109,7 +108,6 @@ public sealed class PromptMemory
         var a = s.Activity;
         var from = a.UserMessageFrom ?? UserMessageFrom.Person;
         var text = a.UserMessage;
-        var key = text is null ? null : $"{from}\n{a.UserMessageLabel}\n{text}";
         var running = s.Status is SessionStatus.Working or SessionStatus.Waiting;
         // From when it began, not from a question answered or a resume within it.
         if (running && !wasRunning) { ran = s.StatusSince; }
@@ -125,7 +123,10 @@ public sealed class PromptMemory
         if (turns is not null) { ran = null; }
         DateTimeOffset? when;
         bool nowSettled;
-        if (!currentSeen || current != key)
+        // A host that omits the words says nothing of which prompt this is: the one shown stays it.
+        if (text is null) { return new(false, null, false); }
+        var key = (from, a.UserMessageLabel, text);
+        if (current != key)
         {
             when = running ? s.StatusSince : null;
             // Seen idle, its own turn is among those counted.
@@ -143,7 +144,7 @@ public sealed class PromptMemory
             nowSettled = true;
         }
         repeat = false;
-        if (from == UserMessageFrom.Schedule && text is not null)
+        if (from == UserMessageFrom.Schedule)
         {
             var label = a.UserMessageLabel ?? "";
             repeat = bySchedule.TryGetValue(label, out var last) && last == text;
@@ -151,8 +152,8 @@ public sealed class PromptMemory
         }
         at = when;
         settled = nowSettled;
-        var fresh = currentSeen;
-        (current, currentSeen) = (key, true);
+        var fresh = current is not null;
+        current = key;
         return new(repeat, at, fresh);
     }
 }
