@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, q-tp-before-base]
 
 permissions:
   contents: read
