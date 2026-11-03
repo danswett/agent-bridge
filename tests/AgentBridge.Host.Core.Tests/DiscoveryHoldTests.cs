@@ -1,4 +1,5 @@
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Discovery;
 using AgentBridge.Host.Core.Processes;
 using AgentBridge.Protocol;
 using Xunit;
@@ -222,6 +223,118 @@ public class DiscoveryHoldTests
         await source.RefreshAsync();
         Assert.Single(source.Snapshot());
         Assert.Null(source.Held);
+    }
+
+    // #437: a Codex launch waiting on its hooks-trust question fired its hooks before they could
+    // tell which Codex was theirs, so its registration named no process, and the Codex exited
+    // before its SessionEnd. Nothing rewrote the file, and discovery held for 4.5 hours.
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_left_by_a_launch_that_exited_stops_holding_after_the_grace_and_says_so_once()
+    {
+        using var f = new Fixture();
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe");
+        f.CodexRegistration(C, 0, null, updated: f.Time.GetUtcNow());
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process, an unrecognised codex process (pid 960)", source.Held?.Reason);
+
+        f.Processes.Exit(AgentKind.Codex, 960);
+        f.Time.Advance(TimeSpan.FromSeconds(119));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+        Assert.Single(log, l => l == $"carrying on without codex registration {C}: it names no process, was written 2 min ago, and no running codex could have written it");
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_holds_while_a_codex_nothing_accounts_for_could_be_its_session()
+    {
+        // Long past the grace, and past the process's own: a Codex still waiting on its question
+        // is a live session nothing else shows. Gone, it holds no more.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 960, "codex.exe");
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process", source.Held?.Reason);
+
+        f.Processes.Exit(AgentKind.Codex, 960);
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_that_started_after_a_registration_naming_no_process_was_written_is_not_its_session()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 970, "codex.exe", startedAt: f.Time.GetUtcNow());
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+        Assert.Equal("an unrecognised codex process (pid 970)", source.Held?.Reason);
+
+        f.Time.Advance(Unaccounted.Grace);
+        await source.RefreshAsync();
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_that_cannot_be_listed_with_the_processes_holds()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Unreadable(AgentKind.Codex);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration names no process, the codex processes could not be listed", source.Held?.Reason);
+
+        f.Processes.Unreadable(AgentKind.Codex, false);
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_codex_registration_naming_no_process_rewritten_while_it_is_read_holds_until_it_reads_whole()
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var rewrite = true;
+        await using var source = f.Source(afterRegistrationRead: path =>
+        {
+            if (rewrite) { File.AppendAllText(path, " "); }
+        });
+        await source.RefreshAsync();
+        Assert.Equal("a codex registration changed while it was read", source.Held?.Reason);
+
+        rewrite = false;
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+    }
+
+    [Fact]
+    public async Task A_claude_registration_naming_no_process_holds_as_it_did_while_a_codex_one_is_carried_on_without()
+    {
+        using var f = new Fixture();
+        f.ClaudeRegistration(B, 0, null);
+        f.CodexRegistration(C, 0, null);
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        Assert.Equal(new DiscoveryHeld("a claude registration names no process", [AgentKind.Claude]), source.Held, HeldComparer.Instance);
     }
 
     [Fact]

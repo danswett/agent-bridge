@@ -45,6 +45,9 @@ public sealed class SessionSource : ISessionSource
     DiscoveryHeld? _held;
     // Only on the pass, under _pass.
     readonly Unaccounted _unaccounted;
+    // Codex registrations naming no process that no longer hold, by file and when it was written,
+    // so each is said once (#437).
+    readonly HashSet<(string Path, DateTimeOffset? Written)> _pidlessExcused = [];
     string? _heldLogged;
     DateTimeOffset _heldLoggedAt;
     // Only on the pass: whether the first discovery pass has looked at StateFile (Restore), what it
@@ -446,7 +449,8 @@ public sealed class SessionSource : ISessionSource
         var holds = new List<string>();
         var accounted = new HashSet<int>();
         var ended = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended);
+        var pidless = agent == AgentKind.Codex ? new List<Registration>() : null;
+        IReadOnlyList<DiscoveredSession> sessions = RegistrationDiscovery.Find(agent, roots, observed.Processes, findTranscript, holds, accounted, _options.AfterRegistrationRead, observed.Unidentified, ended, pidless);
         if (codexLocks)
         {
             // agent-ha-bridge's registration, where there is one, carries what its hooks saw
@@ -472,9 +476,54 @@ public sealed class SessionSource : ISessionSource
         if (agent == AgentKind.Codex)
         {
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
+            HoldForPidless(observed, accounted, pidless!, holds);
         }
         Account(agent, observed, accounted, previous, holds);
         return new(agent, sessions, holds, observed, ended);
+    }
+
+    // A Codex registration naming no process: its hooks fired before they could tell which Codex
+    // was theirs (one waiting on its hooks-trust question, #437). It may be a live session's that
+    // cannot be seen, so it holds while any Codex nothing accounts for could have written it (one
+    // that started no later than it was written, or whose start is unknown), or while the
+    // processes could not be listed, and for Unaccounted.Grace after it was written, as a process
+    // nothing accounts for does. Past that, no running Codex could be its session: one that exited
+    // before its SessionEnd left the file behind, which held discovery for 4.5 hours with nothing
+    // to rewrite it. It is carried on without, said once. Claude's rule is unchanged.
+    void HoldForPidless(AgentProcessObservation observed, HashSet<int> accounted, List<Registration> pidless, List<string> holds)
+    {
+        var now = _time.GetUtcNow();
+        var current = new HashSet<(string, DateTimeOffset?)>();
+        foreach (var r in pidless)
+        {
+            var written = Written(r);
+            var writer = !observed.Listed || observed.Processes.Any(p => !accounted.Contains(p.Id)
+                && (p.StartedAt is not { } started || written is not { } w || started <= w + TimeSpan.FromSeconds(1)));
+            if (writer || written is not { } at || now - at < Unaccounted.Grace)
+            {
+                holds.Add("a codex registration names no process");
+                continue;
+            }
+            current.Add((r.Path, written));
+            if (_pidlessExcused.Add((r.Path, written)))
+            {
+                Log($"carrying on without codex registration {r.SessionId}: it names no process, was written {(int)(now - at).TotalMinutes} min ago, and no running codex could have written it");
+            }
+        }
+        _pidlessExcused.IntersectWith(current);
+    }
+
+    // When it was last written: its own Updated (the hook writes it on this machine, by this
+    // clock), or the file's when it has none.
+    static DateTimeOffset? Written(Registration r)
+    {
+        if (r.Updated is { } updated) { return updated; }
+        try
+        {
+            var info = new FileInfo(r.Path);
+            return info.Exists ? new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // What makes an agent's pass incomplete beyond what it could not read: agent-ha-bridge's

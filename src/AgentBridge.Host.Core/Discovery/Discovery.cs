@@ -679,10 +679,12 @@ internal static class RegistrationDiscovery
     // Anything it could not read is added to holds, in words, and every running process a
     // readable registration names (live, ended or stale) to accounted: agent-ha-bridge's
     // Read-DaemonAdapterRegistrations. A registration it could not read may be a live session's.
+    // An unended one that names no process holds too, unless pidless is given: then it goes
+    // there, for the caller to decide once it knows which processes nothing accounts for (#437).
     public static IReadOnlyList<DiscoveredSession> Find(
         AgentKind agent, IReadOnlyList<string> roots, IReadOnlyList<AgentProcess> processes, Func<string, string?> findTranscript,
         ICollection<string>? holds = null, ISet<int>? accounted = null, Action<string>? afterRead = null, IReadOnlyList<AgentProcess>? unidentified = null,
-        ISet<string>? ended = null)
+        ISet<string>? ended = null, ICollection<Registration>? pidless = null)
     {
         var name = agent.ToString().ToLowerInvariant();
         var running = processes.ToDictionary(p => p.Id);
@@ -700,7 +702,12 @@ internal static class RegistrationDiscovery
                 {
                     holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})");
                 }
-                if (!registration.Ended && registration.ProcessId <= 0) { holds?.Add($"a {name} registration names no process"); continue; }
+                if (!registration.Ended && registration.ProcessId <= 0)
+                {
+                    if (pidless is not null) { pidless.Add(registration); }
+                    else { holds?.Add($"a {name} registration names no process"); }
+                    continue;
+                }
                 // The same session registered under both the runtime and the legacy temp
                 // root: the one written last is the current one.
                 if (best.TryGetValue(registration.SessionId, out var other) && (other.Updated ?? DateTimeOffset.MinValue) >= (registration.Updated ?? DateTimeOffset.MinValue)) { continue; }
