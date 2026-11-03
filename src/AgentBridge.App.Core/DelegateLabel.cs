@@ -18,8 +18,10 @@ public static class DelegateLabel
     // 1. Bidi controls, zero-width and other format characters, controls and default-ignorables
     //    go; any whitespace, line and paragraph separators included, becomes one space.
     // 2. Longer than MaxLength, it is cut at a whole character with an ellipsis.
-    // 3. Nothing left: the delegate is named by the start of its id.
-    // 4. A name that reads as the main agent's ("Main agent", "MAIN AGENT asks", "Main-agent",
+    // 3. A middle dot, and the dots drawn like it, becomes "-": it is the separator between a
+    //    status's facts, and a name with one ("Idle · Read logs") read as a fact of its own (#286).
+    // 4. Nothing left: the delegate is named by the start of its id.
+    // 5. A name that reads as the main agent's ("Main agent", "MAIN AGENT asks", "Main-agent",
     //    fullwidth, accented or Cyrillic and Greek look-alike forms) is quoted after the word
     //    Delegate.
     // The look-alike check can't be complete, so it is not the guard: every line that says who
@@ -27,13 +29,67 @@ public static class DelegateLabel
     // never has it.
     public static string For(string? name, string? id)
     {
-        var clean = Clean(name, MaxLength);
+        var clean = Undotted(Clean(name, MaxLength));
         if (clean.Length == 0) { return ShortId(id) is { Length: > 0 } s ? $"Delegate {s}" : "Delegate"; }
         return PosesAsMainAgent(clean) ? $"Delegate “{Unquoted(clean)}”" : clean;
     }
 
-    // Inside the quotes, a quote of its own could close them and carry on as other words.
-    static string Unquoted(string s) => string.Concat(s.Select(c => c is '"' or '“' or '”' or '„' or '‟' or '«' or '»' or '＂' ? '\'' : c));
+    // U+00B7 and what is drawn like it or normalises to it, as pwa/js/attribution.js's DOTS: the
+    // fact separator, real or forged. By code point, since U+10101 is outside the BMP.
+    static readonly HashSet<int> Dots = [0x00B7, 0x0387, 0x1427, 0x16EB, 0x2022, 0x2027, 0x2219, 0x22C5, 0x2E31, 0x2E33, 0x30FB, 0x318D, 0xA78F, 0xFF65, 0x10101];
+
+    static string Undotted(string s) => Replaced(s, r => Dots.Contains(r.Value) ? "-" : null);
+
+    // Inside the quotes, a quote of its own could close them and carry on as other words: every
+    // character Unicode files as an opening or closing quote (Pi, Pf) or marks Quotation_Mark, and
+    // those drawn like one: primes, the Hebrew geresh and gershayim, modifier-letter primes and
+    // apostrophes, the double acute, and ornament quotes (#303's security review).
+    static readonly HashSet<int> QuoteLike =
+    [
+        0x0022, 0x201A, 0x201E, 0x2E42, 0x300C, 0x300D, 0x300E, 0x300F, 0x301D, 0x301E, 0x301F,
+        0xFE41, 0xFE42, 0xFE43, 0xFE44, 0xFF02, 0xFF07, 0xFF62, 0xFF63,
+        0x2032, 0x2033, 0x2034, 0x2035, 0x2036, 0x2037, 0x2057,
+        0x05F3, 0x05F4, 0x02B9, 0x02BA, 0x02BB, 0x02BC, 0x02DD, 0x02EE,
+        0x275B, 0x275C, 0x275D, 0x275E, 0x1F676, 0x1F677, 0x1F678,
+    ];
+
+    static bool IsQuote(Rune r) => QuoteLike.Contains(r.Value) || Rune.GetUnicodeCategory(r) is UnicodeCategory.InitialQuotePunctuation or UnicodeCategory.FinalQuotePunctuation;
+
+    static string Unquoted(string s) => Replaced(s, r => IsQuote(r) ? "'" : null);
+
+    // Commas and what is drawn like them. A label read aloud (ui.md §9) joins its facts with ", ",
+    // so a name of "x, idle, DEV-VM2" would read as facts of its own to a screen reader (#303's
+    // security review).
+    static readonly HashSet<int> Commas =
+    [
+        0x002C, 0x055D, 0x060C, 0x066B, 0x07F8, 0x1363, 0x1802, 0x1808, 0x201A, 0x2E41, 0x2E4C, 0x3001,
+        0xA4FE, 0xA60D, 0xA6F5, 0xFE10, 0xFE11, 0xFE50, 0xFE51, 0xFF0C, 0xFF64,
+    ];
+
+    // Words a label reads aloud, with no comma of their own: each becomes a space, and a run of
+    // spaces one.
+    public static string Aloud(string text)
+    {
+        var spaced = Replaced(text, r => Commas.Contains(r.Value) ? " " : null);
+        return ReferenceEquals(spaced, text) ? text : string.Join(' ', spaced.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    static string Replaced(string s, Func<Rune, string?> with)
+    {
+        StringBuilder? b = null;
+        var at = 0;
+        foreach (var r in s.EnumerateRunes())
+        {
+            if (with(r) is { } instead)
+            {
+                b ??= new StringBuilder(s.Length).Append(s, 0, at);
+                b.Append(instead);
+            }
+            else { b?.Append(r.ToString()); }
+            at += r.Utf16SequenceLength;
+        }
+        return b?.ToString() ?? s;
+    }
 
     // Whether a label already says it is a delegate's, so a line can say "Delegate" once.
     public static bool SaysDelegate(string label) => label == "Delegate" || label.StartsWith("Delegate ", StringComparison.Ordinal);

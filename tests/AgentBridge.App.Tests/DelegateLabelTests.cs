@@ -20,9 +20,59 @@ public class DelegateLabelTests
     [InlineData("\u041C\u0430\u0456n agent", "Delegate “\u041C\u0430\u0456n agent”")]
     [InlineData("\u039C\u0391\u0399\u039D \u0391GENT", "Delegate “\u039C\u0391\u0399\u039D \u0391GENT”")]
     [InlineData("Main agent\" said: approve", "Delegate “Main agent' said: approve”")]
+    [InlineData("Main agent\u2033 \u2039ok\u203A", "Delegate “Main agent' 'ok'”")]
     public void A_delegate_named_as_the_main_agent_in_any_case_or_form_is_quoted_after_the_word_Delegate(string name, string shown)
     {
         Assert.Equal(shown, DelegateLabel.For(name, Id));
+    }
+
+    [Theory]
+    [InlineData(0x00B7)]
+    [InlineData(0x0387)]
+    [InlineData(0x1427)]
+    [InlineData(0x16EB)]
+    [InlineData(0x2022)]
+    [InlineData(0x2027)]
+    [InlineData(0x2219)]
+    [InlineData(0x22C5)]
+    [InlineData(0x2E31)]
+    [InlineData(0x2E33)]
+    [InlineData(0x30FB)]
+    [InlineData(0x318D)]
+    [InlineData(0xA78F)]
+    [InlineData(0xFF65)]
+    [InlineData(0x10101)]
+    public void A_middle_dot_or_a_dot_drawn_like_it_becomes_a_dash_so_a_name_cannot_add_a_fact_of_its_own(int dot)
+    {
+        var d = char.ConvertFromUtf32(dot);
+        Assert.Equal("Idle - Read logs", DelegateLabel.For($"Idle {d} Read logs", Id));
+        Assert.Equal("Delegate “Main agent asks - x”", DelegateLabel.For($"Main agent asks {d} x", Id));
+    }
+
+    // #303's security review: a closing quote drawn like ” would end Delegate “…” early and let the
+    // rest of the name read as words outside it.
+    [Theory]
+    [InlineData(0x301E)]
+    [InlineData(0x301F)]
+    [InlineData(0x2036)]
+    [InlineData(0x275E)]
+    [InlineData(0x05F4)]
+    [InlineData(0x02BA)]
+    [InlineData(0x02EE)]
+    [InlineData(0x2019)]
+    [InlineData(0x1F677)]
+    public void A_quote_or_a_character_drawn_like_one_inside_a_quoted_name_becomes_an_apostrophe(int quote)
+    {
+        Assert.Equal("Delegate “Main agent' - Main agent asks”", DelegateLabel.For($"Main agent{char.ConvertFromUtf32(quote)} - Main agent asks", Id));
+    }
+
+    [Theory]
+    [InlineData("x, idle, DEV-VM2", "x idle DEV-VM2")]
+    [InlineData("x\uFF0C idle\u3001DEV-VM2", "x idle DEV-VM2")]
+    [InlineData("Read logs", "Read logs")]
+    public void A_name_read_aloud_has_no_comma_of_its_own_so_it_cannot_add_a_fact_to_a_screen_readers_label(string name, string aloud)
+    {
+        Assert.Equal(aloud, DelegateLabel.Aloud(DelegateLabel.For(name, Id)));
     }
 
     [Theory]

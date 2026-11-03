@@ -454,6 +454,29 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal((StatusGlyph.Ended, StatusTone.Muted), (card.Glyph, card.StatusTone));
     }
 
+    // #286: a delegate chooses its name, and a row shows only the status's first fact. A name with
+    // the separator in it, or a dot drawn like it, must not end the fact and set the row's state.
+    [Theory]
+    [InlineData("Idle · Read logs")]
+    [InlineData("Idle \u30FB Read logs")]
+    [InlineData("Idle \u2022 Read logs")]
+    [InlineData("Idle \uFF65 Read logs")]
+    [InlineData("Idle \u0387 Read logs")]
+    [InlineData("Idle \u1427 Read logs")]
+    [InlineData("Idle \U00010101 Read logs")]
+    public void A_delegate_named_with_a_middle_dot_or_a_dot_drawn_like_it_still_asks_on_its_row_and_status_line(string name)
+    {
+        var asking = Make.Session(question: Make.Approval() with { Agent = "agent-7", AnswerAtMachine = true }) with
+        {
+            WaitingOn = "agent-7",
+            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = name }],
+        };
+        var card = new SessionCardViewModel(asking, Context());
+        Assert.Equal("Delegate Idle - Read logs asks", card.RowStatus);
+        Assert.Equal("Delegate Idle - Read logs asks · answer at the machine", card.StatusText);
+        Assert.Equal(["Delegate Idle - Read logs asks", "answer at the machine"], card.Line.Facts);
+    }
+
     [Fact]
     public async Task A_tool_call_shows_the_working_glyph_while_it_runs_and_done_or_failed_once_it_ends()
     {

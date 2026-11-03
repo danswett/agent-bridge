@@ -224,6 +224,18 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Null(NeedsYouEntry.DelegateOf(Make.Session(question: Make.Approval())));
     }
 
+    [Theory]
+    [InlineData("Idle · Read logs")]
+    [InlineData("Idle \u30FB Read logs")]
+    public void A_delegate_named_with_a_middle_dot_or_a_dot_drawn_like_it_adds_no_fact_to_its_Needs_you_entry(string name)
+    {
+        var s = Make.Session(question: Make.Approval() with { Agent = "agent-7" }) with
+        {
+            Subagents = [new Subagent { Id = "agent-7", Kind = SubagentKind.Background, Status = SubagentStatus.Waiting, Name = name }],
+        };
+        Assert.Equal("Delegate Idle - Read logs", NeedsYouEntry.DelegateOf(s));
+    }
+
     [Fact]
     public void A_long_first_line_is_cut_and_markdown_marks_are_dropped()
     {

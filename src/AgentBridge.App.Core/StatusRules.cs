@@ -12,11 +12,32 @@ public enum StatusGlyph { Idle, Working, Delegating, Needs, Done, Failed, Ended 
 public enum StatusTone { Plain, Needs, Agent, Muted }
 
 // What a session says about itself: the rule that matched, its glyph, the card's state (View)
-// and its words. Driven is rule 7's overlay.
-public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, string Text, StatusTone Tone, bool Driven)
+// and its facts ("Waiting on you", "2 delegates still running"). Driven is rule 7's overlay.
+// The facts stay apart until they are shown: a delegate's name is part of a fact, and cutting
+// the joined words at the separator let a delegate named "Idle · Read logs" set its row's status
+// to "Delegate Idle" (#286).
+public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadOnlyList<string> Facts, StatusTone Tone, bool Driven)
 {
-    // The words as they read mid-sentence: a delegate's name and a number keep their case.
-    public string Spoken => Rule == 2 || Text.Length == 0 || char.IsDigit(Text[0]) ? Text : char.ToLowerInvariant(Text[0]) + Text[1..];
+    public const string Separator = " · ";
+
+    // The words as the header and Details show them.
+    public string Text => string.Join(Separator, Facts);
+
+    // What a row shows (ui.md §6.1): "Waiting on you · 2 delegates still running" is one fact
+    // there and both in the header.
+    public string FirstFact => Facts.Count > 0 ? Facts[0] : "";
+
+    // The words as they read mid-sentence: a delegate's name and a number keep their case. Built
+    // from the facts, each with no comma of its own: Label joins with ", ", and a name of "x,
+    // idle, DEV-VM2" would read as facts to a screen reader (#303's security review).
+    public string Spoken
+    {
+        get
+        {
+            var text = string.Join(Separator, Facts.Select(DelegateLabel.Aloud));
+            return Rule == 2 || text.Length == 0 || char.IsDigit(text[0]) ? text : char.ToLowerInvariant(text[0]) + text[1..];
+        }
+    }
 
     // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
     // agents, DEV-VM1", with the driver said in words, since the diamond is only a shape.
@@ -41,8 +62,8 @@ public static class StatusRules
     static StatusLine Pick(Session s)
     {
         var q = s.Question;
-        var atMachine = q?.AnswerAtMachine == true ? " · answer at the machine" : "";
-        if (s.Status == SessionStatus.Ending) { return new(Ending, StatusGlyph.Ended, "ending", "Ending session…", StatusTone.Muted, false); }
+        var atMachine = q?.AnswerAtMachine == true ? "answer at the machine" : null;
+        if (s.Status == SessionStatus.Ending) { return Line(Ending, StatusGlyph.Ended, "ending", StatusTone.Muted, "Ending session…"); }
         if (s.Status == SessionStatus.Waiting)
         {
             // Rule 2: a delegate's question, named for the delegate after the word Delegate, which
@@ -51,15 +72,15 @@ public static class StatusRules
             if ((s.WaitingOn ?? q?.Agent) is { } asker)
             {
                 var name = s.Subagents?.FirstOrDefault(a => a.Id == asker) is { } agent ? DelegateLabel.Titled(DelegateLabel.For(agent.Name, agent.Id)) : "A delegate";
-                return new(2, StatusGlyph.Needs, "waiting", $"{name} asks{atMachine}", StatusTone.Needs, false);
+                return Line(2, StatusGlyph.Needs, "waiting", StatusTone.Needs, $"{name} asks", atMachine);
             }
             var n = RunningDelegates(s);
-            return new(1, StatusGlyph.Needs, "waiting", $"Waiting on you{(n > 0 ? $" · {Words.Plural(n, "delegate", "delegates")} still running" : "")}{atMachine}", StatusTone.Needs, false);
+            return Line(1, StatusGlyph.Needs, "waiting", StatusTone.Needs, "Waiting on you", n > 0 ? $"{Words.Plural(n, "delegate", "delegates")} still running" : null, atMachine);
         }
         if (s.Status == SessionStatus.Working)
         {
             var task = ForegroundTask(s);
-            return new(3, StatusGlyph.Working, "working", task is null ? "Working" : $"Working · task: {DelegateLabel.Titled(DelegateLabel.For(task.Name, task.Id))}", StatusTone.Plain, false);
+            return Line(3, StatusGlyph.Working, "working", StatusTone.Plain, "Working", task is null ? null : $"task: {DelegateLabel.Titled(DelegateLabel.For(task.Name, task.Id))}");
         }
         var b = s.Activity.Background;
         if (b is { Agents: > 0 })
@@ -69,12 +90,15 @@ public static class StatusRules
             var text = $"Delegating to {Words.Plural(b.Agents, "agent", "agents")}";
             // Rule 8: delegation the host counts but can't list (Claude and Codex until #84's
             // later slices, or a host older than the list). Nothing is attributed.
-            if (s.Subagents is not { Count: > 0 } && s.SubagentsMore is not > 0) { return new(8, StatusGlyph.Delegating, "delegating", $"{text} · details not reported", StatusTone.Plain, false); }
-            return new(4, StatusGlyph.Delegating, "delegating", text, StatusTone.Plain, false);
+            if (s.Subagents is not { Count: > 0 } && s.SubagentsMore is not > 0) { return Line(8, StatusGlyph.Delegating, "delegating", StatusTone.Plain, text, "details not reported"); }
+            return Line(4, StatusGlyph.Delegating, "delegating", StatusTone.Plain, text);
         }
-        if (b is { Shells: > 0 }) { return new(5, StatusGlyph.Delegating, "delegating", Words.Plural(b.Shells, "background command", "background commands"), StatusTone.Plain, false); }
-        return new(6, StatusGlyph.Idle, "idle", "Idle", StatusTone.Plain, false);
+        if (b is { Shells: > 0 }) { return Line(5, StatusGlyph.Delegating, "delegating", StatusTone.Plain, Words.Plural(b.Shells, "background command", "background commands")); }
+        return Line(6, StatusGlyph.Idle, "idle", StatusTone.Plain, "Idle");
     }
+
+    static StatusLine Line(int rule, StatusGlyph glyph, string view, StatusTone tone, params string?[] facts) =>
+        new(rule, glyph, view, facts.OfType<string>().ToArray(), tone, false);
 
     static bool Running(Subagent a) => a.Status is SubagentStatus.Working or SubagentStatus.Waiting;
 
