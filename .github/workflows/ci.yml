@@ -40,10 +40,44 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
+      - run: dotnet tool restore
+      # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
+      # and the compiler too.
+      - run: dotnet build AgentBridge.slnx -c Release --nologo
+        timeout-minutes: 10
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
       # and killed, and the run fails naming the test in progress, instead of stalling the job.
-      - run: dotnet test AgentBridge.slnx -c Release --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults
+      # dotnet-coverage follows every process the test hosts start (the host, hook and injector
+      # run as real processes in several tests), which a per-project collector would miss, and
+      # needs no package in the test projects. Coverage and the TRX timings are only reported
+      # (quality/README.md §5): nothing here fails the run but the tests themselves.
+      - name: dotnet test, with coverage and per-test times
+        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test AgentBridge.slnx -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
         timeout-minutes: 20
+        env:
+          DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
+      - name: Coverage and timing report
+        # Also after a failure: the slowest tests are most useful then. A fault in the report
+        # itself must not fail the build, since nothing is gated on coverage yet.
+        if: success() || failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Test-Path TestResults/coverage.cobertura.xml) {
+            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge ${{ matrix.os }}"
+          }
+          pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
+      - name: Keep the coverage report and test results
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: |
+            TestResults/coverage-report/
+            TestResults/**/*.trx
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Keep the hang dumps
         if: failure()
         uses: actions/upload-artifact@v4
@@ -427,6 +461,43 @@ jobs:
       - run: dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo
       - run: npm ci
       - run: node --test "test/unit/*.test.mjs"
+      - name: Unit test coverage
+        # A second run, since V8's precise coverage makes code several times slower: markdown's
+        # 1.5 s budget for pathological input took 2.0 s covered on the runner (0.7 s plain, 2.3 s
+        # covered, on a dev box), so that one timing check is left to the run above, which counts.
+        # This run only measures: a test failing here is reported and does not fail the job.
+        continue-on-error: true
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/pwa-coverage"
+          mkdir -p "$out"
+          rc=0
+          node --test --experimental-test-coverage --test-coverage-exclude='test/**' \
+            --test-skip-pattern='^pathological input finishes quickly$' \
+            --test-reporter=spec --test-reporter-destination="$out/unit.log" \
+            --test-reporter=lcov --test-reporter-destination="$out/lcov.info" \
+            "test/unit/*.test.mjs" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::The PWA coverage run exited with $rc (1 is a failed test; see unit.log in the pwa-coverage artifact). The run without coverage passed."
+          fi
+          if [ ! -s "$out/lcov.info" ]; then
+            echo "::warning::The PWA coverage run wrote no lcov.info."
+            exit 0
+          fi
+          sed -n '/start of coverage report/,/end of coverage report/p' "$out/unit.log" 2>/dev/null || true
+          awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} /^BRF:/{bf+=$2} /^BRH:/{bh+=$2} /^FNF:/{ff+=$2} /^FNH:/{fh+=$2}
+            function pct(hit, found) { return found ? sprintf("%.1f (%d / %d)", 100*hit/found, hit, found) : "n/a" }
+            END {
+              print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
+              print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
+            }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: pwa-coverage
+          path: ${{ runner.temp }}/pwa-coverage
+          if-no-files-found: ignore
+          retention-days: 14
       - name: The Pages build accepts the live relay and its blob store, and refuses bad ones
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
