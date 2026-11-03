@@ -200,7 +200,7 @@ public sealed partial class LaunchViewModel
     static TrustAnswerResult? TrustResult(Delivery d)
     {
         if (d.Result.ValueKind != JsonValueKind.Object) { return null; }
-        try { return d.Result.Deserialize<TrustAnswerResult>(ProtocolJson.Options); }
+        try { return Received.Read<TrustAnswerResult>(d.Result); }
         catch (JsonException) { return null; }
     }
 
@@ -373,7 +373,7 @@ public sealed partial class LaunchViewModel
         {
             await lb.Host.WhenConnectedAsync().WaitAsync(TimeSpan.FromSeconds(20));
             if (!lb.Host.Can(TrustProtocol.Capability)) { return null; }
-            var o = await lb.Host.CallAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout);
+            var o = await lb.Host.ReadAsync<LaunchOptions>(LaunchProtocol.Options, timeout: OptionsTimeout);
             return o.Trust ?? [];
         }
         catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }

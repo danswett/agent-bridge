@@ -118,7 +118,7 @@ public partial class App : Application
                 BlobsFor = blobs is null ? null : key,
                 FetchDetail = async id =>
                 {
-                    try { return await conn.CallAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
+                    try { return await conn.ReadAsync<Session>(Ops.SessionGet, new { id }, TimeSpan.FromSeconds(15)); }
                     catch (Exception e) when (e is IOException or HostErrorException or TimeoutException or JsonException) { return null; }
                 },
                 FetchDelegate = (id, agent) => Attribution.FetchDelegateAsync(conn, id, agent),

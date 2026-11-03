@@ -293,6 +293,7 @@ public sealed record HelloResult(int Protocol, MachineInfo Machine, IReadOnlyLis
 
 public sealed record Session
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required AgentKind Agent { get; init; }
     public string? Title { get; init; }
@@ -385,6 +386,7 @@ public enum SubagentOutcome { Done, Failed }
 // agent } adds its own response, reasoning and tool history.
 public sealed record Subagent
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public string? Parent { get; init; }
     public required SubagentKind Kind { get; init; }
@@ -424,6 +426,7 @@ public sealed record Background
 
 public sealed record ToolCall
 {
+    [Strict(Strictness.Identity)]
     public required string Id { get; init; }
     public required string Name { get; init; }
     public string? Summary { get; init; }
@@ -432,39 +435,53 @@ public sealed record ToolCall
     public DateTimeOffset? EndedAt { get; init; }
 }
 
+// Everything a person decides on is [Strict] (Security): the question this id answers, what it
+// asks, how and with which choices, whether a device can answer it, and who asks. A question
+// any of that cannot be read from is dropped, never shown with part of it guessed or left out.
 public sealed record Question
 {
+    [Strict(Strictness.Security)]
     public required string Id { get; init; }
+    [Strict(Strictness.Security)]
     public required QuestionKind Kind { get; init; }
+    [Strict(Strictness.Security)]
     public required string Message { get; init; }
+    [Strict(Strictness.Security)]
     public IReadOnlyList<Field> Fields { get; init; } = [];
     public required DateTimeOffset AskedAt { get; init; }
     // Set when the host had to cut the message or drop the fields to fit the size budget;
     // a client then says to answer at the machine instead.
+    [Strict(Strictness.Security)]
     public bool? Truncated { get; init; }
     // Set when no host can answer this prompt from another device (a Claude permission
     // prompt, which agent-ha-bridge only ever mirrored; a Copilot permission prompt of a kind
     // the host does not drive, or on a host with remote approval off): a client shows it with
     // no controls and says it is waiting at the machine.
+    [Strict(Strictness.Security)]
     public bool? AnswerAtMachine { get; init; }
     // The sub-agent that asked, when it is not the session's own question (status
     // precedence rule 2). Absent for the main agent's.
+    [Strict(Strictness.Security)]
     public string? Agent { get; init; }
 }
 
 public sealed record Field
 {
+    [Strict(Strictness.Identity)]
     public required string Name { get; init; }
     public string? Title { get; init; }
     public string? Description { get; init; }
+    [Strict(Strictness.Security)]
     public required FieldType Type { get; init; }
+    [Strict(Strictness.Security)]
     public IReadOnlyList<Option>? Options { get; init; }
+    [Strict(Strictness.Security)]
     public bool? AllowOther { get; init; }
     public JsonElement? Default { get; init; }
     public bool? Required { get; init; }
 }
 
-public sealed record Option(string Value, string? Label = null);
+public sealed record Option([property: Strict(Strictness.Security)] string Value, string? Label = null);
 
 // One page of sessions.list. Next is absent on the last page. DiscoveryHeld is present while
 // the host's discovery is incomplete (DiscoveryHeld below).
@@ -475,7 +492,7 @@ public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision,
 // offering or starting resumes of them, and reclaiming worktrees. Agents are the ones held;
 // sessions of the others are removed and resumed as usual. Reason is for a person, in words
 // ("an unrecognised copilot process (pid 4120)"), within MaxReasonBytes.
-public sealed record DiscoveryHeld(string Reason, IReadOnlyList<AgentKind> Agents)
+public sealed record DiscoveryHeld([property: Strict(Strictness.Identity)] string Reason, IReadOnlyList<AgentKind> Agents)
 {
     public const int MaxReasonBytes = 512;
 }
@@ -492,7 +509,7 @@ public sealed record SubscribeResult(long Revision, int Count);
 // DiscoveryHeld: as on sessions.list, as of the end of the snapshot.
 public sealed record SessionsSynced(long Revision, DiscoveryHeld? DiscoveryHeld = null);
 
-public sealed record SessionRemoved(string Id);
+public sealed record SessionRemoved([property: Strict(Strictness.Identity)] string Id);
 
 // session.answer. Fields holds one value per field name, shaped by the field's type (see
 // the contract); Text answers a question without fields. Request is the client's UUID for

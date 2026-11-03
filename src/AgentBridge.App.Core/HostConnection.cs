@@ -29,6 +29,8 @@ public sealed class HostConnection : IAsyncDisposable
     long usageEvents;
     long updateEvents;
     long connections;
+    // The kinds of event a message was refused for, each logged once (#446).
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> refusedKinds = new(StringComparer.Ordinal);
 
     sealed record Current(IClientChannel Channel, string? Instance);
 
@@ -120,6 +122,12 @@ public sealed class HostConnection : IAsyncDisposable
     public async Task<T> CallAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
         (await CallAsync(op, data, timeout, ct)).Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
 
+    // A host record (a session, launch options, a launch's outcome), read as the spec says a client
+    // reads one (Received, v1-sessions.md "Malformed records"): a field it cannot read is absent,
+    // unless it is one the record is filed or decided on, which refuses it (MalformedRecordException).
+    public async Task<T> ReadAsync<T>(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) where T : class =>
+        Received.Read<T>(await CallAsync(op, data, timeout, ct));
+
     async Task RunAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -158,7 +166,7 @@ public sealed class HostConnection : IAsyncDisposable
                 if (!Subscribes) { }
                 else if (hello.Capabilities.Contains(UsageProtocol.Capability))
                 {
-                    var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Subscribe, UsageAsk(hello), ct: ct);
+                    var usage = await ch.ReadAsync<UsageReport>(UsageProtocol.Subscribe, UsageAsk(hello), ct: ct);
                     ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; } });
                 }
                 // A host that reports no usage now (usage.publish off) has no figure to keep showing.
@@ -166,7 +174,7 @@ public sealed class HostConnection : IAsyncDisposable
                 var heardUpdate = Interlocked.Read(ref updateEvents);
                 if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability))
                 {
-                    var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+                    var update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
                     ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; } });
                 }
                 else { ui.Post(() => Update = null); }
@@ -256,7 +264,7 @@ public sealed class HostConnection : IAsyncDisposable
         if (hello.Capabilities.Contains(UsageProtocol.Capability))
         {
             var heardUsage = Interlocked.Read(ref usageEvents);
-            var usage = await ch.CallAsync<UsageReport>(UsageProtocol.Get, UsageAsk(hello), ct: ct);
+            var usage = await ch.ReadAsync<UsageReport>(UsageProtocol.Get, UsageAsk(hello), ct: ct);
             ui.Post(() => { if (Interlocked.Read(ref usageEvents) == heardUsage) { Usage = usage; Changed?.Invoke(); } });
         }
         if (hello.Capabilities.Contains(UpdateProtocol.Capability))
@@ -264,7 +272,7 @@ public sealed class HostConnection : IAsyncDisposable
             // Subscribed again rather than read: a host first seen without updates was followed
             // only from a refresh, and subscribing where it already is changes nothing there.
             var heardUpdate = Interlocked.Read(ref updateEvents);
-            var update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+            var update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
             ui.Post(() => { if (Interlocked.Read(ref updateEvents) == heardUpdate) { Update = update; Changed?.Invoke(); } });
         }
         else { ui.Post(() => { if (Update is not null) { Update = null; Changed?.Invoke(); } }); }
@@ -282,7 +290,7 @@ public sealed class HostConnection : IAsyncDisposable
         var heardUpdate = Interlocked.Read(ref updateEvents);
         if (Subscribes && hello.Capabilities.Contains(UpdateProtocol.Capability) && Hello?.Capabilities.Contains(UpdateProtocol.Capability) != true)
         {
-            update = await ch.CallAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
+            update = await ch.ReadAsync<UpdateState>(UpdateProtocol.Subscribe, ct: ct);
         }
         ui.Post(() =>
         {
@@ -316,33 +324,64 @@ public sealed class HostConnection : IAsyncDisposable
         catch (OperationCanceledException) { }
     }
 
+    // One message the app cannot read is refused, and the pump goes on (#446). Before, the
+    // JsonException ended the pump and the connection with it, and the snapshot after the
+    // reconnect sent the same record again: one malformed session kept the app reconnecting for
+    // good, its other sessions frozen. Logged once per kind of event, without the record itself.
     void Apply(ChannelEvent ev)
+    {
+        try { ApplyOne(ev); }
+        catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException)
+        {
+            if (refusedKinds.TryAdd(ev.Name, 0)) { log($"refused a {ev.Name} the app could not read ({e.GetType().Name}: {e.Message}); any more are refused without a word"); }
+        }
+    }
+
+    // Host records are read as the spec says (Received): a field that cannot be read is absent,
+    // unless the record is filed or decided on by it. The host's own status, a local-pipe record
+    // the app alone reads, stays strict: its process id and start say which host it is.
+    void ApplyOne(ChannelEvent ev)
     {
         switch (ev.Name)
         {
-            case Events.SessionUpsert when ev.Data.Deserialize<Session>(ProtocolJson.Options) is { } s:
-                ui.Post(() => Sessions.Upsert(s));
-                break;
-            case Events.SessionRemove when ev.Data.Deserialize<SessionRemoved>(ProtocolJson.Options) is { } r:
-                ui.Post(() => Sessions.Remove(r.Id));
-                break;
+            case Events.SessionUpsert:
+                {
+                    var s = Received.Read<Session>(ev.Data);
+                    ui.Post(() => Sessions.Upsert(s));
+                    break;
+                }
+            case Events.SessionRemove:
+                {
+                    var r = Received.Read<SessionRemoved>(ev.Data);
+                    ui.Post(() => Sessions.Remove(r.Id));
+                    break;
+                }
             case Events.SessionsSynced:
                 {
-                    var held = ev.Data.ValueKind == JsonValueKind.Object ? ev.Data.Deserialize<SessionsSynced>(ProtocolJson.Options)?.DiscoveryHeld : null;
+                    var held = ev.Data.ValueKind == JsonValueKind.Object ? Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld : null;
                     ui.Post(() => Sessions.EndSnapshot(held));
                     break;
                 }
-            case Events.DiscoveryChanged when ev.Data.Deserialize<DiscoveryChanged>(ProtocolJson.Options) is { } d:
-                ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
-                break;
-            case UsageProtocol.Update when ev.Data.Deserialize<UsageReport>(ProtocolJson.Options) is { } u:
-                Interlocked.Increment(ref usageEvents);
-                ui.Post(() => { Usage = u; Changed?.Invoke(); });
-                break;
-            case UpdateProtocol.Event when ev.Data.Deserialize<UpdateState>(ProtocolJson.Options) is { } up:
-                Interlocked.Increment(ref updateEvents);
-                ui.Post(() => { Update = up; Changed?.Invoke(); });
-                break;
+            case Events.DiscoveryChanged:
+                {
+                    var d = Received.Read<DiscoveryChanged>(ev.Data);
+                    ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
+                    break;
+                }
+            case UsageProtocol.Update:
+                {
+                    var u = Received.Read<UsageReport>(ev.Data);
+                    Interlocked.Increment(ref usageEvents);
+                    ui.Post(() => { Usage = u; Changed?.Invoke(); });
+                    break;
+                }
+            case UpdateProtocol.Event:
+                {
+                    var up = Received.Read<UpdateState>(ev.Data);
+                    Interlocked.Increment(ref updateEvents);
+                    ui.Post(() => { Update = up; Changed?.Invoke(); });
+                    break;
+                }
             case HostOps.StatusEvent when ev.Data.Deserialize<HostStatus>(ProtocolJson.Options) is { } h:
                 Interlocked.Increment(ref statusEvents);
                 ui.Post(() => { Status = h; Changed?.Invoke(); });

@@ -104,6 +104,35 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.Usage.Agents.Count == 1 && connection.Status!.Relay.State == RelayState.Connected, "usage and status");
     }
 
+    // #446: a record the app could not read ended the event pump, and the connection with it; the
+    // snapshot after the reconnect sent the same record, so one bad session kept the app
+    // reconnecting for good. Now that message alone is refused, logged once for its kind.
+    [Fact]
+    public async Task A_message_the_app_cannot_read_is_refused_and_the_events_after_it_still_arrive()
+    {
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Get("s1") is not null, "the snapshot");
+        var number = conn.ConnectionNumber;
+
+        await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["agent"] = "copilot" });
+        await host.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
+        await host.SendAsync(HostOps.StatusEvent, new System.Text.Json.Nodes.JsonObject { ["processId"] = "4242" });
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        // Missing a required field other than its id, and one of the wrong type: kept, as the PWA keeps it.
+        var partial = JsonSerializer.SerializeToNode(Make.Session("s3", status: SessionStatus.Working), ProtocolJson.Options)!.AsObject();
+        partial.Remove("status");
+        partial["title"] = 5;
+        await host.SendAsync(Events.SessionUpsert, partial);
+
+        await Wait.UntilAsync(() => conn.Sessions.Get("s2") is not null && conn.Sessions.Get("s3") is not null, "the events after the refused ones");
+        Assert.Equal((number, LinkState.Connected), (conn.ConnectionNumber, conn.State));
+        Assert.Equal((SessionStatus.Idle, (string?)null), (conn.Sessions.Get("s3")!.Status, conn.Sessions.Get("s3")!.Title));
+        Assert.Single(logged, l => l.StartsWith($"refused a {Events.SessionUpsert} ", StringComparison.Ordinal));
+        Assert.Single(logged, l => l.StartsWith($"refused a {HostOps.StatusEvent} ", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_gap_in_the_events_after_a_reconnect_reads_the_sessions_status_and_usage_again()
     {

@@ -13,6 +13,8 @@ public sealed record UsageWindow
 {
     public required string Key { get; init; }
     public required string Label { get; init; }
+    // A window with no figure has nothing to show.
+    [Strict(Strictness.Identity)]
     public required double Percent { get; init; }
     public double? Used { get; init; }
     public double? Limit { get; init; }
@@ -51,7 +53,7 @@ public sealed record AgentUsage
 }
 
 // Which machine took a reading: its device id and the name it gave the relay.
-public sealed record UsageReader(string Id, string Name);
+public sealed record UsageReader([property: Strict(Strictness.Identity)] string Id, string Name);
 
 // usage.get's and usage.subscribe's request. shared: the other machines' readings too, where the
 // host offers usage.shared; a host without it ignores the field and sends its own.

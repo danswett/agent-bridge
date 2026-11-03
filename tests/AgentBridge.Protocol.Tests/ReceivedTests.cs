@@ -1,0 +1,296 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using AgentBridge.Protocol;
+using Xunit;
+
+// A host record as a client reads it (Received; v1-sessions.md "Malformed records", #446). A field
+// it cannot read is absent and a required one missing takes its default, as the PWA has always
+// read them; but a record is never filed under a guessed id, and nothing a person decides on is
+// guessed at or shown with a part left out.
+public class ReceivedTests
+{
+    const string T = "2026-10-28T04:22:43.182Z";
+
+    static JsonObject Session() => JsonNode.Parse($$"""
+        {"id":"s1","agent":"copilot","title":"Fix the build","status":"waiting","statusSince":"{{T}}","updatedAt":"{{T}}","processId":4120,
+         "activity":{"response":"Done.","currentTool":{"id":"t1","name":"powershell","status":"running","startedAt":"{{T}}"},
+                     "history":[{"id":"t0","name":"edit","status":"done","startedAt":"{{T}}"}]},
+         "question":{"id":"q1","kind":"approval","message":"Allow **Run a command**?","askedAt":"{{T}}","agent":"a1",
+                     "fields":[{"name":"decision","type":"choice","options":[{"value":"yes","label":"Approve once"},{"value":"no","label":"Deny"}]}]},
+         "subagents":[{"id":"a1","kind":"background","status":"waiting","name":"Run the suite"},{"id":"a2","kind":"task","status":"working"}]}
+        """)!.AsObject();
+
+    static Session Read(JsonNode node) => Received.Read<Session>(JsonSerializer.SerializeToElement(node));
+
+    static string Json<T>(T value) => JsonSerializer.Serialize(value, ProtocolJson.Options);
+
+    [Fact]
+    public void A_well_formed_record_reads_exactly_as_the_strict_reader_reads_it()
+    {
+        var node = Session();
+        Assert.Equal(Json(node.Deserialize<Session>(ProtocolJson.Options)), Json(Read(node)));
+    }
+
+    [Theory]
+    [InlineData("sessions-list.json")]
+    [InlineData("session-subagents.json")]
+    public void Every_example_in_the_spec_reads_as_the_strict_reader_reads_it(string file)
+    {
+        var doc = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "examples", file)))!;
+        var sessions = doc["sessions"]?.AsArray() is { } list ? [.. list.Select(s => s!)] : new[] { doc["result"] ?? doc };
+        foreach (var s in sessions)
+        {
+            Assert.Equal(Json(s.Deserialize<Session>(ProtocolJson.Options)), Json(Read(s)));
+        }
+    }
+
+    [Fact]
+    public void A_session_missing_a_required_field_other_than_its_id_is_kept_with_that_fields_default()
+    {
+        var node = Session();
+        node.Remove("status");
+        node.Remove("statusSince");
+        node.Remove("activity");
+        node.Remove("agent");
+
+        var s = Read(node);
+
+        Assert.Equal(("s1", SessionStatus.Idle, AgentKind.Unknown), (s.Id, s.Status, s.Agent));
+        Assert.Equal(DateTimeOffset.MinValue, s.StatusSince);
+        Assert.Null(s.Activity.Response);
+        Assert.NotNull(s.Question);
+    }
+
+    [Fact]
+    public void A_field_of_the_wrong_type_reads_as_absent()
+    {
+        var node = Session();
+        node["title"] = 5;
+        node["processId"] = "4120";
+        node["status"] = 1;
+        node["updatedAt"] = "yesterday";
+        node["activity"]!["response"] = new JsonObject();
+        node["subagents"] = "none";
+
+        var s = Read(node);
+
+        Assert.Equal((null, null, SessionStatus.Idle, DateTimeOffset.MinValue), (s.Title, s.ProcessId, s.Status, s.UpdatedAt));
+        Assert.Null(s.Activity.Response);
+        Assert.Null(s.Subagents);
+        Assert.Equal("powershell", s.Activity.CurrentTool!.Name);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(7)]
+    public void A_session_whose_id_is_missing_or_not_a_string_is_refused(int? id)
+    {
+        var node = Session();
+        if (id is { } n) { node["id"] = n; } else { node.Remove("id"); }
+
+        var e = Assert.Throws<MalformedRecordException>(() => Read(node));
+        Assert.Equal("$.id", e.Path);
+    }
+
+    [Fact]
+    public void A_tool_call_or_delegate_with_no_id_is_left_out_and_the_session_kept()
+    {
+        var node = Session();
+        node["activity"]!["currentTool"]!.AsObject().Remove("id");
+        node["activity"]!["history"]!.AsArray().Add(new JsonObject { ["name"] = "orphan", ["status"] = "done", ["startedAt"] = T });
+        node["subagents"]![1]!["id"] = 2;
+
+        var s = Read(node);
+
+        Assert.Null(s.Activity.CurrentTool);
+        Assert.Equal(["t0"], s.Activity.History!.Select(t => t.Id));
+        Assert.Equal(["a1"], s.Subagents!.Select(a => a.Id));
+    }
+
+    [Fact]
+    public void A_list_entry_that_is_null_or_of_the_wrong_type_is_left_out()
+    {
+        var node = Session();
+        node["subagents"]!.AsArray().Add(null);
+        node["subagents"]!.AsArray().Add("a3");
+
+        Assert.Equal(["a1", "a2"], Read(node).Subagents!.Select(a => a.Id));
+        var held = Received.Read<DiscoveryHeld>(JsonSerializer.SerializeToElement(new JsonObject { ["reason"] = "busy", ["agents"] = new JsonArray("copilot", 3, null, "claude") }));
+        Assert.Equal([AgentKind.Copilot, AgentKind.Claude], held.Agents);
+    }
+
+    // An approval's id answers it, its message is what it allows, its kind and fields how it is
+    // answered and with what, answerAtMachine and truncated whether it may be from here, and agent
+    // who asks (#263). None of them is guessed: the question is dropped, the session kept.
+    [Theory]
+    [InlineData("id", null)]
+    [InlineData("id", 5)]
+    [InlineData("kind", null)]
+    [InlineData("kind", 1)]
+    [InlineData("message", null)]
+    [InlineData("message", 2)]
+    [InlineData("agent", 3)]
+    [InlineData("answerAtMachine", "no")]
+    [InlineData("truncated", 0)]
+    [InlineData("fields", "decision")]
+    public void A_question_whose_decision_or_who_asks_cannot_be_read_is_dropped_and_the_session_kept(string field, object? value)
+    {
+        var node = Session();
+        var q = node["question"]!.AsObject();
+        if (value is null) { q.Remove(field); } else { q[field] = JsonValue.Create(value); }
+
+        var s = Read(node);
+
+        Assert.Null(s.Question);
+        Assert.Equal(("s1", SessionStatus.Waiting), (s.Id, s.Status));
+    }
+
+    [Theory]
+    [InlineData("name")]
+    [InlineData("type")]
+    [InlineData("options")]
+    [InlineData("allowOther")]
+    [InlineData("option")]
+    [InlineData("null-option")]
+    public void A_question_with_a_field_or_choice_it_cannot_read_is_dropped_whole_rather_than_shown_without_it(string broken)
+    {
+        var node = Session();
+        var field = node["question"]!["fields"]![0]!.AsObject();
+        switch (broken)
+        {
+            case "name": field.Remove("name"); break;
+            case "type": field["type"] = 3; break;
+            case "options": field["options"] = "yes,no"; break;
+            case "allowOther": field["allowOther"] = "true"; break;
+            case "option": field["options"]![1]!["value"] = false; break;
+            case "null-option": field["options"]!.AsArray().Add(null); break;
+        }
+
+        Assert.Null(Read(node).Question);
+    }
+
+    [Fact]
+    public void An_unknown_question_kind_still_reads_as_a_form_as_the_spec_says()
+    {
+        var node = Session();
+        node["question"]!["kind"] = "survey";
+
+        Assert.Equal(QuestionKind.Form, Read(node).Question!.Kind);
+    }
+
+    [Fact]
+    public void A_missing_outcome_reads_as_the_enums_unknown_value_never_as_its_first()
+    {
+        var empty = JsonSerializer.SerializeToElement(new JsonObject());
+
+        Assert.Equal(AnswerOutcome.Unconfirmed, Received.Read<AnswerResult>(empty).Outcome);
+        Assert.Equal(LaunchOutcome.Unconfirmed, Received.Read<LaunchResult>(empty).Outcome);
+        Assert.Equal(TrustAnswerOutcome.Unconfirmed, Received.Read<TrustAnswerResult>(empty).Outcome);
+        Assert.Equal(UpdateOutcome.Failed, Received.Read<UpdateState>(JsonSerializer.SerializeToElement(new JsonObject { ["last"] = new JsonObject { ["at"] = T } })).Last!.Outcome);
+    }
+
+    static JsonObject Options() => JsonNode.Parse($$"""
+        {"agents":[{"id":"copilot","label":"Copilot","kind":"copilot"},{"label":"no id","kind":"claude"}],
+         "workspaces":[{"label":"repo","path":"C:\\repo"},{"path":"C:\\nolabel"}],
+         "resumable":[{"id":"r1","agent":"copilot","launcher":"copilot","title":"Old"},{"id":"r2","agent":"codex","title":"no launcher"}],
+         "defaults":{"agent":"copilot","workspace":"repo","permissions":"ask"},
+         "trust":[{"id":"tq1","agent":"copilot","kind":"copilot","label":"Copilot","folder":"C:\\repo","askedAt":"{{T}}","answerable":true}]}
+        """)!.AsObject();
+
+    static LaunchOptions ReadOptions(JsonNode node) => Received.Read<LaunchOptions>(JsonSerializer.SerializeToElement(node));
+
+    [Fact]
+    public void Launch_options_leave_out_an_agent_workspace_or_resumable_session_with_nothing_to_launch_it_by()
+    {
+        var o = ReadOptions(Options());
+
+        Assert.Equal(["copilot"], o.Agents.Select(a => a.Id));
+        Assert.Equal(["repo"], o.Workspaces.Select(w => w.Label));
+        Assert.Equal(["r1"], o.Resumable.Select(r => r.Id));
+        Assert.Equal("tq1", Assert.Single(o.Trust!).Id);
+    }
+
+    [Theory]
+    [InlineData("folder", null)]
+    [InlineData("folder", 1)]
+    [InlineData("answerable", null)]
+    [InlineData("answerable", "yes")]
+    [InlineData("agent", 2)]
+    [InlineData("warning", 3)]
+    [InlineData("root", false)]
+    public void A_folder_trust_question_a_person_could_not_read_in_full_is_dropped(string field, object? value)
+    {
+        var node = Options();
+        var q = node["trust"]![0]!.AsObject();
+        if (value is null) { q.Remove(field); } else { q[field] = JsonValue.Create(value); }
+
+        Assert.Empty(ReadOptions(node).Trust!);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1)]
+    public void Launch_options_whose_default_permissions_cannot_be_read_are_refused_rather_than_guessed(int? permissions)
+    {
+        var node = Options();
+        var d = node["defaults"]!.AsObject();
+        if (permissions is { } p) { d["permissions"] = p; } else { d.Remove("permissions"); }
+
+        Assert.Throws<MalformedRecordException>(() => ReadOptions(node));
+    }
+
+    [Fact]
+    public void A_usage_window_with_no_percent_is_left_out_and_its_reading_kept()
+    {
+        var report = JsonNode.Parse($$"""
+            {"agents":[{"agent":"copilot","label":"Copilot","source":"api","measuredAt":"{{T}}",
+              "windows":[{"key":"month","label":"Month","percent":40},{"key":"week","label":"Week"},{"key":"day","label":"Day","percent":"10%"}]},
+             {"agent":"claude","windows":[]}]}
+            """)!;
+
+        var r = Received.Read<UsageReport>(JsonSerializer.SerializeToElement(report));
+
+        Assert.Equal(["month"], r.Agents[0].Windows.Select(w => w.Key));
+        Assert.Equal((AgentKind.Claude, "", UsageSource.None, DateTimeOffset.MinValue), (r.Agents[1].Agent, r.Agents[1].Label, r.Agents[1].Source, r.Agents[1].MeasuredAt));
+    }
+
+    [Fact]
+    public void A_discovery_hold_with_no_reason_reads_as_none()
+    {
+        var changed = Received.Read<DiscoveryChanged>(JsonSerializer.SerializeToElement(new JsonObject { ["discoveryHeld"] = new JsonObject { ["agents"] = new JsonArray("copilot") } }));
+
+        Assert.Null(changed.DiscoveryHeld);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("\"s1\"")]
+    [InlineData("null")]
+    public void A_message_that_is_not_a_record_at_all_is_refused(string json) =>
+        Assert.Throws<MalformedRecordException>(() => Received.Read<Session>(JsonDocument.Parse(json).RootElement));
+
+    // The spec's table of strict fields and the [Strict] marks are one list: a field marked here and
+    // not there, or there and not here, or in the wrong column, fails.
+    [Fact]
+    public void The_specs_table_of_strict_fields_is_exactly_the_fields_marked_strict()
+    {
+        var spec = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "spec", "v1-sessions.md"));
+        var start = Array.IndexOf(spec, "## Malformed records");
+        var rows = spec.Skip(start).TakeWhile((l, i) => i == 0 || !l.StartsWith("## ", StringComparison.Ordinal))
+            .Where(l => l.StartsWith("| `", StringComparison.Ordinal))
+            .Select(l => l.Split('|'))
+            .ToList();
+        static IEnumerable<string> Names(string cell) => System.Text.RegularExpressions.Regex.Matches(cell, "`([^`]+)`").Select(m => m.Groups[1].Value);
+        var documented = rows.SelectMany(r => Names(r[1]).SelectMany(record =>
+            Names(r[2]).Select(f => $"{record}.{f} Identity").Concat(Names(r[3]).Select(f => $"{record}.{f} Security")))).ToHashSet();
+
+        var marked = typeof(Received).Assembly.GetTypes()
+            .SelectMany(t => t.GetProperties().Select(p => (Type: t, Property: p, Strict: p.GetCustomAttributes(typeof(StrictAttribute), false).OfType<StrictAttribute>().SingleOrDefault())))
+            .Where(x => x.Strict is not null)
+            .Select(x => $"{(x.Type == typeof(SessionRemoved) ? "session.remove" : x.Type.Name)}.{JsonNamingPolicy.CamelCase.ConvertName(x.Property.Name)} {x.Strict!.Why}")
+            .ToHashSet();
+
+        Assert.Empty(marked.Except(documented));
+        Assert.Empty(documented.Except(marked));
+    }
+}

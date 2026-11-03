@@ -25,23 +25,32 @@ public static class TrustProtocol
 // A pending folder-trust question: launch.options' trust, and a launch result's trust.
 public sealed record TrustQuestion
 {
-    // Names this question while it waits; answered by this id.
+    // Names this question while it waits; answered by this id. Everything a person decides on
+    // is [Strict] (Security): a question any of it cannot be read from is dropped, not guessed at.
+    [Strict(Strictness.Security)]
     public required string Id { get; init; }
     // The launcher that started the agent (copilot, agency, claude, codex), its agent and label.
+    [Strict(Strictness.Security)]
     public required string Agent { get; init; }
+    [Strict(Strictness.Security)]
     public required AgentKind Kind { get; init; }
     public required string Label { get; init; }
     // The workspace the launch named, and the exact folder the agent was started in.
     public string? Workspace { get; init; }
+    [Strict(Strictness.Security)]
     public required string Folder { get; init; }
     // When trusting applies to an enclosing repository instead (Codex): that folder, and the
     // agent's note saying so.
+    [Strict(Strictness.Security)]
     public string? Root { get; init; }
+    [Strict(Strictness.Security)]
     public string? RootNote { get; init; }
     // The agent's own warning, as its window shows it. Null when it could not be read.
+    [Strict(Strictness.Security)]
     public string? Warning { get; init; }
     public required DateTimeOffset AskedAt { get; init; }
     // Whether launch.trust.answer can answer it now; when not, why not and how to change that.
+    [Strict(Strictness.Security)]
     public required bool Answerable { get; init; }
     public string? AtMachine { get; init; }
 }

@@ -73,8 +73,11 @@ public sealed record LaunchTransfer
 // make (docs/protocol/v1-transfer.md, "The signed command").
 public sealed record SignedCommand
 {
+    [Strict(Strictness.Security)]
     public required string Body { get; init; }
+    [Strict(Strictness.Security)]
     public required string By { get; init; }
+    [Strict(Strictness.Security)]
     public required string Mac { get; init; }
 }
 
@@ -115,14 +118,20 @@ public sealed record TransferRequest
 // machine alone (docs/protocol/blobs.md), and what it holds.
 public sealed record TransferResult
 {
+    [Strict(Strictness.Security)]
     public required BlobRef Blob { get; init; }
     // The bundle's bytes and SHA-256 (base64url), as for an attachment.
+    [Strict(Strictness.Security)]
     public required long Size { get; init; }
+    [Strict(Strictness.Security)]
     public required string Sha256 { get; init; }
+    [Strict(Strictness.Security)]
     public required AgentKind Agent { get; init; }
     // The launcher that ran it on its machine: Agency's sessions resume in Agency.
+    [Strict(Strictness.Security)]
     public required string Launcher { get; init; }
     public required string Title { get; init; }
+    [Strict(Strictness.Security)]
     public required int Files { get; init; }
     // The agent's version there, when it said: Codex has changed how it stores sessions.
     public string? AgentVersion { get; init; }
