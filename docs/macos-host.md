@@ -96,9 +96,27 @@ the environment's HOME/CODEX_HOME. The native client uses the normal profile roo
 custom-root diagnostics can connect to the socket path printed by the host.
 
 G5 holds delivery if a PowerShell runtime could be running agent-ha-bridge for the
-same user, or if process observation is incomplete. This deliberately holds even
-an unrelated PowerShell shell until it exits. Never stop an existing legacy daemon
-to get past that check from an agent session.
+same effective, real or saved user ID, or if process observation is incomplete.
+It brackets repeated kernel owner and executable-path reads with the native unique
+process ID and exec version (`PROC_PIDUNIQIDENTIFIERINFO`). The unique ID detects
+PID reuse; the version changes on exec. All fields must agree, and unreadable,
+short, unsupported or truncated queries stay incomplete. The bounded three-pass
+retry never reuses an earlier clear snapshot.
+
+This avoids requiring full `PROC_PIDTBSDINFO`, which macOS denies for protected
+setuid login parents even though their real UID is the current user's. It adds no
+process-name exemption: the same kernel identity and path proof applies to every
+candidate. It also supplies the raw Codex candidate scan; file-descriptor and
+owned-pane delivery checks retain their existing stronger authority.
+
+Apple's [native structure](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h)
+and [identity checks](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c)
+define this 56-byte API. SDK C assertions cover arm64 and x86_64, and a disposable
+shell-to-sleep exec regression checks the live generation behavior. These remain
+point-in-time observations, not an atomic exclusion of future processes.
+
+G5 deliberately holds even an unrelated PowerShell shell until it exits. Never
+stop an existing legacy daemon to get past that check from an agent session.
 
 For tests on macOS, use a canonical temporary path (`TMPDIR=/private/tmp`) because
 some existing worktree fixtures compare `/var` and `/private/var` paths literally.
