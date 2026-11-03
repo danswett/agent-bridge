@@ -32,8 +32,9 @@ on:
         required: false
         default: ''
 
-# id-token: write only on the jobs that sign in to Azure (build, staging, production, rollback):
-# given here, it let `infra`, which only compiles the templates, mint an Azure OIDC token too (#360).
+# id-token: write only on the jobs that sign in to Azure (build, staging, production, rollback).
+# It used to be granted here, for the whole workflow, which let `infra`, a job that only compiles
+# the templates, mint an Azure OIDC token too (#360).
 permissions:
   contents: read
 
