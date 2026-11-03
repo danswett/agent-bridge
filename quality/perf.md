@@ -29,9 +29,10 @@ build. `dotnet test` passes over it (`IsTestProject` false).
 
 Nothing real is touched. Each copy of the hook runs from a folder the tool makes under `--work`
 (the temp folder by default), next to a pointer to a runtime folder of its own, as
-`HookProcessTests` does. The tool deletes the folder when it finishes. The host is stood in for by its heartbeat, which
-is all the hook reads of it. For "up" the tool writes the heartbeat before each run and empties
-the spool after it, as the intake would. For "down" there is no heartbeat.
+`HookProcessTests` does. The tool deletes the folder when it finishes. The host is stood in for
+by its heartbeat, which is all the hook reads of it. For "up" the tool writes the heartbeat
+before each run and takes the spooled file away between runs, keeping the spool folder, as the
+intake does. For "down" there is no heartbeat.
 
 "Cold" means a new executable, not a cold disk: the OS's file cache still holds the bytes just
 copied. On a Windows machine with real-time scanning, most of the cold cost is the scan of the

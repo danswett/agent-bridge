@@ -13,10 +13,11 @@ using AgentBridge.Hooks;
 // Every copy of the hook runs from a folder of its own made here, beside a pointer to a runtime
 // folder of its own, as HookProcessTests does: nothing reaches a real installation's spool,
 // heartbeat or log. The host is stood in for by its heartbeat, which is all the hook reads of
-// it: "up" writes it before each run and empties the spool after (as the intake would), "down"
-// leaves none. Warm runs reuse one copy; each cold run is the first start of a fresh copy, as
-// after an install or an update (the OS's file cache still holds the bytes just copied, so this
-// is the cost of a new executable, Defender's scan of it on Windows, not of a cold disk).
+// it: "up" writes it before each run and takes the spooled file away between runs, keeping the
+// folder, as the intake does; "down" leaves none. Warm runs reuse one copy; each cold run is the
+// first start of a fresh copy, as after an install or an update (the OS's file cache still holds
+// the bytes just copied, so this is the cost of a new executable, and of any real-time scan of
+// it, not of a cold disk).
 
 var options = Options.Parse(args);
 if (options is null)
@@ -40,7 +41,9 @@ var eventJson = JsonSerializer.SerializeToUtf8Bytes(new
     toolArgs = JsonSerializer.Serialize(new { command = "dotnet test AgentBridge.slnx -c Release --filter \"Category!=Process\"", description = "Run the tests", mode = "sync", initial_wait = 120 }),
 });
 
-var root = Path.Combine(options.Work ?? Path.GetTempPath(), "abperf-" + Guid.NewGuid().ToString("N")[..12]);
+// A pointer must hold a full path (HookRunner.RuntimeRoot refuses any other), so a relative
+// --work is resolved here.
+var root = Path.GetFullPath(Path.Combine(options.Work ?? Path.GetTempPath(), "abperf-" + Guid.NewGuid().ToString("N")[..12]));
 var runtime = Path.Combine(root, "runtime");
 Directory.CreateDirectory(runtime);
 try
@@ -137,7 +140,10 @@ try
     {
         var heartbeat = SpoolContract.HeartbeatPath(runtime);
         var spool = SpoolContract.SpoolDirectory(runtime);
-        if (Directory.Exists(spool)) { Directory.Delete(spool, recursive: true); }
+        // The spool is kept and only its files taken, as the intake does, so a timed run never
+        // pays for creating the folder.
+        Directory.CreateDirectory(spool);
+        foreach (var file in Directory.GetFiles(spool)) { File.Delete(file); }
         if (hostUp) { File.WriteAllText(heartbeat, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
         else if (File.Exists(heartbeat)) { File.Delete(heartbeat); }
 
@@ -155,7 +161,7 @@ try
 
         // Timing the wrong path would be worse than timing nothing: each run must have answered
         // as the hook does, and spooled exactly when the host was up.
-        var spooled = Directory.Exists(spool) ? Directory.GetFiles(spool, "*.json").Length : 0;
+        var spooled = Directory.GetFiles(spool, "*.json").Length;
         if (process.ExitCode != 0 || stdout != Reply || spooled != (hostUp ? 1 : 0))
         {
             throw new InvalidOperationException($"the hook did not behave as expected (host {(hostUp ? "up" : "down")}): exit {process.ExitCode}, reply {JsonSerializer.Serialize(stdout)}, {spooled} spooled");
