@@ -274,6 +274,7 @@ public sealed class HostManager
 
     void MarkStopped()
     {
+        marked = true;
         try
         {
             Directory.CreateDirectory(layout.ProfileFolder);
@@ -429,11 +430,25 @@ public sealed class HostManager
     // The app quitting gives up the wait for probes, as it does an update's (#238 review).
     public Task StopAsync(CancellationToken ct = default) => StopAsync(ProbeWait, ct, quit.Token);
 
+    // One stop at a time: Settings' Stop, Restart and an update's stop may all wait on the same
+    // usage probe. Two at once had the second, finding the host gone under the first's stop, report
+    // it ended unexpectedly and clear the marker the first had just written (#238 review), so a
+    // host crashing on its way out was started again (#346). The second now begins after the first,
+    // and finds the host stopped.
+    readonly SemaphoreSlim stopping = new(1, 1);
+    // Whether the stop under way wrote the marker: only that one is its to clear.
+    bool marked;
+
     // hold: gives up the wait for the probes only, before anything is stopped.
     async Task StopAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
+        using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(ct, hold))
+        {
+            await stopping.WaitAsync(waiting.Token);
+        }
         try
         {
+            marked = false;
             await StopHostAsync(probeWait, ct, hold);
             await EndLauncherAsync(probeWait, ct, hold);
         }
@@ -442,9 +457,10 @@ public sealed class HostManager
         catch (Exception e) when (e is HostRefusedException or HostBusyException
             || (e is OperationCanceledException && hold.IsCancellationRequested && !ct.IsCancellationRequested))
         {
-            ClearStopped();
+            if (marked) { ClearStopped(); }
             throw;
         }
+        finally { stopping.Release(); }
     }
 
     // Through the host's pipe, as above, once its usage probes are done (#238).
@@ -459,12 +475,13 @@ public sealed class HostManager
             using (var holding = CancellationTokenSource.CreateLinkedTokenSource(ct, hold))
             {
                 try { await ProbesDoneAsync(ch, probeWait, "the host", holding.Token); }
-                catch (HostBusyException)
+                // Its pipe went mid-wait because the host ended: "nothing was stopped" would read as
+                // though it still ran (#238 review). Said only when its process has gone and nothing
+                // answers on its pipe: a hung host does not answer either, but its process is there.
+                catch (HostBusyException e) when (e.InnerException is IOException or TimeoutException && pid is { } p && !processes.IsRunning(p))
                 {
-                    // Its pipe went mid-wait because the host ended: "nothing was stopped" would
-                    // read as though it still ran (#238 review).
                     if (await IsRunningAsync(ct)) { throw; }
-                    throw new HostBusyException("the host ended unexpectedly while the stop waited for its usage probe to finish; it was not stopped from here, and its launcher, if it has one, starts it again as after any crash");
+                    throw new HostBusyException("the host ended unexpectedly while the stop waited for its usage probe to finish; it was not stopped from here, and its launcher, if it has one, starts it again as after any crash", e);
                 }
             }
             // A stop on purpose: the launcher must not start the host again after it (#106). Only
@@ -680,7 +697,7 @@ public sealed class HostManager
         catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         catch (Exception e) when (e is IOException or TimeoutException)
         {
-            throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}");
+            throw new HostBusyException($"{who} could not say whether a usage probe it started is still finishing, so nothing was stopped: {e.Message}", e);
         }
         return held.Busy ? held.Why ?? "a usage probe it started is still finishing" : null;
     }
@@ -693,10 +710,10 @@ public sealed class HostManager
     // still busy at ProbeWait, is not stopped at all, and never reaches the kill below.
     async Task ProbesDoneAsync(LocalChannel ch, TimeSpan wait, string who, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + wait;
+        var deadline = Time.GetUtcNow() + wait;
         while (await HoldAsync(ch, who, ct) is { } why)
         {
-            if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: {who}: {why}, after {FormatWait(wait)}; try again later"); }
+            if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: {who}: {why}, after {FormatWait(wait)}; try again later"); }
             await Task.Delay(ProbePoll, ct);
         }
     }
@@ -833,7 +850,7 @@ public sealed class WindowsLogonTasks : ILogonTasks
 public sealed class HostRefusedException(string reason) : InvalidOperationException(reason);
 
 // The host was not stopped: a usage probe tied to it is still finishing, or it could not say (#238).
-public sealed class HostBusyException(string reason) : InvalidOperationException(reason);
+public sealed class HostBusyException(string reason, Exception? inner = null) : InvalidOperationException(reason, inner);
 
 // Another update (Settings', or the automatic one) is stopping the host or being applied.
 public sealed class UpdateUnderWayException() : InvalidOperationException("an update is already being installed");

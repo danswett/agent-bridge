@@ -137,8 +137,26 @@ public sealed class UsageProbeTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task A_codex_answer_split_mid_character_at_a_read_or_over_many_small_reads_is_read_whole()
+    {
+        // A three-byte character across the 8 KiB read boundary, then the same line in reads of
+        // one to three bytes, as a pipe may hand it over.
+        var text = "{\"note\":\"" + new string('x', 8192 - 10) + "€ and ✓ and 😀\"}";
+        Assert.Equal(new byte[] { 0xE2, 0x82, 0xAC }, Encoding.UTF8.GetBytes(text)[8191..8194]);
+        var bytes = Encoding.UTF8.GetBytes(text + "\n" + text + "\n");
+
+        foreach (var chunk in new[] { int.MaxValue, 1, 2, 3 })
+        {
+            var link = new JsonLinesLink(new MemoryStream(), new OpenPipe(bytes, chunk));
+            Assert.Equal(text, await link.ReceiveAsync());
+            Assert.Equal(text, await link.ReceiveAsync());
+        }
+    }
+
     // A pipe whose writer has said all it will for now: what arrived, then nothing, never an end.
-    sealed class OpenPipe(byte[] arrived) : Stream
+    // At most chunk bytes a read, as a pipe hands over what has arrived.
+    sealed class OpenPipe(byte[] arrived, int chunk = int.MaxValue) : Stream
     {
         int at;
         public override bool CanRead => true;
@@ -151,7 +169,7 @@ public sealed class UsageProbeTests : IDisposable
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             if (at == arrived.Length) { await Task.Delay(Timeout.Infinite, cancellationToken); }
-            var n = Math.Min(buffer.Length, arrived.Length - at);
+            var n = Math.Min(Math.Min(buffer.Length, chunk), arrived.Length - at);
             arrived.AsSpan(at, n).CopyTo(buffer.Span);
             at += n;
             return n;

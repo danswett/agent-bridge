@@ -261,7 +261,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   It is written only once the host's usage probes are done, just before the host is asked to
   stop (or when no host answers), so a host that crashes during that wait, or while the app
   quits during it, is still started again; the Stop then says the host ended unexpectedly
-  rather than that nothing was stopped (#238). The app then
+  rather than that nothing was stopped, but only when its process has gone and nothing answers
+  on its pipe (a host whose process is still there but no longer answers is reported as not
+  stopped). Stops run one at a
+  time (Settings' Stop and Restart, an update's), so a second waits for the first and finds the
+  host stopped, rather than clearing the first's marker (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
   also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so
