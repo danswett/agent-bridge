@@ -3,33 +3,65 @@ using System.Text;
 
 namespace AgentBridge.Protocol;
 
-// What an agent's input can see past, or drop, before it reads what a person typed: white
-// space, control characters (the host types them as spaces) and format characters (Cf: U+FEFF,
-// U+200B-U+200D, U+2060, the bidi marks), which show as nothing at all. Shared by the reply,
-// launch and answer checks, which the PWA mirrors (pwa/js/replies.js INVISIBLE).
+// What an agent's input can pass over, drop or draw as nothing before what a person typed
+// starts. Shared by the reply, launch and answer checks, which the PWA mirrors
+// (pwa/js/replies.js INVISIBLE), and by the host's look at an agent's input box. It covers:
+//   white space;
+//   control characters (Cc), which the host types as spaces;
+//   format characters (Cf: U+FEFF, U+200B-U+200D, U+2060, bidi marks, tags);
+//   default-ignorable code points (Hangul fillers, variation selectors, U+034F, U+115F);
+//   combining marks (M), which have no base of their own;
+//   unassigned code points (Cn), which a newer agent's Unicode may treat as any of those;
+//   U+2800, the blank braille pattern.
+// So a reply, prompt or answer is judged by its first visible base character.
 //
-// Format characters were once counted as text, so "\uFEFF/clear" passed the reply and launch
-// checks as not starting with /. Copilot CLI trims what it is given with JavaScript's trim(),
-// which removes U+FEFF, and then runs it as /clear on the machine (#448). Other agents differ,
-// and may change, so every Cf character is passed over, not only those one CLI strips today.
-static class Invisible
+// White space and control characters alone once counted. Then "\uFEFF/clear" passed the reply
+// and launch checks as not starting with /, and Copilot CLI, which trims its input with
+// JavaScript's trim() (U+FEFF included), would run it as /clear on the machine (#448). Claude
+// Code drops a wider set still before it sends anything, then leaves what is left in its box: a
+// reply "\u3164/" puts a bare / there, which the next reply's Enter would run. Every agent
+// strips differently, and may change, so this passes over all of it, not only what one agent
+// strips today.
+public static class Invisible
 {
-    public static bool Is(Rune r) => Rune.IsWhiteSpace(r) || Rune.IsControl(r) || IsFormat(r);
+    public static bool Is(Rune r) => Rune.IsWhiteSpace(r) || r.Value == 0x2800 || Rune.GetUnicodeCategory(r) switch
+    {
+        UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.OtherNotAssigned
+            or UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark or UnicodeCategory.EnclosingMark => true,
+        _ => DefaultIgnorable(r.Value),
+    };
 
-    // Shown as nothing, so an answer of nothing else is empty. Control characters stay text
-    // here, as they always have for answers: refusing them is not this check's to decide.
-    public static bool Blank(string? text) => text is null || text.EnumerateRunes().All(r => Rune.IsWhiteSpace(r) || IsFormat(r));
+    // Shows as nothing, so says nothing: an empty reply or answer.
+    public static bool Blank(string? text) => First(text) is null;
 
     // The first character an agent's input would act on, or null when there is none. A lone
     // surrogate reads as U+FFFD, which is visible.
-    public static int? First(string text)
+    public static int? First(string? text)
     {
-        foreach (var r in text.EnumerateRunes())
+        foreach (var r in (text ?? "").EnumerateRunes())
         {
             if (!Is(r)) { return r.Value; }
         }
         return null;
     }
 
-    static bool IsFormat(Rune r) => Rune.GetUnicodeCategory(r) == UnicodeCategory.Format;
+    // Unicode's Default_Ignorable_Code_Point (DerivedCoreProperties.txt), which .NET does not
+    // expose. Those that are Cf, Cn or M are caught by category above, but are listed whole so
+    // this reads against the table; the PWA uses \p{Default_Ignorable_Code_Point} itself.
+    static bool DefaultIgnorable(int c) => c switch
+    {
+        0x00AD or 0x034F or 0x061C or 0x3164 or 0xFEFF or 0xFFA0 => true,
+        >= 0x115F and <= 0x1160 => true,
+        >= 0x17B4 and <= 0x17B5 => true,
+        >= 0x180B and <= 0x180F => true,
+        >= 0x200B and <= 0x200F => true,
+        >= 0x202A and <= 0x202E => true,
+        >= 0x2060 and <= 0x206F => true,
+        >= 0xFE00 and <= 0xFE0F => true,
+        >= 0xFFF0 and <= 0xFFF8 => true,
+        >= 0x1BCA0 and <= 0x1BCA3 => true,
+        >= 0x1D173 and <= 0x1D17A => true,
+        >= 0xE0000 and <= 0xE0FFF => true,
+        _ => false,
+    };
 }

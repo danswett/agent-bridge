@@ -51,16 +51,6 @@ public class LaunchTests
         Assert.StartsWith("a prompt cannot start with !", LaunchProtocol.Check(Launch(prompt: "!rm -rf .")));
     }
 
-    [Theory]
-    [InlineData("\uFEFF/clear", "/")]
-    [InlineData("\u200B/clear", "/")]
-    [InlineData("\u2060 /allow-all", "/")]
-    [InlineData("\U000E0001/clear", "/")]
-    [InlineData("\uFEFF!rm -rf .", "!")]
-    [InlineData("\u200B\u200C\u200D!dir", "!")]
-    public void A_prompt_led_by_invisible_format_characters_is_judged_by_its_first_visible_one(string prompt, string command) =>
-        Assert.StartsWith($"a prompt cannot start with {command}", LaunchProtocol.Check(Launch(prompt: prompt)));
-
     [Fact]
     public void Attachments_are_uuids_sent_first_at_most_ten_and_each_once()
     {

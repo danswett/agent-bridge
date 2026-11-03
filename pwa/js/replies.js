@@ -4,7 +4,7 @@
 // checkReply mirrors src/AgentBridge.Protocol/Replies.cs (Replies.Check), case for case and
 // with the same wording, so the app never sends a reply the host would refuse for its shape.
 // Its last check is the app's own: a request over the message limit would never arrive.
-import { utf8Bytes, wellFormed } from './answers.js';
+import { INVISIBLE, utf8Bytes, wellFormed } from './answers.js';
 import { AttachmentLimits } from './attachments.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,12 +17,6 @@ export const ReplyLimits = Object.freeze({
   message: 48 * 1024,
 });
 
-// What an agent's input can see past before it reads what a person typed, as C#'s Invisible.Is:
-// white space, control characters (typed as spaces) and format characters (Cf: U+FEFF,
-// U+200B-U+200D, U+2060, bidi marks), which show as nothing. Copilot CLI trims its input with
-// trim(), which drops U+FEFF, so "\uFEFF/clear" would have run as /clear (#448).
-export const INVISIBLE = /[\p{White_Space}\p{Cc}\p{Cf}]/u;
-
 // Null when the reply can be sent; otherwise why not, worded as the host words it. `data`
 // is the session.reply request data ({ id, request, text, attachments? }).
 export function checkReply(data) {
@@ -31,11 +25,12 @@ export function checkReply(data) {
   if (attachments.some((a) => !UUID.test(a?.id ?? ''))) { return 'each attachment must be the UUID of one sent with attachment.start'; }
   if (new Set(attachments.map((a) => a.id.toLowerCase())).size !== attachments.length) { return 'the same attachment is in the reply twice'; }
   const text = typeof data.text === 'string' ? data.text : '';
-  // Control characters are typed as spaces and format characters show as nothing, so text of
-  // nothing else is empty too. With attachments the words are optional.
+  // Control characters are typed as spaces and the rest of INVISIBLE (answers.js) shows as
+  // nothing, so text of nothing else is empty too. With attachments the words are optional.
   if ([...text].every((c) => INVISIBLE.test(c)) && attachments.length === 0) { return 'the reply is empty'; }
   if (utf8Bytes(text) > ReplyLimits.text) { return `the reply is longer than ${ReplyLimits.text / 1024} KiB`; }
-  // A leading / or ! would run on the machine as a command, not reach the agent.
+  // A leading / or ! would run on the machine as a command, not reach the agent, however much
+  // that shows as nothing comes first (#448).
   const first = [...text].find((c) => !INVISIBLE.test(c));
   if (first === '/') { return 'a reply cannot start with /, which the agent would run as a command; type commands at the machine'; }
   if (first === '!') { return 'a reply cannot start with !, which the agent would run as a shell command; type commands at the machine'; }

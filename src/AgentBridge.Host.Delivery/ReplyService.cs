@@ -316,6 +316,16 @@ public sealed class ReplyService : ISessionReplier
             // box is typed into whatever it shows: words someone left there would go with the
             // reply, and Claude's record of them would leave the reply unconfirmed.
             if (agent == AgentKind.Codex && !box.Empty) { return Done(Refused($"something is already typed in {name}'s input box at the machine; send or clear it there first")); }
+            // A box whose words start with / or ! holds a command waiting for Enter, and a reply
+            // typed after it would send it, with whatever the reply adds. Claude Code drops
+            // invisible characters from what it is given and leaves the rest in its box unsent,
+            // so a reply "\u3164/" checked as text could leave a bare / there for the next one
+            // to complete (#448). A suggested prompt that started with either would be refused
+            // too, which only sends the person to the machine.
+            if (Invisible.First(box.Content) is '/' or '!')
+            {
+                return Done(Refused($"{name}'s input box at the machine holds a command that a reply would run; send or clear it there first"));
+            }
             // The agent only appends, and a line still being written at this point is not a
             // prompt typed now: reading from here, it does not parse.
             from = Jsonl.Length(transcript);

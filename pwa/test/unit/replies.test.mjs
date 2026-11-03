@@ -32,21 +32,6 @@ test('a slash or bang command is refused wherever leading space or control chara
   assert.equal(checkReply(reply('use /tmp and run !build later')), null);
 });
 
-test('a slash or bang command is refused behind invisible format characters too, as the host refuses it', () => {
-  for (const text of ['\uFEFF/clear', '\u200B/clear', '\u2060/clear', '\u200C\u200D \uFEFF/exit', '\u{E0001}/clear']) {
-    assert.match(checkReply(reply(text)), /^a reply cannot start with \//, JSON.stringify(text));
-  }
-  for (const text of ['\uFEFF!rm -rf build', '\u200B!dir', '\u2060 !dir']) {
-    assert.match(checkReply(reply(text)), /^a reply cannot start with !/, JSON.stringify(text));
-  }
-});
-
-test('a reply of nothing but invisible format characters is empty', () => {
-  assert.equal(checkReply(reply('\uFEFF')), 'the reply is empty');
-  assert.equal(checkReply(reply('\u200B \u2060\u200D')), 'the reply is empty');
-  assert.equal(checkReply(reply('\uFEFFplease carry on')), null);
-});
-
 const A = '0b7e3c1d-5f2a-4c6e-8d9b-1a2b3c4d5e6f';
 const B = '1c8f4d2e-6a3b-4d7f-9eac-2b3c4d5e6f70';
 

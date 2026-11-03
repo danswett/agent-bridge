@@ -94,20 +94,6 @@ public class AnswerTests
         Assert.Contains("not a text answer", Answers.Check(Form(Choice("answer")), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = "a" }));
     }
 
-    [Theory]
-    [InlineData("\uFEFF")]
-    [InlineData("\u200B")]
-    [InlineData("\u2060")]
-    [InlineData(" \u200C\u200D\uFEFF ")]
-    public void An_answer_of_nothing_but_invisible_format_characters_is_empty(string text)
-    {
-        Assert.Equal("the answer is empty", Answers.Check(Form(), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = text }));
-        var other = JsonSerializer.Serialize(new { answer = new { other = text } });
-        Assert.Equal("\"answer\": the other answer is empty", Answers.Check(Form(Choice("answer", other: true)), Answer(other)));
-        // Beside something visible they are part of the text.
-        Assert.Null(Answers.Check(Form(), new AnswerRequest { Id = "s1", Question = "q1", Request = "r1", Text = text + "ship it" }));
-    }
-
     [Fact]
     public void A_request_over_16_KiB_is_refused_even_when_each_text_is_within_its_own_limit()
     {

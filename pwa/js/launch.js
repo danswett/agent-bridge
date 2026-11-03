@@ -3,7 +3,7 @@
 // of a launch's result, and checkLaunch, which is LaunchProtocol.Check case for case, with its
 // wording, so a launch the machine would refuse is never sent.
 import { readAgent } from './protocol.js';
-import { INVISIBLE } from './replies.js';
+import { INVISIBLE } from './answers.js';
 
 export const LAUNCH = Object.freeze({
   capability: 'sessions.launch',

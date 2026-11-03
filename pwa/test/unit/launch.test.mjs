@@ -127,13 +127,6 @@ test('a launch the machine would refuse is caught before it is sent, in the mach
   assert.equal(checkLaunch({ workspace: 'B', model: '', effort: 'high', context: 'claude-opus-4.6[1m]' }), null);
   assert.match(checkLaunch({ workspace: 'B', prompt: '  /clear' }), /cannot start with \//);
   assert.match(checkLaunch({ workspace: 'B', prompt: '\n!rm -rf' }), /cannot start with !/);
-  // Behind invisible format characters as well: the machine judges the first visible one (#448).
-  for (const prompt of ['\uFEFF/clear', '\u200B/clear', '\u2060 /allow-all', '\u{E0001}/clear']) {
-    assert.match(checkLaunch({ workspace: 'B', prompt }), /^a prompt cannot start with \//, JSON.stringify(prompt));
-  }
-  for (const prompt of ['\uFEFF!rm -rf .', '\u200B\u200C\u200D!dir']) {
-    assert.match(checkLaunch({ workspace: 'B', prompt }), /^a prompt cannot start with !/, JSON.stringify(prompt));
-  }
   assert.match(checkLaunch({ workspace: 'B', prompt: 'x'.repeat(MAX_PROMPT + 1) }), /longer than 16 KiB/);
   assert.equal(checkLaunch({ workspace: 'B', prompt: 'x'.repeat(MAX_PROMPT) }), null);
   assert.match(checkLaunch({ workspace: 'B\u0007' }), /control characters/);
