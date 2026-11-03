@@ -6,7 +6,8 @@ using Xunit;
 public sealed class ManagedTmuxTests
 {
     static readonly DateTimeOffset At = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
-    static MacProcessIdentity Identity(int pid, int parent, string image, int seconds = 0) => new(pid, parent, 501, 501, 501, At.AddSeconds(seconds), image);
+    static string Absolute(string path) => Path.GetFullPath(path);
+    static MacProcessIdentity Identity(int pid, int parent, string image, int seconds = 0) => new(pid, parent, 501, 501, 501, At.AddSeconds(seconds), Absolute(image));
 
     sealed class Probe : IMacProcessProbe
     {
@@ -48,8 +49,8 @@ public sealed class ManagedTmuxTests
     static (ManagedTmuxBackend Backend, Commands Commands, Probe Probe, Started Started) StartedBackend()
     {
         var commands = new Commands(); var probe = new Probe();
-        var backend = new ManagedTmuxBackend(commands, probe, _ => "/test/agent");
-        var started = backend.Start(new("/test/agent", [], "/workspace"));
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
+        var started = backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace")));
         return (backend, commands, probe, started);
     }
 
@@ -57,11 +58,11 @@ public sealed class ManagedTmuxTests
     public void Launch_uses_multiple_argv_even_without_agent_arguments_and_snapshot_omits_environment()
     {
         var commands = new Commands(); var probe = new Probe();
-        var backend = new ManagedTmuxBackend(commands, probe, _ => "/test/agent");
-        backend.Start(new("/test/agent", [], "/workspace/#{name}", new Dictionary<string, string> { ["PRIVATE_TOKEN"] = "secret", ["AGENT_BRIDGE_SESSION"] = "not-a-session" }));
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
+        backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace/#{name}"), new Dictionary<string, string> { ["PRIVATE_TOKEN"] = "secret", ["AGENT_BRIDGE_SESSION"] = "not-a-session" }));
         var launch = commands.Calls.Single(c => c[0] == "new-session");
-        Assert.Equal(new[] { "--", "/usr/bin/env", "/test/agent" }, launch[^3..]);
-        Assert.Contains("/workspace/##{name}", launch);
+        Assert.Equal(new[] { "--", "/usr/bin/env", Absolute("/test/agent") }, launch[^3..]);
+        Assert.Contains(Absolute("/workspace/##{name}"), launch);
         Assert.Null(Assert.Single(backend.Snapshot()).BridgeSession);
         Assert.DoesNotContain("secret", Assert.Single(backend.Snapshot()).ToString());
     }
@@ -90,7 +91,7 @@ public sealed class ManagedTmuxTests
         var (backend, commands, probe, started) = StartedBackend();
         using var held = Assert.IsAssignableFrom<IHeldProcess>(backend.Open(300, started.StartedAt).Process);
         if (change == "pid") { probe.Identities[300] = probe.Identities[300] with { StartedAt = At.AddMinutes(1) }; }
-        if (change == "image") { probe.Identities[300] = probe.Identities[300] with { Executable = "/test/replacement" }; }
+        if (change == "image") { probe.Identities[300] = probe.Identities[300] with { Executable = Absolute("/test/replacement") }; }
         if (change == "user") { probe.Identities[300] = probe.Identities[300] with { UserId = 502 }; }
         if (change == "saved-user") { probe.Identities[300] = probe.Identities[300] with { SavedUserId = 0 }; }
         if (change == "server") { probe.Identities[200] = probe.Identities[200] with { StartedAt = At.AddMinutes(1) }; }
@@ -109,7 +110,7 @@ public sealed class ManagedTmuxTests
         Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(301, new([new("hello", false, 0, 0)]))).Status);
         var paste = Assert.Single(commands.Writes);
         Assert.Equal("%1", paste[Array.IndexOf(paste, "-t") + 1]);
-        probe.Identities[301] = probe.Identities[301] with { Executable = "/test/changed" };
+        probe.Identities[301] = probe.Identities[301] with { Executable = Absolute("/test/changed") };
         Assert.NotNull(backend.Refuse(301));
         probe.Identities[302] = Identity(302, 300, "/test/native-agent", -1);
         Assert.NotNull(backend.Refuse(302));
@@ -223,13 +224,13 @@ public sealed class ManagedTmuxTests
     public void Root_and_overridden_home_are_refused_before_a_launch()
     {
         var commands = new Commands(); var probe = new Probe { UserId = 0 };
-        var backend = new ManagedTmuxBackend(commands, probe, _ => "/test/agent");
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
         Assert.NotNull(backend.Unavailable());
         probe.UserId = 501;
         probe.Identities[Environment.ProcessId] = probe.Identities[Environment.ProcessId] with { UserId = 0 };
         Assert.NotNull(backend.Unavailable());
         probe.Identities[Environment.ProcessId] = probe.Identities[Environment.ProcessId] with { UserId = 501 };
-        Assert.Null(backend.CommandLine(new("/test/agent", [], "/workspace", new Dictionary<string, string> { ["HOME"] = "/other" }), out var reason));
+        Assert.Null(backend.CommandLine(new(Absolute("/test/agent"), [], Absolute("/workspace"), new Dictionary<string, string> { ["HOME"] = "/other" }), out var reason));
         Assert.NotNull(reason);
         Assert.Empty(commands.Calls);
     }
@@ -240,8 +241,8 @@ public sealed class ManagedTmuxTests
         var commands = new Commands(); var probe = new Probe();
         var kernelTime = DateTimeOffset.FromUnixTimeSeconds(1793669689).AddTicks(941950);
         probe.Identities[300] = probe.Identities[300] with { StartedAt = kernelTime };
-        var backend = new ManagedTmuxBackend(commands, probe, _ => "/test/agent");
-        var started = backend.Start(new("/test/agent", [], "/workspace"));
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
+        var started = backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace")));
         var identity = probe.Identities[300];
         Assert.NotEqual(identity.StartedAt, identity.ProcessStartTime);
         Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(1793669689 + 94195 / 1_000_000d), started.StartedAt);
@@ -252,5 +253,21 @@ public sealed class ManagedTmuxTests
         Assert.NotNull(managed.Terminate());
         Assert.NotNull(native.Terminate());
         Assert.Empty(commands.Writes);
+    }
+
+    [Theory]
+    [InlineData("host")]
+    [InlineData("agent")]
+    [InlineData("workspace")]
+    public void Relative_paths_still_refuse_the_injected_backend_before_any_launch(string target)
+    {
+        var commands = new Commands(); var probe = new Probe();
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
+        Assert.Null(backend.Unavailable());
+        if (target == "host") { probe.Identities[Environment.ProcessId] = probe.Identities[Environment.ProcessId] with { Executable = "relative-host" }; }
+        Assert.Null(backend.CommandLine(new(target == "agent" ? "relative-agent" : Absolute("/test/agent"), [],
+            target == "workspace" ? "relative-workspace" : Absolute("/workspace")), out var reason));
+        Assert.NotNull(reason);
+        Assert.Empty(commands.Calls);
     }
 }

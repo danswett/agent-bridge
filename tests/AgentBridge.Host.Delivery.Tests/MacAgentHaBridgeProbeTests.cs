@@ -11,6 +11,7 @@ public sealed class MacG5GenerationCollection { }
 [Collection("Mac G5 generation")]
 public sealed class MacAgentHaBridgeProbeTests
 {
+    static string Absolute(string path) => Path.GetFullPath(path);
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -75,7 +76,7 @@ public sealed class MacAgentHaBridgeProbeTests
         public Func<int[]?, int>? List { get; set; }
         public Func<int, MacDaemonOwnerRead> Owner { get; set; } = pid => new(new(pid, 501, 501, 501));
         public Func<int, MacDaemonGenerationRead> Generation { get; set; } = _ => new(new(100, 2));
-        public Func<int, string?> Path { get; set; } = _ => "/usr/bin/ordinary-process";
+        public Func<int, string?> Path { get; set; } = _ => Absolute("/usr/bin/ordinary-process");
         public int ListPids(int[]? buffer)
         {
             Capacities.Add(buffer?.Length ?? 0);
@@ -212,7 +213,7 @@ public sealed class MacAgentHaBridgeProbeTests
     [InlineData("/opt/homebrew/bin/pwsh", false)]
     public void A_stable_mixed_UID_process_is_classified_by_its_kernel_executable_not_a_full_BSD_query(string path, bool clear)
     {
-        var native = new Native { Owner = pid => new(new(pid, 0, 501, 0)), Path = _ => path };
+        var native = new Native { Owner = pid => new(new(pid, 0, 501, 0)), Path = _ => Absolute(path) };
         var scan = MacAgentHaBridgeProbe.Observe(native);
         Assert.True(scan.Complete);
         Assert.Equal(clear, new MacAgentHaBridgeProbe(() => scan).Active() is null);
@@ -229,7 +230,15 @@ public sealed class MacAgentHaBridgeProbeTests
     public void Missing_invalid_or_changed_paths_never_prove_a_complete_scan(string? after)
     {
         var calls = 0;
-        var native = new Native { Path = _ => ++calls == 1 ? "/usr/bin/ordinary" : after };
+        var first = Absolute("/usr/bin/ordinary");
+        var second = after switch
+        {
+            "/" => Path.GetPathRoot(first),
+            "/usr/bin/ordinary\0hidden" => first + "\0hidden",
+            "/usr/bin/changed" => Absolute(after),
+            _ => after,
+        };
+        var native = new Native { Path = _ => ++calls == 1 ? first : second };
         Assert.False(MacAgentHaBridgeProbe.Observe(native).Complete);
     }
 
@@ -341,7 +350,7 @@ public sealed class MacAgentHaBridgeProbeTests
     [InlineData("/somewhere/PowerShell")]
     public void A_complete_raw_scan_identifies_the_current_users_PowerShell_runtime(string path)
     {
-        var native = new Native { Path = _ => path };
+        var native = new Native { Path = _ => Absolute(path) };
         var scan = MacAgentHaBridgeProbe.Observe(native);
         Assert.True(scan.Complete);
         Assert.Equal(123, Assert.Single(scan.Processes).ProcessId);
@@ -354,11 +363,11 @@ public sealed class MacAgentHaBridgeProbeTests
         var native = new Native
         {
             Pids = [100, 101, 102, 103, 104, 105],
-            Path = pid => pid switch
+            Path = pid => Absolute(pid switch
             {
                 100 => "/test/codex", 101 => "/test/node", 102 => "/test/bun", 103 => "/test/codex.exe",
                 104 => "/test/codex-app-server", _ => "/test/pwsh",
-            },
+            }),
         };
         Assert.Equal(new[] { 100, 101, 102, 103, 104 }, ManagedSessionProcessInspector.NativeCandidates(native));
         Assert.Equal(105, Assert.Single(MacAgentHaBridgeProbe.Observe(native).Processes).ProcessId);

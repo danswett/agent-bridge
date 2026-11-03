@@ -5,7 +5,8 @@ public sealed class MacFileHolderTests
 {
     static readonly MacFileIdentity Target = new(1, 123, 0, 0x8180);
     static readonly MacFileIdentity Other = new(1, 124, 0, 0x8180);
-    static MacProcessIdentity Identity(int pid) => new(pid, 1, 501, 501, 501, Fixture.T0, "/test/codex");
+    static readonly string LockPath = Path.GetFullPath("/test/lock");
+    static MacProcessIdentity Identity(int pid) => new(pid, 1, 501, 501, 501, Fixture.T0, Path.GetFullPath("/test/codex"));
 
     sealed class Probe : IMacDescriptorProbe
     {
@@ -23,9 +24,9 @@ public sealed class MacFileHolderTests
     public void Complete_native_lists_distinguish_a_holder_from_a_readable_external_process()
     {
         var probe = new Probe();
-        Assert.Equal(new[] { 101 }, MacFileHolders.Find("/test/lock", [101, 102], probe));
+        Assert.Equal(new[] { 101 }, MacFileHolders.Find(LockPath, [101, 102], probe));
         probe.ReadVnode = (_, _) => Target;
-        Assert.Equal(new[] { 101, 102 }, MacFileHolders.Find("/test/lock", [101, 102], probe));
+        Assert.Equal(new[] { 101, 102 }, MacFileHolders.Find(LockPath, [101, 102], probe));
     }
 
     [Theory]
@@ -52,7 +53,7 @@ public sealed class MacFileHolderTests
                 _ => Enumerable.Range(0, MacFileHolders.MaxDescriptors + 1).Select(i => new MacDescriptor(i, 2)).ToArray(),
             };
         }
-        Assert.Empty(MacFileHolders.Find("/test/lock", [101, 102], probe));
+        Assert.Empty(MacFileHolders.Find(LockPath, [101, 102], probe));
     }
 
     [Theory]
@@ -68,17 +69,17 @@ public sealed class MacFileHolderTests
         if (change == "fd-list") { probe.ReadDescriptors = _ => reads++ == 0 ? [new(3, 1)] : [new(3, 1), new(4, 2)]; }
         if (change == "fd-reuse") { probe.ReadVnode = (_, _) => reads++ == 0 ? Target : Other; }
         if (change == "target") { probe.ReadFile = _ => reads++ == 0 ? Target : Other; }
-        Assert.Empty(MacFileHolders.Find("/test/lock", [101], probe));
+        Assert.Empty(MacFileHolders.Find(LockPath, [101], probe));
     }
 
     [Fact]
     public void Symlinks_and_exhausted_traversal_budgets_do_not_produce_holders()
     {
         var probe = new Probe { ReadFile = _ => Target with { Mode = 0xa180 } };
-        Assert.Empty(MacFileHolders.Find("/test/link", [101], probe));
+        Assert.Empty(MacFileHolders.Find(Path.GetFullPath("/test/link"), [101], probe));
         probe.ReadFile = _ => Target;
         var calls = 0;
-        Assert.Empty(MacFileHolders.Find("/test/lock", [101], probe, () => ++calls < 4));
-        Assert.Empty(MacFileHolders.Find("/test/lock", [101, 101], probe));
+        Assert.Empty(MacFileHolders.Find(LockPath, [101], probe, () => ++calls < 4));
+        Assert.Empty(MacFileHolders.Find(LockPath, [101, 101], probe));
     }
 }
