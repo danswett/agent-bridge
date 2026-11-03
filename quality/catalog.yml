@@ -385,7 +385,9 @@ suites:
     select: affected
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
     runner: local
-    triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**]
+    # Every file generate.mjs writes, since --check compares each one with design/ (it isn't
+    # only design/ changing that can make them disagree).
+    triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**, src/AgentBridge.App.Core/DesignLayout.cs, pwa/index.html, pwa/manifest.webmanifest]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
     where: ci.yml design
     status: exists
@@ -424,7 +426,10 @@ suites:
     select: affected
     platforms: [browser]
     runner: hosted
-    triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**]
+    # The dev stack links files from other spikes into S4.Protocol and S4.Relay: S2's Noise (C#
+    # and the browser's), and S6's device keys. The spikes aren't in AgentBridge.slnx, so the
+    # project graph can't see those links; they're named here.
+    triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**, spikes/s2-noise-interop/dotnet/Noise.cs, spikes/s2-noise-interop/web/noise-p256.js, spikes/s6-tpm-keys/src/DeviceKeys.cs]
     command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
     where: ci.yml pwa
     status: exists
