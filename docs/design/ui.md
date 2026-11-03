@@ -9,7 +9,9 @@ iOS and Android apps.
 
 *Status: proposed by the design session on 2026-11-01 and signed off by the owner the
 same day (status.md §5). Two light-theme tokens are corrected for contrast in #183. Motion
-(§5.3) was added in #232 and signed off by the owner on 2026-11-02.* The
+(§5.3) was added in #232 and signed off by the owner on 2026-11-02. Attention (one row and one
+question, #253) replaced the Needs you lane with a filter, signed off by the owner on
+2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench".
 Every board is also rendered in [mockups/](mockups/README.md), and its source is in
 [`/design/canvas`](../../design/canvas/README.md). This page is the spec, and it is complete
@@ -21,8 +23,9 @@ without them: where they disagree, this page wins and the mock-ups get fixed.
    client: status glyphs, status colours, icons, the mark, and the session → main agent →
    delegate hierarchy. How things are *built* belongs to each platform: window chrome,
    navigation pattern, controls, materials, type family, motion and gestures.
-2. **Order is yours.** Rows never move on their own. Only a question floats, into Needs
-   you, and its row stays where it is (#164, #165).
+2. **Order is yours.** Rows never move on their own, not even for a question: its row shows
+   it in place, and Needs you · N narrows the list to the rows waiting on you (#164, #253).
+   A question's words are drawn once, in the conversation.
 3. **One voice per line.** The conversation shows the main agent only. Every delegate's
    words live on that delegate's own row or panel, and name who wrote them (#84).
 4. **Panes, not expanding cards.** A list of one- or two-line rows, and detail in a pane or
@@ -342,21 +345,21 @@ easing in, its duration out, and how far it travels.
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
 | Disclosure | Show reasoning, Tool history, a delegate's details, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
-| Arriving and leaving | A session row, a Needs you entry, a delegate in the strip | A host adds or removes it; a question is asked or answered | The item fades in where it lands. Leaving, it fades out, then its space closes at once. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: transitions, with `@starting-style` where supported. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
+| Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, it fades out, then its space closes at once. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: transitions, with `@starting-style` where supported. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
 | Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
 | Selection | The list's 3×16 Bridge pill; the rail's pill | Choosing a row or a destination | The pill slides from the old row to the new one when both are on screen, and fades in when the old one isn't. The row's fill changes at once | `selection`: standard, standard | Windows: `NavigationView`'s own pill on the rail, and the same motion on the list. Apple: the system's selection | Instant |
 | Press | Every button, and every row | Pointer or touch down, and release | The pressed fill shows at once on press, and eases back on release. Nothing scales | `press`: fast, standard | Windows: the controls' own visual states. PWA: a transition on the background. Apple: the system button styles. Android: the ripple | Instant |
-| Send and Answer | The reply box; a question card; Approve once and Deny in Needs you | Send, Answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
+| Send and Answer | The reply box; a question card | Send, Answer, Approve once, Deny | Your message shows at once as your bubble, rising 12 as it fades in. An answer's outcome fades in on the card. While the request is in flight, the button shows the platform's progress ring, which stops with the request. Nothing waits for the motion to finish | `acknowledge`: standard, decelerate; small | Windows: `ProgressRing`. PWA: the answer's ring. Apple: `ProgressView`. Android: `CircularProgressIndicator` | Cross-fade; the ring is still |
 | Toast and banner | In-app toasts; banners such as a host going offline | The event it reports | It slides 12 in from its edge and fades in, then leaves the same way, quicker | `toast`: standard, decelerate; fast out; small | Windows: `InfoBar` with the tokens. System notifications are each OS's own | Cross-fade |
 | Sheet | The delegate sheet on iOS (§6.3), and any phone sheet | Opening a delegate; dragging between detents; dismissing | The sheet rises from the bottom edge and the scrim fades in. While dragged it follows the finger with no easing, and on release it settles at the nearest detent | `sheet`: emphasis, decelerate; standard out | iOS: `.sheet` with `.presentationDetents([.medium, .large])` and the system's spring. Android: `ModalBottomSheet`. PWA: the tokens on transform | Cross-fade at the detent. A drag still follows the finger |
 | Menu and flyout | The row menu, Sort, the overflow menu, flyouts | A click, a long press, Shift+F10 or the menu key | It fades in and settles 4 from its anchor. Choosing an item acts at once, and the menu fades out | `menu`: fast, decelerate; fast out; nudge | Windows: `MenuFlyout`'s own. PWA: the tokens, on a popover where supported. Apple and Android: the system menus | Instant |
-| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray or a Needs you entry opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through, or is touching | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`. PWA: `scrollIntoView` with smooth behaviour, at the browser's pace. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
+| Scroll to a question | The open session's conversation, and the list when a notification opens a session | A question arrives while the person is at the end of the conversation; a toast, the tray, the menu bar or a waiting row opens a session | The view scrolls smoothly to the question or the row. It never scrolls a conversation the person has scrolled back through, or is touching | `scroll`: emphasis, standard | Windows: `StartBringIntoView` with `AnimationDesired`. PWA: `scrollIntoView` with smooth behaviour, at the browser's pace. Apple: `ScrollViewReader`. Android: `animateScrollToItem` | Instant: a jump |
 | Reorder | The session list (#164) | Alt+↑/↓; Move up or Move down; a drag by the handle | By key or menu, the moved row slides to its new place, and the row it passed takes its own new place at once. In a drag, the row follows the pointer, a line shows where it will land, and on drop it settles into place. No other row moves | `reorder`: standard, standard | Windows: no `ReorderThemeTransition`, which slides the neighbours. Apple and Android, later: the system list's drag, whose gap follows the finger | Instant |
 
 **Not in the design:**
 - **Loops** other than the two glyphs and an in-flight progress ring: no pulsing dot, badge
-  or Needs you entry, no shimmer, no animated placeholder.
+  or Needs you toggle, no shimmer, no animated placeholder.
 - **Parallax, bounce and overshoot,** on content or on controls. Every curve stays within
   0–1, and every spring has a damping fraction of 1.
 - **Motion on data updates:**
@@ -398,28 +401,34 @@ that a control can be used while it moves.
 
 Sections, top to bottom:
 
-1. **Needs you · N** (#165): one entry per pending question across machines, oldest first.
-   - Each entry shows: the session title, the question's first line or the approval's
-     action, and its age; the machine (once more than one is shown) and the agent; and for
-     a delegate's question, "Delegate *name* asks" (§2.2 rule 2).
-   - Approvals (`kind: approval`, not `answerAtMachine`) can be answered inline: "Approve
-     once" (Bridge) and "Deny" (secondary). They are the card's own buttons: the same
-     request, progress and outcomes. The action is the whole prompt, drawn as the card
-     draws it, exactly as written (§6.4), since Approve once allows all of it; one too long to show
-     whole (an edit's diff, a long command), with a table, not shaped as a host writes a
-     permission (prose, then at most one fenced block ending it, its fence naming no
-     language but json or diff, no link, whose words hide where it goes, and no character
-     drawn other than where it runs: bidi controls, zero-width and other format characters,
-     variation selectors and other default-ignorable code points,
-     controls but newline and tab, private-use or unassigned code points, U+2028/2029, or
-     right-to-left letters, which reorder what is drawn around them), or from an agent whose prompt can reach the host cut short
-     (Codex, today; only Copilot's are whole and literal) opens the session instead.
-   - Forms open the session. `answerAtMachine` entries say so and have no controls.
-   - The lane references sessions; it never moves their rows.
-   - Its count is the app's badge: the Windows app's tray and Sessions badge, and the PWA's
-     app badge where the browser has one.
+1. **Needs you · N** (#165, #253): a toggle, not a lane. It is the list's first item, under the
+   machine tabs, shown while any question waits or while it is pressed.
+   - **N** counts pending questions on every machine connected, whatever the machine tabs show.
+     It is the app's badge (§7): the Windows app's tray and Sessions badge, the PWA's app badge
+     where the browser has one, and on Apple the Dock badge, the menu bar extra and the icon
+     badge.
    - A question on a machine that is away, or back but not yet confirmed by its next full list,
-     is in neither the lane nor the count, nor raised as a notification (#269).
+     is neither counted in N nor shown by the filter, nor raised as a notification (#269).
+   - **Look:** the `needs` glyph (`idle` at none), then "Needs you · N". It is a control, so it
+     takes the platform's button styling and never a status colour. Pressed, it has the
+     selection's look (the quiet fill, the 3×16 Bridge pill, semibold words) and, at its
+     trailing edge, "Showing N of M", or "N on *machine*" with a machine chosen. It is 36 px tall
+     on a desktop and 44 on a phone.
+   - **Pressed:** the list shows only the rows waiting on you, in Pinned and Sessions, in their
+     own order and under the Sort menu's choice. Groups with none, and Ended, are hidden.
+     - Nothing moves. A row answered while the filter is on stays where it is, with its new
+       glyph and words, until the filter is turned off. A question arriving adds its row where
+       that row lives.
+     - With a machine chosen, it narrows that machine's rows. When others wait elsewhere, the
+       list ends with one secondary button, "N more on other machines", which chooses All.
+     - With nothing left waiting it reads "Needs you · 0", keeps the rows already shown, and
+       says "Nothing else needs you" under them.
+   - **Not kept:** the filter starts off each time the client starts.
+   - **It draws no question's words and offers no answer.** Choosing a waiting row, filtered or
+     not, opens its session at its question (§6.4). A click, a tap or Enter puts keyboard focus
+     on the question's heading. Arrow keys only move the selection.
+   - **Several questions in a session** (if a host ever sends them; protocol v1 has one): one
+     row, whose status reads "N questions waiting", and N counts each question.
 2. **Pinned.**
 3. **Sessions,** in your order (#164).
 4. **Ended · N,** collapsed.
@@ -469,7 +478,8 @@ client's own relay link is up on the same account:
   LaunchView.xaml.cs · ULTRA" or "Driven by an agent · ULTRA" (in agent colour).
 - **Trailing:** the age (tabular), when there's no unread dot.
 - **Never on a row:** the model, the repo SHA, turn and compaction counts, or the pid.
-  Those live in session details.
+  Those live in session details. Nor a question's words: a waiting row says only its status
+  ("Waiting on you", "Delegate *name* asks"), and the question is in the conversation (#253).
 - **Line 2 is one line,** cut short at its end; the title is too. Every fact is still in the
   session's header or Details, and the row reads in full to a screen reader (§9).
 
@@ -505,6 +515,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
   mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
   conversation's place until pressed again. Delegates (#176) join the inspector and the tabs.
+- **An `ask_user` call in Tools** (#253) is one line without its summary. While its question
+  (Question `id` is the call's id) waits, it reads "Waiting on you", a link to the question.
+  After, it reads the call's reported status ("Done", "Failed"), since a call can end without
+  an answer. "Answered" is said only for an answer this device sent and the host confirmed. The
+  words link to the question while the conversation keeps it (§6.4). "Show summary" in the row's
+  menu discloses the `summary` the host sent (at most 200 bytes; the protocol sends no
+  arguments), for diagnosis, closed by default. The call an approval holds keeps its summary: it
+  is the action, not the question.
 
 ### 6.3 Delegates (#84)
 
@@ -517,7 +535,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Android and the PWA open the delegate in place or as a pushed screen.
 - **Inspector:**
   - the delegate's name and glyph;
-  - a property list: Status, Model, Kind (background or task), ID (mono);
+  - a property list: Status, Model, Kind (background or task), ID (mono). A delegate that asks
+    has Status "Asks you", a link to its question (with "· answer at the machine" when so),
+    and never the question itself (#253);
   - Task (the prompt it was given), Latest (its latest output), and Reasoning (collapsed);
   - Tools: mono, glyph per call, tabular duration;
   - nested delegates, listed under their parent.
@@ -545,7 +565,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   (design/subagents.md §6, #263), which is shown as it is rather than quoted twice. No such
   list is complete, so it is not the guard:
   every line that says who asks or works puts the word "Delegate" before the label ("Delegate
-  *name* asks" in the status line, the question's heading and Needs you; "Working · task:
+  *name* asks" in the status line, the row and the question's heading; "Working · task:
   Delegate *name*"), as the conversation's events do, and the main agent's own lines never
   have it. The inspector's heading has a
   fixed "Delegate" overline above the name, and the pre-filled reply names the delegate by its
@@ -569,11 +589,36 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Delegate events:** one line each, meta style, with an icon: "Started 3 delegates ·
   26m", "Delegate *Read witness shell logic* reported back · 22m". The name links to the
   delegate, and the word "Delegate" stays outside the link.
-- **Questions:** in the stream, as a card in Needs you colours. The header reads "Main agent
-  asks" or "Delegate *name* asks", followed by the question and the platform's own radio,
-  checkbox and text controls, with Answer in Bridge.
+- **Questions** (#253): in the stream, as a card in Needs you colours. It is the one place a
+  question's words are drawn, and the one place in the app it is answered. The header reads
+  "Main agent asks" or "Delegate *name* asks". Then come the question and the platform's own
+  radio, checkbox and text controls, with Answer in Bridge, or Approve once (Bridge) and Deny.
+  - **One card per question id:** an update to the same question changes its card in place,
+    and never adds a second.
+  - **An approval is drawn as it runs,** since Approve once allows all of it: exactly as
+    written, in the code face, never read as Markdown, with its hidden characters,
+    right-to-left letters and bare carriage returns escaped and the code notes beside it, and
+    no Copy ("An approval's card", below, #220). Approve once stays offered whatever it holds,
+    the owner's "escape and allow" (#253). It wraps and is never cut, so a long command or a
+    diff keeps Approve once.
+  - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
+    colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
+    (`truncated`) can't be answered from here either, as before. Leaving the session is never
+    an answer: the row keeps its glyph until the host clears the question.
+  - **Resolved:** the card quietens, with no Needs you fill, and reads "Main agent asked"
+    (or "Delegate *name* asked") over the question as it was shown. Below that:
+    - with this device's answer record for the question, the record's progress and outcome as
+      the card shows them: "You answered *value*" once confirmed; "Sent, but not confirmed.
+      Check at the machine" for `unconfirmed`; refused, failed and stale as they are;
+    - with no record (answered elsewhere, or the call ended without an answer), "No longer
+      waiting", since the protocol doesn't say what was answered elsewhere.
+  - **History:** a resolved question stays as a read-only item where it was asked, across later
+    turns: the latest 20 per session, for as long as the client runs, none across a restart.
+  - **Several at once** (if a host ever sends them): one card each, in the order asked, with
+    "1 of N" in the heading.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
-  tool's name and arguments in mono).
+  tool's name and arguments in mono). Not while the session waits on a question: the card says
+  what is happening.
 - **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
   scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
   "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
@@ -591,8 +636,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   character still acts: PowerShell ends a `#` comment at a bare CR, so `# just a note\u000D Write-Output RAN`
   drawn on one line still reads as a comment, and runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
   line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
-  still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
-  this since #296; the PWA follows in #415.
+  offers no answer (§6.1): an approval is approved on its card, below. The Windows app does
+  this since #296, and the PWA since #429 (#415).
 - **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
   markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
   left to right with its line breaks kept, and escaped as every code block is (hidden characters,
@@ -639,6 +684,23 @@ machine, online ones first, then the account's offline machines (#213):
 
 ## 7. Platform shells
 
+**Notifications, on every client (#253):** a question still pending after 2 s is notified
+once, and an answer anywhere clears its notification (`docs/protocol/v1-sessions.md`,
+Notifications): the Windows app withdraws its toast, while Web Push replaces it in place with a
+silent "no longer waiting" notice, or the finished turn's, since every push must show a
+notification or iOS revokes the permission (`pwa/sw.js`). Opening one opens the session at its
+question, as choosing its row does.
+- **An approval's notification only opens its question** (#253 decision 7, #372). It never
+  offers Approve once or Deny: the OS draws its body as plain text and cuts it short, so it
+  can show neither the whole command nor the escapes and notes that hidden, bidi and
+  right-to-left characters get on its card (§6.4, #165, #220). Windows toasts, Web Push and the
+  Apple notifications (#260) follow this, and a button on a toast an older build left in
+  Notification Center only opens.
+- **Other questions keep their buttons** where the platform has them and they fit: the options
+  of a single choice, or a text box and Send. Each still checks, before sending, that the
+  question is the one shown.
+- The count each platform shows is Needs you's N (§6.1).
+
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
   and a centred search box. System caption buttons.
@@ -649,25 +711,36 @@ machine, online ones first, then the account's offline machines (#213):
   Settings at the foot) with a selection pill.
 - **Content:** a layer with an 8 px top-left radius.
 - **Controls:** ListView rows with a 3×16 Bridge pill on selection, SelectorBar for
-  machines, an Accent button for New, subtle icon buttons for header actions.
+  machines, an Accent button for New, subtle icon buttons for header actions, and a
+  `ToggleButton` for Needs you · N.
+- **Tray and toasts:** the tray's tooltip and the rail's Sessions badge carry N ("Agent
+  Bridge · 3 need you"). A question's toast follows the rules above: an approval's toast has
+  Open only.
 
-**macOS (SwiftUI, later):**
-- **Sidebar:** a translucent source list (Needs You, Pinned, Sessions, Machines), 28 px
-  rows, and a Bridge fill on the selected row.
+**macOS (SwiftUI, #260):**
+- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,
+  Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
+  the same toggle.
+- **Menu bar:** an extra whose label is N. Its menu names the waiting sessions (machine and
+  title, oldest first, at most 8) and Open Agent Bridge. An item opens its session at the
+  question. The menu never shows a question's words or answers one.
+- **Dock:** the badge is N.
 - **Toolbar:** unified, with title and subtitle, search, and icon buttons.
 - **Inspector:** a property grid with right-aligned labels.
 - **Keyboard:** ⌘↩ sends.
 
-**iOS (SwiftUI, later):**
+**iOS (SwiftUI, #260):**
 - **Sessions:** large title with the filter and New buttons on the title row (no empty
-  nav-bar row above it), a search field, and inset grouped sections.
+  nav-bar row above it), a search field, and inset grouped sections. The filter menu's first
+  item is Needs you · N, and the filter button shows N while anything waits.
 - **Session:** a back button, a 28/34 title, the conversation, and delegates in a sheet.
 - **Navigation:** a tab bar (Sessions, Machines, Usage, Settings).
 - **Gestures:** swipe actions on rows (Pin, Ask main agent to stop).
+- **Badge:** the app icon's badge is N.
 
 **Android (Compose, later):**
-- **Sessions:** a Material 3 search bar, filter chips, list items, an extended "New
-  session" FAB, and a navigation bar.
+- **Sessions:** a Material 3 search bar, filter chips (Needs you · N first), list items, an
+  extended "New session" FAB, and a navigation bar.
 - **Session:** a top app bar, assist chips for delegates, and the composer on
   `surfaceContainer`.
 
@@ -719,13 +792,6 @@ machine, online ones first, then the account's offline machines (#213):
     window narrows to a phone's with one open. Forward to it shows the delegate again, opening
     the finished fold if it has finished meanwhile.
 
-**Notifications (every platform, #253 decision 7, #372):** a notification for an approval
-only opens its question; it never offers Approve once or Deny. The OS draws its body as plain
-text and cuts it short, so it can show neither the whole command nor the escapes and refusals
-that hidden, bidi and right-to-left characters get in the app (#165, #220). Other questions
-keep their buttons where they fit. Windows toasts, Web Push and the Apple notifications (#260)
-follow this, and a button on a toast an older build left in Notification Center only opens.
-
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
 swaps an app icon with the theme, so the mark is always Bridge's dark value. The sizes are in
@@ -760,6 +826,13 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     follows the word "Delegate", which the main agent's own lines never have.
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
+- **Attention words (#253):** "Needs you · N", "Showing N of M", "N on *machine*", "N more on
+  other machines", "Nothing else needs you"; on a question, "Main agent asked", "You
+  answered", "No longer waiting" and "Answer at the machine"; in Tools and the delegate
+  inspector, "Waiting on you" and "Asks you". "Answered" only for an answer this device sent
+  and the host confirmed.
+- **A question's words** appear in the conversation only, never on a row, in Needs you, in
+  Tools, in the inspector or in a menu.
 - **Numbers before nouns:** "3 delegates", "1 background command".
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
@@ -792,7 +865,21 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
   else: no shortcut hint opens because the window was activated, a click landed or Ctrl+K was
-  pressed (#256).
+  pressed (#256). Needs you · N is a toggle in the tab order after the machine tabs and before
+  the list. Space or Enter toggles it, and Enter on a waiting row puts focus on its question's
+  heading.
+- **Needs you (#253):**
+  - The toggle reports its pressed state, and is named for its count and scope: "Needs you, 3
+    on every machine", or "Needs you, 1 on ULTRA, 3 on every machine" with a machine chosen.
+  - A change in N is announced once, politely ("3 need you"), at most every 5 s, and not while
+    the person types in the reply box.
+  - The question's heading (level 3) is where focus lands, and its accessible description is
+    the question's first line. Approve once and Deny are named for their session and machine
+    ("Approve once: *title* on *machine*").
+  - In high contrast, the toggle takes the system's button colours (ButtonFace and ButtonText,
+    and Highlight and HighlightText when pressed). The `needs` glyph is Highlight with
+    HighlightText ink, swapped on the pressed toggle's Highlight fill so its disc still shows.
+    The Tools link is a system hyperlink.
 
 ## 10. Mock-up index
 
@@ -802,10 +889,14 @@ canvas, each platform board has a light/dark switch.
 | Board | Shows |
 |---|---|
 | Design language | Principles, glyphs, colour roles, icons, app icon, hierarchy, typography, layout |
-| Windows · dark / light | Three panes, delegating session, inspector on |
-| macOS · light / dark | Sidebar, token row, inspector |
+| Windows · dark / light | Three panes, delegating session, inspector on; Needs you · N over the list |
+| macOS · light / dark | Sidebar with the Needs You · N item, token row, inspector |
 | PWA desktop · dark / light | The Windows board with the web app bar |
-| iOS Sessions / Session · dark / light | List with Needs you; session with the delegate sheet |
-| Android Sessions / Session · light / dark | List with FAB; a session waiting on you while delegates run |
+| iOS Sessions / Session · dark / light | List with the Needs you filter; session with the delegate sheet |
+| Android Sessions / Session · light / dark | List with the Needs you chip and FAB; a session waiting on you while delegates run |
 | PWA phone / phone session · dark / light | Windows-styled phone list and session |
 | Status rules | The table in §2.2, drawn |
+
+The states #253 added (the toggle's states, rows, the question card's forms, Tools and the
+delegate inspector) are drawn on the Proposal #253 boards, which stay on the canvas as their
+reference ([proposals/253-attention/](proposals/253-attention/)).
