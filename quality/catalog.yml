@@ -1,7 +1,8 @@
 # The test catalog: every suite this repository runs, or plans to run, and where it runs.
 # quality/README.md explains the rings and the fields. This file is the source of truth for
-# test selection (quality/README.md §4); once the selector lands, a CI check fails when a test
-# project, spec folder or workflow job is not listed here, so the catalog cannot silently rot.
+# test selection (quality/README.md §4): CI's plan job reads it to choose which jobs run, and fails
+# when a test project, spec folder or workflow job is not listed here, so the catalog cannot
+# silently rot.
 #
 # Fields (R: required on every suite; otherwise optional):
 #   id         R  stable name, used by the selector, reports and issues
@@ -22,7 +23,9 @@
 #   command       how to run it; required once status is exists. Prose ("see ci.yml ...") marks
 #                 a suite only CI can run
 #   where         the workflow job that runs it today; required once status is exists, unless a
-#                 person runs it (runner lab, staging or device, with a command saying how)
+#                 person runs it (runner lab, staging or device, with a command saying how). In
+#                 ci.yml it also gates the job: on a pull request, a job runs only when a selected
+#                 suite names it here
 #   baseline      measured 2026-11-02 (win-x64, local, Release); any of: tests, skipped, seconds,
 #                 files (for suites counted by spec file rather than test)
 #   security_sensitive
@@ -203,6 +206,20 @@ suites:
     where: ci.yml product
     status: exists
 
+  - id: catalog-check
+    kind: static
+    ring: 1
+    select: always
+    # CI's plan job: this catalog is complete (every test project, workflow job and PWA test
+    # folder is in it, and every tracked file is claimed by a rule), then the selection that
+    # gates every other ci.yml job. quality-gate is the one check that sums them up. It runs on
+    # every pull request, docs-only ones too, since nothing else would run without it.
+    platforms: [linux-x64]
+    runner: hosted
+    command: dotnet run --project tools/AgentBridge.Quality -c Release -- check
+    where: ci.yml plan, quality-gate
+    status: exists
+
   - id: mac-host
     kind: component
     ring: 1
@@ -352,11 +369,14 @@ suites:
     select: affected
     # The only suite a docs-only change selects: relative links and anchors in Markdown resolve,
     # so a renamed doc or heading can't strand AGENTS.md, status.md or the catalog's references.
+    # Offline: web links are not fetched, so a site being down never fails a PR. Advisory for
+    # now: findings are warnings on the run, and the job stays green.
     platforms: [linux-x64]
     runner: hosted
     triggers: ['**/*.md']
-    command: lychee --offline --include-fragments '**/*.md'
-    status: planned
+    command: lychee --offline --include-fragments --no-progress '**/*.md'
+    where: ci.yml docs-links
+    status: exists
 
   # ---------------------------------------------------------------- PWA and design
   - id: design-gen
