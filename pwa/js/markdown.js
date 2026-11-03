@@ -334,6 +334,14 @@ export function parseInline(text, depth = 0) {
   // Delimiters known to have no closer from here on: cached so a long run of unmatched
   // "*" or "[" stays linear rather than rescanning the rest of the text each time.
   const noCloser = new Set();
+  // The first blank line from an emphasis opener on, found once and kept: openers only move forward.
+  // Searched from each opener, it read the rest of the text again every time, since a paragraph's
+  // text holds none, and closed emphasis grew quadratic (#482).
+  let blank = null;
+  const blankFrom = (from) => {
+    if (blank === null || (blank !== -1 && blank < from)) { blank = text.indexOf('\n\n', from); }
+    return blank;
+  };
   let links = null;
   const n = text.length;
   let i = 0;
@@ -391,7 +399,7 @@ export function parseInline(text, depth = 0) {
     }
 
     if ((c === '*' || c === '_' || c === '~') && depth < MAX_DEPTH) {
-      const span = parseEmphasis(text, i, noCloser);
+      const span = parseEmphasis(text, i, noCloser, blankFrom);
       if (span) {
         push(el(span.tag, parseInline(span.inner, depth + 1)));
         i = span.end;
@@ -502,7 +510,7 @@ function linkTail(text, p) {
   return { title, end: p + 1 };
 }
 
-function parseEmphasis(text, i, noCloser) {
+function parseEmphasis(text, i, noCloser, blankFrom) {
   const c = text[i];
   let run = 1;
   while (text[i + run] === c) { run++; }
@@ -516,9 +524,9 @@ function parseEmphasis(text, i, noCloser) {
   if (c === '_' && i > 0 && WORD.test(text[i - 1])) { return null; }
   if (noCloser.has(delim)) { return null; }
   let from = i + len;
-  // Where the span would cross a blank line, found once: reading each candidate's inner text for it
-  // was quadratic, as "_x" repeated offers a closer at every "_" and the word after refuses each one.
-  const blank = text.indexOf('\n\n', i + len);
+  // Where the span would cross a blank line: reading each candidate's inner text for it was
+  // quadratic, as "_x" repeated offers a closer at every "_" and the word after refuses each one.
+  const blank = blankFrom(i + len);
   for (;;) {
     const close = text.indexOf(delim, from);
     if (close === -1) { noCloser.add(delim); return null; }

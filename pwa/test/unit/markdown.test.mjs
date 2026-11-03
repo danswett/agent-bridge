@@ -81,12 +81,14 @@ test('headings sit below the card title, and tables are built cell by cell', () 
 // Whether parsing grows in proportion to its input, judged so that no machine's speed or load
 // decides it. A fixed bound did both wrong: under load 1.5 s failed linear input (1.75-2.15 s seen),
 // while on a fast machine it let quadratic nested brackets through (0.14 s at 8,000 characters).
-// So each input is parsed at n and 4n, once to warm up and then five times, keeping the fastest (load
-// only ever adds time), and the larger must take less than 10 times as long: a linear parse takes 4,
-// a quadratic 16. Below 50 ms the clock, the collector and the load decide that ratio, not the
-// parser, so a parse that fast passes; and none may take 2 s, which also stops a quadratic early
-// rather than timing it six times. Each n is large enough that the quadratic parser it guards
-// against fails here (#439), and small enough that the linear one takes milliseconds.
+// So each input is parsed at n, 4n and 16n, about 25,000, 100,000 and 400,000 characters, once to
+// warm up and then five times, keeping the fastest (load only ever adds time). From 4n to 16n a
+// linear parse takes about 4 times as long (6.4 at most, seen at 100% CPU) and a quadratic about 16
+// (14.6 at least, seen in each one this guards against: #439's and #482's), so it must take less
+// than 9. At smaller sizes a quadratic's linear part hides its square: from 25,000 to 100,000
+// characters, closed emphasis searching the rest of the text from each opener grew only 8.4 times.
+// Below 50 ms the clock, the collector and the load decide that ratio, not the parser, so a parse
+// that fast passes; and none may take 2 s, which also stops a quadratic early.
 const LINEAR_MS = 2000;
 function parsesLinearly(make, n) {
   const time = (text) => {
@@ -97,24 +99,34 @@ function parsesLinearly(make, n) {
     for (let k = 0; k < 5; k++) { start = performance.now(); parseMarkdown(text); best = Math.min(best, performance.now() - start); }
     return best;
   };
-  const [small, large] = [make(n), make(4 * n)];
-  const a = time(small);
-  const b = a > LINEAR_MS ? Infinity : time(large);
-  const said = `${JSON.stringify(small.slice(0, 12))}…: ${small.length} characters in ${a.toFixed(1)} ms, ${large.length} in ${b.toFixed(1)} ms`;
-  assert.ok(b < LINEAR_MS, said);
-  assert.ok(b < 50 || b < 10 * a, said);
+  const sizes = [make(n), make(4 * n), make(16 * n)];
+  const ms = [];
+  for (const text of sizes) { ms.push(ms.at(-1) > LINEAR_MS ? Infinity : time(text)); }
+  const said = `${JSON.stringify(sizes[0].slice(0, 12))}…: ${sizes.map((t, k) => `${t.length} characters in ${ms[k].toFixed(1)} ms`).join(', ')}`;
+  assert.ok(ms[2] < LINEAR_MS, said);
+  assert.ok(ms[2] < 50 || ms[2] < 9 * ms[1], said);
 }
 
 test('pathological input parses in time proportional to its length', () => {
   const inputs = [
-    [(n) => '*a '.repeat(n), 5000], [(n) => '['.repeat(n), 16000], [(n) => '[]('.repeat(n), 5000], [(n) => '`'.repeat(n), 16000],
+    [(n) => '*a '.repeat(n), 8300], [(n) => '['.repeat(n), 25000], [(n) => '[]('.repeat(n), 8300], [(n) => '`'.repeat(n), 25000],
     // Every "_" after the first is a closer the word after it refuses: reading each one's span for a
     // blank line was quadratic, 4.9 s at 512,000 characters.
-    [(n) => '_x'.repeat(n), 40000],
-    [(n) => '> '.repeat(n) + 'x', 8000], [(n) => '- '.repeat(n) + 'x', 8000], [(n) => '**'.repeat(n), 8000],
-    [(n) => '['.repeat(n) + ']'.repeat(n), 8000],
+    [(n) => '_x'.repeat(n), 12500],
+    [(n) => '> '.repeat(n) + 'x', 12500], [(n) => '- '.repeat(n) + 'x', 12500], [(n) => '**'.repeat(n), 12500],
+    [(n) => '['.repeat(n) + ']'.repeat(n), 12500],
   ];
   for (const [make, n] of inputs) { parsesLinearly(make, n); }
+});
+
+// #482: each opener searched the rest of the text for a blank line, which paragraph text never holds.
+test('closed emphasis parses in time proportional to its length', () => {
+  const inputs = [
+    [(n) => '*x'.repeat(n), 12500], [(n) => '*a* '.repeat(n), 6250], [(n) => '_a_ '.repeat(n), 6250],
+    [(n) => '**a** '.repeat(n), 4200], [(n) => '~~a~~ '.repeat(n), 4200],
+  ];
+  for (const [make, n] of inputs) { parsesLinearly(make, n); }
+  assert.deepEqual(walk(parseMarkdown('*a* _b_ **c** ~~d~~ *x')).tags, ['p', 'em', 'em', 'strong', 'del']);
 });
 
 test('a button written in the text stays text, in a paragraph and in a code block', () => {
@@ -399,8 +411,8 @@ test('an approval with 200,000 blank lines before its text is drawn in linear ti
 // #439: each "[" scanned afresh to its partner, and each destination to the end of the text.
 test('nested link brackets parse in linear time, drawn as written', () => {
   // 20,000 of each took 1.35 s, and it grew with the square.
-  parsesLinearly((n) => '['.repeat(n) + ']'.repeat(n), 8000);
-  parsesLinearly((n) => '!' + '['.repeat(n) + ']'.repeat(n), 8000);
+  parsesLinearly((n) => '['.repeat(n) + ']'.repeat(n), 12500);
+  parsesLinearly((n) => '!' + '['.repeat(n) + ']'.repeat(n), 12500);
   const text = '['.repeat(100000) + ']'.repeat(100000);
   assert.equal(textOf({ children: parseMarkdown(text) }), text);
   assert.equal(textOf({ children: parseMarkdown('!' + text) }), '!' + text);
@@ -409,17 +421,17 @@ test('nested link brackets parse in linear time, drawn as written', () => {
 test('a link\'s opening repeated parses in linear time, drawn as written', () => {
   // "[a](" repeated took 67 s at 200,000 characters: each destination was read to the end of the text.
   const inputs = [
-    [(n) => '[a]('.repeat(n), 4000], [(n) => '[a](<'.repeat(n), 16000],
-    [(n) => '[a](x'.repeat(n) + ' '.repeat(2 * n) + 'y', 4000], [(n) => '[a](x'.repeat(n) + ' "' + 'x'.repeat(5 * n), 2000],
+    [(n) => '[a]('.repeat(n), 6250], [(n) => '[a](<'.repeat(n), 5000],
+    [(n) => '[a](x'.repeat(n) + ' '.repeat(2 * n) + 'y', 3600], [(n) => '[a](x'.repeat(n) + ' "' + 'x'.repeat(5 * n), 2500],
   ];
   for (const [make, n] of inputs) {
     parsesLinearly(make, n);
-    const text = make(10 * n);
+    const text = make(16 * n);
     assert.equal(textOf({ children: parseMarkdown(text) }), text);
   }
 });
 
 test('a link after thousands of unclosed ones is still a link', () => {
-  parsesLinearly((n) => '[a](('.repeat(n) + '[b](https://ok.example/)', 4000);
+  parsesLinearly((n) => '[a](('.repeat(n) + '[b](https://ok.example/)', 5000);
   assert.deepEqual(walk(parseMarkdown('[a](('.repeat(20000) + '[b](https://ok.example/)')).hrefs, ['https://ok.example/']);
 });
