@@ -114,15 +114,18 @@ export class SessionListView {
     const q = String(query ?? '').trim().toLowerCase();
     if (q === this.filter) { return; }
     this.filter = q;
+    this.terms = q ? q.split(/\s+/) : [];
     this.render();
   }
 
   filter = '';
+  terms = [];
 
   #matches(hostId, s) {
     if (!this.filter) { return true; }
     const m = this.machine(hostId);
-    return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter));
+    const fields = [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].filter((v) => typeof v === 'string').map((v) => v.toLowerCase());
+    return this.terms.every((term) => fields.some((field) => field.includes(term)));
   }
 
   get moving() { return !this.filter && this.order.sort === 'yours'; }

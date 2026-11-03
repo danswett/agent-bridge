@@ -445,3 +445,21 @@ test('the card clock pauses off route and while hidden, refreshes on return, and
   await page.clock.fastForward(45000);
   expect(await count()).toBe(retired);
 });
+
+
+test('every search term can match a different field, including ended sessions', async ({ page }) => {
+  await openDemo(page, '&machines=2');
+  const search = page.locator('#search');
+  await search.fill('LAPTOP\tdotfiles');
+  await expect(page.locator('.session')).toHaveCount(1);
+  await expect(page.locator('.session[data-id="laptop-copilot-1"]')).toBeVisible();
+  await search.fill('dotfiles missing');
+  await expect(page.locator('.session')).toHaveCount(0);
+  await search.fill('demo flaky');
+  await expect(page.locator(`.session[data-id="${CODEX}"]`)).toBeVisible();
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), CODEX);
+  await expect(page.locator('.ended-group summary')).toHaveText('Ended · 1');
+  await page.locator('.ended-group summary').click();
+  await expect(page.locator(`.ended[data-id="${CODEX}"]`)).toBeVisible();
+  await expect(page.locator('#sessions-empty')).toBeHidden();
+});
