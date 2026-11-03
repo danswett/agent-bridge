@@ -281,7 +281,23 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     DateTimeOffset? WokenSince(string id, DateTimeOffset? endedAt) =>
         _wokenAt.TryGetValue(id, out var woken) && woken is { } w && endedAt is { } e && w > e ? w : null;
 
-    static string Hash(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+    // Hashed in pieces, so a notice holding a long result is never copied whole.
+    static string Hash(string text)
+    {
+        using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        Span<byte> bytes = stackalloc byte[4096 * 3];
+        var chars = text.AsSpan();
+        while (!chars.IsEmpty)
+        {
+            var take = Math.Min(chars.Length, 4096);
+            // Never split a surrogate pair across pieces.
+            if (take < chars.Length && char.IsHighSurrogate(chars[take - 1])) { take--; }
+            var n = System.Text.Encoding.UTF8.GetBytes(chars[..take], bytes);
+            sha.AppendData(bytes[..n]);
+            chars = chars[take..];
+        }
+        return Convert.ToHexString(sha.GetHashAndReset());
+    }
 
     // A sub-agent another one started, known from its own record: listed as working unless the
     // session's transcript already said it stopped, or the agent above it has stopped since (it

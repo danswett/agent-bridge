@@ -165,7 +165,7 @@ internal sealed class ClaudeSubagents
         return bytes;
     }
 
-    // Claude's agent ids are short hex. Letters, digits, '-' and '_' are allowed; anything else
-    // is not a name to build a path from.
+    // Letters, digits, '-' and '_': anything else is not a name to build a path from. (Claude's
+    // own ids are short hex; the check is broader so another id form is not dropped.)
     static bool IsId(string id) => id.Length is > 0 and <= 64 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 }

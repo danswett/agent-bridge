@@ -316,12 +316,14 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         // Only what is between the tags is the notice's JSON.
         var close = text.IndexOf(NotificationEnd, NotificationStart.Length, StringComparison.Ordinal);
         if (close < 0) { return false; }
-        var (start, end) = (text.IndexOf('{', NotificationStart.Length), text.LastIndexOf('}', close));
-        if (start < 0 || end < start) { return false; }
+        var start = text.IndexOf('{', NotificationStart.Length);
+        if (start < 0 || start > close) { return false; }
         var before = S.Background.Version;
         try
         {
-            using var doc = JsonDocument.Parse(text.AsMemory(start, end - start + 1));
+            // Exactly one JSON value from its first brace, whatever braces its strings hold.
+            var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(text, start, close - start));
+            using var doc = JsonDocument.ParseValue(ref reader);
             if (doc.RootElement.ValueKind == JsonValueKind.Object && Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is { } agent
                 && Json.Get(doc.RootElement, "status") is { } status)
             {
