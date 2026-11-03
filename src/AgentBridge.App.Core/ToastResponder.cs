@@ -39,6 +39,14 @@ public sealed class ToastResponder
     bool AsksApproval(ToastAction action) =>
         SessionOf(action.Machine, action.Session!)?.Question is { Kind: AgentBridge.Protocol.QuestionKind.Approval } q && q.Id == action.Question;
 
+    // The gates on an answer from a toast, beyond its being one: it carries this build's mark (an
+    // older build's button may be Approve once), and its question is not known to be an approval.
+    bool MayAnswer(ToastAction action)
+    {
+        if (!action.Current) { return false; }
+        return !AsksApproval(action);
+    }
+
     async Task<Deliveries?> FindAsync(string? machine)
     {
         var waited = System.Diagnostics.Stopwatch.StartNew();
@@ -74,7 +82,7 @@ public sealed class ToastResponder
     public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = "Agent Bridge")
     {
         var action = ToastAction.Parse(arguments);
-        if (action.Action != "answer" || action.Session is null || action.Question is null || !action.Current || AsksApproval(action))
+        if (action.Action != "answer" || action.Session is null || action.Question is null || !MayAnswer(action))
         {
             // A click that answers nothing, and any that would answer an approval: an older build's
             // toast, still in Notification Center, offered Approve once (#372). It opens the
