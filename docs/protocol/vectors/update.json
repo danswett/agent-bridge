@@ -231,10 +231,27 @@
       ],
       "refused": [
         {
-          "name": "wrong-type-state",
+          "name": "wrong-type-reason",
           "json": {
             "outcome": "accepted",
-            "state": "wrong"
+            "state": {
+              "current": "0.1.200",
+              "installer": true,
+              "available": "0.1.201",
+              "notes": "Fixes the flaky reconnect.",
+              "checkedAt": "2026-10-28T04:22:43.182Z",
+              "phase": "checking",
+              "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+              "automatic": true,
+              "last": {
+                "outcome": "updated",
+                "from": "0.1.199",
+                "to": "0.1.200",
+                "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "reason": 42
           },
           "refusedBy": "parse"
         }
@@ -275,7 +292,7 @@
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "UpdateCommandResult/wrong-type-state",
+      "vector": "UpdateCommandResult/wrong-type-reason",
       "issue": 446,
       "differs": "pwa",
       "step": "read",

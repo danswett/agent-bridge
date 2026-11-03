@@ -187,11 +187,15 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
             if (!first.ContainsKey(key)) { throw new InvalidOperationException($"{typeof(T).Name}'s first vector lacks required {key}"); }
             Refused($"missing-{key}", j => j.Remove(key));
         }
-        var candidates = WireProperties().Where(p => first.ContainsKey(JsonName(p))).ToList();
+        var wire = WireProperties().ToList();
+        var present = wire.Where(p => first.ContainsKey(JsonName(p))).ToList();
         static Type Bare(PropertyInfo p) => Nullable.GetUnderlyingType(p.PropertyType) ?? p.PropertyType;
-        // Not an enum, which reads anything it does not know as its fallback, nor JSON of any kind.
-        var wrong = candidates.FirstOrDefault(p => p.PropertyType == typeof(string))
-            ?? candidates.FirstOrDefault(p => Bare(p) is var t && !t.IsEnum && t != typeof(JsonElement) && t != typeof(DateTimeOffset));
+        // A string field by preference, present in the first vector or else added to it, since a
+        // minimal first vector would otherwise leave a record with none. Never an enum, which reads
+        // anything it does not know as its fallback, nor JSON of any kind.
+        var wrong = present.FirstOrDefault(p => p.PropertyType == typeof(string))
+            ?? wire.FirstOrDefault(p => p.PropertyType == typeof(string))
+            ?? present.FirstOrDefault(p => Bare(p) is var t && !t.IsEnum && t != typeof(JsonElement) && t != typeof(DateTimeOffset));
         if (wrong is null) { return; }
         var type = Bare(wrong);
         JsonNode value = type == typeof(string) ? JsonValue.Create(42)

@@ -66,9 +66,12 @@ replay until its entry goes.
   readers (`protocol.js`, `launch.js`, `usage.js`, `update.js`, `host-client.js`, the service
   worker). A valid vector must keep every part the PWA uses, and a refused one must be dropped.
   `checkAnswer`, `checkReply` and `checkLaunch` must agree with the host's checks word for word.
-  The answer, reply, stop, list, attachment and usage requests are built by the PWA's own services
-  and must equal their vectors. The signed commands are signed again with the fixed keys and must
-  give the same bytes and MAC. A record the PWA does not replay is listed there with the reason.
+  The answer, reply, stop, launch, list, attachment and usage requests are built by the PWA's own
+  services and must equal their vectors. An attachment starts from a picked file prepared as the
+  reply box prepares one, and a refused start a person could cause (a blank or long name, an
+  empty or oversized file) must never be sent as it is. A chunk comes from a file of the size its
+  context gives. The signed commands are signed again with the fixed keys and must give the same
+  bytes and MAC. A record the PWA does not replay is listed there with the reason.
 - **Swift** (the `apple/` package): not yet. To adopt the folder, read each file as above. Each
   `host` record goes through the package's decoders: a valid vector keeps every field the app
   uses, and a refused one is dropped. Each `client` record goes through its encoders and any

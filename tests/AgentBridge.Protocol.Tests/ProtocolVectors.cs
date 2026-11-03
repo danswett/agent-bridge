@@ -264,7 +264,13 @@ public static class ProtocolVectors
 
     // ---- attachments ----
 
-    static AttachmentStart Start(long size = 1024, string? type = "image/png") => new() { Attachment = FileA, Name = "screenshot.png", Type = type, Size = size, Sha256 = Sha };
+    // A file of size zero bytes, with its real SHA-256 where it can go in the channel, so a client
+    // can prepare that very file and must send this very start.
+    static AttachmentStart Start(long size = 1024, string? type = "image/png") => new()
+    {
+        Attachment = FileA, Name = "screenshot.png", Type = type, Size = size,
+        Sha256 = size is > 0 and <= AttachmentLimits.Bytes ? Attachments.Base64Url(SHA256.HashData(new byte[size])) : Sha,
+    };
 
     static void AttachmentRecords(VectorFileBuilder f)
     {
@@ -292,9 +298,13 @@ public static class ProtocolVectors
             .Refused("a-blob-key-that-is-not-32-bytes", Start(1024) with { Blob = blob with { Key = BlobKey[..42] } })
             .Refused("a-sha256-with-padding", Start() with { Sha256 = Sha + "=" });
         var data = Convert.ToBase64String("hello"u8);
+        // The file each chunk comes from: a full chunk is the first of a longer file, so a client
+        // that would send more than the host takes in one sends more than the vector.
+        const string whole = "the-whole-file-in-one-chunk", longer = "a-file-of-two-full-chunks-and-more";
+        f.Context(whole, new { fileSize = 5 }).Context(longer, new { fileSize = 2 * AttachmentLimits.Chunk + 5 });
         f.Record<AttachmentChunk>(Client, VectorChecks.AttachmentChunk)
-            .Valid("the-first-chunk", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = data })
-            .Valid("a-full-11-KiB-chunk", new AttachmentChunk { Attachment = FileA, Offset = AttachmentLimits.Chunk, Data = Convert.ToBase64String(new byte[AttachmentLimits.Chunk]) })
+            .Valid("the-first-chunk", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = data }, whole)
+            .Valid("a-full-11-KiB-chunk", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = Convert.ToBase64String(new byte[AttachmentLimits.Chunk]) }, longer)
             .Refused("an-attachment-that-is-not-a-uuid", new AttachmentChunk { Attachment = "x", Offset = 0, Data = data })
             .Refused("a-negative-offset", new AttachmentChunk { Attachment = FileA, Offset = -1, Data = data })
             .Refused("an-offset-past-100-MiB", new AttachmentChunk { Attachment = FileA, Offset = AttachmentLimits.DirectBytes, Data = data })

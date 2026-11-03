@@ -24,7 +24,8 @@ import { SessionsStore } from '../../js/sessions-store.js';
 import { AnswerService } from '../../js/answer-service.js';
 import { ReplyService } from '../../js/reply-service.js';
 import { StopService } from '../../js/stop-service.js';
-import { uploadAttachment } from '../../js/attachments.js';
+import { LaunchService } from '../../js/launch-service.js';
+import { prepareAttachment, uploadAttachment } from '../../js/attachments.js';
 import { P256KeyPair } from '../../js/noise-p256.js';
 import { deviceIdOf } from '../../js/identity.js';
 import { fromBase64url, toBase64url } from '../../js/blobs.js';
@@ -227,12 +228,28 @@ const CHECKS = {
 };
 
 // Records the PWA sends, as it builds them: each valid vector built from its own parts must be
-// that vector. only: the vectors this way of sending can make.
+// that vector. only: the vectors this way of sending can make. offered: refused vectors whose
+// parts a person could give it, which it must refuse or change rather than send as they are.
 const UUID_FILE = (id, size = 1) => ({ id, name: 'f', type: '', size, sha256: 'x', bytes: new Uint8Array(size) });
+// A picked file of the vector's name, type and size (zeros, which the vectors' SHA-256 is of),
+// prepared and started as the reply box does it.
+async function sendPrepared(j) {
+  const file = new File([new Uint8Array(j.size)], j.name, { type: j.type ?? '' });
+  const prepared = await prepareAttachment(file, { uuid: () => j.attachment, shrink: async () => null });
+  let sent;
+  await uploadAttachment({ attachmentStart: async (d) => { sent = d; return { received: d.size, complete: true }; } }, prepared);
+  return sent;
+}
 const BUILDS = {
   AnswerRequest: { build: (j) => sentBy(AnswerService, 'answer', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, questionId: j.question, answer: j.text !== undefined ? { text: j.text } : { fields: j.fields } })) },
   ReplyRequest: { build: (j) => sentBy(ReplyService, 'reply', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, text: j.text, attachments: (j.attachments ?? []).map((a) => UUID_FILE(a.id)) })) },
   StopRequest: { build: (j) => sentBy(StopService, 'stop', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, confirm: j.confirm ?? null })) },
+  LaunchRequest: {
+    build: (j) => {
+      const { request, ...launch } = j;
+      return sentBy(LaunchService, 'launch', request, (s) => s.submit({ hostId: 'h', launch }));
+    },
+  },
   ListRequest: {
     build: async (j) => {
       const t = fakeTransport();
@@ -246,23 +263,21 @@ const BUILDS = {
     },
   },
   AttachmentStart: {
+    // In the channel; a blob store or a direct channel is not where a phone's file goes.
     only: ['in-the-channel', 'no-type', 'at-the-channels-256-KiB-limit', 'a-name-at-255-bytes'],
-    build: async (j) => {
-      let sent;
-      const client = { attachmentStart: async (d) => { sent = d; return { received: j.size, complete: true }; } };
-      await uploadAttachment(client, { id: j.attachment, name: j.name, type: j.type ?? '', size: j.size, sha256: j.sha256, bytes: new Uint8Array(j.size) });
-      return sent;
-    },
+    build: sendPrepared,
+    // Its id and SHA-256 are the PWA's own making, so only these come from the person.
+    offered: ['a-blank-name', 'a-name-over-255-bytes', 'a-type-over-127-bytes', 'empty', 'over-256-KiB-in-the-channel'],
   },
   AttachmentChunk: {
-    build: async (j) => {
-      const data = Uint8Array.from(Buffer.from(j.data, 'base64'));
-      const bytes = new Uint8Array(j.offset + data.length);
-      bytes.set(data, j.offset);
+    build: async (j, context) => {
+      const bytes = new Uint8Array(context.fileSize);
+      bytes.set(Uint8Array.from(Buffer.from(j.data, 'base64')), j.offset);
       let sent;
       const client = {
         attachmentStart: async () => ({ received: j.offset, complete: false }),
-        attachmentChunk: async (d) => { sent = d; return { received: bytes.length, complete: true }; },
+        // The first chunk the PWA sends from the vector's offset, whatever follows it.
+        attachmentChunk: async (d) => { sent ??= d; return { received: bytes.length, complete: true }; },
       };
       await uploadAttachment(client, { id: j.attachment, name: 'f', type: '', size: bytes.length, sha256: 'x', bytes });
       return sent;
@@ -338,6 +353,14 @@ test('every known difference names a vector there is', () => {
   }
 });
 
+test('every vector a builder names is one there is', () => {
+  for (const [record, b] of Object.entries(BUILDS)) {
+    const r = records.get(record);
+    for (const name of b.only ?? []) { assert.ok(r.valid.some((v) => v.name === name), `${record}/${name}`); }
+    for (const name of b.offered ?? []) { assert.ok(r.refused.some((v) => v.name === name), `${record}/${name}`); }
+  }
+});
+
 for (const [record, r] of records) {
   const reads = READS[record];
   if (reads) {
@@ -371,9 +394,17 @@ for (const [record, r] of records) {
   }
   const builds = BUILDS[record];
   if (builds) {
+    const context = (v) => (v.context ? r.contexts[v.context] : undefined);
     for (const v of r.valid.filter((x) => !builds.only || builds.only.includes(x.name))) {
       test(`the PWA sends a ${record} "${v.name}" exactly as the vector has it`, () => agrees(`${record}/${v.name}`, 'build', async () => {
-        assert.deepEqual(await builds.build(v.json), v.json);
+        assert.deepEqual(await builds.build(v.json, context(v)), v.json);
+      }));
+    }
+    for (const v of r.refused.filter((x) => builds.offered?.includes(x.name))) {
+      test(`the PWA never sends a ${record} "${v.name}" as it is`, () => agrees(`${record}/${v.name}`, 'build', async () => {
+        let sent;
+        try { sent = await builds.build(v.json, context(v)); } catch { return; }
+        assert.notDeepEqual(sent, v.json);
       }));
     }
   }

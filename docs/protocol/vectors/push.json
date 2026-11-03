@@ -138,7 +138,15 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "wrong-type-endpoint",
+          "json": {
+            "endpoint": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "PushUnsubscribeResult": {
       "direction": "host",

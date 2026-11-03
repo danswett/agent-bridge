@@ -10,6 +10,7 @@ public static class KnownDifferences
     static readonly string[] TolerantReaders =
     [
         "AttachmentState/wrong-type-received", "AttachmentDiscarded/wrong-type-discarded",
+        "AnswerResult/wrong-type-reason", "ReplyResult/wrong-type-reason", "StopResult/wrong-type-reason",
         "LaunchedTransfer/missing-session", "LaunchedTransfer/missing-bytes", "LaunchedWith/missing-agent", "LaunchedWith/missing-permissions",
         "LaunchedWith/wrong-type-agent", "LaunchResult/wrong-type-session", "LaunchTuning/wrong-type-model", "LaunchAgent/missing-label",
         "LaunchAgent/missing-kind", "LaunchWorkspace/missing-path", "ResumableSession/missing-agent", "ResumableSession/missing-title",
@@ -22,7 +23,7 @@ public static class KnownDifferences
         "Subagent/missing-status", "Session/missing-agent", "Session/missing-status", "Session/missing-statusSince", "Session/missing-updatedAt",
         "Session/missing-activity", "SessionList/wrong-type-next", "DiscoveryChanged/wrong-type-discoveryHeld", "SessionsSynced/wrong-type-revision",
         "UpdateResult/missing-outcome", "UpdateResult/missing-at", "UpdateResult/wrong-type-from", "UpdateState/wrong-type-current",
-        "UpdateCommandResult/wrong-type-state", "UsageWindow/missing-key", "UsageWindow/missing-label", "UsageWindow/wrong-type-key",
+        "UpdateCommandResult/wrong-type-reason", "UsageWindow/missing-key", "UsageWindow/missing-label", "UsageWindow/wrong-type-key",
         "AgentUsage/missing-agent", "AgentUsage/missing-label", "AgentUsage/missing-source", "AgentUsage/missing-measuredAt",
         "AgentUsage/wrong-type-label", "UsageReport/wrong-type-agents",
     ];

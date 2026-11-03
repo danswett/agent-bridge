@@ -2961,7 +2961,15 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "wrong-type-cursor",
+          "json": {
+            "cursor": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "SubscribeResult": {
       "direction": "host",
@@ -3715,7 +3723,16 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "wrong-type-reason",
+          "json": {
+            "outcome": "delivered",
+            "reason": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "ReplyRequest": {
       "direction": "client",
@@ -4014,7 +4031,16 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "wrong-type-reason",
+          "json": {
+            "outcome": "delivered",
+            "reason": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
     },
     "StopRequest": {
       "direction": "client",
@@ -4161,10 +4187,43 @@
           }
         }
       ],
-      "refused": []
+      "refused": [
+        {
+          "name": "wrong-type-reason",
+          "json": {
+            "outcome": "ended",
+            "reason": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
     }
   },
   "knownDifferences": [
+    {
+      "vector": "AnswerResult/wrong-type-reason",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: it cannot be deserialized",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "ReplyResult/wrong-type-reason",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: it cannot be deserialized",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "StopResult/wrong-type-reason",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: it cannot be deserialized",
+      "pwa": "reads it, the field absent or its default"
+    },
     {
       "vector": "MachineInfo/wrong-type-id",
       "issue": 446,
