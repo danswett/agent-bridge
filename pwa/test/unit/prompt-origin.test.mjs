@@ -148,3 +148,10 @@ test('labels an agent wrote apart but drawn alike are one: same as last time onl
     assert.equal(promptOrigin(session({ from: 'schedule', label: one })).facts[1], promptOrigin(session({ from: 'schedule', label: two })).facts[1]);
   }
 });
+test('a repeat whose turn ends while the host leaves the words out is still a repeat once they return, dated from its turn', () => {
+  const m = new PromptMemory();
+  m.observe(session({ from: 'schedule', label: '4', text: 'A', turns: 3 }));
+  m.observe(session({ from: 'schedule', label: '4', text: 'A', status: 'working', turns: 3, since: '2026-11-03T19:01:00Z' }));
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', text: null, turns: 4 })), { repeat: false, at: null, fresh: false });
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', text: 'A', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
+});

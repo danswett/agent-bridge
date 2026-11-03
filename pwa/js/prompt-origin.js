@@ -111,6 +111,9 @@ export class PromptMemory {
     // From when it began, not from a question answered or a resume within it.
     if (running && !this.#running) { this.#ran = s.statusSince ?? null; }
     this.#running = running;
+    // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the one
+    // shown stays it, and the turns that end meanwhile wait to be put down to the words that return.
+    if (text === null) { return { repeat: false, at: null, fresh: false }; }
     const turns = idleTurns(s);
     let more = 0;
     if (turns !== null) {
@@ -119,8 +122,6 @@ export class PromptMemory {
     }
     const ran = this.#ran;
     if (turns !== null) { this.#ran = null; }
-    // A host that omits the words says nothing of which prompt this is: the one shown stays it.
-    if (text === null) { return { repeat: false, at: null, fresh: false }; }
     // Apart, not joined: a label can hold a line break, so no separator keeps two prompts apart.
     const key = JSON.stringify([from, a.userMessageLabel ?? null, text]);
     const cur = this.#current;
