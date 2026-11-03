@@ -461,9 +461,11 @@ jobs:
     # are the release's own assets, downloaded back, since publishing may rebuild a delta after
     # the app job packed it. Only when this run uploaded them: a re-run that finds its version
     # already out rebuilds the app, and its SBOMs would not be of what is out. Its own job, so the
-    # signing token is not in the job that runs vpk and holds contents: write.
+    # signing token is not in the job that runs vpk and holds contents: write. Also when publish
+    # failed after uploading (pruning old releases, say): a retry would find the version out and
+    # attest nothing, so this is the release's one chance.
     needs: [publish]
-    if: needs.publish.outputs.published == 'true'
+    if: ${{ !cancelled() && needs.publish.outputs.published == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
