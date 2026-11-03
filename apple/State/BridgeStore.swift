@@ -26,6 +26,12 @@ struct SessionEntry: Identifiable {
     }
 }
 
+enum SignInStage: String {
+    case browserApproval = "GitHub approval"
+    case credentialStorage = "Saving on this device"
+    case relayConnection = "Connecting to the relay"
+}
+
 @MainActor @Observable
 final class BridgeStore {
     private(set) var hosts: [HostStore] = []
@@ -34,6 +40,7 @@ final class BridgeStore {
     private(set) var account: RelayAccount?
     private(set) var signInCode: RelayDeviceCode?
     private(set) var signInStatus: String?
+    private(set) var signInFailureStage: SignInStage?
     private(set) var isSigningIn = false
     private(set) var isSample = false
     private(set) var isFixture = false
@@ -310,8 +317,10 @@ final class BridgeStore {
         let token = signInGeneration
         isSigningIn = true
         signInStatus = "Requesting a sign-in code…"
+        signInFailureStage = nil
         let address = relayAddress
         signInTask = Task {
+            var stage = SignInStage.browserApproval
             do {
                 let address = try RelayAddress.validated(address).absoluteString
                 let flow = try RelaySignIn(relay: address)
@@ -330,6 +339,7 @@ final class BridgeStore {
                 }
                 try Task.checkCancellation()
                 guard token == signInGeneration else { return }
+                stage = .credentialStorage
                 try BridgeKeychain.save(JSONEncoder().encode(signedIn), name: "account:\(address)")
                 relayAddress = address
                 account = signedIn
@@ -341,6 +351,7 @@ final class BridgeStore {
                 guard token == signInGeneration else { return }
                 isSigningIn = false
                 signInCode = nil
+                signInFailureStage = stage
                 signInStatus = error.localizedDescription
             }
         }
@@ -353,6 +364,7 @@ final class BridgeStore {
         isSigningIn = false
         signInCode = nil
         signInStatus = nil
+        signInFailureStage = nil
     }
 
     func signOut() {
@@ -398,6 +410,7 @@ final class BridgeStore {
         relayTask = Task {
             var delay = 1
             while !Task.isCancelled, token == generation {
+                var stage = SignInStage.credentialStorage
                 do {
                     let identity: NoiseKeyPair
                     if let bytes = try BridgeKeychain.load("identity:\(address):\(account.accountId)") {
@@ -406,6 +419,7 @@ final class BridgeStore {
                         identity = NoiseKeyPair()
                         try BridgeKeychain.save(identity.rawRepresentation, name: "identity:\(address):\(account.accountId)")
                     }
+                    stage = .relayConnection
                     let kind = "app"
                     let connection = try RelayBridge(relay: address, account: account, identity: identity, name: name, kind: kind)
                     relay = connection
@@ -415,6 +429,7 @@ final class BridgeStore {
                     guard token == generation else { await connection.disconnect(); return }
                     delay = 1
                     remoteStatus = "Signed in as \(account.login)"
+                    signInFailureStage = nil
                     for try await event in events {
                         guard token == generation else { await connection.disconnect(); return }
                         switch event {
@@ -431,6 +446,7 @@ final class BridgeStore {
                     guard token == generation else { return }
                     relay = nil
                     hosts.filter { !$0.isLocal }.forEach { $0.stop() }
+                    signInFailureStage = stage
                     remoteStatus = "\(error.localizedDescription) Reconnecting…"
                 }
                 do { try await Task.sleep(for: .seconds(delay)) } catch { return }

@@ -65,7 +65,18 @@ struct ConnectionView: View {
                             store.signIn()
                         }
                     }
-                    if let status = store.signInStatus {
+                    if let stage = store.signInFailureStage {
+                        Label("\(stage.rawValue) failed", systemImage: "exclamationmark.triangle")
+                        if store.account != nil {
+                            Text(store.remoteStatus).font(.callout).foregroundStyle(.secondary)
+                            Button("Retry Connection", action: connect)
+                        } else {
+                            if let status = store.signInStatus {
+                                Text(status).font(.callout).foregroundStyle(.secondary)
+                            }
+                            Button("Try Sign-In Again") { applySettings(); store.signIn() }
+                        }
+                    } else if let status = store.signInStatus {
                         Text(status).font(.callout).foregroundStyle(.secondary)
                     }
                 }.disabled(store.isFixture)
