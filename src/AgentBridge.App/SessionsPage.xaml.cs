@@ -303,15 +303,23 @@ public sealed partial class SessionsPage : UserControl
     readonly TextBlock ruler = new() { TextWrapping = TextWrapping.NoWrap };
     readonly TextBlock moreRuler = new() { TextWrapping = TextWrapping.NoWrap };
     bool arrangeQueued;
+    // The chosen tab, when it alone would push More past the bar's edge, and the most its name may then
+    // take (MachineTabSplit.ChosenWidth less its padding); every other name takes DesignLayout.MachineTab.
+    SelectorBarItem? cutTab;
+    double cutName;
 
     void BuildMachineTabs()
     {
         if (viewModel is null) { return; }
-        foreach (var old in tabs.Keys.Except(viewModel.Machines).ToList())
+        var gone = tabs.Keys.Except(viewModel.Machines).ToList();
+        foreach (var old in gone)
         {
             old.PropertyChanged -= OnChoiceNamed;
             tabs.Remove(old);
         }
+        // A machine forgotten, or kept offline past its time, while More is open: its line would
+        // choose nothing (MainViewModel refuses a choice no longer listed), so the menu goes.
+        if (gone.Count > 0 && MoreMachinesMenu.IsOpen) { MoreMachinesMenu.Hide(); }
         foreach (var choice in viewModel.Machines.Where(c => !tabs.ContainsKey(c)))
         {
             var item = new SelectorBarItem { Tag = choice };
@@ -341,9 +349,11 @@ public sealed partial class SessionsPage : UserControl
         if (sender is not SelectorBarItem item || NameOf(item) is not { } name) { return; }
         name.TextWrapping = TextWrapping.NoWrap;
         name.TextTrimming = TextTrimming.CharacterEllipsis;
-        name.MaxWidth = DesignLayout.MachineTab;
+        name.MaxWidth = NameCap(item);
         if (!chromeSeen) { QueueArrange(); }
     }
+
+    double NameCap(SelectorBarItem item) => item == cutTab ? Math.Min(cutName, DesignLayout.MachineTab) : DesignLayout.MachineTab;
 
     // The tab's name as drawn: its template's text (the self-test reads it too).
     internal static TextBlock? NameOf(SelectorBarItem item) => Descendants(item).OfType<TextBlock>().FirstOrDefault(t => t.Name == "PART_TextVisual");
@@ -360,6 +370,8 @@ public sealed partial class SessionsPage : UserControl
 
     internal IReadOnlyList<MachineChoice> MachinesUnderMore => overflow;
     internal Button MoreMachinesButton => MoreMachines;
+    internal TextBlock MoreMachinesWords => MoreMachinesText;
+    internal void ArrangeMachineTabsNow() => ArrangeMachineTabs();
     // What the tabs were last arranged from, for the self-test to say.
     internal string Arranged { get; private set; } = "";
 
@@ -416,6 +428,8 @@ public sealed partial class SessionsPage : UserControl
             Arranged = $"room {room:0}, More {more:0}, tabs {string.Join(" ", widths)}, chrome {tabChrome:0.#}";
         }
         overflow = [.. split.More.Select(i => choices[i])];
+        cutTab = split.ChosenWidth is not null ? tabs[choices[chosen]] : null;
+        cutName = split.ChosenWidth is { } cut ? Math.Max(0, Math.Floor(cut - tabChrome)) : DesignLayout.MachineTab;
         SayMore(overflow.Count);
         MoreMachines.Visibility = overflow.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -436,6 +450,8 @@ public sealed partial class SessionsPage : UserControl
             if (MachineTabs.SelectedItem != selected) { MachineTabs.SelectedItem = selected; }
         }
         finally { syncing = false; }
+        // A tab loaded later takes its cap in OnTabLoaded; those already drawn take it here.
+        foreach (var item in want) { if (NameOf(item) is { } name) { name.MaxWidth = NameCap(item); } }
     }
 
     void SayMore(int count)

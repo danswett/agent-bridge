@@ -121,6 +121,21 @@ static partial class SelfTest
             var themed = Wrong();
             check(themed.Count == 0, $"keeps every machine a tab or under More once the theme changes ({Drawn()}){(themed.Count > 0 ? $": {string.Join("; ", themed)}" : "")}");
 
+            // Windows' text made larger (#368 review): a wider More beside the chosen tab's whole
+            // 128 px name went past the narrowest list's edge. The chosen name is cut to what More leaves.
+            page.MoreMachinesWords.FontSize = 32;
+            page.ArrangeMachineTabsNow();
+            await Task.Delay(400);
+            var larger = Wrong();
+            var cutName = bar.SelectedItem is { } chosenTab ? NameOf(chosenTab) : null;
+            check(larger.Count == 0 && bar.SelectedItem?.Tag == target && cutName is { IsTextTrimmed: true } && cutName.MaxWidth < DesignLayout.MachineTab,
+                $"cuts the chosen tab's name to what a wider More leaves at the narrowest list, so More stays on the pane ({Drawn()}; the name up to {cutName?.MaxWidth:0} px){(larger.Count > 0 ? $": {string.Join("; ", larger)}" : "")}");
+            page.MoreMachinesWords.ClearValue(TextBlock.FontSizeProperty);
+            page.ArrangeMachineTabsNow();
+            await Task.Delay(400);
+            var restored = bar.SelectedItem is { } again ? NameOf(again) : null;
+            check(restored?.MaxWidth == DesignLayout.MachineTab && Wrong().Count == 0, $"gives the chosen tab's name its whole room back once More is its own width again ({restored?.MaxWidth:0} px)");
+
             // Two panes at the list's default, and one column: the same, whatever fits.
             page.ListDividerView.Reset();
             foreach (var (w, mode) in new[] { (1000.0, PaneMode.Two), (400.0, PaneMode.One) })

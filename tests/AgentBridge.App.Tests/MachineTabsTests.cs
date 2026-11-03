@@ -45,6 +45,24 @@ public sealed class MachineTabsTests
     }
 
     [Fact]
+    public void A_chosen_tab_too_wide_to_sit_beside_more_is_cut_to_what_more_leaves_so_more_stays_on_the_bar()
+    {
+        // Windows' text made larger: a 128 px name and its padding, and a wider More, at the narrowest list.
+        var split = MachineTabFit.Split([46, 154, 120], selected: 1, room: 247, more: 134, gap: 0);
+
+        Assert.Equal([1], split.Shown);
+        Assert.Equal(113, split.ChosenWidth);
+        Assert.True(split.ChosenWidth + 134 <= 247);
+    }
+
+    [Fact]
+    public void A_chosen_tab_that_fits_beside_more_keeps_its_own_width()
+    {
+        Assert.Null(MachineTabFit.Split([40, 100, 100, 100], selected: 3, room: 260, more: 60).ChosenWidth);
+        Assert.Null(MachineTabFit.Split([40, 100], selected: 1, room: 260, more: 60).ChosenWidth);
+    }
+
+    [Fact]
     public void The_space_between_tabs_counts_toward_whether_they_fit()
     {
         Assert.Empty(MachineTabFit.Split([100, 100], selected: 0, room: 200, more: 40).More);
