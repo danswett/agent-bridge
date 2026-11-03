@@ -74,8 +74,9 @@ Considered and not recommended:
 
 ### 3.2 Entries
 
-An entry is sent as exact bytes (`body`, base64url, no padding) with a detached signature,
-as signed commands are, so no end has to serialize JSON identically:
+An entry is sent as exact bytes (`body`, base64url, no padding) with a detached signature
+(`sig`, the DER-encoded ECDSA signature, also base64url without padding), as signed commands
+are, so no end has to serialize JSON identically:
 
 ```json
 { "body": "eyJ2IjoxLC…", "sig": "MEUCIQ…" }
@@ -112,7 +113,7 @@ as signed commands are, so no end has to serialize JSON identically:
 | `account` | The account id the relay issued. A roster entry from another account never verifies |
 | `generation` | Chosen at genesis. A reset (§5.5) is a new generation |
 | `seq`, `prev` | `seq` is 0 at genesis and one more than its parent otherwise; `prev` is the parent's **entry hash** (below), not a hash of its signature, so a re-encoded ECDSA signature cannot make a second entry with the same content |
-| `op` | `genesis`, `add`, `remove`, `rename`. Grants (`set grants` in §5.4) are left for later |
+| `op` | `genesis`, `add`, `remove`, `rename`, `merge` (§3.4; its `prev` is a list). Grants (`set grants` in §5.4) are left for later |
 | `by` | The signer's device id. It must be an active person's device in the state the parent leaves; for `genesis`, the device the entry adds |
 | `at` | When the signer says it signed. Shown to people ("added by Desk app at 14:05"); never used to order or expire anything |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
@@ -146,12 +147,13 @@ roster as offered, keeping what it had:
 * `v`, `account`, `generation` match; `seq` and `prev` extend the verifier's chain;
 * the signature verifies under `by`'s `sign` key, and `by` is an active person's device
   (`app`, `pwa`, `phone`) in the state before this entry;
-* `add`: the id is the hash of `dh`; the id was never in this generation before (a removed key
-  is never re-added; a re-approved device makes a new key pair); a person's device has `sign`
-  and a host has none;
+* `add`: the id is the hash of `dh`; the id was never in this generation before on its own
+  branch (a removed key is never re-added; a re-approved device makes a new key pair; the same
+  add on both sides of a fork is one device); a person's device has `sign` and a host has none;
 * `remove`: the id is active; it is not the last active person's device (removing that is a
   reset, §5.5);
 * `rename`: the id is active;
+* `merge`: as §3.4, signed by a device active in the merged state;
 * `genesis`: only at `seq` 0, adding a person's device that is `by` itself;
 * the chain has at most 4,096 entries and 64 active devices. Compaction by a signed
   checkpoint is left for when an account comes near that.
@@ -159,18 +161,29 @@ roster as offered, keeping what it had:
 ### 3.4 Versioning and rollback
 
 Each verifier keeps a **pin**: `(generation, seq, entry hash)` of the newest entry it has
-accepted, written before it acts on the new state.
+accepted (during a fork, below, one per head), written before it acts on the new state.
 
-* **Extension only.** An offered roster is accepted only if it contains the pinned entry at
-  the pinned `seq` and continues from it. A shorter roster, or one that does not contain the
-  pin, is a rollback and is refused; the verifier keeps its own copy and says so (host log,
-  app and PWA banner).
-* **Fork.** Two valid entries with one parent can only exist if the relay showed two
-  approvers the same head at once (it serializes honest appends with conditional writes,
-  §3.5). A fork is a hard error, as §5.4 says, and fails closed: the verifier stays on its
-  pinned branch, also applies every validly signed `remove` it has seen on any branch, and
-  refuses further `add`s until a person resolves it. Resolution is a later slice (a signed
-  entry naming the abandoned head) or a reset.
+* **Extension only.** An offered roster is accepted only if it contains every pinned entry
+  and continues from them. A shorter roster, or one that does not contain a pinned entry,
+  is a rollback: a hard error, as §5.4 says. It is refused; the verifier keeps its own copy
+  and says so (host log, app and PWA banner).
+* **Fork.** Two valid entries on one parent can only exist if the relay showed two approvers
+  the same head at once (it serializes honest appends with conditional writes, §3.5). Both
+  are a person's approval, so neither is discarded. A fork is resolved by a **`merge`** entry,
+  part of the same slice as the chain itself (R1), so the state always has a signed, verifiable
+  head:
+  * `merge` has `prev` as the sorted list of the heads it joins and `seq` one more than the
+    highest of them. Each branch must verify on its own from their common ancestor;
+  * its state is deterministic: every device added on either branch, minus every device
+    removed on either. A removal wins, so a fork can never keep a removed device trusted.
+    If that leaves no person's device, the merge is invalid and only a reset (§5.5) recovers;
+  * any approver that sees a fork signs the merge without asking the person, since there is
+    nothing to choose, and every device announces it with the changes it brought in (§6.3);
+  * a verifier that sees a fork before a merge pins both heads, and applies the same merged
+    state at once. That is exactly the state the merge will sign, so a host never serves a
+    device that either branch removed. Its `rosterHead` is then the sorted list of heads, and
+    every device shows "the device list forked; merging", since an honest relay never
+    causes a fork.
 * **Generations.** A verifier never moves to a new generation because something remote says
   so; only a local action does (§5.5).
 * **Downgrade.** Once a host or client has a pin, nothing remote can turn enforcement off:
@@ -315,24 +328,27 @@ never as the gate:
 
 ### 4.6 User verification on approval
 
-Approving is the most powerful thing a device does. Where the platform offers it, signing a
-roster entry asks the person to verify (owner decision 3):
-* **Windows app**: the key itself must demand the gesture; a `UserConsentVerifier` prompt in
-  the app alone does not stop malware calling the key directly. v1 stays ES256 everywhere: a
-  TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each
-  use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6
-  verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in
-  v1. Adopting it later would add `RS256` to `signAlg` and define the RSA key and signature
-  encodings, a protocol change of its own. Without a usable policy, the app uses a TPM key and
-  a confirmation dialog;
-* **Apple**: a Secure Enclave key with `.userPresence` access control (Face ID, Touch ID or
-  passcode);
-* **PWA**: WebAuthn user verification is a later slice; until then the PWA's approval is a
-  typed code and a confirmation.
+Approving is the most powerful thing a device does. The property wanted is **user presence
+enforced by the key**: the signing key cannot sign a roster entry unless a person has just
+verified at that device. A prompt the app shows before using a key that would sign without it
+is not that property, since malware running as the user can call the key directly.
 
-Without user verification, malware on a machine with the Windows app can approve its own
-device with the app's key while the person is not looking. That is the residual risk of a
-compromised machine running the app, and the reason every roster change is announced (§6.3).
+| Platform | Key-enforced presence |
+|---|---|
+| Apple | Yes: a Secure Enclave key with `.userPresence` access control (Face ID, Touch ID or passcode) |
+| Windows app | Where available: a TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6 verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in v1; adopting it later would add `RS256` to `signAlg` and define the RSA key and signature encodings, a protocol change of its own |
+| PWA | Not in v1. A later slice (L1) can make a WebAuthn assertion with user verification over the entry hash part of the approval |
+
+A device without key-enforced presence (a PWA, a Windows machine whose TPM or provider does
+not honour the policy) is a **weaker approver**. It says so on its Devices page, and the
+person's confirmation there is best effort, not a security boundary. What bounds it is that
+every roster change is announced on every other device with a two-press undo (§6.3). The
+residual risk of §2 is therefore: malware on a machine with a weaker approver can approve its
+own device while the person is not looking, and the person's other devices show it at once.
+Owner decision 3 includes whether weaker approvers may approve at all.
+
+A device cannot attest its own verification in the entry: a compromised approver would simply
+claim it. So nothing about verification is recorded in the roster.
 
 ### 4.7 A machine with an app and a host
 
@@ -635,8 +651,10 @@ Each slice adds its own; together they cover:
 * The relay serves an older head, a shorter chain, no roster at all, or says "none": a host and a
   client with a pin keep enforcing their own and say so.
 * A peer's `hello` without a roster head or with an older protocol version: no change of mode.
-* A fork (two valid entries on one parent): hard error, removes from both branches applied,
-  adds refused.
+* A fork (two valid entries on one parent): both heads pinned, the merged state applied at
+  once with a device removed on either branch refused, a `merge` signed by the first approver
+  that sees it and accepted by every verifier, and one head again afterwards. A `merge` whose
+  state differs from the deterministic one, or that leaves no person's device, is refused.
 
 **Kind spoofing**
 * A rostered host's key connecting with `hello` kind `pwa`: refused at transfer signing, folder
@@ -678,10 +696,13 @@ Each slice adds its own; together they cover:
    **Recommended: (a)**: otherwise a stolen token registers a fake machine that collects what
    people type.
 3. **How an approval is made.**
-   (a) Type the six-digit code shown on the new device, or scan a QR, plus Windows Hello, Face ID
-   or Touch ID where available. (b) The same without user verification. (c) Compare the codes
-   and tap.
-   **Recommended: (a).**
+   (a) Type the six-digit code shown on the new device, or scan a QR. Key-enforced user presence
+   (Face ID, Touch ID, Windows' TPM key policy) where the platform has it; weaker approvers
+   (the PWA, Windows without the policy) may still approve, marked as such, with every change
+   announced (§4.6). (b) As (a), but only key-enforced approvers may approve, so the PWA cannot
+   approve until WebAuthn verification (L1). (c) Compare the codes and tap.
+   **Recommended: (a)**: the phone PWA is the owner's main approver away from a desk, and the
+   announcement plus two-press undo bounds a weaker approver.
 4. **What an unapproved device of the account sees.**
    (a) Nothing beyond "pending approval". (b) A read-only list of machines.
    **Recommended: (a).**
@@ -712,11 +733,11 @@ Each is one PR, security-reviewed independently before merge.
 | R1 | Roster library: entries, ECDSA signing keys (TPM/DPAPI, WebCrypto), chain verification, pin store, shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2 | No |
 | R2 | Relay: store and serve the chain, appends, approved/pending admission, bound kinds in presence, pending limits, `removed` close code. Staging; production only with the owner's approval | R1 | Only for accounts with a roster |
 | R3 | Host: verifier, pin, gossip in `hello`, `roster.*` ops, modes `off`/`observe`/`enforce`, the gate in `ChannelHub`, enrollment over the pipe and `devices join`/`reset` | R1 | Only when the mode is changed |
-| R4 | Enrollment protocol and the Windows app: genesis, join, approve (code), Devices page, remove, announcements, Windows Hello signing | R2, R3, decision 3 | Only after genesis |
+| R4 | Enrollment protocol and the Windows app: genesis, join, approve (code), Devices page, remove, announcements, key-enforced presence through the TPM key's UI policy | R2, R3, decision 3 | Only after genesis |
 | R5 | PWA: join, approve (code, QR scan), Devices, remove, pending screen, client rule | R2, R4 | As R4 |
 | R6 | Bound kinds: one `RosterKinds.IsPerson`; transfer, folder trust, update and usage peers read the roster; the client rule in the app; docs for #70, #133, #138, #161 | R3, decision 8 | In `enforce` |
 | R7 | Removal end to end: revocation, offline hosts, removed-device experience, Forget/Remove | R4, R5, decision 7 | Yes |
 | R8 | Owner cutover: runbook and live checks (the issue's "Validate live"), then `enforce` per host | R1-R7, decision 6 | On the owner's machines, with their go-ahead |
 | R9 | `enforce` by default for new installs | R8 | Yes |
 | A1 | Apple: join, then approve and Devices (contributor) | R1, R2 | For Apple clients |
-| L1 | Later: fork resolution, recovery key if chosen, checkpoints, WebAuthn user verification in the PWA | | |
+| L1 | Later: recovery key if chosen, checkpoints, WebAuthn user verification in the PWA | | |
