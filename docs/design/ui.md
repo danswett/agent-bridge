@@ -623,9 +623,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).
 - **A prompt you didn't type** (#489): a schedule's (`activity.userMessageFrom` `schedule`), another
-  agent's (`agent`), or one the host knows only as not yours (`other`, and any value a client
-  doesn't know). It is **never a bubble**, and never at the right, which is yours only. A prompt
-  from you, and every prompt from a host that doesn't send the field, keeps the bubble.
+  agent's (`agent`), or one the host knows only as not yours (`other`, and any other value a
+  client doesn't know, malformed ones too). It is **never a bubble**, and never at the right,
+  which is yours only. A prompt from you, and every prompt from a host that doesn't send the
+  field (or sends it null), keeps the bubble.
   - **At the column's start, across it,** like an event line; on a phone, a full-width row.
   - **A label line in agent colour, with an icon:** a clock (`icons/clock.svg`) and "Scheduled
     prompt · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
@@ -639,7 +640,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     it is instant under reduced motion. Open, it reads "Hide prompt" and shows all of it in reading
     style inside a thin (2 px) agent-colour rule on the leading edge, not a filled card. A new
     prompt starts collapsed; an update to the same one leaves it as the person left it.
-  - **Repeats fold.** When a schedule's prompt has the same words as that schedule's previous one,
+  - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the
+    same label as drawn (two labels an agent wrote apart but drawn alike are one),
     the line says "Scheduled prompt · #4 · same as last time" and has no preview; Show prompt still
     opens it. A session carries only its latest prompt, so the previous one is the one this view
     saw: a new prompt is one whose words or sender changed, or, with the same words, a finished

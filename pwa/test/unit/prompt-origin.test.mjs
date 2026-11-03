@@ -140,3 +140,11 @@ test('a line break in a label never makes a new prompt look the same, and words 
   assert.deepEqual(omitted.observe(session({ from: 'schedule', label: '4', text: null })), { repeat: false, at: null, fresh: false });
   assert.deepEqual(omitted.observe(session({ from: 'schedule', label: '4', text: 'A' })), { repeat: false, at: null, fresh: false });
 });
+test('labels an agent wrote apart but drawn alike are one: same as last time only when the words match the last shown under it', () => {
+  for (const [one, two] of [['nightly-build', 'nightly\u00b7build'], ['\u201ca\u2019b\u201d', '\u201ca\'b\u201d']]) {
+    const m = new PromptMemory();
+    const row = (label, text, turns) => m.observe(session({ from: 'schedule', label, text, turns })).repeat;
+    assert.deepEqual([row(one, 'A', 3), row(two, 'B', 4), row(one, 'A', 5), row(two, 'B', 6)], [false, false, false, false], one);
+    assert.equal(promptOrigin(session({ from: 'schedule', label: one })).facts[1], promptOrigin(session({ from: 'schedule', label: two })).facts[1]);
+  }
+});

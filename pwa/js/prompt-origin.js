@@ -32,7 +32,8 @@ export function promptFact(text, max = LABEL_MAX_BYTES) {
 // A schedule's label as drawn: "#4" for a number, and anything else in quotes, so no label of an
 // agent's reads as words of the line's own ("Scheduled prompt · “Main agent”"), whatever letters
 // it draws them with.
-function scheduleName(label) {
+function scheduleName(raw) {
+  const label = promptFact(raw);
   if (!label) { return null; }
   return /^\d+$/.test(label) ? `#${label}` : quoted(label);
 }
@@ -54,8 +55,7 @@ export function promptOrigin(session, { repeat = false } = {}) {
   const text = reveal(a.userMessage);
   const preview = text.replace(/\s+/gu, ' ').trim();
   if (from === 'schedule') {
-    const label = promptFact(a.userMessageLabel);
-    const name = scheduleName(label);
+    const name = scheduleName(a.userMessageLabel);
     return {
       from, icon: 'clock', by: null, repeat, text, preview,
       facts: ['Scheduled prompt', name, repeat ? 'same as last time' : null].filter(Boolean),
@@ -141,7 +141,9 @@ export class PromptMemory {
     }
     let repeat = false;
     if (from === 'schedule') {
-      const label = a.userMessageLabel ?? '';
+      // By the label as drawn: two an agent wrote apart but drawn alike are one to the person, and
+      // "same as last time" means the words last shown under it.
+      const label = JSON.stringify([from, scheduleName(a.userMessageLabel)]);
       repeat = this.#bySchedule.get(label) === text;
       this.#bySchedule.set(label, text);
     }

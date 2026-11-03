@@ -68,7 +68,9 @@ test('a prompt is the person\'s when the host doesn\'t say who sent it, and a se
   // An older host sends no userMessageFrom at all (#489).
   assert.equal(readSession({ id: 'x', activity: { userMessage: 'hi' } }).activity.userMessageFrom, 'person');
   assert.deepEqual([from('person'), from('schedule'), from('agent'), from('other')], ['person', 'schedule', 'agent', 'other']);
-  assert.deepEqual([from(undefined), from(null), from(''), from(4)], ['person', 'person', 'person', 'person']);
+  assert.deepEqual([from(undefined), from(null)], ['person', 'person']);
+  // Present but malformed is still a value the host sent: not the person's, as in the app.
+  assert.deepEqual([from(''), from(4), from(true), from({})], ['other', 'other', 'other', 'other']);
   assert.equal(from('cron'), 'other');
   assert.equal(readSession({ id: 'x', activity: { userMessageLabel: 4 } }).activity.userMessageLabel, null);
   assert.equal(readSession({ id: 'x', activity: { userMessageLabel: '4' } }).activity.userMessageLabel, '4');

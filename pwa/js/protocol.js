@@ -46,10 +46,10 @@ export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'nu
 // Who drives the session's turn. Absent, and anything unknown, is the person: a wrong purple
 // edge is worse than none.
 export const readDriver = tolerant(['person', 'agent'], 'person');
-// Who sent activity.userMessage (#489). Absent is the person, as from a host before the field;
-// a value this client doesn't know is still one the host says the person didn't type, so it is
-// never drawn as theirs.
-export const readUserMessageFrom = (v) => (typeof v !== 'string' || v === '' ? 'person' : tolerant(['person', 'schedule', 'agent', 'other'], 'other')(v));
+// Who sent activity.userMessage (#489). Absent (or null) is the person, as from a host before the
+// field; any other value this client doesn't know, malformed ones too, is still one the host says
+// the person didn't type, so it is never drawn as theirs.
+export const readUserMessageFrom = (v) => (v === undefined || v === null ? 'person' : tolerant(['person', 'schedule', 'agent', 'other'], 'other')(v));
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
