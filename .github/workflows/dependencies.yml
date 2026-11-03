@@ -51,14 +51,15 @@ jobs:
       - name: NuGet packages with known vulnerabilities, direct and transitive
         shell: pwsh
         # A finding is a warning; only the audit itself failing (a restore that cannot reach
-        # nuget.org, say) fails the step, since then nothing was checked.
+        # nuget.org, say) fails the step, since then nothing was checked. The restore runs on its
+        # own, so its failure is reported as such; the listing then reuses it.
         run: |
           # A workflow command is one line, so a % or line break in a tool's text could garble
           # or forge one; GitHub's own escapes keep it inside its message.
           function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
           dotnet restore AgentBridge.slnx --nologo -v q
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $json = dotnet list AgentBridge.slnx package --vulnerable --include-transitive --format json
+          $json = dotnet list AgentBridge.slnx package --vulnerable --include-transitive --format json --no-restore
           if ($LASTEXITCODE) { $json; exit $LASTEXITCODE }
           # One document, not one per line: pwsh captures a command's output as lines.
           $report = ($json -join "`n") | ConvertFrom-Json

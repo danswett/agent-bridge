@@ -60,10 +60,14 @@ jobs:
       - name: actionlint
         # Shellcheck is off here and reported by the next step instead. Pyflakes is off in both:
         # no step uses `shell: python`, and the runner's copy would be unpinned.
+        # A message can quote the pull request's own YAML, so % and line breaks in it, and also
+        # : and , in the file name, are escaped as workflow commands require; otherwise a
+        # crafted value could end the annotation and start a command of its own. actionlint
+        # unescapes the format first, so "\\n" here reaches the template as a newline.
         run: |
           # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
           actionlint -shellcheck= -pyflakes= \
-            -format '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint {{$err.Kind}}::{{$err.Message}}\n{{end}}'
+            -format '{{range $err := .}}::error file={{replace $err.Filepath "%" "%25" "\\r" "%0D" "\\n" "%0A" ":" "%3A" "," "%2C"}},line={{$err.Line}},col={{$err.Column}},title=actionlint {{$err.Kind}}::{{replace $err.Message "%" "%25" "\\r" "%0D" "\\n" "%0A"}}\n{{end}}'
       - name: shellcheck, through actionlint (advisory)
         # Runs after a failed actionlint step too, but not in a cancelled job: there is no one
         # left to read it.
@@ -74,7 +78,7 @@ jobs:
           code=0
           # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
           actionlint -shellcheck="$RUNNER_TEMP/lint-tools/shellcheck" -pyflakes= \
-            -format '{{range $err := .}}{{if eq $err.Kind "shellcheck"}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{$err.Message}}\n{{end}}{{end}}' \
+            -format '{{range $err := .}}{{if eq $err.Kind "shellcheck"}}::warning file={{replace $err.Filepath "%" "%25" "\\r" "%0D" "\\n" "%0A" ":" "%3A" "," "%2C"}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{replace $err.Message "%" "%25" "\\r" "%0D" "\\n" "%0A"}}\n{{end}}{{end}}' \
             || code=$?
           if [ "$code" -gt 1 ]; then exit "$code"; fi
       - name: zizmor (advisory)
