@@ -222,7 +222,8 @@ export class LaunchPanel {
   // machine, and launch.trust.answer sent with it. inspectOnly: the machine does not take
   // launches now (read-only, or agent-ha-bridge runs there), but a folder-trust question waiting
   // on it is still shown, read-only, with why; readOnly says why when it is known. The panel
-  // shows only when there is such a question.
+  // shows only when there is such a question. held: why nothing can be sent to the machine now (its
+  // channel is down, or its list not yet current, #269), or null: Launch and Try again are off.
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
     if (same) {
@@ -462,6 +463,11 @@ export class LaunchPanel {
     e.note.hidden = !e.note.textContent;
     e.busy.textContent = o.busy ? `${name} is busy: ${sentence(o.busy)}` : '';
     e.busy.hidden = !o.busy;
+    // Its machine's channel down, or its list not yet current (#269): nothing goes until it is.
+    if (this.#target?.held) {
+      e.busy.textContent = this.#target.held;
+      e.busy.hidden = false;
+    }
     this.#drawTrust();
     this.#drawCount();
     this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
@@ -497,7 +503,7 @@ export class LaunchPanel {
 
   async #press() {
     const target = this.#target;
-    if (!target || !this.#options) { return; }
+    if (!target || !this.#options || target.held) { return; }
     if (this.#pending(this.service.get(target.hostId)) || this.#signing) { return; }
     const launch = this.settings();
     const agent = this.#agent(launch.agent);
@@ -535,7 +541,7 @@ export class LaunchPanel {
   }
 
 
-  #resend() { if (this.#target) { this.service.resend(this.#target.hostId); } }
+  #resend() { if (this.#target && !this.#target.held) { this.service.resend(this.#target.hostId); } }
 
   // ---- folder trust ----
 
@@ -731,7 +737,8 @@ export class LaunchPanel {
     e.status.className = `answer-status launch-status${shown.tone ? ` ${shown.tone}` : ''}`;
     this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';
+    e.resend.disabled = !!this.#target?.held;
     e.open.hidden = !(entry?.state === 'done' && entry.detail?.session);
-    e.launch.disabled = this.#pending(entry);
+    e.launch.disabled = this.#pending(entry) || !!this.#target?.held;
   }
 }

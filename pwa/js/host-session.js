@@ -20,8 +20,10 @@
 // A machine that leaves presence keeps its link and its last list, offline and stale (#269,
 // ui.md §2.2): a host's relay connection drops for a few seconds on a restart, an update or a
 // network blip, and taking its sessions with it made them vanish and come back, grouped by
-// machine, every few minutes. Nothing can be sent to a stale machine (route() is null) until
-// its next full snapshot after it is back says what is still there.
+// machine, every few minutes. A link whose channel is down for any other reason (this device's
+// relay link dropped, the host restarted) is stale too, as the Windows app treats it: what it
+// last showed may have changed. Nothing is sent to a stale machine (route() is null, the one
+// gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
 import { SessionsStore } from './sessions-store.js';
@@ -59,9 +61,9 @@ export class HostLink {
   // Away so long its list went (the one machine chosen, which stays chosen): not kept on screen
   // with every machine, should every machine be chosen again before it is back.
   expired = false;
-  // Its list may be out of date: it left presence, and no full snapshot has come since it came
-  // back. Nothing is sent to it meanwhile.
-  stale = false;
+  // Its list may be out of date: no channel open now has delivered a whole snapshot (none has
+  // opened yet, its channel went, or the machine left presence). Nothing is sent to it meanwhile.
+  stale = true;
 
   constructor(id, store) {
     this.id = id;
@@ -108,14 +110,15 @@ export class HostSession {
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
 
-  // Calls fn(hostId) each time a channel to a machine shown is open and subscribed: whatever
-  // waits to be resent to that machine can go.
+  // Calls fn(hostId) each time a channel to a machine shown is open, subscribed and its snapshot
+  // whole: whatever waits to be resent to that machine can go.
   onOpen(fn) { this.#openListeners.add(fn); return () => this.#openListeners.delete(fn); }
 
   // Where something sent from a card goes: its own machine's channel, open now, or null. Never
   // another machine's, whichever is chosen; and never a machine's whose list may be out of date
-  // (it went offline, and its snapshot since has not finished), so nothing is sent on the
-  // strength of a question or session it showed before it went.
+  // (its channel went, or it went offline, and no whole snapshot has come since), so nothing is
+  // sent on the strength of a question or session it showed before. The one gate: the services
+  // take nothing new for a machine it gives no route to (SessionsPage, accepts).
   route(hostId) {
     const link = this.#links.get(hostId);
     return link?.phase === 'open' && link.client && !link.stale ? { client: link.client, hostId } : null;
@@ -123,11 +126,11 @@ export class HostSession {
 
   // Why a machine's sessions can't be acted on now, or null when they can (or it isn't shown):
   // { reason, since }. 'offline': it left presence; since is when it was last seen (the relay's
-  // roster says, else when this device saw it go). 'reconnecting': it is back in presence, and
-  // its channel is not open yet. 'confirming': open, and its snapshot has not finished.
+  // roster says, else when this device saw it go). 'reconnecting': it is in presence, and no
+  // channel to it is open. 'confirming': open, and its snapshot has not finished.
   staleOf(id) {
     const link = this.#links.get(id);
-    if (!link?.stale) { return null; }
+    if (!link || this.route(id)) { return null; }
     if (link.offlineSince === null) { return { reason: link.phase === 'open' ? 'confirming' : 'reconnecting', since: null }; }
     const seen = this.connection.known?.find?.((k) => k?.id === id)?.lastSeen;
     return { reason: 'offline', since: typeof seen === 'string' && seen ? seen : new Date(link.offlineSince).toISOString() };
@@ -248,7 +251,9 @@ export class HostSession {
   }
 
   // A machine forgotten (#50), here or from another device: its last list goes at once, rather
-  // than staying on screen offline for a machine the account no longer has.
+  // than staying on screen offline for a machine the account no longer has. One online now is
+  // left alone: the relay forgets only a machine that is gone (roster.md, `online`), so it is
+  // back, and its open channel is the live one.
   dropMachine(id) {
     if (!this.#links.has(id) || this.isOnline(id)) { return; }
     this.#drop(id);
@@ -306,7 +311,6 @@ export class HostSession {
         // Still away: a relay drop meanwhile said so on it, which this presence answers.
         if (link.offlineSince !== null) { if (link.phase === 'waiting') { link.error = ''; } continue; }
         link.offlineSince = this.now();
-        link.stale = true;
         this.#cancel(link);
         clearTimeout(link.timer);
         link.timer = null;
@@ -366,6 +370,7 @@ export class HostSession {
     const c = link.client;
     link.client = null;
     link.channel = null;
+    link.stale = true;
     c?.close();
   }
 
@@ -433,8 +438,9 @@ export class HostSession {
       client = this.makeClient(channel, link.store);
       link.channel = channel;
       link.client = client;
-      // Its first whole snapshot since it came back says what is still there: only then is
-      // anything sent to it again.
+      // A new channel's first whole snapshot says what is there now: only then is anything sent
+      // to it again.
+      link.stale = true;
       client.on('synced', () => this.#confirm(link, client));
       client.on('close', () => {
         if (link.client !== client) { return; }
@@ -442,6 +448,7 @@ export class HostSession {
         const settled = link.phase === 'open' || (link.phase === 'unsupported' && !link.attempt);
         link.client = null;
         link.channel = null;
+        link.stale = true;
         // One closing while it is being set up fails that attempt, which retries it once.
         if (!settled) { return; }
         this.#set(link, 'waiting', 'The channel to this machine closed; reopening.');
@@ -466,14 +473,14 @@ export class HostSession {
       if (link.client !== client) { throw new Error('the channel closed'); }
       link.failures = 0;
       this.#set(link, 'open');
-      if (!link.stale) { this.#opened(link.id); } else if (client.synced === true) { this.#confirm(link, client); }
+      if (client.synced === true) { this.#confirm(link, client); }
     } catch (e) {
       if (stale()) { client?.close(); return; }
       if (e.unsupported) {
         this.#set(link, 'unsupported', `This machine doesn't support Agent Bridge sessions yet (${e.reason ?? e.message}).`);
         return;
       }
-      if (link.client === client) { link.client = null; link.channel = null; }
+      if (link.client === client) { link.client = null; link.channel = null; link.stale = true; }
       client?.close();
       this.#set(link, 'failed', e.message);
       this.#later(link, this.retryMs);
@@ -487,7 +494,7 @@ export class HostSession {
     }
   }
 
-  // A stale machine's snapshot is complete: its sessions and questions are the ones it has now
+  // A channel's snapshot is complete: its sessions and questions are the ones the machine has now
   // (those that ended meanwhile went with the snapshot), so they can be acted on again.
   #confirm(link, client) {
     if (this.#links.get(link.id) !== link || link.client !== client || !link.stale || link.phase !== 'open' || link.offlineSince !== null) { return; }

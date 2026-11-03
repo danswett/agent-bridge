@@ -212,6 +212,10 @@ test.describe('a machine back from offline', () => {
 
   test('takes nothing while it is away, nor until its whole list is in, and then everything again', async ({ page }) => {
     await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    await page.locator('#launch select[name="machine"]').selectOption(LAPTOP);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await go(page, 'sessions');
     const v = sv(page, LAPTOP, IDLE);
     await open(page, IDLE, LAPTOP);
     await v.locator('.reply-input').fill('Push it when done');
@@ -229,10 +233,11 @@ test.describe('a machine back from offline', () => {
     await expect(asked.locator('.question .choice').first()).toBeDisabled();
     await expect(asked.locator('.question .answer-held')).toHaveText('Laptop is offline. This can\'t be answered from here until it is back.');
     await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
-    // Launch offers it nothing.
+    // Launch keeps the laptop picked, held.
     await go(page, 'launch');
-    await expect(page.locator('#launch select[name="machine"] option')).toHaveCount(0);
-    await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Demo machine');
+    await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Laptop');
+    await expect(page.locator('#launch .launch-busy')).toHaveText('Laptop is offline. Sessions can be started on it once it is back.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeDisabled();
     await go(page, 'sessions');
 
     // Back in presence, its channel not open yet: reconnecting.
@@ -255,6 +260,55 @@ test.describe('a machine back from offline', () => {
     await expect(card(page, LAPTOP, IDLE)).not.toHaveAttribute('data-stale', /./);
     await expect(v.locator('.reply .send')).toBeEnabled();
     await expect(v.locator('.end-button')).toBeEnabled();
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
+    await go(page, 'launch');
+    await expect(page.locator('#launch .launch-busy')).toBeHidden();
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeEnabled();
+  });
+
+  test('a machine still in presence whose channel drops reads as reconnecting and takes nothing until its new list is whole', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    await page.locator('#launch select[name="machine"]').selectOption(LAPTOP);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await go(page, 'sessions');
+    const v = sv(page, LAPTOP, IDLE);
+    await open(page, IDLE, LAPTOP);
+    await v.locator('.reply-input').fill('Push it when done');
+    await expect(v.locator('.reply .send')).toBeEnabled();
+    const asked = sv(page, LAPTOP, ASK);
+    await expect(asked.locator('.question .choice').first()).toBeEnabled();
+
+    await page.evaluate(() => {
+      const m = window.agentBridgeDemo.machines['demo-laptop'];
+      m.failOpen = 'the handshake timed out';
+      m.disconnect();
+    });
+    await tab(page, 'all').click();
+    await expect(card(page, LAPTOP, IDLE).locator('.row-status')).toHaveText('Reconnecting…');
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).not.toHaveAttribute('data-stale', /./);
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(v.locator('.reply .attach')).toBeDisabled();
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is reconnecting. This can be replied to once it has sent its sessions again.');
+    await expect(v.locator('.end-button')).toBeDisabled();
+    await expect(asked.locator('.question .choice').first()).toBeDisabled();
+    await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(0);
+    await go(page, 'launch');
+    await expect(page.locator('#launch .launch-busy')).toHaveText('Laptop is reconnecting. Sessions can be started on it once it has sent its sessions again.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeDisabled();
+    await go(page, 'sessions');
+
+    await laptop(page, 'holdSnapshot');
+    await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
+    // Picked again: tried now rather than at the next retry.
+    await tab(page, 'all').click();
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'confirming');
+    await expect(v.locator('.reply .send')).toBeDisabled();
+    await expect(v.locator('.reply-held')).toHaveText('Laptop is back. This can be replied to once it has sent its sessions again.');
+    await laptop(page, 'releaseSnapshot');
+    await expect(card(page, LAPTOP, IDLE)).not.toHaveAttribute('data-stale', /./);
+    await expect(v.locator('.reply .send')).toBeEnabled();
     await expect(asked.locator('.question .choice').first()).toBeEnabled();
     await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
   });
@@ -383,22 +437,30 @@ test('a launch resent when its machine comes back does not take the picker from 
   const which = panel.locator('select[name="machine"]');
   await which.selectOption(LAPTOP);
   await expect(panel.locator('[name="agent"]')).toBeVisible();
-  // The laptop drops away just as Launch is pressed: the launch waits for it.
+  // The laptop drops away just after Launch is pressed, its outcome not yet back: the launch
+  // waits for it, and Launch takes nothing more while the laptop is away (#269).
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].holdResponses());
+  await panel.getByRole('button', { name: 'Launch' }).click();
+  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(1);
   await page.evaluate(() => {
     const laptop = window.agentBridgeDemo.machines['demo-laptop'];
     laptop.failOpen = 'the handshake timed out';
     laptop.disconnect();
   });
   await expect(page.locator(`#host-state [data-host-id="${LAPTOP}"]`)).toBeAttached();
-  await panel.getByRole('button', { name: 'Launch' }).click();
   await expect(panel).toHaveAttribute('data-launch', 'waiting');
+  await expect(panel.getByRole('button', { name: 'Launch' })).toBeDisabled();
   await which.selectOption('demo');
   await expect(panel.locator('.launch-title')).toHaveText('Start a session on Demo machine');
 
   await page.evaluate(() => { window.agentBridgeDemo.machines['demo-laptop'].failOpen = null; });
   await go(page, 'sessions');
   await tab(page, 'all').click();
-  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(1);
+  // Resent, with the same request, once the laptop's new channel has sent its whole list.
+  await expect.poll(() => machine(page, LAPTOP, 'launchLog').then((l) => l.length)).toBe(2);
+  const log = await machine(page, LAPTOP, 'launchLog');
+  expect(log[1].request).toBe(log[0].request);
+  await page.evaluate(() => window.agentBridgeDemo.machines['demo-laptop'].releaseResponses());
   await go(page, 'launch');
   // Drawn again, as any later change in the machines would.
   await page.evaluate(() => window.agentBridgeDemo.retarget());

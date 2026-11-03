@@ -103,9 +103,11 @@ export class SessionsPage {
     Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, status, facts, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
-    // Nothing new is given for a machine whose list may be out of date (#269): its controls are
-    // disabled, and this holds even if one is pressed anyway.
-    const accepts = (hostId) => !hosts.staleOf(hostId);
+    // One gate for every send (#269): nothing new is given for a machine with no route now (its
+    // channel is down, or its snapshot since is not whole); its controls are disabled, and this
+    // holds even if one is pressed anyway. What was sent before stays to be resent: the machine
+    // checks it against the live question or session.
+    const accepts = (hostId) => !!hosts.route(hostId);
     this.answers = new AnswerService({ current, accepts, ...timing });
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
@@ -621,12 +623,13 @@ export class SessionsPage {
   // launches now (read-only, or agent-ha-bridge runs there) still gets a panel, to show a
   // folder-trust question waiting on it read-only, while it reconnects too; but with every
   // machine shown, only when none of them launches, so the picker offers only machines that do.
-  // A machine that went offline is offered nothing until it is back with a whole new list
-  // (#269): its folder-trust questions and what it could launch may have changed meanwhile.
+  // A machine whose channel is down, or whose snapshot since is not whole (#269), keeps its place
+  // in the panel, held: nothing can be launched or resumed on it, nor its folder-trust questions
+  // answered, until it is current again (launchTarget, held).
   #drawLaunch() {
     const { hosts, launchPanel: panel } = this;
     if (hosts.selection === null) { panel.setMachines(null); panel.setTarget(null); return; }
-    const links = hosts.links().filter((l) => !hosts.staleOf(l.id));
+    const links = hosts.links();
     const launches = links.filter((l) => this.#launches(l));
     const inspect = hosts.all && launches.length ? [] : links.filter((l) => !this.#launches(l) && this.#inspectOnly(l));
     const can = [...launches, ...inspect];
@@ -649,13 +652,19 @@ export class SessionsPage {
   }
 
   // What the launch panel is told about a machine: a new object each time, for the same machine,
-  // as a presence update hands in.
+  // as a presence update hands in. held: why nothing can be sent to it now (#269), or null.
   launchTarget(id) {
     const { hosts, launchPanel: panel } = this;
     const link = hosts.link(id);
+    const stale = hosts.staleOf(id);
+    const name = hosts.nameOf(id) ?? 'your machine';
+    const held = !stale ? null : stale.reason === 'offline'
+      ? `${name} is offline. Sessions can be started on it once it is back.`
+      : `${name} ${stale.reason === 'confirming' ? 'is back' : 'is reconnecting'}. Sessions can be started on it once it has sent its sessions again.`;
     const base = {
       hostId: id,
-      machineName: hosts.nameOf(id) ?? 'your machine',
+      machineName: name,
+      held,
       load: () => (hosts.link(id)?.client ? hosts.link(id).client.launchOptions() : Promise.reject(new Error('not connected'))),
     };
     if (link && !this.#launches(link) && this.#inspectOnly(link)) {
@@ -666,7 +675,8 @@ export class SessionsPage {
       // The account's other machines' sessions, each signed for when picked: only where this one
       // takes them, and only what they hand on.
       transfers: link?.capabilities.includes(TRANSFER.capability) ? this.transfers(id) : null,
-      trust: link?.capabilities.includes(TRUST.capability) ? this.trust(id) : null,
+      // A held machine's folder-trust questions are shown, not answered.
+      trust: !held && link?.capabilities.includes(TRUST.capability) ? this.trust(id) : null,
     };
   }
 

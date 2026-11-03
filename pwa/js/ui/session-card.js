@@ -44,9 +44,9 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 export function staleNote(stale, machineName, what) {
   if (!stale) { return null; }
   const name = machineName || 'The machine';
-  return stale.reason === 'offline'
-    ? `${name} is offline. This can't be ${what} from here until it is back.`
-    : `${name} is back. This can be ${what} once it has sent its sessions again.`;
+  if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
+  const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
+  return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
 }
 
 let seq = 0;
