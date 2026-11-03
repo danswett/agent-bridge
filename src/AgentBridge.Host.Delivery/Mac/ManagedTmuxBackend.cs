@@ -26,6 +26,7 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
     readonly Func<string, string?> imageFor;
     readonly string tmuxImage;
     readonly bool supported;
+    readonly Action<string>? log;
     readonly SemaphoreSlim typing = new(1, 1);
     readonly Lock registryGate = new();
     readonly Dictionary<int, Entry> entries = [];
@@ -35,8 +36,9 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
 
     public string SocketPath { get; }
 
-    public ManagedTmuxBackend(string tmuxExecutable, string privateRuntimeDirectory)
+    public ManagedTmuxBackend(string tmuxExecutable, string privateRuntimeDirectory, Action<string>? log = null)
     {
+        this.log = log;
         supported = OperatingSystem.IsMacOS();
         if (!OperatingSystem.IsMacOS()) { throw new PlatformNotSupportedException("managed tmux delivery requires macOS"); }
         if (!Path.IsPathFullyQualified(tmuxExecutable) || !File.Exists(tmuxExecutable)) { throw new ArgumentException("tmux must be an existing absolute executable", nameof(tmuxExecutable)); }
@@ -52,8 +54,9 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
         commands = new TmuxCommand(tmuxExecutable, SocketPath);
     }
 
-    internal ManagedTmuxBackend(ITmuxCommand commands, IMacProcessProbe processes, Func<string, string?> imageFor)
+    internal ManagedTmuxBackend(ITmuxCommand commands, IMacProcessProbe processes, Func<string, string?> imageFor, Action<string>? log = null)
     {
+        this.log = log;
         this.commands = commands; this.processes = processes; this.imageFor = imageFor;
         // The injected backend also runs on Windows in policy tests; its fake image
         // must satisfy that runner's absolute-path rules without changing Mac checks.
@@ -247,10 +250,7 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
                 {
                     if (buffer is not null)
                     {
-                        // -d removes a successfully pasted buffer. This also removes one
-                        // left by cancellation, a changed prompt or an uncertain paste.
-                        try { await commands.RunAsync(["delete-buffer", "-b", buffer]).ConfigureAwait(false); }
-                        catch (Exception) { }
+                        await CleanBufferAsync(entry.Server, buffer).ConfigureAwait(false);
                     }
                 }
             }
@@ -323,6 +323,27 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
             current = parent;
         }
         return null;
+    }
+
+    async Task CleanBufferAsync(MacProcessIdentity server, string buffer)
+    {
+        // paste-buffer -d normally consumes the buffer itself. Never inspect its contents.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (!Same(server, processes.Capture(server.ProcessId))) { break; }
+                var identity = await commands.RunAsync(["display-message", "-p", "#{pid}"]).ConfigureAwait(false);
+                if (identity.ExitCode != 0 || identity.Output.Trim() != server.ProcessId.ToString(CultureInfo.InvariantCulture)
+                    || !Same(server, processes.Capture(server.ProcessId))) { break; }
+                var deleted = await commands.RunAsync(["delete-buffer", "-b", buffer]).ConfigureAwait(false);
+                if (deleted.ExitCode == 0) { return; }
+                var buffers = await commands.RunAsync(["list-buffers", "-F", "#{buffer_name}"]).ConfigureAwait(false);
+                if (buffers.ExitCode == 0 && !buffers.Output.Split('\n').Contains(buffer, StringComparer.Ordinal)) { return; }
+            }
+            catch (Exception) { /* The delete or its reply may have been lost. Recheck identity before retry. */ }
+        }
+        log?.Invoke($"Cleanup of private tmux buffer {buffer} could not be confirmed.");
     }
 
     bool StillTarget(Entry entry, MacProcessIdentity target) => Same(target, processes.Capture(target.ProcessId))

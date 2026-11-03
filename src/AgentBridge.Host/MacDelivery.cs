@@ -16,7 +16,7 @@ internal static class MacDelivery
         }
         try
         {
-            var backend = new ManagedTmuxBackend(executable, Path.Combine(profileFolder, "run"));
+            var backend = new ManagedTmuxBackend(executable, Path.Combine(profileFolder, "run"), log);
             if (backend.Unavailable() is { } why) { log($"Mac session control is off: {why}"); return null; }
             log($"Mac sessions use a private tmux server: {backend.SocketPath}. Only sessions launched by this host run can be controlled.");
             return backend;

@@ -38,6 +38,7 @@ public sealed class ManagedTmuxTests
             if (args[0] == "new-session") { Session = args[Array.IndexOf(args, "-s") + 1]; }
             return Task.FromResult(new TmuxResult(0, args[0] switch
             {
+                "display-message" when args[^1] == "#{pid}" => ServerPid.ToString(),
                 "new-session" or "display-message" => $"%1\t{PanePid}\t{Session}\t0\t{ServerPid}\n",
                 "capture-pane" => Screen,
                 _ => "",
@@ -46,10 +47,10 @@ public sealed class ManagedTmuxTests
         public string[][] Writes => Calls.Where(c => c[0] is "send-keys" or "paste-buffer" or "kill-pane").ToArray();
     }
 
-    static (ManagedTmuxBackend Backend, Commands Commands, Probe Probe, Started Started) StartedBackend()
+    static (ManagedTmuxBackend Backend, Commands Commands, Probe Probe, Started Started) StartedBackend(Action<string>? log = null)
     {
         var commands = new Commands(); var probe = new Probe();
-        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"));
+        var backend = new ManagedTmuxBackend(commands, probe, _ => Absolute("/test/agent"), log);
         var started = backend.Start(new(Absolute("/test/agent"), [], Absolute("/workspace")));
         return (backend, commands, probe, started);
     }
@@ -187,6 +188,30 @@ public sealed class ManagedTmuxTests
         Assert.Equal(loaded[2], deleted[2]);
         Assert.Contains("-d", pasted);
         Assert.DoesNotContain("-p", pasted);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public async Task Buffer_cleanup_retries_only_when_the_private_buffer_still_exists(bool retained, int expectedDeletes)
+    {
+        var warnings = new List<string>();
+        var (backend, commands, _, _) = StartedBackend(warnings.Add);
+        string? buffer = null;
+        commands.OnCall = args =>
+        {
+            if (args[0] == "load-buffer") { buffer = args[2]; }
+            return args[0] switch
+            {
+                "delete-buffer" => new(1, ""),
+                "list-buffers" => new(0, retained ? buffer! : ""),
+                _ => null,
+            };
+        };
+        await backend.InjectAsync(300, new([new("fixture-secret", true, 0, 0)]));
+        Assert.Equal(expectedDeletes, commands.Calls.Count(c => c[0] == "delete-buffer"));
+        Assert.Equal(retained ? 1 : 0, warnings.Count);
+        Assert.DoesNotContain(warnings, w => w.Contains("fixture-secret"));
     }
 
     [Theory]
