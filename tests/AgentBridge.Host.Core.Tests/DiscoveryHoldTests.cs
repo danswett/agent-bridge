@@ -422,6 +422,9 @@ public class DiscoveryHoldTests
     [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -c \"codex app-server\"", false)]
     [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -c \"codex\"", true)]
     [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest", true)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex@latest exec codex", false)]
+    [InlineData("node --conditions codex /usr/lib/node_modules/@openai/codex/bin/codex.js exec task", false)]
+    [InlineData("node -C codex /work/vendored/codex.js exec task", false)]
     // an option naming codex is never the program
     [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package=@openai/codex codex exec task", false)]
     public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)

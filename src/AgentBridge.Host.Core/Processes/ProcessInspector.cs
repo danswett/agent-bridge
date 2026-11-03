@@ -623,11 +623,12 @@ public static partial class CommandLine
     // npx's options that take the command to run, as one argument.
     static readonly HashSet<string> WrapperCommandOptions = new(StringComparer.Ordinal) { "-c", "--call" };
 
-    // node's and bun's options that take the next argument as their value: a module to load
-    // before the script, whose name may be anything.
+    // node's and bun's options that take the next argument as their value (a module to load
+    // before the script, a condition, a folder, a file), which may be named anything, codex too.
     static readonly HashSet<string> RuntimeValueOptions = new(StringComparer.Ordinal)
     {
-        "-r", "--require", "--import", "--loader", "--experimental-loader", "--preload",
+        "-r", "--require", "--import", "--loader", "--experimental-loader", "--preload", "-C", "--conditions",
+        "--env-file", "--title", "--input-type", "--cwd",
     };
 
     // Codex's global options that take the next argument as their value, before any subcommand
