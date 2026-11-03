@@ -53,6 +53,9 @@ internal static class QuestionMapper
             return tool is null && command is null ? held with { Truncated = true } : held with { AnswerAtMachine = true };
         }
         var q = Approval(id, $"{who}\n\n{CopilotPermission.Fence(command)}", askedAt, atMachine);
+        // Whatever the command, what is sent is that shape, which every client checks before it
+        // offers Approve; one that is not would be answered nowhere else, so it is held here.
+        if (!ApprovalShape.IsFencedCommand(q.Message)) { q = q with { AnswerAtMachine = true }; }
         return cut ? q with { Truncated = true } : q;
     }
 

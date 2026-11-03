@@ -665,8 +665,11 @@ command's fence, a link, an image or HTML, text after a block, or a line in a bl
 fence; `ApprovalShape`), and both say a `truncated` approval is cut before they judge its shape,
 since one cut usually ends inside its block. These rules cover characters only, not Markdown:
 whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
-for Copilot's intention and #209 for a Codex approval's command, which until then is sent as
-Markdown prose (`Needs approval: <command>`).
+for Copilot's intention, and #209 for a Codex approval's command, which a host now sends whole in a
+fence longer than any run of backticks inside it. An older host sent it as Markdown prose
+(`Needs approval: <command>`): the PWA draws that exactly as written, and the app and Home
+Assistant cards hold any such prose Markdown would redraw at the machine, as its source
+(`ApprovalShape`).
 
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",

@@ -316,6 +316,23 @@ test.describe('what an entry offers', () => {
     await expect(card(page, CODEX).locator('.question')).toHaveAttribute('data-answerable', 'true');
   });
 
+  // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): as a host
+  // sends each and as an older host sent it (Markdown prose), the card draws it exactly as written
+  // (#429), with no link or image, and offers Approve once (#253, decision 3).
+  test('a Codex command Markdown would draw as a link or image is drawn on its card exactly as written, as a host sends it and as an older host sent it', async ({ page }) => {
+    const { cases } = JSON.parse(readFileSync(new URL('../../tests/fixtures/approvals/codex-commands.json', import.meta.url), 'utf8'));
+    await openDemo(page);
+    for (const c of cases) {
+      for (const [id, message] of [[`d-${c.name}`, c.message], [`l-${c.name}`, c.legacy]]) {
+        await ask(page, CODEX, permission({ id, message }));
+        const q = card(page, CODEX).locator(`.question[data-question="${id}"]`);
+        await expect(q).toHaveAttribute('data-answerable', 'true');
+        expect(await q.locator('.question-message').textContent()).toBe(message);
+        await expect(q.locator('.question-message a, .question-message img')).toHaveCount(0);
+      }
+    }
+  });
+
   // #220, #415: Approve once allows what runs, so an approval's card draws all of its message
   // exactly as written, fence markers included, in the code face; nothing in it is read as
   // Markdown, and what is not on screen as it runs is an escape.

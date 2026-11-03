@@ -251,6 +251,38 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("truncated", q.Why);
     }
 
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): all
+    // ASCII, yet as Markdown prose each draws a link's words or an image in place of what runs. As a
+    // host sends it, the card draws the whole command as code, with no link, and may approve it; as
+    // an older host sent it, the card shows its source and leaves it to the machine.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<System.Text.Json.Nodes.JsonObject> CodexCases() =>
+        System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public void A_codex_command_Markdown_would_draw_as_a_link_or_image_is_drawn_whole_as_code_and_an_older_hosts_prose_is_never_approved(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        var command = (string)c["command"]!;
+        IReadOnlyList<string> caps = [.. connection.Capabilities, Capabilities.SessionsApprove];
+        QuestionViewModel Codex(string message) => new(Make.Approval() with { Message = message }, "s1", AgentKind.Codex, caps, deliveries, "Test PC");
+
+        var sent = Codex((string)c["message"]!);
+        Assert.True(sent.Answerable);
+        var blocks = MarkdownModel.Parse(sent.Message);
+        Assert.Equal(command, Assert.Single(blocks.OfType<MdCode>()).Text);
+        Assert.DoesNotContain(blocks.OfType<MdParagraph>().SelectMany(p => p.Inlines), i => i is MdLink);
+
+        var legacy = Codex((string)c["legacy"]!);
+        Assert.False(legacy.Answerable);
+        Assert.Equal("atMachine", legacy.Why);
+        Assert.Equal((string)c["legacy"]!, Assert.Single(MarkdownModel.Parse(legacy.Message).OfType<MdCode>()).Text);
+        Assert.DoesNotContain(MarkdownModel.Parse(legacy.Message), b => b is not MdCode);
+    }
+
     [Fact]
     public void A_question_cut_to_fit_or_a_host_that_takes_no_answers_is_shown_read_only()
     {

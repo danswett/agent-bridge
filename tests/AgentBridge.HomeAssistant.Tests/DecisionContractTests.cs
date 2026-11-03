@@ -353,6 +353,39 @@ public sealed class DecisionContractTests
         Assert.True(HaDecision.Plan(preview, AgentKind.Codex).TerminalOnly);
     }
 
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): as a host
+    // sends each, the card shows it whole in a block and takes the tap; as an older host sent it
+    // (Markdown prose, drawn as a link's words or an image), the card shows its source and sends the
+    // person to the terminal.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    static IEnumerable<JsonObject> CodexCases() =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public void A_codex_command_Markdown_would_draw_as_a_link_or_image_is_tapped_only_as_a_whole_block_and_an_older_hosts_prose_goes_to_the_terminal(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        static Question Approval(string message) => new()
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = message, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
+        Assert.True(sent.AnswerOnTap);
+        Assert.Equal((string)c["message"]!, sent.Question);
+
+        var legacy = HaDecision.Plan(Approval((string)c["legacy"]!), AgentKind.Codex);
+        Assert.True(legacy.TerminalOnly);
+        Assert.False(legacy.AnswerOnTap);
+        Assert.Empty(legacy.Choices);
+        Assert.StartsWith($"```\n{(string)c["legacy"]!}\n```\n\n", legacy.Question);
+        Assert.Contains("answered in the terminal", legacy.Question);
+    }
+
     [Fact]
     public void A_delegate_whose_name_needs_neutralising_leaves_an_ordinary_approval_answerable_on_the_card()
     {

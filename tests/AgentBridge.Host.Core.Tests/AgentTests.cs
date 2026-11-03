@@ -342,6 +342,38 @@ public class CodexTests
         Assert.Equal((ToolStatus.Failed, Fixture.T0.AddSeconds(3)), (tool.Status, tool.EndedAt));
     }
 
+    // The security review's commands (tests/fixtures/approvals/codex-commands.json): all ASCII, yet
+    // as Markdown prose each draws a link's words or an image in place of what runs. A host sends
+    // each whole in a block nothing in it can close, exactly as the clients' tests take it.
+    public static TheoryData<string> CodexCommands => [.. CodexCases().Select(c => (string)c["name"]!)];
+
+    internal static IEnumerable<JsonObject> CodexCases() =>
+        JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["cases"]!
+            .AsArray().Select(c => c!.AsObject());
+
+    [Theory]
+    [MemberData(nameof(CodexCommands))]
+    public async Task A_codex_command_that_Markdown_would_draw_as_a_link_or_image_is_sent_whole_in_a_block_it_cannot_close(string name)
+    {
+        var c = CodexCases().Single(c => (string)c["name"]! == name);
+        var command = (string)c["command"]!;
+        using var f = new Fixture();
+        var rollout = f.CodexTranscript(Id);
+        f.CodexRegistration(Id, 950, rollout, status: "waiting", updated: Fixture.T0.AddSeconds(10));
+        f.CodexApprovalMarker(Id, "node-1", question: "Needs approval: " + command, created: Fixture.T0.AddSeconds(10), command: command);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 1));
+        await using var source = f.Source();
+
+        await source.RefreshAsync();
+
+        var q = Assert.Single(source.Snapshot()).Question!;
+        Assert.Equal((string)c["message"]!, q.Message);
+        Assert.True(ApprovalShape.IsFencedCommand(q.Message));
+        Assert.Null(q.AnswerAtMachine);
+        Assert.Null(q.Truncated);
+    }
+
     [Fact]
     public async Task An_approval_marker_beside_the_registration_is_an_approval_question_carrying_the_whole_command_literal()
     {

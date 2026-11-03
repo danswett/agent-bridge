@@ -501,3 +501,24 @@ test('a permission prompt draws the agent\'s intention as its words and what is 
     assert.equal(words(prose.map(spoken).join(' ')), words(c.intention), c.name);
   }
 });
+
+// The security review's commands (tests/fixtures/approvals/codex-commands.json, #209): all ASCII,
+// yet as Markdown prose each draws a link's words or an image in place of what runs. This card draws
+// an approval exactly as written (#429), so as a host sends it and as an older host sent it, each is
+// drawn whole, with no link or image, and Approve once offered (#253, decision 3).
+test('a codex command Markdown would draw as a link or image is drawn exactly as written, as a host sends it and as an older host sent it', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { answerability } = await import('../../js/answers.js');
+  const { cases } = JSON.parse(readFileSync(new URL('../../../tests/fixtures/approvals/codex-commands.json', import.meta.url), 'utf8'));
+  const caps = ['sessions.read', 'sessions.answer', 'sessions.approve'];
+  assert.ok(cases.length >= 4);
+  for (const c of cases) {
+    for (const message of [c.message, c.legacy]) {
+      const nodes = parseApproval(message);
+      assert.deepEqual(nodes.map(textOf), [message], c.name);
+      assert.ok(!walk(nodes).tags.some((t) => t === 'a' || t === 'img'), c.name);
+      const approval = { id: 'd1', kind: 'approval', message, fields: [{ name: 'decision', type: 'choice', options: [{ value: 'approve', label: 'Approve once' }, { value: 'deny', label: 'Deny' }], required: true }] };
+      assert.deepEqual(answerability(approval, caps, 'codex'), { ok: true, why: null }, c.name);
+    }
+  }
+});
