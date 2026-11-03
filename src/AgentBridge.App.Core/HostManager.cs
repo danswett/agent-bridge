@@ -436,19 +436,21 @@ public sealed class HostManager
         MarkStopped();
         try
         {
-            await StopHostAsync(ct);
+            await StopHostAsync(probeWait, ct, hold);
             await EndLauncherAsync(ct);
         }
-        catch (HostRefusedException)
+        // Not stopped: refused, still finishing a usage probe (#238), or the wait for its probes
+        // given up. It runs on, and is still to be started again should it crash.
+        catch (Exception e) when (e is HostRefusedException or HostBusyException
+            || (e is OperationCanceledException && hold.IsCancellationRequested && !ct.IsCancellationRequested))
         {
-            // Not stopped: it runs on, and is still to be started again should it crash.
             ClearStopped();
             throw;
         }
     }
 
-    // Through the host's pipe, as above.
-    async Task StopHostAsync(CancellationToken ct)
+    // Through the host's pipe, as above, once its usage probes are done (#238).
+    async Task StopHostAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
         int? pid = null;
         try
@@ -500,7 +502,7 @@ public sealed class HostManager
             }
             if (await AnswersAsync(ct))
             {
-                await StopHostAsync(ct);
+                await StopHostAsync(ProbeWait, ct);
                 continue;
             }
             await Task.Delay(Poll, ct);

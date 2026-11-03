@@ -417,6 +417,31 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_stop_given_up_on_a_usage_probe_still_finishing_leaves_no_stop_marker_so_a_crash_is_still_restarted()
+    {
+        var quick = new HostManager(manager.Layout, tasks, processes,
+            ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            StopTimeout = TimeSpan.FromSeconds(1),
+            Poll = TimeSpan.FromMilliseconds(50),
+            ProbeWait = TimeSpan.FromMilliseconds(300),
+            ProbePoll = TimeSpan.FromMilliseconds(50),
+            PackageHosts = () => [],
+        };
+        quick.SetStartAtSignIn(true);
+        host.On(HostOps.ProbeHold, _ => new ProbeHoldResult(true, "Codex's app-server is still finishing"));
+        host.Start();
+
+        await Assert.ThrowsAsync<HostBusyException>(() => quick.StopAsync());
+
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.True(await quick.IsRunningAsync());
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Starting_after_a_stop_clears_the_stop_marker_and_the_host_runs()
     {
         manager.SetStartAtSignIn(true);
