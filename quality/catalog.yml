@@ -10,7 +10,10 @@
 #                 4 release); every later ring runs it too
 #   select     R  affected: rings 0-1 run it only when a change reaches it; always: every run of its ring
 #   platforms  R  win-x64 | win-arm64 | linux-x64 | linux-arm64 | macos-arm64 | ios-sim | ios-device | browser
-#   runner     R  local | hosted | lab (Azure VMs, quality/README.md §6) | staging | device
+#   runner     R  where the suite's earliest ring runs it: local (a developer machine, and the
+#                 inner loop) | hosted (GitHub-hosted runners) | lab (Azure VMs, quality/README.md §6)
+#                 | staging | device. A local suite runs on hosted runners from ring 1 on (where:
+#                 names the job); lab, staging and device suites run only there
 #   status     R  exists | partial | planned
 #   project       for .NET suites: the directory of the test project, relative to the repository
 #                 root, holding exactly one .csproj (the selector fails if it holds none or more).

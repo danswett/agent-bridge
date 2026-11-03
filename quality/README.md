@@ -247,8 +247,8 @@ pwsh quality/run.ps1 -Explain   # the selection and why, without running
 pwsh quality/run.ps1 -Suite pwa-ui,host
 ```
 
-Agents follow the same loop: AGENTS.md's Tests section points at `quality/run.ps1` before a
-push.
+Agents will follow the same loop: the PR that adds `quality/run.ps1` (#355) also points
+AGENTS.md's Tests section at it, to run before a push.
 
 ## 5. Coverage, timing, flakes and reports
 

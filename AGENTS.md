@@ -54,7 +54,7 @@ merges.**
 ## Tests
 
 - `dotnet test AgentBridge.slnx` runs on Windows and Linux in CI.
-- Every suite, its ring and where it runs is in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
+- Every suite, with its ring and where it runs, is listed in [quality/catalog.yml](quality/catalog.yml); the test plan is [quality/README.md](quality/README.md).
 - If you touch `pwa/`, run its unit and Playwright tests (see `pwa/README.md`).
 - New behaviour gets a few focused tests whose names read as sentences, and each one fails without the change.
 - Never weaken or skip existing tests to get green.
