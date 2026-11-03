@@ -304,7 +304,9 @@ public sealed partial class NeedsYouEntry : Observable
     private static partial Regex Marks();
     [GeneratedRegex(@"(^|[\s(])[*_]([^*_\s][^*_]*?)[*_](?=[\s).,!?:;]|$)")]
     private static partial Regex Emphasis();
-    [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)")]
+    // Not backtracking: from every `[` the pattern scans the rest of the line, quadratic over a long
+    // run of brackets in the agent's text.
+    [GeneratedRegex(@"\[([^\]]*)\]\([^)]*\)", RegexOptions.NonBacktracking)]
     private static partial Regex Link();
     [GeneratedRegex(@"\s+")]
     private static partial Regex Spaces();

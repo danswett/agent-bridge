@@ -320,6 +320,22 @@ public sealed class NeedsYouTests : IAsyncLifetime
         Assert.Equal("Allow shell?", NeedsYouEntry.LineOf(Make.Approval() with { Message = "Allow **shell**?\n\nPush it\n\n```\ngit push origin main\n```" }));
     }
 
+    // A question's line comes from the agent's text, however long. A backtracking link pattern
+    // rescanned the rest of the line from every bracket, seconds on the UI thread for a long run.
+    [Theory]
+    [InlineData("[", 500000)]
+    [InlineData("[](", 200000)]
+    public void A_long_line_of_brackets_is_made_plain_quickly(string mark, int times)
+    {
+        var line = string.Concat(Enumerable.Repeat(mark, times));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var plain = NeedsYouEntry.PlainLine(line);
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
+        Assert.StartsWith(mark, plain);
+    }
+
     [Fact]
     public void A_question_that_opens_with_a_fenced_example_shows_the_question_after_it_not_the_examples_code()
     {
