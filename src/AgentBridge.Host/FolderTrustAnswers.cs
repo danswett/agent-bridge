@@ -22,6 +22,7 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
     readonly Action<string> log = log ?? (_ => { });
     readonly TimeProvider time = time ?? TimeProvider.System;
     Func<IReadOnlyList<PresenceEntry>>? presence;
+    public RemoteAuthorization? Trust { get; init; }
 
     // The relay's kinds for a device a person answers from.
     static readonly HashSet<string> PersonKinds = new(["pwa", "app"], StringComparer.Ordinal);
@@ -46,6 +47,10 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
 
         var (c, problem) = SignedCommands.Verify(key, request.Command, TrustProtocol.Action(request.Choice), time.GetUtcNow());
         if (c is null) { return Refused(peer, problem!); }
+        if (Trust is { } trust && (!trust.HasRole(peer, TrustedPeerStore.Person) || !trust.PersonKey(request.Command.By)))
+        {
+            return Refused(peer, "only an independently pinned person key may answer folder trust");
+        }
         var me = Wire.DeviceId(key.Public);
         if (c.To != me) { return Refused(peer, "the command is for another machine to act on"); }
         if (c.Target.Session != request.Question) { return Refused(peer, "the command is for another question"); }
@@ -64,7 +69,9 @@ public sealed class FolderTrustAnswers(P256KeyPair key, ISessionLauncher launche
     // Why this device cannot answer by what the relay lists it as, or null for a person's device
     // connected now: shared with the questions each device is shown, so none is offered buttons
     // that would only be refused.
-    public string? NotAPerson(string peer) => Volatile.Read(ref presence) is { } devices ? NotAPerson(devices().FirstOrDefault(d => d.Id == peer)) : "this machine is not connected to the relay now";
+    public string? NotAPerson(string peer) => Trust?.HasRole(peer, TrustedPeerStore.Person) == false
+        ? "only an independently pinned person key may answer folder trust"
+        : Volatile.Read(ref presence) is { } devices ? NotAPerson(devices().FirstOrDefault(d => d.Id == peer)) : "this machine is not connected to the relay now";
 
     static string? NotAPerson(PresenceEntry? d) =>
         d is null ? "the device that signed the command is not connected to the relay now"

@@ -26,10 +26,10 @@ public sealed class RelayPushSender(RelayClient relay) : IPushSender
 
 // Who asked to be notified: the channel's peer, the account its relay connection is signed
 // in to, and whether that relay lists the peer among the account's devices.
-public sealed record PushPeer(string Device, string Name, string AccountId, bool InAccount)
+public sealed record PushPeer(string Device, string Name, string AccountId, bool InAccount, byte[]? PublicKey = null)
 {
     public static PushPeer Of(SecureChannel ch) =>
-        new(ch.PeerId, ch.PeerName, ch.Relay.AccountId, ch.Relay.Presence.Any(p => p.Id == ch.PeerId));
+        new(ch.PeerId, ch.PeerName, ch.Relay.AccountId, ch.Relay.Presence.Any(p => p.Id == ch.PeerId), ch.PeerStatic);
 }
 
 public sealed record PushOptions
@@ -77,6 +77,7 @@ public sealed class PushNotifier : IAsyncDisposable
     readonly PushOptions options;
     readonly Action<string> log;
     readonly TimeProvider time;
+    readonly RemoteAuthorization? trust;
     readonly object gate = new();
     readonly Dictionary<string, Tracked> sessions = new(StringComparer.Ordinal);
     readonly List<Outgoing> outbox = [];
@@ -125,9 +126,11 @@ public sealed class PushNotifier : IAsyncDisposable
         public required DateTimeOffset Created;
         public DateTimeOffset NotBefore;
         public int Attempts;
+        public TrustedPeerLease? Grant;
     }
 
-    public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null)
+    public PushNotifier(ISessionSource source, MachineInfo machine, PushStore store, PushOptions? options = null, Action<string>? log = null, TimeProvider? time = null,
+        RemoteAuthorization? trust = null)
     {
         this.source = source;
         this.machine = machine;
@@ -135,6 +138,7 @@ public sealed class PushNotifier : IAsyncDisposable
         this.options = options ?? new PushOptions();
         this.log = log ?? (_ => { });
         this.time = time ?? TimeProvider.System;
+        this.trust = trust;
         source.Changed += OnChanged;
         var now = this.time.GetUtcNow();
         lock (gate)
@@ -152,6 +156,24 @@ public sealed class PushNotifier : IAsyncDisposable
     }
 
     public int Subscribers => store.Count;
+
+    bool MayNotify(PushSubscriber subscriber) => trust is not { Enabled: true } ||
+        (subscriber.Grant is { Role: TrustedPeerStore.Person } grant && trust.Store.Current(grant, store.Account)
+            && BlobFormat.FromBase64Url(grant.PublicKey) is { } key && Wire.DeviceId(key) == subscriber.Device);
+
+    public void RevalidateTrust()
+    {
+        if (trust is not { Enabled: true }) { return; }
+        lock (gate)
+        {
+            foreach (var subscriber in store.All)
+            {
+                if (MayNotify(subscriber)) { continue; }
+                store.RemoveIfEndpoint(subscriber.Device, subscriber.Endpoint);
+                Forget(subscriber.Device);
+            }
+        }
+    }
 
     // Outgoing notices not yet sent; tests read it.
     internal int Pending { get { lock (gate) { return outbox.Count; } } }
@@ -215,6 +237,12 @@ public sealed class PushNotifier : IAsyncDisposable
         {
             throw new InvalidOperationException("notifications are only for devices of this host's own account");
         }
+        var grant = trust?.Enabled == true ? trust.Lease(peer.PublicKey, peer.AccountId) : null;
+        if (trust?.Enabled == true && (grant?.Role != TrustedPeerStore.Person
+            || peer.PublicKey is null || Wire.DeviceId(peer.PublicKey) != peer.Device))
+        {
+            throw new InvalidOperationException("notifications require a current full-key person pin");
+        }
         switch (op)
         {
             case Ops.PushSubscribe:
@@ -222,7 +250,11 @@ public sealed class PushNotifier : IAsyncDisposable
                     var request = Read<PushSubscribeRequest>(data, "push.subscribe needs an endpoint, keys and an app URL");
                     if (Problem(request) is { } problem) { throw new ArgumentException(problem); }
                     var name = Clean(request.Device) ?? Clean(peer.Name) ?? "device";
-                    store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow()));
+                    lock (gate)
+                    {
+                        if (trust?.Enabled == true && store.Get(peer.Device)?.Grant != grant) { Forget(peer.Device); }
+                        store.Put(new PushSubscriber(peer.Device, name, request.Endpoint, request.Keys.P256dh, request.Keys.Auth, request.App, time.GetUtcNow(), grant));
+                    }
                     log($"push subscription from {name} ({peer.Device[..Math.Min(8, peer.Device.Length)]}, {new Uri(request.Endpoint).Host}); {store.Count} in all");
                     return new PushSubscribeResult(true, store.Count);
                 }
@@ -392,6 +424,7 @@ public sealed class PushNotifier : IAsyncDisposable
     // long until there may be more to do.
     internal async Task<TimeSpan> PumpAsync()
     {
+        RevalidateTrust();
         lock (gate) { MakeDue(time.GetUtcNow()); }
         while (true)
         {
@@ -408,13 +441,26 @@ public sealed class PushNotifier : IAsyncDisposable
                 if (recent.Count >= options.MaxPerMinute) { return NextWake(now); }
                 outbox.Remove(ready);
                 if (store.Get(ready.Device) is not { } found) { continue; }
-                recent.Enqueue(now);
+                if (!MayNotify(found) || ready.Grant != found.Grant) { continue; }
                 (next, sub, via) = (ready, found, s);
             }
             PushResult result;
             try
             {
-                result = await via.PushAsync(sub.Endpoint, WebPushCrypto.Encrypt(next.Plain, sub.Subscription), next.Ttl, next.Urgency, next.Topic);
+                var encrypted = WebPushCrypto.Encrypt(next.Plain, sub.Subscription);
+                lock (gate)
+                {
+                    if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != next.Grant) { continue; }
+                    var now = time.GetUtcNow();
+                    while (recent.Count > 0 && now - recent.Peek() >= TimeSpan.FromMinutes(1)) { recent.Dequeue(); }
+                    if (recent.Count >= options.MaxPerMinute)
+                    {
+                        outbox.Insert(0, next);
+                        return NextWake(now);
+                    }
+                    recent.Enqueue(now);
+                }
+                result = await via.PushAsync(sub.Endpoint, encrypted, next.Ttl, next.Urgency, next.Topic);
             }
             catch (TimeoutException)
             {
@@ -430,7 +476,8 @@ public sealed class PushNotifier : IAsyncDisposable
                 lock (gate)
                 {
                     if (sender == via) { broken = via; }
-                    if (!outbox.Any(o => o.Device == next.Device && o.Session == next.Session)) { outbox.Insert(0, next); }
+                    if (MayNotify(sub) && store.Get(sub.Device)?.Grant == sub.Grant
+                        && !outbox.Any(o => o.Device == next.Device && o.Session == next.Session)) { outbox.Insert(0, next); }
                     log($"push to {sub.Name} not sent ({e.GetType().Name}); will send after reconnecting");
                     // Still wakes for notices coming due; sending waits for Attach.
                     return NextWake(time.GetUtcNow());
@@ -447,6 +494,7 @@ public sealed class PushNotifier : IAsyncDisposable
 
     void Sent(Outgoing o, PushSubscriber sub, PushResult r)
     {
+        if (!MayNotify(sub) || store.Get(sub.Device)?.Grant != sub.Grant) { return; }
         var key = (o.Device, o.Session);
         if (r.Status is >= 200 and < 300)
         {
@@ -545,6 +593,7 @@ public sealed class PushNotifier : IAsyncDisposable
         var now = time.GetUtcNow();
         foreach (var sub in to)
         {
+            if (!MayNotify(sub)) { continue; }
             var plain = PushNotice.Serialize(Notice(s, kind, question, sub.App, now, ended));
             var ttl = kind == NoticeKind.Finished ? options.FinishedTtl : options.QuestionTtl;
             // The latest state of a session wins: a newer notice replaces one still waiting.
@@ -561,6 +610,7 @@ public sealed class PushNotifier : IAsyncDisposable
                 Topic = PushNotice.Topic(machine.Id, s.Id),
                 Created = now,
                 NotBefore = now,
+                Grant = sub.Grant,
             });
         }
     }

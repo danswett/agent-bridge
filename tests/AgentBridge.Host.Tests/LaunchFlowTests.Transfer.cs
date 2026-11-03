@@ -22,7 +22,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
     const string AwayId = "0f3c4d5e-6a7b-4c8d-9e0f-a1b2c3d4e5f6";
 
     // The other machine: its own fixture homes, sources, launcher and transfers.
-    sealed class Away(Fixture f, SessionSource source, Device device, SessionTransfers transfers, string events) : IAsyncDisposable
+    sealed class Away(Fixture f, SessionSource source, Device device, SessionTransfers transfers, string events, RemoteAuthorization? authorization) : IAsyncDisposable
     {
         public Fixture F => f;
         public Device Device => device;
@@ -31,6 +31,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
 
         public async ValueTask DisposeAsync()
         {
+            authorization?.Dispose();
             await device.DisposeAsync();
             await source.DisposeAsync();
             transfers.Dispose();
@@ -38,7 +39,7 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         }
     }
 
-    async Task<Away> AwayAsync(bool serve = true, HttpClient? storage = null)
+    async Task<Away> AwayAsync(bool serve = true, HttpClient? storage = null, Func<Device, RemoteAuthorization>? policy = null)
     {
         var fa = new Fixture();
         var appAway = Directory.CreateDirectory(Path.Combine(fa.Root, "repos", "app")).FullName;
@@ -60,7 +61,9 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         await awaySource.RefreshAsync();
         var device = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "Away host", "host");
         device.Hub.JsonOptions = ProtocolJson.Options;
-        var transfers = new SessionTransfers(device.Key, Path.Combine(fa.Root, "profile", "transfers"), http: storage);
+        var authorization = policy?.Invoke(device);
+        authorization?.Attach(device.Hub);
+        var transfers = new SessionTransfers(device.Key, Path.Combine(fa.Root, "profile", "transfers"), http: storage) { Trust = authorization };
         var awayLocator = new FakeLocator();
         awayLocator.Installed["copilot"] = @"C:\fake\copilot.exe";
         var launcher = new LaunchService(awaySource, new FakeProbe(), new FakeScreens(), new FakeStarter(fa), awayLocator, new AgencyCatalog(new FakeRunner()), new LaunchServiceOptions
@@ -76,18 +79,20 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
         });
         transfers.Launcher = launcher;
         transfers.Attach(device.Relay, device.Hub);
-        device.Hub.Handler = new SessionService(awaySource, new MachineInfo(device.Id, "Away host", "windows", "0.1.0"), launcher: launcher, transfers: transfers).HandleAsync;
-        return new Away(fa, awaySource, device, transfers, events);
+        var service = new SessionService(awaySource, new MachineInfo(device.Id, "Away host", "windows", "0.1.0"), launcher: launcher, transfers: transfers);
+        device.Hub.Handler = authorization?.Handler(service) ?? service.HandleAsync;
+        return new Away(fa, awaySource, device, transfers, events, authorization);
     }
 
     // This machine, bringing sessions in.
-    SessionTransfers ServeTransfers(Func<LaunchConfig, LaunchConfig>? change = null)
+    SessionTransfers ServeTransfers(Func<LaunchConfig, LaunchConfig>? change = null, RemoteAuthorization? trust = null)
     {
-        var transfers = new SessionTransfers(host.Key, Path.Combine(f.Root, "profile", "transfers"));
+        var transfers = new SessionTransfers(host.Key, Path.Combine(f.Root, "profile", "transfers")) { Trust = trust };
         var launcher = Launcher(Config(change), transfers: transfers);
         transfers.Launcher = launcher;
         transfers.Attach(host.Relay, host.Hub);
-        host.Hub.Handler = new SessionService(source, new MachineInfo(host.Id, "Test host", "windows", "0.1.0"), launcher: launcher, transfers: transfers).HandleAsync;
+        var service = new SessionService(source, new MachineInfo(host.Id, "Test host", "windows", "0.1.0"), launcher: launcher, transfers: transfers);
+        host.Hub.Handler = trust?.Handler(service) ?? service.HandleAsync;
         return transfers;
     }
 
@@ -120,6 +125,54 @@ public sealed class LaunchTransferFlowTests : LaunchFlowFixture
     LocalBlobBackend RelayStore => (LocalBlobBackend)relay.App.Services.GetRequiredService<BlobService>().Backend!;
 
     static IEnumerable<string> Left(string folder) => Directory.Exists(folder) ? Directory.EnumerateFileSystemEntries(folder) : [];
+
+    [Fact]
+    public async Task A_person_pinned_only_at_the_target_cannot_take_a_source_hosts_session_through_a_trusted_carrier()
+    {
+        RemoteAuthorization? sourcePolicy = null;
+        await using var away = await AwayAsync(policy: device =>
+        {
+            var pins = new TrustedPeerStore(Path.Combine(f.Root, "source-trust"), device.Key.Public, () => device.Relay.AccountId);
+            pins.Reset();
+            pins.Put(host.Key.Public, TrustedPeerStore.Host, DateTimeOffset.UtcNow.AddHours(1));
+            return sourcePolicy = new RemoteAuthorization(true, pins);
+        });
+        var targetPins = new TrustedPeerStore(Path.Combine(f.Root, "target-trust"), host.Key.Public, () => host.Relay.AccountId);
+        targetPins.Reset();
+        targetPins.Put(client.Key.Public, TrustedPeerStore.Person, DateTimeOffset.UtcNow.AddHours(1));
+        targetPins.Put(away.Device.Key.Public, TrustedPeerStore.Host, DateTimeOffset.UtcNow.AddHours(1));
+        using var targetPolicy = new RemoteAuthorization(true, targetPins);
+        targetPolicy.Attach(host.Hub);
+        using var transfers = ServeTransfers(trust: targetPolicy);
+        var channel = await OpenAsync();
+        object Offered()
+        {
+            var now = DateTimeOffset.UtcNow;
+            return new
+            {
+                from = away.Device.Id, session = AwayId,
+                command = SignedCommands.Sign(client.Key, away.Device.Key.Public, new CommandBody
+                {
+                    V = 1, Action = TransferProtocol.Action, Request = Guid.NewGuid().ToString(),
+                    Principal = new CommandPrincipal { Kind = "user", Device = client.Id },
+                    Target = new CommandTarget { Machine = away.Device.Id, Session = AwayId }, To = host.Id,
+                    IssuedAt = now.ToUnixTimeSeconds(), ExpiresAt = now.AddMinutes(5).ToUnixTimeSeconds(),
+                }),
+            };
+        }
+        var refused = await LaunchAsync(channel, new { agent = "copilot", workspace = "App", transfer = Offered() });
+        Assert.Equal("refused", refused.Outcome_);
+        Assert.Contains("signing person is not independently pinned", refused.Reason);
+        Assert.Empty(starter.Specs);
+        Assert.Empty(RelayStore.Stored);
+
+        sourcePolicy!.Store.Put(client.Key.Public, TrustedPeerStore.Person, DateTimeOffset.UtcNow.AddHours(1));
+        sourcePolicy.Revalidate();
+        var started = await LaunchAsync(channel, new { agent = "copilot", workspace = "App", transfer = Offered() });
+        Assert.Equal("started", started.Outcome_);
+        Assert.Single(starter.Specs);
+        Assert.Empty(RelayStore.Stored);
+    }
 
     [Fact]
     public async Task A_session_that_ended_on_another_machine_is_brought_here_under_an_id_of_its_own_and_resumed_in_the_workspace_chosen()
