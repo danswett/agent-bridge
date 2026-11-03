@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- perf-hook (quality/perf.md): starts a published agent-bridge-host-hook as an agent does, many
+       times, cold and warm, with the host up and down, and writes p50/p95/max as JSON. A console
+       tool rather than a test: it records numbers and gates nothing, and dotnet test passes over it
+       (IsTestProject false). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The pointer and spool names, from the contract the hook itself is built on. -->
+    <ProjectReference Include="..\..\src\AgentBridge.Hooks\AgentBridge.Hooks.csproj" />
+  </ItemGroup>
+
+</Project>

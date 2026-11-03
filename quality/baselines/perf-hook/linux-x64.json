@@ -1,0 +1,86 @@
+{
+  "suite": "perf-hook",
+  "schema": 1,
+  "platform": "linux-x64",
+  "measuredAt": "2026-11-03T16:49:55Z",
+  "environment": {
+    "runner": "github-actions",
+    "os": "Ubuntu 24.04.5 LTS",
+    "processors": 4
+  },
+  "hook": {
+    "file": "agent-bridge-host-hook",
+    "version": "1.0.0",
+    "agent": "copilot",
+    "hook": "permission",
+    "eventBytes": 391
+  },
+  "warmup": 3,
+  "unit": "ms",
+  "scenarios": [
+    {
+      "name": "warm, host up",
+      "start": "warm",
+      "host": "up",
+      "runs": 50,
+      "replyMs": {
+        "p50": 6.16,
+        "p95": 8.31,
+        "max": 8.98
+      },
+      "exitMs": {
+        "p50": 6.25,
+        "p95": 8.4,
+        "max": 9.04
+      }
+    },
+    {
+      "name": "warm, host down",
+      "start": "warm",
+      "host": "down",
+      "runs": 50,
+      "replyMs": {
+        "p50": 3.56,
+        "p95": 5.38,
+        "max": 5.5
+      },
+      "exitMs": {
+        "p50": 3.64,
+        "p95": 5.45,
+        "max": 5.55
+      }
+    },
+    {
+      "name": "cold, host up",
+      "start": "cold",
+      "host": "up",
+      "runs": 20,
+      "replyMs": {
+        "p50": 6.29,
+        "p95": 8.72,
+        "max": 10.95
+      },
+      "exitMs": {
+        "p50": 6.36,
+        "p95": 8.8,
+        "max": 11.04
+      }
+    },
+    {
+      "name": "cold, host down",
+      "start": "cold",
+      "host": "down",
+      "runs": 20,
+      "replyMs": {
+        "p50": 3.93,
+        "p95": 9.04,
+        "max": 11.15
+      },
+      "exitMs": {
+        "p50": 4.03,
+        "p95": 9.13,
+        "max": 11.22
+      }
+    }
+  ]
+}

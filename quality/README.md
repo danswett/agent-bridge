@@ -148,7 +148,8 @@ compares, on a lab machine kept for that and nothing else.
 
 Baselines live in `quality/baselines/` as small JSON files, one per suite and platform, and
 change only by PR. A regression is accepted on purpose by updating the baseline in the PR
-that causes it, with the reason in the PR.
+that causes it, with the reason in the PR. How to run `perf-hook` and `bench-micro`, read their
+numbers and update a baseline is in [perf.md](perf.md).
 
 ### 3.3 Security
 

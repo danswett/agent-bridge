@@ -1,0 +1,86 @@
+{
+  "suite": "perf-hook",
+  "schema": 1,
+  "platform": "win-x64",
+  "measuredAt": "2026-11-03T16:47:42Z",
+  "environment": {
+    "runner": "local",
+    "os": "Microsoft Windows 10.0.26200",
+    "processors": 16
+  },
+  "hook": {
+    "file": "agent-bridge-host-hook.exe",
+    "version": "1.0.0",
+    "agent": "copilot",
+    "hook": "permission",
+    "eventBytes": 391
+  },
+  "warmup": 3,
+  "unit": "ms",
+  "scenarios": [
+    {
+      "name": "warm, host up",
+      "start": "warm",
+      "host": "up",
+      "runs": 50,
+      "replyMs": {
+        "p50": 24.07,
+        "p95": 26.56,
+        "max": 28.14
+      },
+      "exitMs": {
+        "p50": 25.46,
+        "p95": 28.18,
+        "max": 30.12
+      }
+    },
+    {
+      "name": "warm, host down",
+      "start": "warm",
+      "host": "down",
+      "runs": 50,
+      "replyMs": {
+        "p50": 21.02,
+        "p95": 24.78,
+        "max": 26.5
+      },
+      "exitMs": {
+        "p50": 22.37,
+        "p95": 26.3,
+        "max": 28.03
+      }
+    },
+    {
+      "name": "cold, host up",
+      "start": "cold",
+      "host": "up",
+      "runs": 20,
+      "replyMs": {
+        "p50": 137.92,
+        "p95": 146.44,
+        "max": 147.58
+      },
+      "exitMs": {
+        "p50": 139.41,
+        "p95": 147.96,
+        "max": 149.6
+      }
+    },
+    {
+      "name": "cold, host down",
+      "start": "cold",
+      "host": "down",
+      "runs": 20,
+      "replyMs": {
+        "p50": 134.47,
+        "p95": 156.99,
+        "max": 168.94
+      },
+      "exitMs": {
+        "p50": 136.79,
+        "p95": 158.49,
+        "max": 170.37
+      }
+    }
+  ]
+}
