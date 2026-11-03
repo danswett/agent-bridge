@@ -120,45 +120,68 @@ internal sealed class HaPublicationReceipts
         new FileInfo(path).SetAccessControl(security);
     }
 
-    // ACL validation itself can briefly open a Windows handle without delete
-    // sharing. Serialize the entire snapshot check, not only its data stream.
+    void EnsureLockFile(string lockPath)
+    {
+        try { File.GetAttributes(lockPath); return; }
+        catch (FileNotFoundException) { }
+        var pending = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".lock.pending");
+        try
+        {
+            using (var stream = PrivateFolder.CreateNew(pending)) { stream.Flush(flushToDisk: true); }
+            if (OperatingSystem.IsWindows()) { ProtectWindowsReceipt(pending); }
+            if (!IsPrivateFile(pending)) { throw new IOException("The publication receipt lock is not private."); }
+            try { File.Move(pending, lockPath); }
+            catch (IOException) when (File.Exists(lockPath)) { }
+        }
+        finally { if (File.Exists(pending)) { File.Delete(pending); } }
+    }
+
+    // The persistent private file's exclusive handle serializes ACL checks too.
+    // Never delete the lock: another process could otherwise lock a new inode.
     T Locked<T>(Func<T> action, CancellationToken cancellationToken = default)
     {
-        var mutexPath = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
-        var name = "AgentBridgePublication_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mutexPath)));
-        using var mutex = new Mutex(false, name);
+        var name = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
         LocalTurn turn;
         lock (turnsGate)
         {
             if (!turns.TryGetValue(name, out turn!)) { turns[name] = turn = new(); }
             turn.Users++;
         }
-        var held = false;
+        FileStream? held = null;
         var localHeld = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
             var elapsed = Stopwatch.StartNew();
-            // A Windows mutex is not FIFO: a hot read loop can reacquire it for
-            // seconds while another local caller starves. Queue local callers
-            // asynchronously, retaining the same total bounded wait and the
-            // named mutex for cross-process exclusion.
+            // Synchronous locks permit hot readers to barge ahead. The asynchronous
+            // queue admits local callers fairly before cross-process exclusion.
             localHeld = turn.Queue.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).GetAwaiter().GetResult();
             if (!localHeld) { throw new IOException("Publication receipt is busy; no shared write is authorized."); }
-            while (!held && elapsed.Elapsed < TimeSpan.FromSeconds(5))
+            PrivateFolder.Ensure(folder, "the publication receipt folder", "no publication is authorized");
+            var lockPath = Path.Combine(folder, "receipt.lock");
+            EnsureLockFile(lockPath);
+            while (held is null && elapsed.Elapsed < TimeSpan.FromSeconds(5))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                // Unix does not support WaitAny with named mutexes. Bounded single
-                // waits preserve cancellation without turning this into a lease.
-                try { held = mutex.WaitOne(TimeSpan.FromMilliseconds(100)); }
-                catch (AbandonedMutexException) { held = true; }
+                try
+                {
+                    if (File.GetAttributes(lockPath).HasFlag(FileAttributes.ReparsePoint) || !IsPrivateFile(lockPath))
+                    {
+                        throw new InvalidDataException("The publication receipt lock is not a private regular file.");
+                    }
+                    held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                }
+                catch (Exception e) when (e is not InvalidDataException && e is IOException or UnauthorizedAccessException)
+                {
+                    cancellationToken.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(100));
+                }
             }
-            if (!held) { throw new IOException("Publication receipt is busy; no shared write is authorized."); }
+            if (held is null) { throw new IOException("Publication receipt is busy; no shared write is authorized."); }
             return action();
         }
         finally
         {
-            if (held) { mutex.ReleaseMutex(); }
+            held?.Dispose();
             if (localHeld) { turn.Queue.Release(); }
             lock (turnsGate)
             {
@@ -237,7 +260,7 @@ internal sealed record HaPublicationObservation(
             policy = HaPublicationPolicy.ReadResource(policyResource.Url, dashboard);
             if (previous is not null) { policy.CheckProgressFrom(previous); }
             // Only accept after the entire actual HA snapshot has been validated. Accept
-            // checks progression again under the local mutex; this is not a distributed lease.
+            // checks progression again under the private local lock; it is not a distributed lease.
             receipts.Accept(policy, cancellationToken);
         }
         else if (previous is not null || establishedConfig)

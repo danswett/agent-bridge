@@ -1337,11 +1337,15 @@ policies; none counts as permission to bootstrap. Only `config_not_found` means 
 missing dashboard config.
 
 Accepted policies are kept under the new host's profile in an owner-only
-`ha-publication/<instance-and-dashboard-digest>/receipt.json`. A named local mutex
+`ha-publication/<instance-and-dashboard-digest>/receipt.json`. An exclusive handle on
+the adjacent owner-only `receipt.lock`
 rechecks progression against the current receipt before an atomic, flushed
 replacement. Reads also hold it while validating Windows ACLs and reading a
 complete snapshot; query/fragment URL metadata cannot select a fresh receipt for
-the same normalized API endpoint. This mutex is **not a distributed lease**. Corrupt/inaccessible
+the same normalized API endpoint. A bounded, cancellation-aware local queue prevents
+hot readers starving replacements. The persistent lock is private before it becomes
+visible and is never deleted or treated as a lease; a process crash releases its
+handle. Corrupt/inaccessible
 receipts refuse observation, and deleting a dashboard cannot reset an established
 high-water mark. No legacy configuration or installed files are read or changed.
 

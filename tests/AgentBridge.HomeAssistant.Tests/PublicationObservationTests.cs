@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using AgentBridge.HomeAssistant;
 using Xunit;
 
@@ -127,6 +129,37 @@ public sealed class PublicationObservationTests : IDisposable
         }
         await Task.WhenAll(readers);
         Assert.Equal(original.Generation + 30, Receipts().Read()!.Generation);
+    }
+
+    [Fact]
+    public async Task An_exclusive_private_receipt_lock_preserves_cancellation_and_the_previous_snapshot()
+    {
+        var original = Policy();
+        Receipts().Accept(original);
+        var lockPath = Assert.Single(Directory.GetFiles(folder, "receipt.lock", SearchOption.AllDirectories));
+        using (var held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        using (var canceled = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Task.Run(() => Receipts().Accept(original, canceled.Token)));
+        }
+        Assert.Equal(original.Hash, Receipts().Read()!.Hash);
+        Assert.True(File.Exists(lockPath));
+    }
+
+    [Fact]
+    public void A_receipt_lock_with_broader_permissions_is_never_repaired_or_trusted()
+    {
+        Receipts().Accept(Policy());
+        var lockPath = Assert.Single(Directory.GetFiles(folder, "receipt.lock", SearchOption.AllDirectories));
+        if (OperatingSystem.IsWindows())
+        {
+            var file = new FileInfo(lockPath);
+            var security = file.GetAccessControl();
+            security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null), FileSystemRights.Read, AccessControlType.Allow));
+            file.SetAccessControl(security);
+        }
+        else { File.SetUnixFileMode(lockPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.OtherRead); }
+        Assert.Throws<InvalidDataException>(() => Receipts().Read());
     }
 
     [Fact]
