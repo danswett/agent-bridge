@@ -407,3 +407,41 @@ test('signed out, there is only the sign-in page: no navigation, no search', asy
   await expect(page.locator('#avatar')).toBeHidden();
   await expect(page.locator('[data-route]:visible')).toHaveCount(0);
 });
+
+
+test('the card clock pauses off route and while hidden, refreshes on return, and retires with its page', async ({ page }) => {
+  await page.clock.install();
+  await openDemo(page);
+  await page.evaluate(() => {
+    window.__timeRefreshes = 0;
+    for (const card of window.agentBridgeDemo.page.view.shownCards()) {
+      const refresh = card.refreshTimes.bind(card);
+      card.refreshTimes = () => { window.__timeRefreshes++; refresh(); };
+    }
+  });
+  const count = () => page.evaluate(() => window.__timeRefreshes);
+  await page.clock.fastForward(15000);
+  expect(await count()).toBeGreaterThan(0);
+  await go(page, 'machines');
+  const away = await count();
+  await page.clock.fastForward(45000);
+  expect(await count()).toBe(away);
+  await go(page, 'sessions');
+  expect(await count()).toBeGreaterThan(away);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const hidden = await count();
+  await page.clock.fastForward(45000);
+  expect(await count()).toBe(hidden);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await count()).toBeGreaterThan(hidden);
+  await page.evaluate(() => window.agentBridgeDemo.page.clear());
+  const retired = await count();
+  await page.clock.fastForward(45000);
+  expect(await count()).toBe(retired);
+});

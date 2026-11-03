@@ -35,6 +35,8 @@ export class SessionListView {
   #drawn = false;
 
   get drawn() { return this.#drawn; }
+  #active = true;
+  #visibilityChanged = () => this.#clock();
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
   // fetchDetail(hostId, id) -> Promise<Session|null>; fetchDelegate(hostId, id, agent) ->
@@ -57,11 +59,38 @@ export class SessionListView {
       this.schedule();
     });
     // Relative times move on without any event from the host.
-    this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
+    document.addEventListener('visibilitychange', this.#visibilityChanged);
+    this.#clock();
     // What a move did, said to a screen reader.
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);
     this.#listen();
+  }
+
+  setActive(active) {
+    this.#active = active;
+    this.#clock();
+  }
+
+  #refreshTimes() {
+    for (const card of this.#cards.values()) {
+      if (card.element.getClientRects().length || card.view.getClientRects().length) { card.refreshTimes(); }
+    }
+  }
+
+  #clock() {
+    clearInterval(this.ticker);
+    this.ticker = null;
+    if (!this.#active || document.hidden) { return; }
+    this.#refreshTimes();
+    this.ticker = setInterval(() => this.#refreshTimes(), 15000);
+  }
+
+  dispose() {
+    this.#active = false;
+    clearInterval(this.ticker);
+    this.ticker = null;
+    document.removeEventListener('visibilitychange', this.#visibilityChanged);
   }
 
   static key(hostId, id) { return `${hostId}\n${id}`; }

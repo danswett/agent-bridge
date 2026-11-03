@@ -286,6 +286,7 @@ export class SessionsPage {
         this.launchPanel.setOpen(route === 'launch');
         const back = route === 'sessions' && was !== 'sessions';
         was = route;
+        this.view.setActive(route === 'sessions');
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
@@ -318,6 +319,7 @@ export class SessionsPage {
         globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
       }
       this.launchPanel.setOpen(shell.route === 'launch');
+      this.view.setActive(shell.route === 'sessions');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
       this.#delegateBack($('session-views'));
@@ -674,6 +676,7 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.view.dispose();
     this.#unroute?.();
     this.#unroute = null;
     this.#listening?.abort();
