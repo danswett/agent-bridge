@@ -224,6 +224,25 @@ public sealed class LaunchPieceTests : IDisposable
         }
     }
 
+    [WindowsFact]
+    public async Task Codex_home_is_isolated_for_both_executables_and_batch_shims_without_changing_the_parent()
+    {
+        var inherited = Environment.GetEnvironmentVariable("CODEX_HOME");
+        var home = Path.Combine(root, "selected-codex-home");
+        var environment = new Dictionary<string, string> { ["CODEX_HOME"] = home };
+        var runner = new BatchFileRunner(new AgentBridge.Host.Core.Usage.CommandRunner(environment), environment);
+        var command = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+        var native = await runner.RunAsync(command, ["/d", "/c", "set CODEX_HOME"], TimeSpan.FromSeconds(30));
+        var shim = Path.Combine(root, "codex.cmd");
+        File.WriteAllText(shim, "@set CODEX_HOME\r\n");
+        var batch = await runner.RunAsync(shim, [], TimeSpan.FromSeconds(30));
+        Assert.Equal(0, native.ExitCode);
+        Assert.Equal(0, batch.ExitCode);
+        Assert.Equal("CODEX_HOME=" + home, native.Output.Trim());
+        Assert.Equal(native.Output.Trim(), batch.Output.Trim());
+        Assert.Equal(inherited, Environment.GetEnvironmentVariable("CODEX_HOME"));
+    }
+
     [Fact]
     public void A_line_too_long_for_cmd_exe_is_refused_rather_than_cut()
     {

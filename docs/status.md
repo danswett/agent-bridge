@@ -58,6 +58,13 @@ remain gates; the wider HA architecture redirect is tracked separately in #388.
 
 ### Built and merged
 
+Fresh Windows hook setup now has an explicit local CLI path (`hooks install|remove`,
+[host-hooks.md](host-hooks.md)) independent of legacy migration. It covers Copilot/Agency,
+Claude and Codex, with ownership checks and a private runtime. Launch workspaces still
+require explicit approval. This is the backend slice of #54, not the complete Settings/
+first-run experience; automatic CLI installation, sign-in guidance, agent trust prompts,
+optional HA and end-to-end readiness remain to be planned together with Settings (#231).
+
 The work has been built phone-first. All merged PRs are listed in §7.
 
 | Area | State |

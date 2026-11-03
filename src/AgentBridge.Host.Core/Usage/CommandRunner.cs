@@ -12,7 +12,7 @@ public interface ICommandRunner
     Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default);
 }
 
-public sealed class CommandRunner : ICommandRunner
+public sealed class CommandRunner(IReadOnlyDictionary<string, string>? environment = null) : ICommandRunner
 {
     public async Task<CommandResult> RunAsync(string program, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -27,6 +27,10 @@ public sealed class CommandRunner : ICommandRunner
         foreach (var a in arguments) { start.ArgumentList.Add(a); }
         // Whatever gh would otherwise ask, it must not wait for an answer nobody is there to give.
         start.Environment["GH_PROMPT_DISABLED"] = "1";
+        if (environment is not null)
+        {
+            foreach (var (name, value) in environment) { start.Environment[name] = value; }
+        }
         Process process;
         try { process = ProcessLaunch.Start(start) ?? throw new InvalidOperationException(); }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException) { return new CommandResult(false, false, -1, ""); }
