@@ -393,7 +393,7 @@ suites:
     triggers: [pwa/**, design/**]
     command: cd pwa && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
     where: ci.yml pwa
-    baseline: { files: 22 }
+    baseline: { files: 25 }
     status: exists
 
   - id: pwa-e2e
@@ -684,8 +684,13 @@ suites:
     platforms: [browser]
     runner: hosted
     triggers: [pwa/**, design/**]
-    command: '@axe-core/playwright on every view, light, dark and forced-colors, plus keyboard-only and reduced-motion specs'
-    status: planned
+    # @axe-core/playwright on every view in light, dark and forced colors, plus keyboard-only and
+    # reduced-motion specs. The 6 forced-colors tests are skipped on WebKit. Known issues #365,
+    # #366, #369, #370 and #371 are allowlisted by rule, selector and issue.
+    command: cd pwa && npx playwright test axe.spec.mjs keyboard.spec.mjs reduced-motion.spec.mjs
+    where: ci.yml pwa
+    baseline: { files: 3, tests: 58 }
+    status: exists
 
   - id: a11y-contrast
     kind: a11y
