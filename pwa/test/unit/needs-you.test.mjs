@@ -51,6 +51,14 @@ test('one machine shown, entries leave the machine out, as the cards do', () => 
   assert.equal(e.machine, '');
 });
 
+test('a machine whose list is not current (offline, or back without its whole list) adds no entry and nothing to the count', () => {
+  const list = lane([
+    entry('h1', session('a', approval('qa'))),
+    entry('h2', session('b', form('qb'))),
+  ], { current: (h) => h !== 'h1' });
+  assert.deepEqual(list.map((e) => e.hostId), ['h2']);
+});
+
 test('an approval\'s line is its first line of prose, never a code fence', () => {
   assert.equal(questionLine(approval('q')), 'Allow shell?');
   assert.equal(questionLine({ kind: 'approval', message: '```\ngit status\n```' }), 'git status');

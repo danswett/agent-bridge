@@ -81,10 +81,38 @@ function dropKeptUsage() {
 let page = null;
 
 // ---- links: a notification's ?host=&session=&question= ----
-// The session a link asked for, until its card is on screen: { host, session }.
+// The session a link asked for, until its card is on screen: { host, session, question }.
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
+// While a shown link's answers wait to take focus: stops watching for focus moved meanwhile.
+let unwatchFocus = () => {};
+
+// What a link asked for: another, or none. Whatever watched the last one's focus goes with it.
+function setLinked(next) {
+  unwatchFocus();
+  linked = next;
+}
+
+// Any focus landing anywhere but where showing the session left it, and any press or key at
+// all, while its answers wait for the machine, gives the wait up: the person has moved on. A
+// click on something that takes no focus leaves focus on the page itself with no focusin, and
+// a redrawn panel drops it there too, so where focus is once the machine is current says
+// nothing; that the person did something meanwhile does. Focus coming back to the page as a
+// whole (another app, then this one again) is neither.
+function watchFocus(want) {
+  const off = () => { if (linked === want) { setLinked(null); } };
+  const moved = (e) => { if (e.target !== want.left && e.target !== document && e.target !== document.body) { off(); } };
+  document.addEventListener('focusin', moved, true);
+  document.addEventListener('pointerdown', off, true);
+  document.addEventListener('keydown', off, true);
+  unwatchFocus = () => {
+    document.removeEventListener('focusin', moved, true);
+    document.removeEventListener('pointerdown', off, true);
+    document.removeEventListener('keydown', off, true);
+    unwatchFocus = () => {};
+  };
+}
 
 const ID = /^[0-9a-f]{32}$/;
 const param = (p, name) => { const v = p.get(name); return v && v.length <= 256 ? v : null; };
@@ -101,15 +129,37 @@ function takeLink() {
 }
 
 // Opens the session a notification was about, with its question ready to answer: on its own
-// machine, shown alone or with every other.
+// machine, shown alone or with every other. Its answers take focus only once that machine
+// takes them (#269: not while its list is still being confirmed), and only while the session
+// is still the one shown.
+// Focus goes to an answer only for the question the notification was about, and only if the
+// person has not moved focus since: a tap choice sends on Enter or Space, and while the machine
+// was held the question could have been answered at the machine and another asked, which a
+// focus moved later would have them approve unseen (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
-  // Taken before the session is shown: showing it closes a search that hid it, which redraws
-  // the list, which comes back here.
-  linked = null;
-  page.showSession(card.id, card.hostId);
+  if (!linked.shown) {
+    // Taken while the session is shown: showing it closes a search that hid it, which redraws
+    // the list, which comes back here.
+    const want = { ...linked, shown: true };
+    setLinked(null);
+    page.showSession(card.id, card.hostId);
+    want.left = document.activeElement;
+    setLinked(want);
+    if (!page.hosts.route(card.hostId)) { watchFocus(want); return; }
+  } else if (page.view.selected !== card) {
+    setLinked(null);
+    return;
+  }
+  if (!page.hosts.route(card.hostId)) { return; }
+  const { question, left } = linked;
+  setLinked(null);
+  // Body only as where nothing has been focused since: a move would have given this up.
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { return; }
+  if (!question || card.session?.question?.id !== question) { return; }
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.
   const el = card.view;
@@ -385,11 +435,11 @@ function begin(account) {
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId });
   const link = takeLink();
-  linked = link?.host && link.session ? { host: link.host, session: link.session } : null;
+  setLinked(link?.host && link.session ? { host: link.host, session: link.session, question: link.question } : null);
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
-  followLink = ({ host, session }) => {
-    linked = session ? { host, session } : null;
+  followLink = ({ host, session, question }) => {
+    setLinked(session ? { host, session, question } : null);
     if (!hosts.all || !hosts.isOnline(host)) { hosts.visit(host); }
     focusLinked();
   };
@@ -400,6 +450,7 @@ function begin(account) {
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
   const updates = new UpdateControl({ fleet });
   const dropMachine = (id) => {
+    hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }
@@ -561,8 +612,10 @@ function begin(account) {
       // News, as reconnecting is: the strip shows on a phone, in plain words.
   case 'connecting': return setPill('Connecting…', 'busy');
       case 'connected': page.refresh(); return setPill('Connected', 'ok');
-      case 'reconnecting': page.refresh(); return setPill('Reconnecting…', 'warn');
-      case 'replaced': return setPill('Paused', 'warn');
+      // A shown link still waiting to focus an answer is given up when the relay drops: the
+      // machine's list will be another by the time it is back.
+      case 'reconnecting': if (linked?.shown) { setLinked(null); } page.refresh(); return setPill('Reconnecting…', 'warn');
+      case 'replaced': if (linked?.shown) { setLinked(null); } return setPill('Paused', 'warn');
       case 'signed-out': return undefined;
       default: return setPill(state);
     }
@@ -570,6 +623,7 @@ function begin(account) {
   connection.on('signed-out', () => {
     // The account's sessions and remembered machine go with it; a reconnect within the
     // same sign-in keeps them, but a new sign-in may be a different account.
+    setLinked(null);
     hosts.forget();
     fleet.clear();
     forgets.clear();
@@ -594,6 +648,7 @@ function begin(account) {
   });
 
   $('signout').onclick = async () => {
+    setLinked(null);
     hosts.forget();
     fleet.clear();
     page.clear();

@@ -40,8 +40,9 @@ export class SessionListView {
   // settled(hostId): whether a machine has sent its whole list yet. views: where the sessions'
   // views go (the session pane). layout() -> { inspector }: whether the inspector is a pane now.
   // viewing() -> whether the selected session's view is on screen (on a phone, only once pushed).
-  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true } = {}) {
-    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing });
+  // stale(hostId) -> why a machine's sessions can't be acted on now ({ reason, since }), or null.
+  constructor(container, sessions, { fetchDetail, fetchDelegate = null, machine = () => ({ name: '', show: false }), answering = () => null, order = new SessionOrder(), shows = () => true, settled = () => true, views = null, layout = () => ({ inspector: false }), viewing = () => true, stale = () => null } = {}) {
+    Object.assign(this, { container, sessions, fetchDetail, fetchDelegate, machine, answering, order, shows, settled, layout, viewing, stale });
     this.views = views ?? h('div');
     sessions.onChange((change) => {
       this.order.observe(change);
@@ -122,6 +123,7 @@ export class SessionListView {
             hostId, fetchDetail: (id) => this.fetchDetail(hostId, id),
             fetchDelegate: this.fetchDelegate ? (id, agent) => this.fetchDelegate(hostId, id, agent) : null,
             machineName: m.name, labelled: m.show, answering: () => this.answering(hostId),
+            stale: this.stale(hostId),
             onSelect: (c) => this.onSelect?.(c),
             onPin: (c, pinned) => this.#pin(c, pinned, c.els.pin),
             onBack: (c) => this.onBack?.(c),
@@ -138,6 +140,7 @@ export class SessionListView {
           card.update(s);
         }
         card.setPinned(isPinned);
+        card.setStale(this.stale(hostId));
         // On screen, its news is seen as it comes; otherwise its row gets the dot. A session's
         // view stays on screen while search hides its row, so this comes before search's say.
         if (card.selected && this.viewing()) { this.order.markSeen(key, s.updatedAt); }
@@ -384,6 +387,11 @@ export class SessionListView {
     if (this.filter) { this.schedule(); }
   }
 
+  // A machine went offline, came back, or sent a whole new list since (#269): its rows say so.
+  refreshStale() {
+    for (const c of this.#cards.values()) { c.setStale(this.stale(c.hostId)); }
+  }
+
   // Whether search is hiding a session's row: it exists, and is not in the list.
   hidden(card) { return !!card && !card.element.isConnected; }
 
@@ -418,20 +426,27 @@ export class SessionListView {
 }
 
 // The machine tabs above the sessions (ui.md §6.1, Windows and the PWA: SelectorBar-style text
-// tabs): All, once more than one machine is online, then each online machine, and a machine
-// still chosen while it is away. Hidden when there is nothing to choose between. Arrow keys,
-// Home and End move between them, choosing as they go, as a SelectorBar does.
+// tabs): All, once more than one machine is online or kept on screen, then each online machine,
+// then each machine kept on screen since it left (away: with every machine shown, #269), and a
+// machine still chosen while it is away. Hidden when there is nothing to choose between. Arrow
+// keys, Home and End move between them, choosing as they go, as a SelectorBar does.
 const tabsDrawnAs = new WeakMap();
 
-export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null }) {
+export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [] }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
+  const awayIds = away.filter((id) => id !== me && !hosts.some((d) => d.id === id));
+  const kept = all ? awayIds : [];
+  const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: true });
   const tabs = [
-    ...(hosts.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
+    // A machine chosen while it is away counts too, so All stays offered to go back to (#269).
+    ...(hosts.length + awayIds.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
     ...hosts.map((d) => ({ id: d.id, name: d.name, label: d.name })),
-    ...(current && !all && !hosts.some((d) => d.id === current) ? [{ id: current, name: nameOf(current) ?? 'This machine', label: nameOf(current) ?? 'This machine', away: true }] : []),
+    ...kept.map(awayTab),
+    ...(current && !all && !hosts.some((d) => d.id === current) ? [awayTab(current)] : []),
   ];
-  const chosen = (t) => t.id === current || (all && hosts.length === 1 && t.id === hosts[0].id);
+  const sole = hosts.length + kept.length === 1 ? hosts[0]?.id ?? kept[0] : null;
+  const chosen = (t) => t.id === current || (all && t.id === sole);
   // One machine and it is the one shown: there is nothing to choose.
   const show = tabs.length > 1 || (tabs.length === 1 && !chosen(tabs[0]));
   const key = JSON.stringify([show, current, tabs.map((t) => [t.id, t.name, !!t.away])]);

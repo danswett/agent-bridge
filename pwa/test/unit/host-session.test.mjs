@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ALL, HostSession } from '../../js/host-session.js';
+import { ALL, HostSession, OFFLINE_KEEP_MS } from '../../js/host-session.js';
 import { HostClient, HostError } from '../../js/host-client.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { AnswerService } from '../../js/answer-service.js';
@@ -90,6 +90,7 @@ test('a host that refuses hello is reported as not supporting sessions', async (
   await flush();
   assert.equal(hosts.phase, 'unsupported');
   assert.match(hosts.error, /unknown op hello/);
+  assert.deepEqual([hosts.route('a'), hosts.staleOf('a')], [null, { reason: 'unsupported', since: null }], 'held as unsupported, never as reconnecting');
 });
 
 test('switching machines while a handshake is pending opens the new machine', async () => {
@@ -288,7 +289,7 @@ test('a machine that can\'t be reached is tried again on its own, waiting longer
   assert.equal(connection.opens.filter((o) => o.peerId === 'a').length, 1);
 });
 
-test('a machine going offline leaves with its sessions when every machine is shown; one machine chosen keeps its last list', async () => {
+test('a machine that leaves presence keeps its sessions on screen, offline and stale, beside the other machine\'s, and so does one machine chosen', async () => {
   const connection = fakeConnection(hosts('a', 'b'));
   const s = new HostSession({ connection, storage: null, makeClient: snapshot({ a: [['s1', '2026-10-31T10:00:00.000Z']], b: [['s2', '2026-10-31T11:00:00.000Z']] }) });
   s.select(ALL);
@@ -296,21 +297,171 @@ test('a machine going offline leaves with its sessions when every machine is sho
   for (const o of connection.opens) { o.resolve(); }
   await flush();
   await flush();
-  const gone = [];
-  s.sessions.onChange((c) => gone.push(`${c.type}:${c.hostId}`));
+  const changes = [];
+  s.sessions.onChange((c) => changes.push(`${c.type}:${c.hostId}`));
   const b = s.link('b').client;
   connection.presence = hosts('a');
   connection.emit('presence');
-  assert.deepEqual(s.sessions.list().map((e) => e.hostId), ['a']);
-  assert.deepEqual(gone, ['clear:b']);
-  assert.equal(b.closed, true);
-  assert.equal(s.link('b'), null);
+  assert.deepEqual(s.sessions.list().map((e) => `${e.hostId}/${e.session.id}`), ['b/s2', 'a/s1']);
+  assert.deepEqual(changes, [], 'nothing cleared, nothing removed');
+  assert.equal(b.closed, true, 'its channel went with it');
+  assert.deepEqual([s.link('b').phase, s.shownIds(), s.away()], ['waiting', ['a', 'b'], ['b']]);
+  assert.equal(s.staleOf('b').reason, 'offline');
+  assert.equal(s.staleOf('a'), null, 'the other machine is untouched');
+  assert.equal(s.route('b'), null);
+  assert.ok(s.route('a'));
 
   s.select('a');
   assert.equal(s.link('a').phase, 'open', 'the chosen machine keeps the channel it had');
   connection.presence = [];
   connection.emit('presence');
-  assert.deepEqual([s.phase, s.sessions.list().map((e) => e.session.id)], ['waiting', ['s1']]);
+  assert.deepEqual([s.phase, s.sessions.list().map((e) => e.session.id), s.staleOf('a')?.reason], ['waiting', ['s1'], 'offline']);
+});
+
+// A client whose snapshot the test finishes by hand: subscribe() answers at once, and synced()
+// sends sessions.synced with the sessions given, as HostClient does.
+function heldSnapshot(clients) {
+  return (ch, store) => {
+    const listeners = new Map();
+    const c = {
+      ...fakeClient(ch),
+      synced: false,
+      on(type, fn) {
+        if (!listeners.has(type)) { listeners.set(type, []); }
+        listeners.get(type).push(fn);
+      },
+      subscribe: async () => { c.synced = false; return { revision: 1, count: 0 }; },
+      snapshot(sessions) {
+        for (const [id, updatedAt, question = null] of sessions) { store.upsert({ id, agent: 'copilot', status: question ? 'waiting' : 'idle', updatedAt, activity: {}, question }); }
+        c.synced = true;
+        store.retain(new Set(sessions.map(([id]) => id)));
+        for (const fn of listeners.get('synced') ?? []) { fn({}); }
+      },
+    };
+    clients.push(c);
+    return c;
+  };
+}
+
+test('a machine back from offline takes nothing until its first whole snapshot, which ends what ended meanwhile without duplicating the rest', async () => {
+  const connection = fakeConnection(hosts('a', 'b'));
+  const clients = [];
+  const s = new HostSession({ connection, storage: null, makeClient: heldSnapshot(clients) });
+  const opened = [];
+  s.onOpen((id) => opened.push(id));
+  s.select(ALL);
+  await flush();
+  for (const o of connection.opens) { o.resolve(); }
+  await flush();
+  await flush();
+  const q = { id: 'q1', kind: 'form', message: 'Which?', fields: [] };
+  assert.deepEqual([opened, s.route('a'), s.staleOf('a')?.reason], [[], null, 'confirming'], 'even a first channel waits for its snapshot');
+  clients.find((c) => c.channel.peerId === 'a').snapshot([]);
+  clients.find((c) => c.channel.peerId === 'b').snapshot([['kept', '2026-10-31T10:00:00.000Z'], ['ends', '2026-10-31T11:00:00.000Z', q]]);
+  assert.deepEqual(opened, ['a', 'b']);
+
+  connection.presence = hosts('a');
+  connection.emit('presence');
+  connection.presence = hosts('a', 'b');
+  connection.emit('presence');
+  await flush();
+  connection.opens.at(-1).resolve();
+  await flush();
+  await flush();
+  assert.equal(s.link('b').phase, 'open');
+  assert.deepEqual(s.staleOf('b'), { reason: 'confirming', since: null });
+  assert.equal(s.route('b'), null, 'open, but its snapshot has not finished');
+  assert.deepEqual(opened, ['a', 'b'], 'nothing waiting is resent before the snapshot');
+  assert.ok(s.sessions.get('b', 'ends')?.question, 'the question it showed before is still drawn, stale');
+
+  const ended = [];
+  s.sessions.onChange((c) => { if (c.type === 'synced') { ended.push(...c.removed.map((x) => x.id)); } });
+  clients.at(-1).snapshot([['kept', '2026-10-31T12:00:00.000Z']]);
+  assert.deepEqual(ended, ['ends']);
+  assert.deepEqual(s.sessions.list().map((e) => `${e.hostId}/${e.session.id}`).sort(), ['b/kept']);
+  assert.equal(s.staleOf('b'), null);
+  assert.equal(s.route('b').client, clients.at(-1));
+  assert.deepEqual(opened, ['a', 'b', 'b']);
+});
+
+test('an answer, reply, stop or launch is refused unsent for a machine that takes nothing now', () => {
+  let stale = true;
+  const sent = [];
+  const client = { closed: false, answer: async (d) => { sent.push(d); return { outcome: 'delivered' }; } };
+  const services = [
+    new AnswerService({ current: () => ({ client, hostId: 'b' }), accepts: () => !stale }),
+    new ReplyService({ current: () => ({ client, hostId: 'b' }), accepts: () => !stale }),
+    new StopService({ current: () => ({ client, hostId: 'b' }), accepts: () => !stale }),
+    new LaunchService({ current: () => ({ client, hostId: 'b' }), accepts: () => !stale }),
+  ];
+  assert.equal(services[0].submit({ hostId: 'b', sessionId: 's', questionId: 'q', answer: { text: 'yes' } }), null);
+  assert.equal(services[1].submit({ hostId: 'b', sessionId: 's', text: 'hi' }), null);
+  assert.equal(services[2].submit({ hostId: 'b', sessionId: 's' }), null);
+  assert.equal(services[3].submit({ hostId: 'b', launch: { agent: 'copilot' } }), null);
+  assert.deepEqual([services[0].get('b', 's', 'q'), sent], [null, []]);
+  stale = false;
+  assert.equal(services[0].submit({ hostId: 'b', sessionId: 's', questionId: 'q', answer: { text: 'yes' } }).state, 'sending');
+});
+
+test('an offline machine\'s sessions go after fifteen minutes; the one machine chosen stays chosen, empty', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const connection = fakeConnection(hosts('a', 'b'));
+  const s = new HostSession({ connection, storage: null, makeClient: snapshot({ a: [['s1', '2026-10-31T10:00:00.000Z']], b: [['s2', '2026-10-31T11:00:00.000Z']] }) });
+  s.select(ALL);
+  await flush();
+  for (const o of connection.opens) { o.resolve(); }
+  await flush();
+  await flush();
+  connection.presence = hosts('a');
+  connection.emit('presence');
+  t.mock.timers.tick(15 * 60 * 1000 - 1);
+  assert.equal(s.sessions.size, 2, 'kept up to the bound');
+  t.mock.timers.tick(1);
+  assert.deepEqual([s.sessions.list().map((e) => e.hostId), s.shownIds(), s.link('b')], [['a'], ['a'], null]);
+
+  s.select('a');
+  connection.presence = [];
+  connection.emit('presence');
+  t.mock.timers.tick(OFFLINE_KEEP_MS);
+  assert.deepEqual([s.selection, s.sessions.size, s.phase], ['a', 0, 'waiting']);
+  s.select(ALL);
+  assert.deepEqual([s.shownIds(), s.link('a')], [[], null], 'gone past the bound, it is not kept with every machine');
+});
+
+test('a machine back within fifteen minutes keeps its sessions past the bound', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const connection = fakeConnection(hosts('a', 'b'));
+  const s = new HostSession({ connection, storage: null, makeClient: snapshot({ a: [['s1', '2026-10-31T10:00:00.000Z']], b: [['s2', '2026-10-31T11:00:00.000Z']] }) });
+  s.select(ALL);
+  await flush();
+  for (const o of connection.opens) { o.resolve(); }
+  await flush();
+  await flush();
+  connection.presence = hosts('a');
+  connection.emit('presence');
+  t.mock.timers.tick(20000);
+  connection.presence = hosts('a', 'b');
+  connection.emit('presence');
+  t.mock.timers.tick(OFFLINE_KEEP_MS);
+  assert.ok(s.sessions.get('b', 's2'));
+});
+
+test('a forgotten machine\'s sessions go at once, and signing out takes every offline machine\'s', async () => {
+  const connection = fakeConnection(hosts('a', 'b', 'c'));
+  const s = new HostSession({ connection, storage: null, makeClient: snapshot({ a: [['s1', '2026-10-31T10:00:00.000Z']], b: [['s2', '2026-10-31T11:00:00.000Z']], c: [['s3', '2026-10-31T12:00:00.000Z']] }) });
+  s.select(ALL);
+  await flush();
+  for (const o of connection.opens) { o.resolve(); }
+  await flush();
+  await flush();
+  connection.presence = hosts('a');
+  connection.emit('presence');
+  s.dropMachine('a');
+  assert.ok(s.link('a'), 'one online is never dropped as forgotten');
+  s.dropMachine('b');
+  assert.deepEqual([s.link('b'), s.sessions.list().map((e) => e.hostId).sort()], [null, ['a', 'c']]);
+  s.forget();
+  assert.deepEqual([s.sessions.size, s.link('c')], [0, null]);
 });
 
 test('the relay dropping keeps every machine\'s sessions on screen, and each machine is opened again when it is back', async () => {
@@ -511,9 +662,11 @@ async function twoMachines() {
   const connection = new DemoConnection([one, two]);
   const s = new HostSession({ connection, storage: null });
   s.select(ALL);
-  await until(() => s.links().every((l) => l.phase === 'open' && l.client.synced), 'both machines to open');
+  await until(() => s.links().every((l) => s.route(l.id)), 'both machines to open');
   const current = (hostId) => s.route(hostId);
-  const services = { answers: new AnswerService({ current, retryMs: 10 }), replies: new ReplyService({ current, retryMs: 10, blobs: () => blobs }), stops: new StopService({ current, retryMs: 10 }), launches: new LaunchService({ current, retryMs: 10 }) };
+  // As SessionsPage gives them: one gate, the route.
+  const accepts = (hostId) => !!s.route(hostId);
+  const services = { answers: new AnswerService({ current, accepts, retryMs: 10 }), replies: new ReplyService({ current, accepts, retryMs: 10, blobs: () => blobs }), stops: new StopService({ current, accepts, retryMs: 10 }), launches: new LaunchService({ current, accepts, retryMs: 10 }) };
   s.onOpen((id) => { for (const x of Object.values(services)) { x.ready(id); } });
   return { one, two, blobs, connection, hosts: s, ...services };
 }
@@ -554,16 +707,38 @@ test('with two machines shown, End session and a launch go to the machine they a
   assert.deepEqual([one.launchLog.length, two.launchLog.length, two.stopLog.length], [0, 1, 0]);
 });
 
-test('an answer for a machine that is away waits for that machine, and goes to it when it is back while the other goes on', async () => {
-  const { one, two, connection, answers } = await twoMachines();
+test('nothing new is taken for a machine that is away, while the other goes on, and its answer goes once it is back', async () => {
+  const { one, two, connection, hosts, answers } = await twoMachines();
   connection.setOnline('two', false);
-  answers.submit({ hostId: 'two', sessionId: 'same-id', questionId: 'q1', answer: { fields: { answer: 'a' } } });
+  assert.equal(answers.submit({ hostId: 'two', sessionId: 'same-id', questionId: 'q1', answer: { fields: { answer: 'a' } } }), null, 'nothing new for a machine away');
   answers.submit({ hostId: 'one', sessionId: 'same-id', questionId: 'q1', answer: { fields: { answer: 'b' } } });
   await until(() => answers.get('one', 'same-id', 'q1')?.state === 'done', 'the answer to one');
-  assert.equal(answers.get('two', 'same-id', 'q1').state, 'waiting');
   assert.deepEqual(two.answerLog, []);
   connection.setOnline('two', true);
+  await until(() => hosts.route('two'), 'two to be back');
+  answers.submit({ hostId: 'two', sessionId: 'same-id', questionId: 'q1', answer: { fields: { answer: 'a' } } });
   await until(() => answers.get('two', 'same-id', 'q1')?.state === 'done', 'the answer to two');
   assert.deepEqual([one.answerLog.length, two.answerLog.length], [1, 1]);
   assert.deepEqual(two.typed.map((x) => x.said), ['answer: "a"']);
+});
+
+test('a machine still in presence whose channel drops takes nothing new until a new channel\'s snapshot is whole, and an answer sent before the drop is resent then, typed once', async () => {
+  const { two, hosts, answers, replies } = await twoMachines();
+  two.holdResponses();
+  answers.submit({ hostId: 'two', sessionId: 'same-id', questionId: 'q1', answer: { fields: { answer: 'a' } } });
+  await until(() => two.answerLog.length === 1, 'the answer to reach two');
+  two.holdSnapshot();
+  two.disconnect();
+  await until(() => answers.get('two', 'same-id', 'q1')?.state === 'waiting', 'the answer to wait');
+  assert.equal(hosts.staleOf('two')?.reason === 'offline', false, 'still in presence');
+  assert.equal(replies.submit({ hostId: 'two', sessionId: 'same-id', text: 'hi' }), null);
+  await until(() => hosts.link('two').phase === 'open', 'a new channel to two');
+  assert.deepEqual([hosts.route('two'), hosts.staleOf('two')?.reason, two.answerLog.length], [null, 'confirming', 1]);
+  assert.equal(replies.submit({ hostId: 'two', sessionId: 'same-id', text: 'hi' }), null, 'nor before its snapshot is whole');
+  two.releaseSnapshot();
+  await until(() => two.answerLog.length === 2, 'the answer to be resent');
+  assert.equal(two.answerLog[1].request, two.answerLog[0].request, 'the same request, so the host types it at most once');
+  two.releaseResponses();
+  await until(() => answers.get('two', 'same-id', 'q1')?.state === 'done', 'its outcome');
+  assert.deepEqual([answers.get('two', 'same-id', 'q1').outcome, two.typed.length], ['delivered', 1]);
 });

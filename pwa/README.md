@@ -127,13 +127,32 @@ app bar says how many machines are online ("3 machines").
   and read-only state. A machine that can't be reached, is still connecting or does not
   support sessions gets a line of its own above the cards ("Couldn't reach Laptop: the
   handshake timed out. Trying again."), its cards stay while it reconnects, and the others
-  carry on. A machine that leaves presence leaves the list with its sessions. "No live
-  sessions on any of your machines." shows only once every machine has said what it has.
+  carry on. "No live sessions on any of your machines." shows only once every machine online
+  has said what it has.
+* **A machine that drops off for a moment (#269, ui.md §2.2, §6.1 "A machine away", §6.6).** A
+  machine that leaves presence (a host restart, an update, a network blip) keeps its rows, in
+  their places, as it last sent them, and its tab, marked offline; its rows show the failed
+  glyph and "Offline · last seen 2m ago" (line 2 "Offline · *machine*"). One still in presence
+  whose channel is down or not yet open, or back in presence before its channel is, reads
+  "Reconnecting…". Either way its rows are stale, and stay so on a new channel until that
+  channel's first snapshot is whole. Nothing on them can be answered, approved or denied,
+  replied to, given files, ended, or launched or resumed on: the controls are disabled (the
+  launch panel says why), `HostSession.route()` is null for it, and every send goes through that
+  one gate: the answer, reply, stop and launch services refuse anything new for it (`accepts`).
+  Its questions leave Needs you and the app badge, and its notifications are closed only
+  against its new whole list. Its actions come back only once its next snapshot is whole
+  (`sessions.synced`), for the sessions and questions that snapshot still has, and anything
+  sent before the drop and waiting to be resent goes only then, with the same request id, for
+  the host to check against the live question. A session that ended meanwhile goes to Ended; a
+  question that ended goes without being answerable. Selection, your order, pins and the
+  address are kept. After 15 minutes away (`OFFLINE_KEEP_MS`) its rows go, and the Machines
+  page still lists it, offline; forgetting it, signing out or another account takes them at
+  once.
 * **What a card sends goes to its own machine.** Answers, replies, files (through the
   channel, or through the relay's blob store for that machine), End session and launches are
   each given for one machine and go only through `HostSession.route(hostId)`, that machine's
   open channel; one waiting for a machine that is away is resent to that machine when it is
-  back, and never to a session of the same id on another. What a card offers comes from its
+  back (once its new snapshot is whole), and never to a session of the same id on another. What a card offers comes from its
   own machine's hello, so a read-only shadow such as "DSWETT-DEV-VM1 (shadow)" shows its
   sessions read-only, saying why, beside machines that take answers.
 * **Connections.** A machine is connected to only while it is shown: one channel per
@@ -338,7 +357,7 @@ without the worker); `sw.js` shows the same fields elsewhere:
 
 | Notice | Shown | Tap |
 |---|---|---|
-| `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control |
+| `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and nothing has been pressed, typed or focused since |
 | `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
 | `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
 

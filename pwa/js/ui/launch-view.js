@@ -222,7 +222,8 @@ export class LaunchPanel {
   // machine, and launch.trust.answer sent with it. inspectOnly: the machine does not take
   // launches now (read-only, or agent-ha-bridge runs there), but a folder-trust question waiting
   // on it is still shown, read-only, with why; readOnly says why when it is known. The panel
-  // shows only when there is such a question.
+  // shows only when there is such a question. held: why nothing can be sent to the machine now (its
+  // channel is down, or its list not yet current, #269), or null: Launch and Try again are off.
   setTarget(target) {
     const same = target && this.#target && target.hostId === this.#target.hostId;
     if (same) {
@@ -312,11 +313,14 @@ export class LaunchPanel {
     }, () => { if (this.#probes.get(hostId)?.token === token) { this.#probes.delete(hostId); } });
   }
 
-  // A channel to that machine opened again: one shown only for its questions, with none shown,
-  // is asked for them again.
+  // A channel to that machine opened again, and its list is whole: one shown only for its
+  // questions, with none shown, is asked for them again; one whose choices could not be read
+  // (picked while away, #269) is asked for them now. Not one whose choices are still coming:
+  // asking again would start the other machines' lists over.
   reopened(hostId) {
     const target = this.#target;
-    if (target?.hostId === hostId && target.inspectOnly && !this.#loading && this.#trustQuestions().length === 0) { this.refresh(); }
+    if (target?.hostId !== hostId || this.#loading) { return; }
+    if (target.inspectOnly ? this.#trustQuestions().length === 0 : !this.#options && !!this.#error) { this.refresh(); }
   }
 
   #title() {
@@ -413,11 +417,12 @@ export class LaunchPanel {
     if (this.#target) { this.root.hidden = false; }
     e.form.hidden = !o;
     e.reload.hidden = !o && !this.#error;
-    e.reload.disabled = !!this.#loading;
+    // Held (#269): asking would only fail; its choices are asked for once it is current again.
+    e.reload.disabled = !!this.#loading || !!this.#target?.held;
     if (!o) {
       e.note.hidden = false;
-      e.note.textContent = this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`;
-      e.note.className = `note launch-note${this.#error ? ' warn' : ''}`;
+      e.note.textContent = this.#target?.held ?? (this.#error ? `Couldn't get the choices from ${name}: ${sentence(this.#error)}` : `Getting the choices from ${name}…`);
+      e.note.className = `note launch-note${this.#error || this.#target?.held ? ' warn' : ''}`;
       e.busy.hidden = true;
       // An answer pressed here stays in view, with its Try again, while the choices load or
       // fail to: the machine still answers a resend with its first outcome.
@@ -462,6 +467,11 @@ export class LaunchPanel {
     e.note.hidden = !e.note.textContent;
     e.busy.textContent = o.busy ? `${name} is busy: ${sentence(o.busy)}` : '';
     e.busy.hidden = !o.busy;
+    // Its machine's channel down, or its list not yet current (#269): nothing goes until it is.
+    if (this.#target?.held) {
+      e.busy.textContent = this.#target.held;
+      e.busy.hidden = false;
+    }
     this.#drawTrust();
     this.#drawCount();
     this.#show(this.#target ? this.service.get(this.#target.hostId) : null);
@@ -497,7 +507,7 @@ export class LaunchPanel {
 
   async #press() {
     const target = this.#target;
-    if (!target || !this.#options) { return; }
+    if (!target || !this.#options || target.held) { return; }
     if (this.#pending(this.service.get(target.hostId)) || this.#signing) { return; }
     const launch = this.settings();
     const agent = this.#agent(launch.agent);
@@ -535,7 +545,7 @@ export class LaunchPanel {
   }
 
 
-  #resend() { if (this.#target) { this.service.resend(this.#target.hostId); } }
+  #resend() { if (this.#target && !this.#target.held) { this.service.resend(this.#target.hostId); } }
 
   // ---- folder trust ----
 
@@ -608,7 +618,7 @@ export class LaunchPanel {
           h('button', { type: 'button', class: 'button trust-yes', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.trust) }, 'Trust'),
           h('button', { type: 'button', class: 'button secondary trust-no', disabled: pending, onclick: () => this.#answerTrust(q, TRUST.quit) }, 'Quit'))
         : retry
-          ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'button secondary trust-resend', onclick: () => this.#sendTrust(hostId, q.id) }, 'Try again'))
+          ? h('div', { class: 'row' }, h('button', { type: 'button', class: 'button secondary trust-resend', disabled: !!this.#target?.held, onclick: () => this.#resendTrust(hostId, q.id) }, 'Try again'))
           : settled ? null : h('p', { class: 'note warn trust-at-machine' }, this.#options && !this.#live.has(q.id) ? `${name} no longer lists this question as waiting.` : q.atMachine ?? (q.answerable ? `Answer at the machine: this app cannot answer it on ${name}.` : 'Answer at the machine.')),
       shown ? h('p', { class: `answer-status trust-status ${shown.tone}`, role: 'status', 'aria-live': 'polite' }, shown.text) : null);
   }
@@ -631,6 +641,13 @@ export class LaunchPanel {
       return;
     }
     await this.#sendTrust(answer.hostId, q.id);
+  }
+
+  // Try again, pressed: only for the machine shown, and not while it is held (#269), when the
+  // send could only fail and put "not connected" in place of why it failed.
+  #resendTrust(hostId, id) {
+    if (this.#target?.hostId !== hostId || this.#target.held) { return; }
+    this.#sendTrust(hostId, id);
   }
 
   // Sends an answer's signed command, to the machine it was signed for, however the machine shown
@@ -731,7 +748,8 @@ export class LaunchPanel {
     e.status.className = `answer-status launch-status${shown.tone ? ` ${shown.tone}` : ''}`;
     this.root.setAttribute('aria-busy', shown.tone === 'progress' ? 'true' : 'false');
     e.resend.hidden = entry?.state !== 'failed';
+    e.resend.disabled = !!this.#target?.held;
     e.open.hidden = !(entry?.state === 'done' && entry.detail?.session);
-    e.launch.disabled = this.#pending(entry);
+    e.launch.disabled = this.#pending(entry) || !!this.#target?.held;
   }
 }

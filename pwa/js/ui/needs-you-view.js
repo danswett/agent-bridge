@@ -44,6 +44,7 @@ export class NeedsYouLane {
       },
       nameOf: (hostId) => this.machine(hostId).name,
       labelled: this.labelled(),
+      current: (hostId) => !this.answering(hostId)?.stale,
     });
     const live = new Set();
     const want = [];
