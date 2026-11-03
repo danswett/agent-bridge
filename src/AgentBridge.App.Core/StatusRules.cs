@@ -52,6 +52,14 @@ public static class StatusRules
 {
     // Not a row of §2.2: the host is ending the session.
     public const int Ending = 0;
+    // Nor this: the session's machine is away (#269), and the row is what it last said, not to be
+    // acted on. The host is unreachable, which is what `failed` says of a host (§2.1).
+    public const int Away = -1;
+
+    public static StatusLine Offline(DateTimeOffset since, DateTimeOffset now) =>
+        Line(Away, StatusGlyph.Failed, "offline", StatusTone.Muted, "Offline", $"last seen {Words.Ago(since, now)}");
+
+    public static StatusLine Reconnecting() => Line(Away, StatusGlyph.Failed, "offline", StatusTone.Muted, "Reconnecting…");
 
     public static StatusLine For(Session s)
     {

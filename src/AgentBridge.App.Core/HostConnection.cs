@@ -83,6 +83,18 @@ public sealed class HostConnection : IAsyncDisposable
 
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
 
+    // The current connection's gap signal, while there is one.
+    SemaphoreSlim? resync;
+
+    // Reads everything again on the connection there is, as after a gap in its events, the
+    // sessions with a new snapshot; nothing without one (the next connection subscribes afresh).
+    // For a machine back in the relay's presence whose channel outlived its absence (#269). One
+    // pending is enough: a recovery reads everything.
+    public void Resync()
+    {
+        if (Volatile.Read(ref resync) is { CurrentCount: 0 } s) { s.Release(); }
+    }
+
     // Waits until there is a connection, for those that have something to send.
     public Task WhenConnectedAsync(CancellationToken ct = default) => Volatile.Read(ref connected).Task.WaitAsync(ct);
 
@@ -122,6 +134,7 @@ public sealed class HostConnection : IAsyncDisposable
                 // Not disposed: the pump may still release it as the connection ends, and a
                 // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
                 var gaps = new SemaphoreSlim(0);
+                Volatile.Write(ref resync, gaps);
                 var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
                 Volatile.Write(ref current, new Current(ch, null));
                 ui.Post(() => Hello = hello);
@@ -197,6 +210,7 @@ public sealed class HostConnection : IAsyncDisposable
             }
             finally
             {
+                Volatile.Write(ref resync, null);
                 Volatile.Write(ref current, null);
                 if (ch is not null) { await ch.DisposeAsync(); }
                 if (Volatile.Read(ref connected).Task.IsCompleted) { Volatile.Write(ref connected, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)); }
@@ -380,7 +394,14 @@ public sealed class SessionStore
     {
         snapshot = new HashSet<string>(StringComparer.Ordinal);
         Complete = false;
+        Snapshots++;
+        SnapshotBegun?.Invoke();
     }
+
+    // How many snapshots have begun: one that began after a moment (Machine.Unconfirm) and has
+    // completed is the host's word on the list since then, not what was kept from before it.
+    public long Snapshots { get; private set; }
+    public event Action? SnapshotBegun;
 
     // Whether the list is the host's whole snapshot: false until a subscribe's sessions.synced, and
     // again from each new subscribe (a reconnect, a gap) until its own. An incomplete list may be

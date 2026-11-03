@@ -68,17 +68,22 @@ public sealed partial class MainViewModel
     void SyncMachineRows()
     {
         var want = new List<MachineRowViewModel>();
+        var listedOffline = OfflineMachines.Select(o => o.Id).ToHashSet(StringComparer.Ordinal);
         foreach (var m in machines.OrderByDescending(m => m.IsLocal))
         {
+            // One kept offline with its rows (#269) that the roster lists is shown by its offline
+            // row, which has its Forget; one the roster does not know says so itself.
+            if (m.Offline && listedOffline.Contains(m.Key)) { continue; }
             var row = MachineRows.FirstOrDefault(r => r.Key == m.Key) ?? new MachineRowViewModel(m.Key);
             var connected = m.Host.State == LinkState.Connected;
             var count = byId.Values.Count(c => owner[c] == m);
             var why = m.IsLocal ? ReadOnlyWhy ?? m.Host.Hello?.Machine.ReadOnly : m.Host.Hello?.Machine.ReadOnly;
             row.Name = m.Name;
             row.ViewOnlyWhy = string.IsNullOrEmpty(why) ? null : why;
-            row.Facts = string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.ViewOnly ? "View only" : null }.Where(s => s is not null));
-            row.Status = !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
-            row.CanShowSessions = connected && machines.Count > 1;
+            row.Facts = m.OfflineSince is { } since ? $"Last seen {Words.Ago(since, Time.GetUtcNow())}"
+                : string.Join(" · ", new[] { connected ? Words.Plural(count, "session", "sessions") : null, row.ViewOnly ? "View only" : null }.Where(s => s is not null));
+            row.Status = m.Offline ? "Offline" : !connected ? "Connecting" : m.IsLocal ? "This machine" : "Online";
+            row.CanShowSessions = connected && !m.Offline && machines.Count > 1;
             row.CanCheckHere = m.IsLocal && CheckLocal is not null;
             row.Update = MachineUpdates.FirstOrDefault(u => u.Key == m.Key);
             want.Add(row);

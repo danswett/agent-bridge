@@ -20,16 +20,17 @@ public sealed class FleetTests : IAsyncLifetime
     readonly FakeFleetLink link = new();
     readonly FakeTimeProvider clock = new(Make.T0);
     readonly List<ToastNotice> shown = [];
+    readonly List<string> withdrawn = [];
     // The usage this app keeps between runs (#172).
     readonly string cacheFile = Path.Combine(Path.GetTempPath(), "abuc-" + Guid.NewGuid().ToString("N")[..8] + ".json");
     HostConnection local = null!;
     MainViewModel main = null!;
     Fleet fleet = null!;
 
-    sealed class Sink(List<ToastNotice> shown) : IToastSink
+    sealed class Sink(List<ToastNotice> shown, List<string>? withdrawn = null) : IToastSink
     {
         public void Show(ToastNotice notice) { lock (shown) { shown.Add(notice); } }
-        public void Withdraw(string tag) { }
+        public void Withdraw(string tag) { if (withdrawn is not null) { lock (withdrawn) { withdrawn.Add(tag); } } }
     }
 
     public Task InitializeAsync()
@@ -60,7 +61,7 @@ public sealed class FleetTests : IAsyncLifetime
             Host = host,
             Time = clock,
         };
-        var toasts = new ToastPlanner(new Sink(shown), clock) { Capabilities = () => host.Capabilities, MachineName = () => m?.Name, MachineKey = key == Machine.LocalKey ? null : key };
+        var toasts = new ToastPlanner(new Sink(shown, withdrawn), clock) { Capabilities = () => host.Capabilities, MachineName = () => m?.Name, MachineKey = key == Machine.LocalKey ? null : key };
         return m = new Machine(key, host, cards, toasts);
     }
 
@@ -86,6 +87,20 @@ public sealed class FleetTests : IAsyncLifetime
         // The relay lists this machine's own host too: it is reached over the pipe, not again.
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
         await Wait.UntilAsync(() => Card("here") is not null && Card("there") is not null, "both machines' cards");
+        // Its rows are acted on only once its snapshot has confirmed them (#269).
+        await Wait.UntilAsync(() => main.MachineOf("remote-id")?.Current == true, "the other machine's sessions confirmed");
+    }
+
+    Machine Remote() => TestUi.Read(() => main.MachineOf("remote-id")!);
+
+    // The other machine's host leaves the relay's presence, as its relay link drops; and comes back.
+    void Leave() => link.Set(FleetState.Connected, ("host-id", "Test PC"));
+    void Return() => link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+
+    async Task GoneAsync()
+    {
+        Leave();
+        await Wait.UntilAsync(() => Card("there")?.Away == true, "the other machine's rows marked offline");
     }
 
     [Fact]
@@ -163,7 +178,7 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.All(keys, key => Assert.Equal(["there-deploy"], Found(key)));
     }
     [Fact]
-    public async Task A_machine_that_leaves_takes_its_cards_with_it_but_a_relay_that_drops_for_a_moment_does_not()
+    public async Task A_relay_that_drops_for_a_moment_keeps_every_machines_cards_and_one_gone_fifteen_minutes_takes_its_cards_and_tab()
     {
         await BothMachinesAsync();
         ui.Post(() => main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id"));
@@ -174,11 +189,288 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.NotNull(Card("there"));
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => Remote().Offline, "the other machine to be offline");
+        clock.Advance(Fleet.OfflineKeep);
         await Wait.UntilAsync(() => Card("there") is null, "the other machine's cards to go");
         Assert.Single(main.AllMachines);
         Assert.False(main.ShowMachines);
         Assert.Null(main.SelectedMachine!.Key);
         Assert.Equal(["here"], main.Sessions.Select(c => c.Id));
+    }
+
+    [Fact]
+    public async Task A_machine_whose_channel_outlived_its_absence_is_asked_for_a_new_snapshot_before_its_rows_can_be_acted_on()
+    {
+        await BothMachinesAsync();
+        var question = Card("there")!.Question!;
+        var subscribed = remoteHost.Sent(Ops.SessionsSubscribe).Count;
+
+        // Gone from presence and back, its channel spared (the hub's presence grace) throughout.
+        link.Quietly(FleetState.Connected, ("host-id", "Test PC"));
+        link.Raise();
+        await Wait.UntilAsync(() => Card("there")!.Away, "its rows marked offline");
+        Assert.False(TestUi.Read(() => question.CanAnswer));
+        link.Quietly(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
+        link.Raise();
+
+        await Wait.UntilAsync(() => Remote().Current && question.CanAnswer, "its rows confirmed by a new snapshot");
+        Assert.Equal(subscribed + 1, remoteHost.Sent(Ops.SessionsSubscribe).Count);
+    }
+
+    [Fact]
+    public async Task One_of_two_machines_that_leaves_the_relay_for_twenty_seconds_keeps_its_rows_marked_offline_and_the_other_is_untouched()
+    {
+        await BothMachinesAsync();
+        var there = Card("there")!;
+        var here = Card("here")!;
+        var hereLine = TestUi.Read(() => here.StatusText);
+
+        Leave();
+        clock.Advance(TimeSpan.FromSeconds(20));
+        await Wait.UntilAsync(() => there.Away, "its rows marked offline");
+
+        TestUi.Read(() =>
+        {
+            Assert.Same(there, Card("there"));
+            Assert.Equal(2, main.AllMachines.Count);
+            Assert.Equal(("Offline · last seen 20s ago", StatusGlyph.Failed, StatusTone.Muted), (there.StatusText, there.Glyph, there.StatusTone));
+            Assert.Equal("Offline · Build server", there.RowFacts);
+            Assert.Contains("offline · last seen 20s ago, Build server", there.GlyphLabel);
+            Assert.Equal("Build server · offline", main.Machines.Single(m => m.Key == "remote-id").Label);
+            Assert.False(here.Away);
+            Assert.Equal(hereLine, here.StatusText);
+            Assert.Equal(["there", "here"], main.Sessions.Select(c => c.Id));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task Nothing_on_an_offline_machines_rows_can_be_answered_replied_to_ended_or_counted_as_waiting_on_you()
+    {
+        remoteHost.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        remoteHost.On(Ops.SessionReply, _ => new ReplyResult(AnswerOutcome.Delivered));
+        remoteHost.On(Ops.SessionStop, _ => new StopResult(StopOutcome.Ended));
+        await BothMachinesAsync();
+        remoteHost.Sessions.Add(Make.Session("there-idle", updated: Make.T0.AddMinutes(2)));
+        await remoteHost.SendAsync(Events.SessionUpsert, remoteHost.Sessions[^1]);
+        await Wait.UntilAsync(() => Card("there-idle")?.Reply is not null && Card("there-idle")?.End is not null, "an idle session to reply to");
+        var question = Card("there")!.Question!;
+        var idle = Card("there-idle")!;
+        ui.Post(() => idle.Reply!.Text = "carry on");
+        Assert.True(TestUi.Read(() => question.CanAnswer && idle.Reply!.CanSend && idle.Reply.CanAttach && idle.End!.CanPress && main.Waiting == 1));
+
+        await GoneAsync();
+
+        TestUi.Read(() =>
+        {
+            Assert.False(question.CanAnswer);
+            Assert.Equal("Waiting for the Bridge Host on Build server. Answer once it is back.", question.StatusText);
+            Assert.False(idle.Reply!.CanSend);
+            Assert.False(idle.Reply.CanAttach);
+            Assert.False(idle.End!.CanPress);
+            Assert.Equal(0, main.Waiting);
+            Assert.Empty(main.NeedsYou);
+            return true;
+        });
+        ui.Post(() =>
+        {
+            question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite"));
+            idle.Reply!.Send();
+            idle.End!.Press();
+        });
+        // Nor straight through its deliveries, as a toast's answer goes.
+        var held = TestUi.Read(() => Remote().Deliveries.Submit("answer|there|q1", Ops.SessionAnswer, r => new AnswerRequest { Id = "there", Question = "q1", Request = r, Text = "sqlite" }, _ => true));
+        Assert.Equal((DeliveryState.Done, Deliveries.Held), (held.State, held.Outcome));
+        var sink = new Recorder();
+        var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromMilliseconds(300) };
+        await responder.HandleAsync("action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite", new Dictionary<string, string>());
+        Assert.StartsWith("Not sent: the machine is not connected now", ToastText(sink.Shown.Last().Xml));
+
+        await Task.Delay(300);
+        Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
+        Assert.Empty(remoteHost.Sent(Ops.SessionReply));
+        Assert.Empty(remoteHost.Sent(Ops.SessionStop));
+    }
+
+    static string ToastText(string xml) => System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Matches(xml, "<text[^>]*>([^<]*)</text>").Last().Groups[1].Value);
+
+    [Fact]
+    public async Task An_offline_machine_back_again_is_reconciled_by_its_new_snapshot_and_its_rows_are_acted_on_only_once_that_snapshot_is_whole()
+    {
+        remoteHost.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        await BothMachinesAsync();
+        remoteHost.Sessions.Add(Make.Session("there-ended", updated: Make.T0.AddMinutes(2)));
+        await remoteHost.SendAsync(Events.SessionUpsert, remoteHost.Sessions[^1]);
+        await Wait.UntilAsync(() => Card("there-ended") is not null, "a second session there");
+        var there = Card("there")!;
+        var question = there.Question!;
+        await GoneAsync();
+
+        // It ends while the machine is away; the other is still asking. The new snapshot is held
+        // before its end.
+        remoteHost.Sessions.RemoveAll(s => s.Id == "there-ended");
+        var synced = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        remoteHost.HoldSynced = synced;
+        Return();
+        await Wait.UntilAsync(() => Remote().Host.State == LinkState.Connected && !there.Away, "the machine connected again");
+
+        TestUi.Read(() =>
+        {
+            Assert.False(Remote().Current);
+            Assert.False(question.CanAnswer);
+            Assert.Equal(0, main.Waiting);
+            Assert.NotNull(Card("there-ended"));
+            Assert.Single(main.Sessions, c => c.Id == "there");
+            return true;
+        });
+        var early = TestUi.Read(() => Remote().Deliveries.Submit(question.Key, Ops.SessionAnswer, r => new AnswerRequest { Id = "there", Question = "q1", Request = r, Text = "sqlite" }, _ => true));
+        Assert.Equal(Deliveries.Held, early.Outcome);
+
+        synced.SetResult();
+        await Wait.UntilAsync(() => Card("there-ended") is null, "the session that ended to go");
+        await Wait.UntilAsync(() => question.CanAnswer && main.Waiting == 1, "the question answerable again");
+        Assert.Same(there, Card("there"));
+        Assert.Equal(["there", "here"], main.Sessions.Select(c => c.Id));
+        Assert.Contains(main.Ended, e => e.Title == "A session");
+
+        ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
+        await Wait.UntilAsync(() => question.StatusText == "Delivered. The session has your answer.", "delivered");
+        Assert.Single(remoteHost.Sent(Ops.SessionAnswer));
+    }
+
+    [Fact]
+    public async Task A_question_that_ended_while_its_machine_was_offline_goes_without_ever_being_answerable()
+    {
+        await BothMachinesAsync();
+        var there = Card("there")!;
+        var question = there.Question!;
+        await GoneAsync();
+        var answerable = false;
+        ui.Post(() =>
+        {
+            question.PropertyChanged += (_, _) => answerable |= question.CanAnswer;
+            main.NeedsYou.CollectionChanged += (_, _) => answerable |= main.NeedsYou.Count > 0;
+        });
+
+        remoteHost.Sessions[0] = Make.Session("there", updated: Make.T0.AddMinutes(3));
+        Return();
+
+        await Wait.UntilAsync(() => Remote().Current && there.Question is null, "the session, no longer asking");
+        Assert.False(answerable);
+        // The question's model, let go of by the card, answers nothing either.
+        Assert.False(TestUi.Read(() => question.CanAnswer));
+        ui.Post(() => question.Choose(question.Fields[0].Options.Single(o => o.Value == "sqlite")));
+        Assert.Equal(0, TestUi.Read(() => main.Waiting));
+        await Task.Delay(200);
+        Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
+    }
+
+    [Fact]
+    public async Task The_open_session_the_machine_tab_your_order_and_pins_survive_a_machine_leaving_and_coming_back()
+    {
+        await BothMachinesAsync();
+        remoteHost.Sessions.Add(Make.Session("there-2", updated: Make.T0.AddMinutes(2)));
+        await remoteHost.SendAsync(Events.SessionUpsert, remoteHost.Sessions[^1]);
+        await Wait.UntilAsync(() => Card("there-2") is not null, "a second session there");
+        ui.Post(() =>
+        {
+            main.SelectedMachine = main.Machines.Single(m => m.Key == "remote-id");
+            main.SetPinned(Card("there")!, true);
+            main.Selected = Card("there-2");
+        });
+        var order = TestUi.Read(() => main.Sessions.Select(c => c.Id).ToList());
+        var open = Card("there-2")!;
+
+        await GoneAsync();
+        TestUi.Read(() =>
+        {
+            Assert.Equal(("remote-id", open), (main.SelectedMachine!.Key, main.Selected));
+            Assert.Equal(order, main.Sessions.Select(c => c.Id));
+            Assert.True(Card("there")!.Pinned);
+            return true;
+        });
+
+        Return();
+        await Wait.UntilAsync(() => Remote().Current, "the machine back, its sessions confirmed");
+        TestUi.Read(() =>
+        {
+            Assert.Equal(("remote-id", open), (main.SelectedMachine!.Key, main.Selected));
+            Assert.Same(open, Card("there-2"));
+            Assert.Equal(order, main.Sessions.Select(c => c.Id));
+            Assert.True(Card("there")!.Pinned);
+            return true;
+        });
+    }
+
+    [Theory]
+    [InlineData("forgotten")]
+    [InlineData("signed out")]
+    [InlineData("refused")]
+    [InlineData("another account")]
+    public async Task An_offline_machine_still_goes_with_its_rows_when_it_is_forgotten_signed_out_refused_or_on_another_account(string how)
+    {
+        link.Known = [];
+        await BothMachinesAsync();
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
+        await GoneAsync();
+
+        switch (how)
+        {
+            case "forgotten": Assert.Null(await link.ForgetAsync("remote-id", default)); break;
+            case "signed out": link.Set(FleetState.SignedOut); break;
+            case "refused": link.Set(FleetState.Refused); break;
+            default: link.Switch(); break;
+        }
+
+        await Wait.UntilAsync(() => Card("there") is null, "its rows to go");
+        Assert.Single(main.AllMachines);
+    }
+
+    [Fact]
+    public async Task An_offline_machines_rows_go_after_fifteen_minutes_and_it_stays_listed_with_the_offline_machines()
+    {
+        link.Known = [];
+        await BothMachinesAsync();
+        link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
+        await GoneAsync();
+        // Listed once, as an offline machine with its Forget, while its rows are kept.
+        Assert.Equal(["local", "offline:remote-id"], TestUi.Read(() => main.MachineRows.Select(r => r.Key).ToList()));
+
+        clock.Advance(Fleet.OfflineKeep - TimeSpan.FromSeconds(1));
+        Assert.NotNull(Card("there"));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        await Wait.UntilAsync(() => Card("there") is null, "its rows to go");
+        Assert.Single(main.AllMachines);
+        Assert.Equal(["local", "offline:remote-id"], TestUi.Read(() => main.MachineRows.Select(r => r.Key).ToList()));
+    }
+
+    [Fact]
+    public async Task An_offline_machines_question_toast_goes_and_comes_back_quietly_once_its_snapshot_confirms_the_question()
+    {
+        await BothMachinesAsync();
+        await Wait.UntilAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            main.Tick();
+            lock (shown) { return shown.Count == 1; }
+        }, "the question's toast");
+        Assert.False(shown[0].Quiet);
+
+        await GoneAsync();
+        lock (withdrawn) { Assert.Contains(ToastPlanner.Tag("there", "remote-id"), withdrawn); }
+        for (var i = 0; i < 5; i++) { clock.Advance(TimeSpan.FromSeconds(1)); ui.Post(main.Tick); }
+        Assert.Single(shown);
+
+        Return();
+        await Wait.UntilAsync(() => Remote().Current, "the machine back, its sessions confirmed");
+        await Wait.UntilAsync(() =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            main.Tick();
+            lock (shown) { return shown.Count == 2; }
+        }, "the question's toast again");
+        Assert.True(shown[1].Quiet);
     }
 
     [Fact]
@@ -344,6 +636,7 @@ public sealed class FleetTests : IAsyncLifetime
         });
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        clock.Advance(Fleet.OfflineKeep);
         await Wait.UntilAsync(() => Card("there") is null, "the other machine to go");
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
         await Wait.UntilAsync(() => Card("there") is not null, "the other machine to come back");
@@ -360,6 +653,8 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => local.State != LinkState.Connected, "this machine's host to go");
 
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        await Wait.UntilAsync(() => main.MachineOf("remote-id")?.Offline == true, "the other machine to be offline");
+        clock.Advance(Fleet.OfflineKeep);
 
         await Wait.UntilAsync(() => Card("there") is null, "the other machine's cards to go");
     }
@@ -414,6 +709,7 @@ public sealed class FleetTests : IAsyncLifetime
         // A click that started the app comes before the relay lists the machine: the answer
         // waits for it rather than being dropped.
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        clock.Advance(Fleet.OfflineKeep);
         await Wait.UntilAsync(() => Card("there") is null, "the machine to go");
         var early = responder.HandleAsync(button, new Dictionary<string, string>());
         await Task.Delay(300);
@@ -451,6 +747,7 @@ public sealed class FleetTests : IAsyncLifetime
         var held = responder.HandleAsync(button.Replace("q1", "q2"), new Dictionary<string, string>());
         await Wait.UntilAsync(() => Volatile.Read(ref calls) == 2, "the second answer at the host");
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        clock.Advance(Fleet.OfflineKeep);
         await Wait.UntilAsync(() => Card("there") is null, "the machine to go");
 
         Assert.Contains(outcome, sink.Withdrawn);
@@ -517,6 +814,7 @@ public sealed class FleetTests : IAsyncLifetime
         // The build server goes offline, and two hours pass.
         link.Known = [new KnownMachine("remote-id", "Build server", "host", Make.T0)];
         link.Set(FleetState.Connected, ("host-id", "Test PC"));
+        clock.Advance(Fleet.OfflineKeep);
         await Wait.UntilAsync(() => main.AllMachines.Count == 1, "the build server to go");
         clock.Advance(TimeSpan.FromHours(2));
         ui.Post(main.Usage.Refresh);
@@ -1031,7 +1329,24 @@ public sealed class FleetTests : IAsyncLifetime
         {
             State = state;
             Hosts = [.. hosts.Select(h => new FleetHost(h.Id, h.Name))];
+            DropAbsent();
             Changed?.Invoke();
+        }
+
+        // As the relay's hub does (ChannelHub.DropAbsent): a channel to a host the relay no longer
+        // lists ends. (A relay that drops ends them all, which these tests leave out.)
+        readonly List<(string Host, IClientChannel Channel)> open = [];
+
+        void DropAbsent()
+        {
+            if (State != FleetState.Connected) { return; }
+            List<IClientChannel> gone;
+            lock (open)
+            {
+                gone = [.. open.Where(o => !hosts.Any(h => h.Id == o.Host)).Select(o => o.Channel)];
+                open.RemoveAll(o => gone.Contains(o.Channel));
+            }
+            foreach (var ch in gone) { _ = ch.DisposeAsync().AsTask(); }
         }
 
         public void Start() { }
@@ -1076,10 +1391,13 @@ public sealed class FleetTests : IAsyncLifetime
             }
         }
 
-        public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct) =>
-            State == FleetState.Connected && Hosts.Any(h => h.Id == hostId) && Endpoints.TryGetValue(hostId, out var e)
-                ? await LocalClient.ConnectAsync(e, TimeSpan.FromSeconds(1), ct)
-                : throw new HostNotRunningException("the machine is offline");
+        public async Task<IClientChannel> OpenAsync(string hostId, CancellationToken ct)
+        {
+            if (State != FleetState.Connected || !Hosts.Any(h => h.Id == hostId) || !Endpoints.TryGetValue(hostId, out var e)) { throw new HostNotRunningException("the machine is offline"); }
+            IClientChannel ch = await LocalClient.ConnectAsync(e, TimeSpan.FromSeconds(1), ct);
+            lock (open) { open.Add((hostId, ch)); }
+            return ch;
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

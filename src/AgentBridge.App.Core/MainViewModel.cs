@@ -240,9 +240,11 @@ public sealed partial class MainViewModel : Observable
         Action<string> removed = id => OnRemoved(m, id);
         Action synced = () => Synced(m);
         Action changed = () => OnHostChanged(m);
+        Action begun = () => Restale(m);
         sessions.Upserted += upsert;
         sessions.Removed += removed;
         sessions.Synced += synced;
+        sessions.SnapshotBegun += begun;
         sessions.HeldChanged += OnHeldChanged;
         m.Host.Changed += changed;
         unhook[m] = () =>
@@ -250,16 +252,42 @@ public sealed partial class MainViewModel : Observable
             sessions.Upserted -= upsert;
             sessions.Removed -= removed;
             sessions.Synced -= synced;
+            sessions.SnapshotBegun -= begun;
             sessions.HeldChanged -= OnHeldChanged;
             m.Host.Changed -= changed;
         };
         Machines.Add(new MachineChoice(m.Key, m.Name));
+        currency[m] = CurrencyOf(m);
         foreach (var s in sessions.All) { OnUpsert(m, s); }
         MachinesChanged();
         OnHostChanged(m);
     }
 
-    // A machine gone from the account's presence: its cards and toasts go with it.
+    // Each machine's rows as last drawn: whether they can be acted on, and whether it is away
+    // (offline, or its link down) and so says so.
+    readonly Dictionary<Machine, (bool Current, bool Offline, bool Connected)> currency = [];
+
+    static (bool Current, bool Offline, bool Connected) CurrencyOf(Machine m) => (m.Current, m.Offline, m.Host.State == LinkState.Connected);
+
+    // A machine left the relay's presence or came back (Fleet), its link went or came, or a snapshot
+    // began or confirmed its rows (#269): its cards say whether they can be acted on, Needs you and
+    // the badges count only questions that can be answered, and its toasts wait while it is away.
+    internal void Restale(Machine m)
+    {
+        if (!machines.Contains(m)) { return; }
+        var now = CurrencyOf(m);
+        if (currency.TryGetValue(m, out var was) && was == now) { return; }
+        currency[m] = now;
+        if (!now.Current && (now.Offline || !now.Connected)) { m.Toasts?.Away(); }
+        foreach (var (c, _) in owner.Where(p => p.Value == m)) { c.CurrentChanged(); }
+        SyncNeedsYou();
+        RefreshLabels();
+        MachinesUpdated?.Invoke();
+    }
+
+    // A machine the fleet no longer lists (forgotten, another account's, none to find it through, or
+    // offline past Fleet.OfflineKeep): its cards and toasts go with it. One only offline for now is
+    // kept, its rows marked (Restale).
     public void Remove(string key)
     {
         if (MachineOf(key) is not { IsLocal: false } m) { return; }
@@ -282,6 +310,7 @@ public sealed partial class MainViewModel : Observable
         SyncUpdate(m);
         baselined.Remove(m);
         capabilities.Remove(m);
+        currency.Remove(m);
         if (Machines.FirstOrDefault(c => c.Key == key) is { } choice)
         {
             if (SelectedMachine == choice) { SelectedMachine = Machines[0]; }
@@ -313,7 +342,7 @@ public sealed partial class MainViewModel : Observable
             if (MachineOf(choice.Key) is not { } m) { continue; }
             choice.Short = m.Name;
             var count = byId.Values.Count(c => owner[c] == m);
-            var state = m.Host.State == LinkState.Connected ? Words.Plural(count, "session", "sessions") : "connecting…";
+            var state = m.Offline ? "offline" : m.Host.State == LinkState.Connected ? Words.Plural(count, "session", "sessions") : "connecting…";
             choice.Label = $"{m.Name}{(m.IsLocal ? " (this machine)" : "")} · {state}";
         }
         SyncMachineRows();
@@ -363,6 +392,7 @@ public sealed partial class MainViewModel : Observable
             SyncNeedsYou();
         }
         if (m.Host.State != LinkState.Connected) { baselined.Remove(m); }
+        Restale(m);
         SyncUpdate(m);
         MachinesUpdated?.Invoke();
         RefreshLabels();
@@ -498,6 +528,7 @@ public sealed partial class MainViewModel : Observable
         Order.Synced(m.Key, owner.Where(p => p.Value == m).Select(p => p.Key.Id).ToHashSet(StringComparer.Ordinal));
         Rearrange();
         RefreshLabels();
+        Restale(m);
     }
 
     bool Shows(Machine m) => SelectedMachine?.Key is not { } key || key == m.Key;
@@ -521,6 +552,8 @@ public sealed partial class MainViewModel : Observable
             foreach (var c in byId.Values) { c.RefreshTimes(); }
             RefreshEnded();
             RefreshNeedsYou();
+            // A machine kept offline says when it was last seen, which moves on.
+            if (machines.Any(m => m.Offline)) { SyncMachineRows(); }
             Order.Flush();
             // A flush that failed turned the list to Most recent: arrange it so, and tell the picker.
             if (Order.Sort != toldSort) { Rearrange(); }

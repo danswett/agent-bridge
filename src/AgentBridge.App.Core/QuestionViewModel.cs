@@ -21,11 +21,14 @@ public sealed partial class QuestionViewModel : Observable
         ["stale"] = _ => "Already answered or gone: the session is no longer asking this.",
         ["busy"] = _ => "Another answer to this session is being delivered. Try again in a moment.",
         ["refused"] = _ => "The machine refused this answer.",
+        // Held by Deliveries (Machine.Current, #269): nothing went.
+        ["offline"] = at => $"Not sent: the machine{at} is not connected now, or has not yet said whether it still asks this. Open the session once it is back.",
     };
 
     readonly Deliveries deliveries;
     readonly string sessionId;
     readonly string at;
+    readonly Func<bool> current;
     string freeText = "";
     bool otherOpen;
     string? error;
@@ -33,11 +36,14 @@ public sealed partial class QuestionViewModel : Observable
     Tone statusTone;
     bool pausedAfterBusy;
 
-    public QuestionViewModel(Question question, string sessionId, AgentKind agent, IReadOnlyList<string> capabilities, Deliveries deliveries, string? machineName = null)
+    // current: whether the machine's rows are its host's word now (Machine.Current, #269). While
+    // not, the question is shown but can't be answered: it may have ended meanwhile.
+    public QuestionViewModel(Question question, string sessionId, AgentKind agent, IReadOnlyList<string> capabilities, Deliveries deliveries, string? machineName = null, Func<bool>? current = null)
     {
         Question = question;
         this.sessionId = sessionId;
         this.deliveries = deliveries;
+        this.current = current ?? (() => true);
         at = string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}";
         (Answerable, Why) = Answerability(question, capabilities, agent);
         Fields = [.. question.Fields.Select(f => new FieldViewModel(f, question.Kind == QuestionKind.Approval))];
@@ -49,8 +55,16 @@ public sealed partial class QuestionViewModel : Observable
 
     void OnDelivery(Delivery d) { if (d.Key == Key) { Refresh(); } }
 
-    // The card let go of this question: it no longer follows the delivery.
-    public void Detach() => deliveries.Changed -= OnDelivery;
+    // The card let go of this question: it no longer follows the delivery, and answers nothing.
+    // Whatever still holds it (a view mid-click) must not answer a question that went (#269).
+    public void Detach()
+    {
+        deliveries.Changed -= OnDelivery;
+        detached = true;
+        RaiseControls();
+    }
+
+    bool detached;
 
     public Question Question { get; }
     public string Id => Question.Id;
@@ -91,13 +105,16 @@ public sealed partial class QuestionViewModel : Observable
         get
         {
             var e = deliveries.Get(Key);
-            return !pausedAfterBusy && (e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused"));
+            return !pausedAfterBusy && !detached && current() && Unsent(e);
         }
     }
 
+    // Nothing of the person's is on its way, or what went was not taken.
+    static bool Unsent(Delivery? e) => e is null || (e.State == DeliveryState.Done && e.Outcome is "busy" or "refused");
+
     // A tap question has no Send until Other is opened.
     public bool ShowSend => !Tap || OtherOpen;
-    public bool ShowResend => deliveries.Get(Key)?.State == DeliveryState.Failed;
+    public bool ShowResend => !detached && current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
 
     // The option a tap question sent, while that answer stands.
     public string? SentValue
@@ -156,7 +173,11 @@ public sealed partial class QuestionViewModel : Observable
         deliveries.Submit(Key, Ops.SessionAnswer, request => answer with { Request = request }, outcome => outcome is not ("busy" or "refused"), payload: answer);
     }
 
-    public void Resend() => deliveries.Resend(Key, Ops.SessionAnswer, request => ((AnswerRequest)deliveries.Get(Key)!.Payload!) with { Request = request });
+    public void Resend()
+    {
+        if (!ShowResend) { return; }
+        deliveries.Resend(Key, Ops.SessionAnswer, request => ((AnswerRequest)deliveries.Get(Key)!.Payload!) with { Request = request });
+    }
 
     void Fail(string message, string? field)
     {
@@ -207,7 +228,8 @@ public sealed partial class QuestionViewModel : Observable
     public void Refresh()
     {
         var e = deliveries.Get(Key);
-        (StatusText, StatusTone) = e is null ? ("", Tone.None) : Describe(e, at);
+        (StatusText, StatusTone) = !current() && (Unsent(e) || e!.State == DeliveryState.Failed) ? ($"Waiting for the Bridge Host{at}. Answer once it is back.", Tone.Progress)
+            : e is null ? ("", Tone.None) : Describe(e, at);
         if (e is { State: DeliveryState.Done, Outcome: "busy" } && !pausedAfterBusy)
         {
             pausedAfterBusy = true;

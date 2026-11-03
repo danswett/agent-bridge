@@ -16,6 +16,23 @@ public sealed class Machine : IAsyncDisposable
         Host = host;
         Cards = cards;
         Toasts = toasts;
+        if (IsLocal) { return; }
+        // Another machine's rows are acted on only while they are its host's word now (#269): its
+        // cards, its toasts and its deliveries all ask, so a press, a toast's button or Needs you
+        // can't answer a question kept from before it went.
+        cards.Current = () => Current;
+        cards.Away = Away;
+        cards.Deliveries.Hold = Hold;
+        if (toasts is not null) { toasts.Held = () => !Current; }
+        // Before MainViewModel hears of the change (it subscribes after): a dropped link's rows are
+        // the host's again only from a snapshot begun after it dropped.
+        var up = false;
+        host.Changed += () =>
+        {
+            var now = host.State == LinkState.Connected;
+            if (up && !now) { Unconfirm(); }
+            up = now;
+        };
     }
 
     // "local" for this machine; another machine's relay device id.
@@ -32,6 +49,53 @@ public sealed class Machine : IAsyncDisposable
     public string? ListedFor { get; set; }
 
     public string Name => Host.Hello?.Machine.Name ?? PresenceName ?? (IsLocal ? Environment.MachineName : "Another machine");
+
+    // When its host left the relay's presence while the app's relay link stayed up on the same
+    // account (#269): the machine stays, its rows marked offline, until it is back, is forgotten,
+    // or has been gone Fleet.OfflineKeep. Null while it is online.
+    public DateTimeOffset? OfflineSince { get; private set; }
+    public bool Offline => OfflineSince is not null;
+
+    // The first snapshot that can confirm its rows: one begun after it was last away.
+    long confirmFrom;
+
+    internal void GoOffline(DateTimeOffset at)
+    {
+        OfflineSince ??= at;
+        Unconfirm();
+    }
+
+    // Back in the relay's presence. A channel can outlive a short absence (ChannelHub spares one
+    // younger than its presence grace), and then nothing would ever send the snapshot its rows wait
+    // for: it is asked for, unless one has begun since.
+    internal void BackOnline()
+    {
+        if (OfflineSince is null) { return; }
+        OfflineSince = null;
+        if (Host.Sessions.Snapshots < confirmFrom) { Host.Resync(); }
+    }
+
+    void Unconfirm() => confirmFrom = Host.Sessions.Snapshots + 1;
+
+    // Whether its rows are its host's word now, and so can be acted on: this machine's always (an
+    // answer there waits for the host over the pipe, as before #269); another's only while it is in
+    // the relay's presence and connected, and a snapshot begun since it was last away has completed.
+    // Never on the copy kept while it was gone: a question that ended meanwhile is not answerable.
+    public bool Current => IsLocal || (OfflineSince is null && Host.State == LinkState.Connected && Host.Sessions.Complete && Host.Sessions.Snapshots >= confirmFrom);
+
+    // What its rows say while it is away (ui.md §2.2): offline with when it was last seen, or
+    // reconnecting while it is listed but its link is down. Null while connected, even before the
+    // snapshot confirms the rows: that is a moment, not news.
+    public StatusLine? Away(DateTimeOffset now) => IsLocal ? null
+        : OfflineSince is { } since ? StatusRules.Offline(since, now)
+        : Host.State != LinkState.Connected ? StatusRules.Reconnecting() : null;
+
+    // What its deliveries may not send now (Deliveries.Hold). An op on a session (an answer, a
+    // reply, End session) only while its rows are current; anything else (a launch, a folder-trust
+    // answer, which act on no row) only while it is online.
+    string? Hold(string op) =>
+        op is Ops.SessionAnswer or Ops.SessionReply or Ops.SessionStop ? Current ? null : $"{Name} is not connected now, or has not yet said which of its sessions are still there"
+        : Offline ? $"{Name} is offline" : null;
 
     public ValueTask DisposeAsync() => IsLocal ? ValueTask.CompletedTask : Host.DisposeAsync();
 }
@@ -88,11 +152,23 @@ public interface IFleetLink : IAsyncDisposable
 
 // The account's other machines, kept in step with the relay's presence: a machine for each
 // host online, other than this machine's own (which the app reaches over its pipe), each with
-// a connection that subscribes as the app's own does. A machine whose host leaves goes, with
-// its cards; while the relay connection itself is down, every machine stays as it was and
-// reconnects when it is back.
+// a connection that subscribes as the app's own does. A machine whose host leaves while the
+// relay link stays up on the same account stays, offline, with its cards (#269): a host's relay
+// link drops for a few seconds now and then (a restart, an update, a flaky network), and its
+// sessions, the one open and the machine's tab vanishing and coming back each time was worse
+// than useless. It goes once forgotten or gone OfflineKeep, and with every other machine when
+// the account changes or there is none (signed out, refused, another copy of the app). While
+// the relay connection itself is down, every machine stays as it was and reconnects when it is
+// back.
 public sealed class Fleet : IAsyncDisposable
 {
+    // How long a machine that left the relay's presence keeps its rows, offline and not to be
+    // acted on, before they go and it is listed only as offline (the roster's list, #50). Long
+    // enough for a restart, an update or a network blip, the drops #269 saw lasting about 20 s;
+    // short enough that a machine switched off does not sit in the list as if it might answer.
+    // The PWA keeps one as long (pwa/js/host-session.js).
+    public static readonly TimeSpan OfflineKeep = TimeSpan.FromMinutes(15);
+
     readonly IFleetLink link;
     readonly MainViewModel main;
     readonly IUiDispatcher ui;
@@ -230,7 +306,16 @@ public sealed class Fleet : IAsyncDisposable
         }
         foreach (var (id, h) in hosts)
         {
-            if (machines.TryGetValue(id, out var known)) { known.PresenceName = h.Name; continue; }
+            if (machines.TryGetValue(id, out var known))
+            {
+                known.PresenceName = h.Name;
+                if (known.Offline)
+                {
+                    known.BackOnline();
+                    main.Restale(known);
+                }
+                continue;
+            }
             var m = create(h);
             m.PresenceName = h.Name;
             // Each machine, not the fleet, carries its account: the last account's machines are
@@ -257,24 +342,61 @@ public sealed class Fleet : IAsyncDisposable
         main.SetOffline(listed, ForgetAsync, time, fresh: switched);
         // A machine that leaves the offline list without coming online was forgotten, from this
         // device or another (pwa/js/forget.js, vanished): only between two lists from a relay with a
-        // roster, of one account. Its usage readings go with it (#172).
+        // roster, of one account. Its usage readings go with it (#172), and so does a machine kept
+        // offline with its rows.
+        var forgotten = new HashSet<string>(StringComparer.Ordinal);
         if (state == FleetState.Connected && !switched && lastOffline is not null && offline is not null)
         {
-            foreach (var id in lastOffline.Select(k => k.Id).Except(offline.Select(k => k.Id)).Where(id => !hosts.ContainsKey(id) && id != me)) { main.Forgotten(id); }
+            foreach (var id in lastOffline.Select(k => k.Id).Except(offline.Select(k => k.Id)).Where(id => !hosts.ContainsKey(id) && id != me))
+            {
+                main.Forgotten(id);
+                forgotten.Add(id);
+            }
         }
         if (switched) { lastOffline = null; }
         if (state == FleetState.Connected) { lastOffline = offline; }
+        var at = time.GetUtcNow();
         foreach (var id in machines.Keys.Where(id => !hosts.ContainsKey(id)).ToList())
         {
-            machines.Remove(id, out var gone);
-            main.Remove(gone!.Key);
-            _ = gone.DisposeAsync().AsTask();
+            var m = machines[id];
+            // Left while the link is up on this account (a switch has already taken the last
+            // account's): kept, offline, until forgotten or gone too long (#269).
+            if (state == FleetState.Connected && !forgotten.Contains(id) && (m.OfflineSince is not { } since || at - since < OfflineKeep))
+            {
+                if (!m.Offline)
+                {
+                    m.GoOffline(at);
+                    main.Restale(m);
+                }
+                continue;
+            }
+            machines.Remove(id);
+            main.Remove(m.Key);
+            _ = m.DisposeAsync().AsTask();
         }
+        Expire(at);
+    }
+
+    // Wakes the fleet when the first machine kept offline has been gone OfflineKeep, so its rows go
+    // then, however quiet the relay is meanwhile.
+    ITimer? expiry;
+    DateTimeOffset? expiresAt;
+
+    void Expire(DateTimeOffset now)
+    {
+        var next = machines.Values.Select(m => m.OfflineSince).OfType<DateTimeOffset>().Select(s => s + OfflineKeep).DefaultIfEmpty(DateTimeOffset.MaxValue).Min();
+        if (next == DateTimeOffset.MaxValue) { expiry?.Dispose(); expiry = null; expiresAt = null; return; }
+        if (expiresAt == next) { return; }
+        expiry?.Dispose();
+        expiresAt = next;
+        var due = next - now;
+        expiry = time.CreateTimer(_ => ui.Post(() => { expiresAt = null; Sync(); }), null, due > TimeSpan.Zero ? due : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
     }
 
     public async ValueTask DisposeAsync()
     {
         disposed = true;
+        expiry?.Dispose();
         if (loopback is { } lb) { loopback = null; await lb.Host.DisposeAsync(); }
         foreach (var m in machines.Values) { await m.DisposeAsync(); }
         machines.Clear();
