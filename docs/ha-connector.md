@@ -1366,12 +1366,23 @@ policies and unconfirmed saves remain failures, not permission to proceed. Share
 mutations use the existing authenticated command boundary and per-write G5 guard;
 shadow mode explicitly refuses them.
 
+Local transactions for the same normalized HA endpoint and dashboard are serialized
+across client/profile instances through policy advancement, artifact write and
+actual readback. This is not a distributed lease or permission to run competing
+writer processes. Dashboard publication also checks the renderer's original card
+URL before advancing its fence, so a changed card requires rendering again rather
+than blessing stale content with a newer card receipt.
+
 The bundled MIT card is the exact legacy 1.42.0 artifact. The native renderer keeps
 all launch/status/usage controls, MCP cards, twelve form slots, answer/reply/stop
 controls, and every old-card fallback. Its declarative session templates are
 recorded from the complete original renderer, not recreated partially. A renderer
 artifact fingerprints its implementation, templates, policy/digest helpers and
 contract constants, with normalized source line endings.
+As in the legacy renderer, file resources and coherently versioned older/newer
+inline cards retain version-gated controls. Malformed inline cards and conflicting
+bytes claiming the bundled version fall back safely. This display trust never
+replaces the independent exact-byte proof required by a pinned policy.
 
 `Export-HaRenderer.ps1` loads source functions through the syntax tree and stubs
 publication in memory. Its separate publication-pin fixture compares 108 complete

@@ -11,12 +11,14 @@ $Source = (Resolve-Path -LiteralPath $Source).Path
 function Import-SpecFunction([string]$Path, [string[]]$Names = @()) {
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $Source $Path), [ref]$tokens, [ref]$errors)
-    if ($errors) { throw "Cannot parse $Path" }
+    if ($errors) { throw "Cannot parse ${Path}: $($errors.Message -join '; ')" }
     foreach ($definition in $ast.EndBlock.Statements) {
         if ($definition -isnot [Management.Automation.Language.FunctionDefinitionAst]) { continue }
         if ($Names.Count -and $definition.Name -notin $Names) { continue }
         $name = $definition.Name
-        . ([scriptblock]::Create($definition.Extent.Text.Replace("function $name", "function script:$name")))
+        $text = [regex]::Replace($definition.Extent.Text, "\Afunction\s+$([regex]::Escape($name))(?=\s|\{)",
+            "function script:$name", [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        . ([scriptblock]::Create($text))
     }
     return ,$ast
 }
@@ -84,6 +86,8 @@ $templatesByVersion = [ordered]@{}
 $lastTemplate = ''
 $versions = @('', '1.0.0', '1.12.0', '1.13.0', '1.15.0', '1.16.0', '1.17.0', '1.18.0',
     '1.19.0', '1.20.0', '1.22.0', '1.25.0', '1.27.0', '1.30.0', '1.31.0', '1.35.0', '1.40.0', '1.42.0')
+$previousCulture = [cultureinfo]::CurrentCulture
+try {
 foreach ($version in $versions) {
     $script:CardUrl = if ($version) { "/local/agent-bridge-reply-card.js?v=$version" } else { '' }
     foreach ($scenario in @('solo', 'fleet', 'empty', 'untrusted', 'ordering', 'czech')) {
@@ -149,3 +153,4 @@ foreach ($file in @($Templates, $Output)) { [void][IO.Directory]::CreateDirector
 [IO.File]::WriteAllText($Templates, (ConvertTo-BridgePublicationJson @{ source = $metadata; sessions = $templatesByVersion }) + "`n", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText($Output, (ConvertTo-BridgePublicationJson @{ source = $metadata; cases = $cases.ToArray() }) + "`n", [Text.UTF8Encoding]::new($false))
 Write-Information "Recorded $($cases.Count) complete renderer contracts and session templates." -InformationAction Continue
+} finally { [cultureinfo]::CurrentCulture = $previousCulture }

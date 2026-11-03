@@ -22,6 +22,7 @@ internal sealed class HaPublicationReceipts
     readonly string folder;
     readonly string path;
     readonly string dashboard;
+    internal string PublicationKey { get; }
 
     // Scope receipts to a configured HA instance and dashboard, never to the token.
     public HaPublicationReceipts(string profileFolder, Uri instance, string dashboard)
@@ -31,7 +32,7 @@ internal sealed class HaPublicationReceipts
             throw new ArgumentException("Invalid dashboard path.", nameof(dashboard));
         }
         this.dashboard = dashboard;
-        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(HomeAssistantClient.NormalizeBaseUrl(instance).AbsoluteUri.TrimEnd('/') + "\n" + dashboard)));
+        var key = PublicationKey = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(HomeAssistantClient.NormalizeBaseUrl(instance).AbsoluteUri.TrimEnd('/') + "\n" + dashboard)));
         folder = Path.GetFullPath(Path.Combine(profileFolder, "ha-publication", key));
         path = Path.Combine(folder, "receipt.json");
     }

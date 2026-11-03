@@ -6,13 +6,15 @@ internal sealed partial class FakeHomeAssistant
 {
     public List<JsonObject> PublicationWrites { get; } = [];
     public Action<JsonObject>? PublicationWrite { get; set; }
+    public Func<JsonObject, Task>? BeforePublicationWrite { get; set; }
 
-    public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default)
+    public async Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var command = mutation.Command();
+        if (BeforePublicationWrite is { } before) { await before(command); }
         PublicationWrites.Add((JsonObject)command.DeepClone());
-        if (PublicationWrite is { } apply) { apply(command); return Task.CompletedTask; }
+        if (PublicationWrite is { } apply) { apply(command); return; }
         var type = command["type"]!.GetValue<string>();
         if (type is "lovelace/resources/create" or "lovelace/resources/update")
         {
@@ -36,6 +38,5 @@ internal sealed partial class FakeHomeAssistant
             Dashboard = command["config"]!.ToJsonString();
         }
         else { throw new InvalidOperationException("Unexpected publication command: " + type); }
-        return Task.CompletedTask;
     }
 }

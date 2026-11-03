@@ -232,7 +232,7 @@ public static partial class HaShadow
         public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => real.ReadResourcesAsync(cancellationToken);
         public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => real.ReadDashboardsAsync(cancellationToken);
         public Task ApplyPublicationAsync(HaPublicationMutation mutation, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Shadow mode never publishes shared resources.");
+            throw new NotSupportedException("Shadow mode never publishes shared resources.");
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => real.ReadTopicsAsync(filters, window, cancellationToken);
     }
 }

@@ -10,7 +10,7 @@ internal sealed record HaFleetSession(string Node, string Name, string Machine, 
 internal sealed record HaFleetMachine(string Slug, string Machine, bool IncludeProfile = false, bool IncludeResume = false,
     bool IncludeAgent = false, bool IncludeTuning = false, bool IncludePermissions = false, bool IncludeDetailed = false,
     bool IsDev = false, bool Online = true, IReadOnlyList<string>? SessionNodes = null);
-internal sealed record HaRenderedDashboard(JsonObject Config, string InputHash, IReadOnlyList<string> RenderedNodes);
+internal sealed record HaRenderedDashboard(JsonObject Config, string InputHash, IReadOnlyList<string> RenderedNodes, string CardUrl);
 
 internal static partial class HaPublicationRenderer
 {
@@ -23,7 +23,7 @@ internal static partial class HaPublicationRenderer
     // version. Normalize source line endings so Windows and Unix build the same fence.
     public static readonly HaPublicationArtifact Artifact = HaPublicationArtifact.Read(JsonSerializer.SerializeToElement(new
     {
-        version = "1.14.0",
+        version = "1.14.1",
         hash = HaPublicationJson.Hash(string.Join("\n", new[] { "HaPublicationRenderer.cs", "HaPublicationWriter.cs", "HaPublicationPolicy.cs", "HaContract.cs", "session-templates.json" }
             .Select(name => name + "\n" + Read(name).Replace("\r\n", "\n", StringComparison.Ordinal)))),
     }));
@@ -42,8 +42,12 @@ internal static partial class HaPublicationRenderer
 
     public static bool TrustCard(string url)
     {
-        if (string.IsNullOrWhiteSpace(url)) { return true; }
-        try { return HaPublicationArtifact.ReadInlineCard(url) == Card; }
+        if (!url.StartsWith("data:", StringComparison.Ordinal)) { return true; }
+        try
+        {
+            var served = HaPublicationArtifact.ReadInlineCard(url);
+            return served.VersionText != Card.VersionText || served.Hash == Card.Hash;
+        }
         catch (InvalidDataException) { return false; }
     }
 
@@ -76,8 +80,8 @@ internal static partial class HaPublicationRenderer
         string selector, string cardUrl, bool? cardTrusted = null)
     {
         if (machines.Count == 0 || machines.Any(m => !SafeId(m.Slug)) || sessions.Any(s => !SafeId(s.Node)) ||
-            machines.Select(m => m.Slug).Distinct(StringComparer.Ordinal).Count() != machines.Count ||
-            sessions.Select(s => s.Node).Distinct(StringComparer.Ordinal).Count() != sessions.Count ||
+            machines.Select(m => m.Slug).Distinct(StringComparer.OrdinalIgnoreCase).Count() != machines.Count ||
+            sessions.Select(s => s.Node).Distinct(StringComparer.OrdinalIgnoreCase).Count() != sessions.Count ||
             machines.Any(m => m.SessionNodes?.Any(n => !SafeId(n)) == true) ||
             (selector.Length != 0 && (!selector.StartsWith("input_select.", StringComparison.Ordinal) || !SafeId(selector["input_select.".Length..]))))
         {
@@ -212,7 +216,7 @@ internal static partial class HaPublicationRenderer
         {
             ["title"] = "Sessions", ["path"] = "decision", ["type"] = "masonry", ["cards"] = Array(cards),
         }) };
-        return new(config, HaPublicationJson.Hash(InputJson(orderedSessions, all, selector, cardUrl, trusted)), orderedSessions.Select(s => s.Node).ToArray());
+        return new(config, HaPublicationJson.Hash(InputJson(orderedSessions, all, selector, cardUrl, trusted)), orderedSessions.Select(s => s.Node).ToArray(), cardUrl);
     }
 
     static JsonNode Expand(JsonNode template, HaFleetSession session) => template switch

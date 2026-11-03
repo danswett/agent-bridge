@@ -8,7 +8,12 @@ public sealed class PublicationWriterTests : IDisposable
 {
     const string Dashboard = "agent-decisions";
     readonly string folder = Path.Combine(Directory.GetCurrentDirectory(), "TestResults", "writer-" + Guid.NewGuid().ToString("N"));
-    static readonly JsonElement Fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json"))).RootElement.Clone();
+    static readonly JsonElement Fixture = ReadFixture();
+    static JsonElement ReadFixture()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json")));
+        return document.RootElement.Clone();
+    }
     static HaPublicationPolicy Policy() => HaPublicationPolicy.Read(Fixture.GetProperty("policy"), Dashboard);
     static readonly HaPublicationIdentity Identity = new("test-authority", "test-writer", "test-writer", 3);
     static readonly string InputHash = new('a', 64);
@@ -88,7 +93,7 @@ public sealed class PublicationWriterTests : IDisposable
         var writer = Writer(ha);
         await writer.PublishCardAsync(Card("1.0.0"));
         var config = new JsonObject { ["title"] = "Agent Sessions", ["views"] = new JsonArray(new JsonObject { ["cards"] = new JsonArray() }) };
-        await writer.PublishDashboardAsync(config, InputHash, ["agent_bridge_one"], Policy().Render);
+        await writer.PublishDashboardAsync(config, InputHash, ["agent_bridge_one"], Policy().Render, Card("1.0.0"));
         Assert.Null(config["agent_bridge_publication"]);
         var state = await writer.ReadAsync();
         var proof = HaVerifiedPublication.Read(state);
@@ -109,13 +114,13 @@ public sealed class PublicationWriterTests : IDisposable
     {
         var ha = Established();
         var renderer = Artifact("3.0.0", new string('c', 64));
-        await Writer(ha).PublishDashboardAsync(new JsonObject { ["views"] = new JsonArray() }, InputHash, [], renderer);
+        await Writer(ha).PublishDashboardAsync(new JsonObject { ["views"] = new JsonArray() }, InputHash, [], renderer, "");
         Assert.Equal(new[] { "lovelace/resources/update", "lovelace/dashboards/create", "lovelace/config/save" },
             ha.PublicationWrites.Select(c => c["type"]!.GetValue<string>()));
         var pinned = JsonNode.Parse(Policy().CanonicalJson)!.AsObject();
         pinned["mode"] = "pin";
         var other = Established(HaPublicationPolicy.Read(Json(pinned), Dashboard));
-        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(other).PublishDashboardAsync(new JsonObject(), InputHash, [], Policy().Render));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(other).PublishDashboardAsync(new JsonObject(), InputHash, [], Policy().Render, ""));
         Assert.Empty(other.PublicationWrites);
     }
 
@@ -124,12 +129,64 @@ public sealed class PublicationWriterTests : IDisposable
     {
         var ha = Established();
         var writer = Writer(ha);
-        await writer.PublishDashboardAsync(new JsonObject { ["views"] = new JsonArray() }, InputHash, [], Artifact("3.0.0", new string('c', 64)));
+        await writer.PublishDashboardAsync(new JsonObject { ["views"] = new JsonArray() }, InputHash, [], Artifact("3.0.0", new string('c', 64)), "");
         ha.PublicationWrites.Clear();
-        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(ha).PublishDashboardAsync(new JsonObject(), InputHash, [], Policy().Render));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(ha).PublishDashboardAsync(new JsonObject(), InputHash, [], Policy().Render, ""));
         Assert.Empty(ha.PublicationWrites);
         ha.PublicationWrite = _ => { };
-        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(ha).PublishDashboardAsync(new JsonObject { ["title"] = "new" }, new string('d', 64), [], Artifact("3.0.0", new string('c', 64))));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(ha).PublishDashboardAsync(new JsonObject { ["title"] = "new" }, new string('d', 64), [], Artifact("3.0.0", new string('c', 64)), ""));
         Assert.Single(ha.PublicationWrites);
+    }
+
+    [Fact]
+    public async Task Concurrent_writer_instances_preserve_both_fence_advances_through_artifact_readback()
+    {
+        var ha = Established();
+        await Writer(ha).PublishCardAsync(Card("1.0.0"));
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var policyWrites = 0;
+        ha.BeforePublicationWrite = async command =>
+        {
+            if (command["resource_id"]?.GetValue<string>() == "policy" && Interlocked.Increment(ref policyWrites) == 1)
+            {
+                paused.SetResult();
+                await resume.Task;
+            }
+        };
+        var renderer = Artifact("3.0.0", new string('c', 64));
+        var rendering = Writer(ha).PublishDashboardAsync(new JsonObject { ["views"] = new JsonArray() }, InputHash, [], renderer, Card("1.0.0"));
+        Task card = Task.CompletedTask;
+        try
+        {
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var otherProfile = new HaPublicationWriter(ha, Dashboard, new(Path.Combine(folder, "other-profile"), new Uri("https://ha.test"), Dashboard), Identity);
+            card = otherProfile.PublishCardAsync(Card("2.0.0"));
+            Assert.False(card.IsCompleted);
+            using var cancel = new CancellationTokenSource();
+            cancel.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => otherProfile.PublishCardAsync(Card("3.0.0"), cancel.Token));
+        }
+        finally
+        {
+            resume.TrySetResult();
+            await Task.WhenAll(rendering, card).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        var actual = (await Writer(ha).ReadAsync()).Policy!;
+        Assert.Equal(renderer, actual.HighRender);
+        Assert.Equal(HaPublicationArtifact.ReadInlineCard(Card("2.0.0")), actual.HighCard);
+    }
+
+    [Fact]
+    public async Task A_card_changed_after_rendering_refuses_before_advancing_the_renderer_fence()
+    {
+        var ha = Established();
+        await Writer(ha).PublishCardAsync(Card("1.0.0"));
+        var rendered = HaPublicationRenderer.Render([], [new("alpha", "Alpha")], "", Card("1.0.0"));
+        await Writer(ha).PublishCardAsync(Card("2.0.0"));
+        ha.PublicationWrites.Clear();
+        await Assert.ThrowsAsync<InvalidDataException>(() => Writer(ha).PublishDashboardAsync(rendered, Artifact("3.0.0", new string('c', 64))));
+        Assert.Empty(ha.PublicationWrites);
+        Assert.Equal(Policy().Render, (await Writer(ha).ReadAsync()).Policy!.Render);
     }
 }

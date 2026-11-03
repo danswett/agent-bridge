@@ -36,7 +36,7 @@ public sealed class LivePublicationTests
             var rendered = HaPublicationRenderer.Render(
                 [new("agent_bridge_native", "Native session", "Native"), new("agent_bridge_legacy", "Legacy MCP", "Legacy", "mcp")],
                 [new("native", "Native", IncludeAgent: true, IncludeDetailed: true), new("legacy", "Legacy", Online: false)], "", HaPublicationRenderer.CardUrl);
-            await writer.PublishDashboardAsync(rendered.Config, rendered.InputHash, rendered.RenderedNodes, HaPublicationRenderer.Artifact);
+            await writer.PublishDashboardAsync(rendered, HaPublicationRenderer.Artifact);
             var state = await Writer().ReadAsync();
             createdIds.UnionWith([state.PolicyResource!.Id, state.CardResource!.Id]);
             var proof = HaVerifiedPublication.Read(state);
@@ -47,7 +47,7 @@ public sealed class LivePublicationTests
             // then repair and observe again with a fresh writer/receipt instance.
             await ha.ApplyPublicationAsync(new(new JsonObject { ["type"] = "lovelace/config/save", ["url_path"] = dashboard, ["config"] = new JsonObject { ["title"] = "overwritten", ["views"] = new JsonArray() } }));
             Assert.False(HaVerifiedPublication.Read(await Writer().ReadAsync()).Verified);
-            await Writer().PublishDashboardAsync(rendered.Config, rendered.InputHash, rendered.RenderedNodes, HaPublicationRenderer.Artifact);
+            await Writer().PublishDashboardAsync(rendered, HaPublicationRenderer.Artifact);
             Assert.True(HaVerifiedPublication.Read(await Writer().ReadAsync()).Verified);
             await Assert.ThrowsAsync<InvalidDataException>(() => Writer().PublishCardAsync(
                 "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0"));

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Collections.Concurrent;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -136,6 +137,17 @@ internal sealed record HaVerifiedPublication(bool Verified, string InputHash, IR
 
 internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, HaPublicationReceipts receipts, HaPublicationIdentity identity)
 {
+    // Targets come only from locally configured endpoints. This process-local
+    // transaction gate is shared across client/profile instances, not a writer lease.
+    static readonly ConcurrentDictionary<string, SemaphoreSlim> transactions = new(StringComparer.Ordinal);
+    sealed class Transaction(SemaphoreSlim gate) : IDisposable { public void Dispose() => gate.Release(); }
+    async Task<IDisposable> BeginAsync(CancellationToken ct)
+    {
+        var gate = transactions.GetOrAdd(receipts.PublicationKey, _ => new(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        return new Transaction(gate);
+    }
+
     public Task<HaPublicationObservation> ReadAsync(CancellationToken cancellationToken = default) =>
         HaPublicationObservation.ReadAsync(ha, dashboard, receipts, cancellationToken);
 
@@ -145,9 +157,14 @@ internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, H
         state.Policy.CheckWriter(identity.Authority, identity.Participant, identity.Writer, identity.Generation, component, artifact, state.CardUrl);
     }
 
-    async Task<HaPublicationObservation> FenceAsync(HaPublicationComponent component, HaPublicationArtifact artifact, CancellationToken ct)
+    async Task<HaPublicationObservation> FenceAsync(HaPublicationComponent component, HaPublicationArtifact artifact, CancellationToken ct,
+        string? renderedCardUrl = null)
     {
         var state = await ReadAsync(ct);
+        if (renderedCardUrl is not null && state.CardUrl != renderedCardUrl)
+        {
+            throw new InvalidDataException("The served card changed since rendering; render again before advancing the fence.");
+        }
         Authorize(state, component, artifact);
         var policy = state.Policy!;
         var target = component == HaPublicationComponent.Card ? policy.Card : policy.Render;
@@ -174,6 +191,7 @@ internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, H
 
     public async Task PublishCardAsync(string inlineCardUrl, CancellationToken cancellationToken = default)
     {
+        using var transaction = await BeginAsync(cancellationToken);
         var artifact = HaPublicationArtifact.ReadInlineCard(inlineCardUrl);
         var state = await FenceAsync(HaPublicationComponent.Card, artifact, cancellationToken);
         if (state.CardUrl == inlineCardUrl) { return; }
@@ -186,15 +204,20 @@ internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, H
         }
     }
 
+    public Task PublishDashboardAsync(HaRenderedDashboard rendered, HaPublicationArtifact renderer, CancellationToken cancellationToken = default) =>
+        PublishDashboardAsync(rendered.Config, rendered.InputHash, rendered.RenderedNodes, renderer, rendered.CardUrl, cancellationToken);
+
     public async Task PublishDashboardAsync(JsonObject rendered, string inputHash, IReadOnlyCollection<string> renderedNodes,
-        HaPublicationArtifact renderer, CancellationToken cancellationToken = default)
+        HaPublicationArtifact renderer, string renderedCardUrl, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(renderedCardUrl);
+        using var transaction = await BeginAsync(cancellationToken);
         if (!HaPublicationPolicy.IsHash(inputHash)) { throw new ArgumentException("Invalid input digest.", nameof(inputHash)); }
         if (renderedNodes.Any(n => n.Length == 0 || n.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-'))))
         {
             throw new ArgumentException("Invalid rendered-node set.", nameof(renderedNodes));
         }
-        var state = await FenceAsync(HaPublicationComponent.Render, renderer, cancellationToken);
+        var state = await FenceAsync(HaPublicationComponent.Render, renderer, cancellationToken, renderedCardUrl);
         var config = (JsonObject)rendered.DeepClone();
         var policy = state.Policy!;
         config["agent_bridge_publication"] = new JsonObject
