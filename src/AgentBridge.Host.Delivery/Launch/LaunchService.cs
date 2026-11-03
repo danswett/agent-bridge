@@ -902,7 +902,7 @@ public sealed partial class LaunchService : ISessionLauncher
                         var was = p.Trust;
                         p.Trust = was is not null && StartupQuestions.SameQuestion(read, was.Screen) ? was with { Screen = read } : new TrustSnapshot(Guid.NewGuid().ToString(), read);
                     }
-                    if (question != p.Question)
+                    if (question != p.Question && !p.Closed)
                     {
                         p.Question = question;
                         if (question == StartupQuestion.Trust)
@@ -1036,7 +1036,7 @@ public sealed partial class LaunchService : ISessionLauncher
         lock (pendingGate)
         {
             // A trust question first: it is the one shown beside the busy (BusyQuestion).
-            bool Asking(Pending x, StartupQuestion q) => x.Question == q && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
+            bool Asking(Pending x, StartupQuestion q) => x.Asks(q) && x.TrustAt is { } at && now - at <= options.TrustBusyFor;
             var p = pending.FirstOrDefault(x => Asking(x, StartupQuestion.Trust)) ?? pending.FirstOrDefault(x => Asking(x, StartupQuestion.BypassPermissions));
             return p is null ? null
                 : p.Question == StartupQuestion.BypassPermissions
@@ -1051,7 +1051,7 @@ public sealed partial class LaunchService : ISessionLauncher
     {
         var now = options.Time.GetUtcNow();
         Pending? p;
-        lock (pendingGate) { p = pending.FirstOrDefault(x => x.Question == StartupQuestion.Trust && x.TrustAt is { } at && now - at <= options.TrustBusyFor); }
+        lock (pendingGate) { p = pending.FirstOrDefault(x => x.Asks(StartupQuestion.Trust) && x.TrustAt is { } at && now - at <= options.TrustBusyFor); }
         return p is null ? null : Question(p);
     }
 
@@ -1064,7 +1064,7 @@ public sealed partial class LaunchService : ISessionLauncher
     public IReadOnlyList<TrustQuestion> TrustQuestions()
     {
         List<Pending> waiting;
-        lock (pendingGate) { waiting = [.. pending.Where(x => x.Question == StartupQuestion.Trust && x.Trust is not null).OrderByDescending(x => x.TrustAt)]; }
+        lock (pendingGate) { waiting = [.. pending.Where(x => x.Asks(StartupQuestion.Trust) && x.Trust is not null).OrderByDescending(x => x.TrustAt)]; }
         return [.. waiting.Take(MostTrustQuestions).Select(Question)];
     }
 
@@ -1125,7 +1125,7 @@ public sealed partial class LaunchService : ISessionLauncher
     {
         Pending? p;
         lock (pendingGate) { p = pending.FirstOrDefault(x => x.Trust?.Id == questionId); }
-        if (p is null || p.Question != StartupQuestion.Trust) { return TrustRefused("that question is no longer waiting: it was answered, or the agent closed"); }
+        if (p is null || !p.Asks(StartupQuestion.Trust)) { return TrustRefused("that question is no longer waiting: it was answered, or the agent closed"); }
         if (Stopped(device) is not null) { return TrustRefused(Refusal(device)); }
         if (Interlocked.CompareExchange(ref p.Answering, 1, 0) != 0) { return TrustRefused("that question is being answered from another device"); }
         var label = p.Launcher.Label;
@@ -1279,7 +1279,9 @@ public sealed partial class LaunchService : ISessionLauncher
             {
                 // No longer asking from now, not from when following sees it gone after its grace:
                 // a client asks again on this outcome, and found the launch still busy (live, the
-                // app after a Quit from it).
+                // app after a Quit from it). And for good: a look at its window begun before the
+                // Quit can come back after this with the question it read, and set it again (#416).
+                p.Closed = true;
                 p.Question = StartupQuestion.None;
                 return new TrustAnswerResult(TrustAnswerOutcome.Declined, $"{label} was not trusted with {p.Where}, and closed; nothing was launched");
             }
@@ -1306,6 +1308,10 @@ public sealed partial class LaunchService : ISessionLauncher
         public LaunchedWith Launched { get; } = launched;
         public TaskCompletionSource<LaunchResult> Decided { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public volatile StartupQuestion Question;
+        // Seen to close after a person's Quit: it asks nothing from then on, whatever Question
+        // says. Never unset, so a reader needs no lock against the follower's write (Asks).
+        public volatile bool Closed;
+        public bool Asks(StartupQuestion question) => !Closed && Question == question;
         public DateTimeOffset? TrustAt { get; set; }
         // While a folder-trust question waits: its id, and what its window last showed (null
         // when that could not be read in full). Answering is 1 while an answer is being typed.
