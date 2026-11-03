@@ -93,7 +93,8 @@ const network = (request) => fetch(request.url, { cache: 'no-cache', credentials
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || !url.href.startsWith(self.registration.scope) || url.pathname.includes('/v1/')) { return; }
-  e.respondWith((async () => {
+  const pending = [];
+  const response = (async () => {
     const own = await caches.open(CACHE);
     // A navigation is the app's page, whatever its query says (?demo=1, ?host=…).
     if (e.request.mode === 'navigate') {
@@ -108,16 +109,20 @@ self.addEventListener('fetch', (e) => {
     }
     // Anything else (the demo's chunk, a file of the app's source layout) is
     // stale-while-revalidate: what is kept now, and the network's copy kept for next time.
-    const fresh = network(e.request).then((r) => {
-      if (r.ok) { const copy = r.clone(); e.waitUntil(own.put(e.request, copy)); }
+    const fresh = network(e.request).then(async (r) => {
+      if (r.ok) { await own.put(e.request, r.clone()).catch(() => {}); }
       return r;
     });
+    pending.push(fresh.catch(() => {}));
     if (hit) {
-      e.waitUntil(fresh.catch(() => {}));
       return hit;
     }
     return fresh.catch(async () => (await caches.match(e.request, { ignoreSearch: true })) ?? Response.error());
-  })());
+  })();
+  // Register before yielding, including when a cached response wins the race.
+  // Storage failure must not turn a successful network response into a failure.
+  e.waitUntil(response.then(() => Promise.all(pending)).catch(() => {}));
+  e.respondWith(response);
 });
 // ---- notifications (docs/protocol/v1-sessions.md, Notifications) ----
 // A push is a notice a machine encrypted to this browser (RFC 8291); the browser has
