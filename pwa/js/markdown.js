@@ -516,18 +516,20 @@ function parseEmphasis(text, i, noCloser) {
   if (c === '_' && i > 0 && WORD.test(text[i - 1])) { return null; }
   if (noCloser.has(delim)) { return null; }
   let from = i + len;
+  // Where the span would cross a blank line, found once: reading each candidate's inner text for it
+  // was quadratic, as "_x" repeated offers a closer at every "_" and the word after refuses each one.
+  const blank = text.indexOf('\n\n', i + len);
   for (;;) {
     const close = text.indexOf(delim, from);
     if (close === -1) { noCloser.add(delim); return null; }
     const before = text[close - 1];
     const next = text[close + len];
-    const inner = text.slice(i + len, close);
-    const okClose = close > i + len && !/\s/.test(before) && !inner.includes('\n\n')
+    const okClose = close > i + len && !/\s/.test(before) && (blank === -1 || blank + 2 > close)
       && !(c === '_' && next !== undefined && WORD.test(next))
       // "**" is not closed by the first half of a "***" run meant for an inner "*".
       && !(len === 1 && next === c);
     if (okClose) {
-      return { tag: c === '~' ? 'del' : len === 2 ? 'strong' : 'em', inner, end: close + len };
+      return { tag: c === '~' ? 'del' : len === 2 ? 'strong' : 'em', inner: text.slice(i + len, close), end: close + len };
     }
     from = close + 1;
   }

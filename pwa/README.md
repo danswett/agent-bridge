@@ -401,8 +401,9 @@ list, the DOM is built with `createElement` and text nodes, every tag and link i
 again while building, and links keep only `http:`, `https:` and `mailto:` (absolute).
 Images become links and are never loaded. It covers what agents write: paragraphs (line
 breaks kept), headings, emphasis, code, fenced code, nested and task lists, quotes, rules,
-GitHub tables and links. It is linear on hostile input (tested at 16 KiB, and nested link
-brackets and unclosed link destinations at 200,000 characters, #439).
+GitHub tables and links. It is linear on hostile input: its tests parse each pathological input
+(runs of `*`, `_`, `[`, backticks, quotes, list markers, nested brackets, unclosed link
+destinations) at two sizes, and fail one whose time grows faster than its length (#439).
 
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
