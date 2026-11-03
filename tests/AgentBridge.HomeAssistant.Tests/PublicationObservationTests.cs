@@ -83,6 +83,43 @@ public sealed class PublicationObservationTests : IDisposable
     }
 
     [Fact]
+    public async Task Equivalent_endpoint_queries_and_fragments_cannot_reset_an_established_receipt()
+    {
+        var ha = new FakeHomeAssistant { Resources = Resources(Policy()) };
+        var endpoint = new Uri("https://ha.test/proxy/");
+        await HaPublicationObservation.ReadAsync(ha, Dashboard, new(folder, endpoint, Dashboard));
+        ha.Resources = Json("[]");
+        foreach (var suffix in new[] { "?display=1", "#dashboard", "?display=1#dashboard" })
+        {
+            var equivalent = new Uri(endpoint.AbsoluteUri + suffix);
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                HaPublicationObservation.ReadAsync(ha, Dashboard, new(folder, equivalent, Dashboard)));
+            Assert.Equal(Policy().Hash, new HaPublicationReceipts(folder, equivalent, Dashboard).Read()!.Hash);
+            Assert.Equal(endpoint, HomeAssistantClient.NormalizeBaseUrl(equivalent));
+        }
+        Assert.Single(Directory.GetFiles(folder, "receipt.json", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task Concurrent_receipt_readers_do_not_block_atomic_replacement_or_observe_partial_snapshots()
+    {
+        var original = Policy();
+        Receipts().Accept(original);
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            for (var i = 0; i < 80; i++) { Assert.NotNull(Receipts().Read()); }
+        })).ToArray();
+        for (var i = 1; i <= 30; i++)
+        {
+            var next = JsonNode.Parse(original.CanonicalJson)!.AsObject();
+            next["generation"] = original.Generation + i;
+            Receipts().Accept(HaPublicationPolicy.Read(Json(next.ToJsonString()), Dashboard));
+        }
+        await Task.WhenAll(readers);
+        Assert.Equal(original.Generation + 30, Receipts().Read()!.Generation);
+    }
+
+    [Fact]
     public async Task A_dashboard_receipt_prevents_bootstrap_even_without_a_local_receipt()
     {
         var ha = new FakeHomeAssistant

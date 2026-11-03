@@ -14,6 +14,17 @@ public class ClientTests
 {
     const string Token = "test-token-not-a-secret";
 
+    [Theory]
+    [InlineData("https://ha.test/proxy?display=1")]
+    [InlineData("https://ha.test/proxy/#dashboard")]
+    [InlineData("https://ha.test/proxy?display=1#dashboard")]
+    public void Equivalent_base_URL_metadata_does_not_change_the_effective_API_endpoint(string url)
+    {
+        using var http = new HttpClient();
+        var client = new HomeAssistantClient(new Uri(url), Token, http);
+        Assert.Equal("wss://ha.test/proxy/api/websocket", client.WebSocketUri.AbsoluteUri);
+    }
+
     sealed class Handler(Func<HttpRequestMessage, string?, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public List<(HttpRequestMessage Request, string? Body)> Seen { get; } = [];

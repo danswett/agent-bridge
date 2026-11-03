@@ -181,7 +181,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     // one, the client keeps its own, so even a client on its own never repeats a refused login.
     public HomeAssistantClient(Uri baseUrl, string token, HttpClient http, Func<Uri, CancellationToken, Task<WebSocket>>? connect = null, HaAuthGuard? auth = null)
     {
-        this.baseUrl = new Uri(baseUrl.ToString().TrimEnd('/') + "/");
+        this.baseUrl = NormalizeBaseUrl(baseUrl);
         this.token = token;
         this.http = http;
         this.auth = auth ?? new HaAuthGuard();
@@ -203,6 +203,12 @@ public sealed class HomeAssistantClient : IHomeAssistant
     }
 
     public string? Refused => auth.Refused(credential);
+
+    internal static Uri NormalizeBaseUrl(Uri value)
+    {
+        var endpoint = new UriBuilder(value) { Query = "", Fragment = "" }.Uri;
+        return new Uri(endpoint.AbsoluteUri.TrimEnd('/') + "/");
+    }
 
     public Uri WebSocketUri => new UriBuilder(new Uri(baseUrl, "api/websocket"))
     {

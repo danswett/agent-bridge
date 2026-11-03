@@ -1339,7 +1339,9 @@ missing dashboard config.
 Accepted policies are kept under the new host's profile in an owner-only
 `ha-publication/<instance-and-dashboard-digest>/receipt.json`. A named local mutex
 rechecks progression against the current receipt before an atomic, flushed
-replacement. This mutex is **not a distributed lease**. Corrupt/inaccessible
+replacement. Reads also hold it while validating Windows ACLs and reading a
+complete snapshot; query/fragment URL metadata cannot select a fresh receipt for
+the same normalized API endpoint. This mutex is **not a distributed lease**. Corrupt/inaccessible
 receipts refuse observation, and deleting a dashboard cannot reset an established
 high-water mark. No legacy configuration or installed files are read or changed.
 

@@ -24,12 +24,14 @@ internal sealed class HaPublicationReceipts
             throw new ArgumentException("Invalid dashboard path.", nameof(dashboard));
         }
         this.dashboard = dashboard;
-        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(instance.AbsoluteUri.TrimEnd('/') + "\n" + dashboard)));
+        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(HomeAssistantClient.NormalizeBaseUrl(instance).AbsoluteUri.TrimEnd('/') + "\n" + dashboard)));
         folder = Path.GetFullPath(Path.Combine(profileFolder, "ha-publication", key));
         path = Path.Combine(folder, "receipt.json");
     }
 
-    public HaPublicationPolicy? Read()
+    public HaPublicationPolicy? Read() => Locked(ReadCore);
+
+    HaPublicationPolicy? ReadCore()
     {
         PrivateFolder.Ensure(folder, "the publication receipt folder", "no publication is authorized");
         // File.Exists treats inaccessible paths as absent. Open directly so only a genuinely
@@ -40,7 +42,7 @@ internal sealed class HaPublicationReceipts
             {
                 throw new IOException("The publication receipt is not a private regular file.");
             }
-            using var stream = File.OpenRead(path);
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             if (stream.Length > 16384) { throw new InvalidDataException("Oversized publication receipt."); }
             using var document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 10 });
             return HaPublicationPolicy.Read(document.RootElement, dashboard);
@@ -71,11 +73,37 @@ internal sealed class HaPublicationReceipts
     public void Accept(HaPublicationPolicy policy, CancellationToken cancellationToken = default)
     {
         if (policy.Dashboard != dashboard) { throw new InvalidDataException("Receipt names a different dashboard."); }
-        PrivateFolder.Ensure(folder, "the publication receipt folder", "no publication is authorized");
+        Locked(() =>
+        {
+            var previous = ReadCore();
+            if (previous is not null)
+            {
+                policy.CheckProgressFrom(previous);
+                if (policy.Hash == previous.Hash) { return 0; }
+            }
+            var pending = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".pending");
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using (var stream = PrivateFolder.CreateNew(pending))
+                {
+                    stream.Write(Encoding.UTF8.GetBytes(policy.CanonicalJson));
+                    stream.Flush(flushToDisk: true);
+                }
+                File.Move(pending, path, overwrite: true);
+            }
+            finally { if (File.Exists(pending)) { File.Delete(pending); } }
+            return 0;
+        }, cancellationToken);
+    }
+
+    // ACL validation itself can briefly open a Windows handle without delete
+    // sharing. Serialize the entire snapshot check, not only its data stream.
+    T Locked<T>(Func<T> action, CancellationToken cancellationToken = default)
+    {
         var mutexPath = OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path;
         using var mutex = new Mutex(false, "AgentBridgePublication_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mutexPath))));
         var held = false;
-        var pending = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".pending");
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -89,23 +117,10 @@ internal sealed class HaPublicationReceipts
                 catch (AbandonedMutexException) { held = true; }
             }
             if (!held) { throw new IOException("Publication receipt is busy; no shared write is authorized."); }
-            var previous = Read();
-            if (previous is not null)
-            {
-                policy.CheckProgressFrom(previous);
-                if (policy.Hash == previous.Hash) { return; }
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-            using (var stream = PrivateFolder.CreateNew(pending))
-            {
-                stream.Write(Encoding.UTF8.GetBytes(policy.CanonicalJson));
-                stream.Flush(flushToDisk: true);
-            }
-            File.Move(pending, path, overwrite: true);
+            return action();
         }
         finally
         {
-            if (File.Exists(pending)) { File.Delete(pending); }
             if (held) { mutex.ReleaseMutex(); }
         }
     }
