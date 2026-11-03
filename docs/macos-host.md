@@ -24,8 +24,21 @@ refuses configuration and sign-in from inside an agent session. The `mac-local`
 profile is separate from any existing default profile. Use an existing ordinary
 workspace directory you approve in place of `/absolute/path/to/workspace`.
 
+For the default local build, the following shortcut approves the folder as
+**Bridge Sessions**, sets Copilot and Ask permissions, and starts device sign-in.
+After sign-in succeeds, start the host in the foreground:
+
+```sh
+bash scripts/mac-local-host.sh configure /absolute/path/to/workspace
+bash scripts/mac-local-host.sh start
+```
+
+To restart after rebuilding, stop this host with Ctrl-C in its Terminal and run
+the start command again. If you prefer the individual commands:
+
 ```sh
 out/macos-host/agent-bridge-host workspace add /absolute/path/to/workspace --label Local --profile mac-local
+out/macos-host/agent-bridge-host config set launch.permissions ask --profile mac-local
 out/macos-host/agent-bridge-host config set launch.enabled true --profile mac-local
 out/macos-host/agent-bridge-host config set launch.defaultAgent copilot --profile mac-local
 out/macos-host/agent-bridge-host sign-in --relay https://relay.bad-duck.com --profile mac-local
