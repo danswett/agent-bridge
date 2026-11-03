@@ -75,10 +75,11 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 ## License
 
 Copyright (c) 2026 Dan Swett. Licensed under the
-[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). If you run a modified
-version as a network service, such as the relay, you must offer its users the source of
-your modified version. For a commercial license on other terms, contact the copyright
-holder.
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). Under its section 13, if
+you modify it and users interact with your version remotely through a computer network
+(the relay, for example), you must prominently offer all of those users an opportunity to
+receive the Corresponding Source of your version. For a commercial license on other terms,
+contact the copyright holder.
 
 Versions up to and including commit `05ee6828022d1cef73b48d5e323fa405c494568a` were
 released under the MIT License, and stay available under it. Agent Bridge Mono, in
