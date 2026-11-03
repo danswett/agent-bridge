@@ -79,7 +79,13 @@ static class DesignKeys
         "AbLayoutMinHeight",
         "AbLayoutList",
         "AbLayoutListMin",
+        "AbLayoutListMax",
         "AbLayoutInspector",
+        "AbLayoutInspectorMin",
+        "AbLayoutInspectorMax",
+        "AbLayoutSessionMin",
+        "AbLayoutDivider",
+        "AbLayoutDividerLine",
         "AbLayoutReadingMax",
     ];
 

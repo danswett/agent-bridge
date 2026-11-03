@@ -58,10 +58,12 @@ public sealed partial class SessionsPage : UserControl
     internal ListView Rows => List;
     internal SessionView SessionPaneView => Session;
 
-    // The window's width, as the panes' adaptive triggers read it.
+    // The window's width, as the panes' adaptive triggers read it, and the panes' widths at the
+    // page's (SessionsPage.Dividers).
     void Measure()
     {
         if (Layout is not null && XamlRoot is { } root) { Layout.Width = root.Size.Width; }
+        SizePanes();
     }
 
     void OnMain(object? sender, PropertyChangedEventArgs e)
