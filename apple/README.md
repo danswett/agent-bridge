@@ -50,6 +50,9 @@ work only when the connected host offers them.
 - The Mac workbench keeps the reply or question editor below the conversation. A
   resizable right pane shows details and tools; selecting a delegate opens its
   activity in that pane while the conversation and composer stay visible.
+  iPad uses the same side-by-side arrangement when its detail column fits both
+  panes. On iPhone and narrow iPad windows, the editor stays below the
+  conversation and the toolbar opens the inspector.
 - Structured questions/approvals, replies and two-step stop. An uncertain action
   remains bound to its original UUID and host process; reconnect never silently
   sends a fresh press. A delivered composer reply removes only its sent prefix
