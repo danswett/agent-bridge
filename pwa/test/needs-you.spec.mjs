@@ -189,6 +189,8 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
       return getComputedStyle(el).color === text;
     })).toBe(true);
     await expect(e.getByRole('button', { name: /^Deny/ })).toBeEnabled();
+    // The outcome grew the entry, so the lane waits a moment before a click counts.
+    await still(page);
     await e.getByRole('button', { name: /^Deny/ }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
     const [first, second] = await log(page);
@@ -229,6 +231,8 @@ test.describe('outcomes, as the card\'s buttons have them', () => {
     await expect(e.locator('.needs-status')).toHaveText("Couldn't send it: the host is restarting.");
     await expect(e.getByRole('button', { name: /^Approve once/ })).toBeDisabled();
     // Named for its session, as Approve once and Deny are: two failed sends can both offer it.
+    // The outcome grew the entry, so the lane waits a moment before a click counts.
+    await still(page);
     await e.getByRole('button', { name: 'Try again: Land the P1 slices', exact: true }).click();
     await expect(entryFor(page, LAND)).toHaveCount(0);
     const [first, second] = await log(page);
@@ -541,6 +545,42 @@ test.describe('a moment before the lane takes a click', () => {
     await expect.poll(answers).toBe(before + 1);
   });
 
+  test('an entry that grows as its answer goes moves those after it, and the lane takes no click for a moment', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, COPILOT, permission({ id: 'r2#fedcba9876543210' }));
+    await expect(entries(page)).toHaveCount(2);
+    // The first entry answered by a key (which waits for nothing): its status appears beneath its
+    // buttons and the entry grows, moving the next one down. A frame later, a click lands on the
+    // second entry's Approve once.
+    const second = await page.evaluate(async () => {
+      const [a, b] = document.querySelectorAll('#needs-you .needs-entry');
+      a.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const grew = !a.querySelector('.needs-status').hidden;
+      b.querySelector('.needs-approve').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return { grew, id: b.dataset.id };
+    });
+    expect(second.grew).toBe(true);
+    await page.waitForTimeout(100);
+    // The first went; the second didn't.
+    expect((await log(page)).map((x) => x.id)).not.toContain(second.id);
+    expect((await log(page)).length).toBe(1);
+    // A note above the lane growing moves the whole lane down: the same wait.
+    await still(page);
+    const pushed = await page.evaluate(async (id) => {
+      const note = document.getElementById('host-state');
+      note.textContent = 'Demo machine is reconnecting. Its sessions stay as they were until it is back, with everything that waits on it.';
+      note.hidden = false;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const armed = document.querySelector('#needs-you .needs-you-list').hasAttribute('data-arriving');
+      document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-approve`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      return armed;
+    }, second.id);
+    expect(pushed).toBe(true);
+    await page.waitForTimeout(100);
+    expect((await log(page)).length).toBe(1);
+  });
   test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {
     await openDemo(page);
     await ask(page, LAND, permission());

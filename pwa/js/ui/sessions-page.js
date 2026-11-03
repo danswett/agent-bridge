@@ -47,8 +47,34 @@ function guardLane(list, scroller = null) {
     clearTimeout(timer);
     timer = setTimeout(() => list.removeAttribute('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
   };
-  // The entries themselves coming, going or moving; not what changes inside one (its age).
-  const changes = typeof MutationObserver === 'function' ? new MutationObserver(arm) : null;
+  // The entries themselves coming, going or moving; and anything that moves their answers without
+  // that (an answer's status appearing or wrapping in an entry above, the note or machine tabs
+  // above the lane changing height, the window's width). Where each answer sits is read, in the
+  // scroller's content so scrolling isn't a move, when an entry, the lane or what is above it
+  // changes size; a move of more than a pixel runs the wait again. An age ticking on moves
+  // nothing, and the guard's own attribute changes no size, so it can't feed itself.
+  const lane = list.parentElement ?? list;
+  const where = () => {
+    const base = scroller ? scroller.getBoundingClientRect().top - scroller.scrollTop : 0;
+    return [...list.querySelectorAll(LANE_ANSWERS)].map((b) => b.getBoundingClientRect().top - base);
+  };
+  let was = null;
+  const moved = () => {
+    const at = where();
+    if (was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1))) { arm(); }
+    was = at;
+  };
+  const sized = typeof ResizeObserver === 'function' ? new ResizeObserver(moved) : null;
+  for (let el = lane; el; el = el.previousElementSibling) { sized?.observe(el); }
+  for (const el of list.children) { sized?.observe(el); }
+  const changes = typeof MutationObserver === 'function' ? new MutationObserver((records) => {
+    for (const r of records) {
+      for (const n of r.removedNodes) { if (n.nodeType === 1) { sized?.unobserve(n); } }
+      for (const n of r.addedNodes) { if (n.nodeType === 1) { sized?.observe(n); } }
+    }
+    arm();
+    was = where();
+  }) : null;
   changes?.observe(list, { childList: true });
   const click = (e) => {
     if (e.detail === 0 || now() >= until || !e.target.closest?.(LANE_ANSWERS)) { return; }
@@ -62,6 +88,7 @@ function guardLane(list, scroller = null) {
     arm,
     stop() {
       changes?.disconnect();
+      sized?.disconnect();
       clearTimeout(timer);
       list.removeEventListener('click', click, true);
       scroller?.removeEventListener('scroll', scrolled);
@@ -586,6 +613,9 @@ export class SessionsPage {
     this.view.layoutChanged();
     this.#drawPanes();
     this.#delegateStep();
+    // Across a width of §5.2 the conversation reflows, or comes into sight as Tools moves into the
+    // inspector: its question waits as one arriving does, if it is on screen.
+    this.view.selected?.reshow();
   }
 
   #toggleInspector() {
@@ -593,6 +623,9 @@ export class SessionsPage {
     this.#write(INSPECTOR, this.#inspectorHidden ? 'hidden' : 'shown');
     this.view.layoutChanged();
     this.#drawPanes();
+    // The conversation reflows to its new width, or comes into sight (Tools picked moves into the
+    // inspector): its question waits as one arriving does, if it is on screen.
+    this.view.selected?.reshow();
     // Pane and inspector (ui.md §5.3): its column opens at once, and its content slides in from
     // the trailing edge. Hiding closes the column at once.
     if (!this.#inspectorHidden && this.wide.matches) { enter(this.view.selected?.els.inspector, 'pane', { dx: 1 }); }

@@ -1008,6 +1008,76 @@ test('a question that arrives while another page is shown takes no click when Se
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });
+test('a question that came while Tools was shown takes no click for a moment when Show inspector brings the conversation back', async ({ page }) => {
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  await v.getByRole('button', { name: 'Hide inspector' }).click();
+  await v.getByRole('tab', { name: 'Tools' }).click();
+  await expect(v.locator('.stream-scroll')).toBeHidden();
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-show-inspector', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // Show inspector, and a click where the question's first choice now is, in one go.
+  const tapped = await page.evaluate(() => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    tap([...view.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Show inspector'));
+    const choice = view.querySelector('.question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return false; }
+    tap(choice);
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+test('a question that came while Tools was a tab takes no click for a moment when a wider window brings the conversation back beside the inspector', async ({ page }) => {
+  await openDemo(page, { width: 1000 });
+  const v = await open(page, CODEX);
+  await v.getByRole('tab', { name: 'Tools' }).click();
+  await expect(v.locator('.stream-scroll')).toBeHidden();
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-wider', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // A click where the question's first choice now is, on the first frame drawn at the new width
+  // (what a person could see and aim at; the width's change is told before that frame).
+  const tapped = await page.evaluate(async () => {
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    let choice = null;
+    for (let i = 0; i < 100 && !choice; i += 1) {
+      await new Promise((r) => requestAnimationFrame(r));
+      const c = view.querySelector('.question-slot .choice');
+      if (c?.getClientRects().length) { choice = c; }
+    }
+    if (!choice) { return false; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
 test('a question that arrives while the page is in the background takes no click for a moment when the page is shown again', async ({ page }) => {
   await openDemo(page);
   await open(page, CODEX);
