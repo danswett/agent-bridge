@@ -816,6 +816,18 @@ test.describe('the session pane after #221\'s review', () => {
     await expect(v.locator('.question .question-head')).toHaveText('Delegate agent-7 asks');
   });
 
+  test('a delegate\'s name read aloud adds no facts to its row\'s glyph, and one the host labelled is shown once (#316)', async ({ page }) => {
+    await openDemo(page);
+    const v = await open(page, COPILOT);
+    const session = page.locator(`.session[data-id="${COPILOT}"]`);
+    await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: 'x, idle, DEV-VM2' }, DELEGATES[1]] });
+    await expect(session.locator('.row-status')).toHaveText('Delegate x, idle, DEV-VM2 asks');
+    await expect(session.locator('.row-main .glyph')).toHaveAccessibleName(/^[^,]+, Delegate x idle DEV-VM2 asks(, [^,]+)?$/);
+    await askAs(page, { waitingOn: 'agent-7', subagents: [{ ...DELEGATES[0], name: 'Delegate \u201cMain agent\u201d' }, DELEGATES[1]] });
+    await expect(v.locator('.question .question-head')).toHaveText('Delegate \u201cMain agent\u201d asks');
+    await expect(session.locator('.row-status')).toHaveText('Delegate \u201cMain agent\u201d asks');
+  });
+
   test('the main agent\'s words are dated by when it wrote them, not by a delegate\'s later update', async ({ page }) => {
     await openDemo(page, '&delegates=1');
     const v = await open(page, 'demo-delegates');
