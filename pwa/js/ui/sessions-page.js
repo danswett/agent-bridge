@@ -660,7 +660,9 @@ export class SessionsPage {
     const name = hosts.nameOf(id) ?? 'your machine';
     const held = !stale ? null : stale.reason === 'offline'
       ? `${name} is offline. Sessions can be started on it once it is back.`
-      : `${name} ${stale.reason === 'confirming' ? 'is back' : 'is reconnecting'}. Sessions can be started on it once it has sent its sessions again.`;
+      : stale.reason === 'unsupported'
+        ? `${name} doesn't support Agent Bridge sessions now, so sessions can't be started on it from here.`
+        : `${name} ${stale.reason === 'confirming' ? 'is back' : 'is reconnecting'}. Sessions can be started on it once it has sent its sessions again.`;
     const base = {
       hostId: id,
       machineName: name,

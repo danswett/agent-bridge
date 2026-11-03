@@ -126,12 +126,16 @@ export class HostSession {
 
   // Why a machine's sessions can't be acted on now, or null when they can (or it isn't shown):
   // { reason, since }. 'offline': it left presence; since is when it was last seen (the relay's
-  // roster says, else when this device saw it go). 'reconnecting': it is in presence, and no
-  // channel to it is open. 'confirming': open, and its snapshot has not finished.
+  // roster says, else when this device saw it go). 'unsupported': in presence, but it says it
+  // has no sessions to give; not tried again. 'reconnecting': in presence, and no channel to it
+  // is open. 'confirming': open, and its snapshot has not finished.
   staleOf(id) {
     const link = this.#links.get(id);
     if (!link || this.route(id)) { return null; }
-    if (link.offlineSince === null) { return { reason: link.phase === 'open' ? 'confirming' : 'reconnecting', since: null }; }
+    if (link.offlineSince === null) {
+      const reason = link.phase === 'open' ? 'confirming' : link.phase === 'unsupported' ? 'unsupported' : 'reconnecting';
+      return { reason, since: null };
+    }
     const seen = this.connection.known?.find?.((k) => k?.id === id)?.lastSeen;
     return { reason: 'offline', since: typeof seen === 'string' && seen ? seen : new Date(link.offlineSince).toISOString() };
   }

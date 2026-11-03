@@ -90,6 +90,7 @@ test('a host that refuses hello is reported as not supporting sessions', async (
   await flush();
   assert.equal(hosts.phase, 'unsupported');
   assert.match(hosts.error, /unknown op hello/);
+  assert.deepEqual([hosts.route('a'), hosts.staleOf('a')], [null, { reason: 'unsupported', since: null }], 'held as unsupported, never as reconnecting');
 });
 
 test('switching machines while a handshake is pending opens the new machine', async () => {

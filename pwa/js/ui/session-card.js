@@ -40,11 +40,13 @@ export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
-// machine is offline, or back and its whole list not yet in. what: 'answered', 'replied to'...
+// machine is offline, reconnecting, back and its whole list not yet in, or no longer offering
+// sessions. what: 'answered', 'replied to'...
 export function staleNote(stale, machineName, what) {
   if (!stale) { return null; }
   const name = machineName || 'The machine';
   if (stale.reason === 'offline') { return `${name} is offline. This can't be ${what} from here until it is back.`; }
+  if (stale.reason === 'unsupported') { return `${name} doesn't support Agent Bridge sessions now, so this can't be ${what} from here.`; }
   const where = stale.reason === 'confirming' ? 'is back' : 'is reconnecting';
   return `${name} ${where}. This can be ${what} once it has sent its sessions again.`;
 }
@@ -345,11 +347,12 @@ export class SessionCard {
   }
 
   // ui.md §2.2 (#269), as facts: "Offline · last seen 2m ago" while its machine is away,
-  // "Reconnecting…" while it has no open channel; null otherwise, including while its snapshot is
-  // still coming (its rows say what that snapshot says, and still take nothing).
+  // "Reconnecting…" while it has no open channel and is still tried; null otherwise, including
+  // while its snapshot is still coming (its rows say what that snapshot says, and still take
+  // nothing) and for a machine that no longer offers sessions (its host line says so).
   #staleText(now = Date.now()) {
     const stale = this.#stale;
-    if (!stale || stale.reason === 'confirming') { return null; }
+    if (!stale || stale.reason === 'confirming' || stale.reason === 'unsupported') { return null; }
     if (stale.reason === 'reconnecting') { return ['Reconnecting…']; }
     const seen = ago(stale.since, now);
     return seen ? ['Offline', `last seen ${seen}`] : ['Offline'];
