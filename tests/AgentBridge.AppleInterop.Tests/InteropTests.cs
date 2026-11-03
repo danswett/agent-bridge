@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -8,9 +9,45 @@ using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using Xunit;
 
-public sealed class InteropTests
+[CollectionDefinition("In-process loopback interop", DisableParallelization = true)]
+public sealed class InProcessLoopbackInteropCollection;
+
+[Collection("In-process loopback interop")]
+public sealed class InteropTests : IDisposable
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    readonly IWebProxy previousProxy = HttpClient.DefaultProxy;
+
+    public InteropTests()
+    {
+        // Program owns its process and applies this same isolation before startup.
+        // Direct tests need it too, especially on Windows runners with a system proxy.
+        HttpClient.DefaultProxy = new WebProxy();
+    }
+
+    public void Dispose() => HttpClient.DefaultProxy = previousProxy;
+
+    [Fact]
+    public async Task Direct_startup_still_refuses_a_proxy_that_does_not_bypass_loopback()
+    {
+        var isolatedProxy = HttpClient.DefaultProxy;
+        var manifest = Path.Combine(Path.GetTempPath(), "abi-proxy-refusal-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            HttpClient.DefaultProxy = new RefusingProxy();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => InteropStack.StartAsync(manifest, certificate: null));
+            Assert.Equal("isolated interop requires loopback traffic to bypass all proxies", error.Message);
+            Assert.False(File.Exists(manifest));
+        }
+        finally { HttpClient.DefaultProxy = isolatedProxy; }
+    }
+
+    sealed class RefusingProxy : IWebProxy
+    {
+        public ICredentials? Credentials { get; set; }
+        public bool IsBypassed(Uri host) => false;
+        public Uri GetProxy(Uri destination) => throw new InvalidOperationException("the refused proxy must never be contacted");
+    }
 
     [Fact]
     public async Task Real_local_and_noise_channels_share_the_parser_snapshot_and_live_updates_without_granting_host_management()
