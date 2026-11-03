@@ -71,3 +71,5 @@ The protocol between them is specified in [docs/protocol](docs/protocol/v1-sessi
 | [S4](spikes/s4-relay/RESULTS.md) | Can one untrusted relay serve every user, with GitHub sign-in and end-to-end channels from hosts and a PWA? | GO, live on Azure Container Apps. Needs a cross-replica backplane to deploy without splitting. [PWA](https://danswett.github.io/agent-bridge/s4/) |
 | [S5](spikes/s5-web-push/RESULTS.md) | Can a host notify the phone PWA through Web Push without the relay or push service reading it? | GO on a real iPhone: lock-screen notice, tap, answer back at the host in 10 s |
 | [S6](spikes/s6-tpm-keys/RESULTS.md) | Can a device's long-term key live non-exportable in the TPM and still do Noise, the relay proof and the device id? | GO, live with the relay and the iPhone. Needs NCrypt directly; .NET's wrappers fail with the TPM provider |
+
+<!-- throwaway: a docs-only change for #443's demo -->
