@@ -310,6 +310,15 @@ internal sealed class BackgroundWork
 
     public bool Knows(string agentId) => _agents.ContainsKey(agentId);
 
+    // When a working agent's current run started.
+    public DateTimeOffset? RunSince(string agentId) => _agents.TryGetValue(agentId, out var agent) && agent.Working ? agent.Since : null;
+
+    // Deliveries of notices queued before the agent was known, each spent on a run already ended.
+    public void Owe(string agentId, int notices)
+    {
+        if (notices > 0 && _agents.TryGetValue(agentId, out var agent)) { agent.IdleOwed += notices; }
+    }
+
     // Whether a known agent is between runs, since when, and how its latest run ended (null when
     // that was never said).
     public bool Stopped(string agentId, out DateTimeOffset? endedAt, out SubagentOutcome? outcome)

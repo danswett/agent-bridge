@@ -379,6 +379,58 @@ public class ClaudeSubagentTests
         Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
     }
 
+    // A message to an agent from the main agent, at a time after Fixture.T0.
+    static string Wake(string to, int ms)
+    {
+        var wake = JsonNode.Parse(Claude.Assistant(0, "tool_use", Claude.ToolUse("toolu_wake" + ms, "SendMessage", new JsonObject { ["to"] = to, ["summary"] = "Again", ["message"] = "Do it again." })))!;
+        wake["timestamp"] = Fixture.T0.AddMilliseconds(ms).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        return wake.ToJsonString();
+    }
+
+    // The nested delegate's recorded notice, queued ("enqueue") or delivered ("remove"), at another time.
+    static string NestedNotice(string operation, int ms)
+    {
+        var line = JsonNode.Parse(File.ReadAllLines(FixturePath(Id + ".jsonl")).Single(l => l.Contains("\"queue-operation\"", StringComparison.Ordinal)
+            && l.Contains($"\"operation\":\"{operation}\"", StringComparison.Ordinal) && l.Contains($"<task-id>{Nested}</task-id>", StringComparison.Ordinal)))!;
+        line["timestamp"] = Fixture.T0.AddMilliseconds(ms).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        return line.ToJsonString();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_nested_delegate_woken_twice_before_either_notice_is_delivered_is_running_whenever_its_record_is_read(bool readBetween)
+    {
+        // Found in review: the second notice queued replaced the first's delivery still owed.
+        await using var r = new Replay();
+        r.Held.Add("agent-" + Nested);
+        await r.Through(10.2);
+        await r.Append(NestedNotice("enqueue", 10217), Wake(Nested, 10220), NestedNotice("enqueue", 10230), Wake(Nested, 10240));
+        if (readBetween) { await r.Release(Nested, 10.2); }
+
+        await r.Append(NestedNotice("remove", 10250), NestedNotice("remove", 10260));
+        var s = await r.Release(Nested, 10.2);
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_started_in_an_earlier_run_of_the_one_above_it_is_not_counted_when_that_one_is_woken_after_bytes_never_read()
+    {
+        // Found in review: its end is in what was not read, and the record is read only after
+        // the delegate above it was woken again.
+        await using var r = new Replay(tailBytes: 1024, skim: lines => Through(lines, l => l.Contains("async_launched", StringComparison.Ordinal) && l.Contains(Nester, StringComparison.Ordinal)));
+        r.Held.Add("agent-" + Nested);
+        await r.Through(11);
+        Assert.Equal(1, (await r.Append(Wake(Nester, 11100))).Activity.Background?.Agents);
+
+        var s = await r.Release(Nested, 11);
+
+        Assert.Equal(SubagentStatus.Working, Entry(s, Nester).Status);
+        Assert.Equal((SubagentStatus.Idle, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+        Assert.Equal(1, s.Activity.Background!.Agents);
+    }
+
     [Fact]
     public async Task A_nested_delegate_found_between_its_queued_notice_and_its_delivery_is_not_stopped_again_by_the_delivery()
     {

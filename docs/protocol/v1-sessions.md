@@ -1012,7 +1012,10 @@ command); the shapes are in `tests/fixtures/claude`.
   `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
   and its prompt. Read once a delegate is known, each again only when it changes, at most
   256 of them, and listed only under a delegate that is listed. It ends as above (its notice
-  is queued in the session's transcript too), or when the delegate above it ends. A message
+  is queued in the session's transcript too), or when the delegate above it ends. One that
+  started before the delegate above it began its current run belongs to an earlier run, which
+  was notified only once it had stopped: with its end not read, it is listed with no `outcome`
+  and not counted. A message
   the delegate above it sends it is in that delegate's own transcript, which is not read (and
   was not recorded): one woken that way stays listed as it stopped.
 * Starts and ends are read from the skimmed part of the transcript too. Where the host could

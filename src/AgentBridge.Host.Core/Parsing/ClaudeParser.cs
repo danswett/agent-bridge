@@ -63,10 +63,12 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     string? _responseMessage;
     // Ends of agents not known yet: a nested agent is known only from its own record, which
     // can be read after the session's transcript says it stopped. Owed: queued, its delivery not
-    // read yet. WokenAt: a message woke it since. As many as there can be records
-    // (ClaudeSubagents); past that, a record with no end kept is not known to be running.
+    // read yet. The latest end is kept, with every delivery still owed (one per notice queued
+    // and not yet delivered, each run's own), and WokenAt: a message woke it since. As many as
+    // there can be records (ClaudeSubagents); past that, a record with no end kept is not known
+    // to be running.
     readonly Dictionary<string, Unclaimed> _unclaimed = new(StringComparer.Ordinal);
-    readonly record struct Unclaimed(SubagentOutcome Outcome, DateTimeOffset? At, bool Owed, DateTimeOffset? WokenAt = null);
+    readonly record struct Unclaimed(SubagentOutcome Outcome, DateTimeOffset? At, int Owed, DateTimeOffset? WokenAt = null);
     bool _unclaimedDropped;
 
     public override void Reset()
@@ -84,6 +86,9 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     {
         S.Background.ForgetShells();
         S.Background.ForgetRuns();
+        // An end not claimed yet keeps its outcome; what was owed it, or a run a message started
+        // since, may have been settled in the bytes never read.
+        foreach (var id in _unclaimed.Keys.ToList()) { _unclaimed[id] = _unclaimed[id] with { Owed = 0, WokenAt = null }; }
     }
 
     protected override void Count(JsonElement e)
@@ -224,17 +229,18 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             return;
         }
         if (work.ShellEnded(id)) { return; }
-        if (_unclaimed.TryGetValue(id, out var known) && known.Owed && !queued)
+        var exists = _unclaimed.TryGetValue(id, out var known);
+        if (exists && known.Owed > 0 && !queued)
         {
-            _unclaimed[id] = known with { Owed = false };
+            _unclaimed[id] = known with { Owed = known.Owed - 1 };
             return;
         }
-        if (!_unclaimed.ContainsKey(id) && _unclaimed.Count >= ClaudeSubagents.MaxRecords)
+        if (!exists && _unclaimed.Count >= ClaudeSubagents.MaxRecords)
         {
             _unclaimed.Remove(_unclaimed.MinBy(p => p.Value.At ?? DateTimeOffset.MinValue).Key);
             _unclaimedDropped = true;
         }
-        _unclaimed[id] = new Unclaimed(outcome, at, queued);
+        _unclaimed[id] = new Unclaimed(outcome, at, (exists ? known.Owed : 0) + (queued ? 1 : 0));
     }
 
     // A sub-agent another one started, known from its own record: listed as working unless the
@@ -261,11 +267,14 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         work.AgentPrompt(record.Id, record.Prompt);
         if (_unclaimed.Remove(record.Id, out var end))
         {
-            if (end.Owed) { work.AgentRunEnded(record.Id, end.At, end.Outcome); }
-            else { work.AgentIdle(record.Id, end.At, end.Outcome); }
+            work.AgentIdle(record.Id, end.At, end.Outcome);
+            work.Owe(record.Id, end.Owed);
             if (end.WokenAt is { } woken) { work.AgentActive(record.Id, woken); }
         }
         else if (_unclaimedDropped) { work.ForgetRun(record.Id); }
+        // Started before the agent above it began its current run: in an earlier one, which
+        // was notified only once this one had stopped, though its own end was not read.
+        else if (record.StartedAt is { } started && work.RunSince(parent) is { } since && started < since) { work.ForgetRun(record.Id); }
         else if (work.Stopped(parent, out var parentEnded, out var parentOutcome))
         {
             // One whose own end was never read (bytes the tail skipped) says nothing of this one's.
