@@ -313,6 +313,40 @@ test.describe('a machine back from offline', () => {
     await expect(page.locator(`#needs-you .needs-entry[data-host-id="${LAPTOP}"]`)).toHaveCount(1);
   });
 
+  test('with every machine shown, a machine away stays in the launch picker, held, though another was picked since', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await go(page, 'launch');
+    const which = page.locator('#launch select[name="machine"]');
+    await which.selectOption('demo');
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await setOnline(page, false);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+    await page.evaluate(() => window.agentBridgeDemo.retarget());
+    await expect(which.locator(`option[value="${LAPTOP}"]`)).toHaveCount(1);
+    await which.selectOption(LAPTOP);
+    await expect(page.locator('#launch .launch-title')).toHaveText('Start a session on Laptop');
+    await expect(page.locator('#launch .launch-note')).toHaveText('Laptop is offline. Sessions can be started on it once it is back.');
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeHidden();
+
+    // Back, and its list whole: its choices are asked for, and it launches again.
+    await setOnline(page, true);
+    await expect(page.locator('#launch [name="agent"]')).toBeVisible();
+    await expect(page.locator('#launch').getByRole('button', { name: 'Launch' })).toBeEnabled();
+  });
+
+  test('a machine away, chosen on its own, still offers All to go back to, where it is kept', async ({ page }) => {
+    await openDemo(page, { machines: 2 });
+    await setOnline(page, false);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+    await tab(page, LAPTOP).click();
+    await expect(tab(page, LAPTOP)).toHaveAttribute('aria-selected', 'true');
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).toHaveCount(0);
+    await expect(tab(page, 'all')).toBeVisible();
+    await tab(page, 'all').click();
+    await expect(card(page, 'demo', '6f1c2b7e-claude-example')).toHaveCount(1);
+    await expect(card(page, LAPTOP, IDLE)).toHaveAttribute('data-stale', 'offline');
+  });
+
   test('ends what ended meanwhile, never offers a question that ended, and keeps the row chosen, its pin and your order', async ({ page }) => {
     await openDemo(page, { machines: 2 });
     const t = new Date().toISOString();

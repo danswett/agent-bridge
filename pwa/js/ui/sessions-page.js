@@ -641,9 +641,13 @@ export class SessionsPage {
     panel.probeOthers(inspect.filter((l) => l.id !== pick && l.phase === 'open').map((l) => ({ hostId: l.id, load: this.launchTarget(l.id).load })));
   }
 
+  // A machine that launches, by what its last hello offered: open now, or kept through a gap
+  // (#269), when it stays in the picker held, so picking another machine does not take it away.
+  // The one shown only for its questions, while it reconnects, stays so.
   #launches(l) {
     const panel = this.launchPanel;
-    return l.capabilities.includes(LAUNCH.capability) && (l.phase === 'open' || (l.id === panel.hostId && !panel.inspectOnly));
+    if (!l.capabilities.includes(LAUNCH.capability) || l.phase === 'unsupported') { return false; }
+    return l.phase === 'open' || !(l.id === panel.hostId && panel.inspectOnly);
   }
 
   #inspectOnly(l) {
@@ -703,7 +707,7 @@ export class SessionsPage {
       presence, me: this.me, current: hosts.selection, controls: 'session-list',
       nameOf: (id) => hosts.nameOf(id),
       // With every machine shown, one that left keeps its tab, offline, while its rows stay (#269).
-      away: hosts.all ? hosts.away() : [],
+      away: hosts.away(),
       onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);

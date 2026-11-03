@@ -413,6 +413,33 @@ test.describe('a folder-trust question', () => {
     expect(sent[1]).toEqual(sent[0]);
   });
 
+  test('a lost answer\'s Try again is off while its machine reconnects, and sends the same command once its list is whole', async ({ page }) => {
+    await openDemo(page, '&timeout=1000');
+    await ask(page, QUESTION);
+    await page.evaluate(() => window.agentBridgeDemo.scriptTrust({ outcome: 'started', drop: true }));
+    await openPanel(page);
+    await card(page).getByRole('button', { name: 'Trust' }).tap();
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeVisible({ timeout: 10000 });
+    await page.evaluate(() => {
+      const host = window.agentBridgeDemo.host;
+      host.failOpen = 'the handshake timed out';
+      host.disconnect();
+    });
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeDisabled();
+    await page.evaluate(() => {
+      const d = window.agentBridgeDemo;
+      d.host.failOpen = null;
+      // Picked again: tried now rather than at the next retry.
+      d.hosts.select(d.hosts.selection);
+    });
+    await expect(card(page).getByRole('button', { name: 'Try again' })).toBeEnabled();
+    await card(page).getByRole('button', { name: 'Try again' }).tap();
+    await expect(card(page).locator('.trust-status')).toHaveText('Trusted. Codex started.');
+    const sent = await trustLog(page);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toEqual(sent[0]);
+  });
+
   test('a lost answer keeps its Try again while the machine is asked for its choices again', async ({ page }) => {
     await openDemo(page, '&timeout=1000');
     await ask(page, QUESTION);

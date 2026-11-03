@@ -435,10 +435,12 @@ const tabsDrawnAs = new WeakMap();
 export function renderMachineTabs(bar, { presence, me, current, nameOf = () => null, onSelect, controls = null, away = [] }) {
   const hosts = presence.filter((d) => d.id !== me && d.kind === 'host');
   const all = current === ALL;
-  const kept = all ? away.filter((id) => id !== me && !hosts.some((d) => d.id === id)) : [];
+  const awayIds = away.filter((id) => id !== me && !hosts.some((d) => d.id === id));
+  const kept = all ? awayIds : [];
   const awayTab = (id) => ({ id, name: nameOf(id) ?? 'This machine', label: nameOf(id) ?? 'This machine', away: true });
   const tabs = [
-    ...(hosts.length + kept.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
+    // A machine chosen while it is away counts too, so All stays offered to go back to (#269).
+    ...(hosts.length + awayIds.length > 1 ? [{ id: ALL, name: 'All', label: 'All machines' }] : []),
     ...hosts.map((d) => ({ id: d.id, name: d.name, label: d.name })),
     ...kept.map(awayTab),
     ...(current && !all && !hosts.some((d) => d.id === current) ? [awayTab(current)] : []),
