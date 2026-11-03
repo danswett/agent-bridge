@@ -22,6 +22,9 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly Probe probe = new();
     readonly Screen console = new();
+    // The reply's time: it moves on only while something waits on it, the reply between its looks or a
+    // test's agent before it draws or records what comes late, so neither races the wall clock (#486).
+    readonly PollClock clock = new();
     SessionSource source = null!;
     AttachmentStore store = null!;
     string claude = "";
@@ -49,6 +52,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     {
         store.Dispose();
         await source.DisposeAsync();
+        await clock.DisposeAsync();
         f.Dispose();
     }
 
@@ -61,6 +65,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitAfter = TimeSpan.FromMilliseconds(200),
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
+        Time = clock,
     }, attachments: store);
 
     ReplyService? replier;
@@ -125,6 +130,11 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }, second++);
 
     static string Typed(KeyPlan plan) => string.Concat(plan.Sends.Select(s => s.Text));
+
+    // What the agent does 300 ms after it is typed into, on the reply's clock. The wait begins as
+    // the keys land, so the clock cannot run past it first, and what it does is done before the
+    // reply's next look. Real delays and Task.Run raced the reply's 25 ms looks (#486).
+    void Later(Action then) => Task.Delay(TimeSpan.FromMilliseconds(300), clock).ContinueWith(_ => then(), TaskContinuationOptions.ExecuteSynchronously);
 
     // ---- Claude Code ----
 
@@ -275,7 +285,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
             if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("drawn late")); return; }
             // At the first look the box shows only the start of the words; the rest comes after.
             console.Rows = ClaudeIdle("dra");
-            _ = Task.Run(async () => { await Task.Delay(300); console.Rows = ClaudeIdle("drawn late"); });
+            Later(() => console.Rows = ClaudeIdle("drawn late"));
         };
 
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "drawn late")).Outcome);
@@ -322,11 +332,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             var line = Typed(plan);
             Fixture.Append(claude, ClaudeQueued(line));
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(300);
-                Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..]));
-            });
+            Later(() => Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..])));
         };
 
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "and this", shot)).Outcome);
@@ -342,9 +348,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             var line = Typed(plan);
             Fixture.Append(claude, ClaudeQueued(line));
-            _ = Task.Run(async () =>
+            Later(() =>
             {
-                await Task.Delay(300);
                 Fixture.Append(claude, ClaudePrompt("an earlier thought", source: "queued"));
                 Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..]));
             });

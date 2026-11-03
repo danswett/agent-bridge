@@ -19,6 +19,8 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     readonly Probe probe = new();
     readonly Guard guard = new();
     readonly Injector injector = new();
+    // The answer's time: it moves on only while the answer waits between looks (#486).
+    readonly PollClock clock = new();
     SessionSource source = null!;
     string claude = "";
     string rollout = "";
@@ -48,6 +50,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await source.DisposeAsync();
+        await clock.DisposeAsync();
         f.Dispose();
     }
 
@@ -60,6 +63,7 @@ public sealed class AgentAnswerFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
         ClaudeReviewAfter = TimeSpan.FromMilliseconds(300),
         AttemptLedgerPath = ledger,
+        Time = clock,
     });
 
     static AnswerRequest Request(string session, string question, object fields) => new()
