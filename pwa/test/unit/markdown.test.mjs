@@ -81,15 +81,20 @@ test('headings sit below the card title, and tables are built cell by cell', () 
 // Whether parsing grows in proportion to its input, judged so that no machine's speed or load
 // decides it. A fixed bound did both wrong: under load 1.5 s failed linear input (1.75-2.15 s seen),
 // while on a fast machine it let quadratic nested brackets through (0.14 s at 8,000 characters).
-// So each input is parsed at n, 4n and 16n, about 25,000, 100,000 and 400,000 characters, once to
-// warm up and then five times, keeping the fastest (load only ever adds time). From 4n to 16n a
-// linear parse takes about 4 times as long (6.4 at most, seen at 100% CPU) and a quadratic about 16
-// (14.6 at least, seen in each one this guards against: #439's and #482's), so it must take less
-// than 9. At smaller sizes a quadratic's linear part hides its square: from 25,000 to 100,000
-// characters, closed emphasis searching the rest of the text from each opener grew only 8.4 times.
-// Below 50 ms the clock, the collector and the load decide that ratio, not the parser, so a parse
-// that fast passes; and none may take 2 s, which also stops a quadratic early.
+// So each input is parsed at n, 4n and 16n repeats of its unit, once to warm up and then five times,
+// keeping the fastest (load only ever adds time), and fails if 16n takes 2 s, or if it takes 200 ms
+// or more and grew as a square does on both measures: at least 9 times from 4n, and at least 100
+// times from n. Each quadratic this guards against (#439's and #482's) grew at least 14.5 and 143
+// times. A linear parse grows about 4 and 16 times, but the collector slows its largest run, so one
+// measure alone gave false alarms: CI saw "[" grow 11 times from 4n (5.0 to 55.7 ms), and eight
+// copies at once on one machine saw closed emphasis grow 11 times (22.9 to 250.8 ms), each under 50
+// times from n. A ratio failure is timed once more before it counts, as such a pause rarely comes
+// twice; a parse over 2 s is no pause. Each input's 16n is about 400,000 characters, or 800,000 where
+// the quadratic's square is small (from 25,000 to 100,000 characters, closed emphasis searching the
+// rest of the text from each opener grew only 8.4 times); there each quadratic takes 470 ms or more
+// here, most over 2 s, and each linear parse 50-150 ms (about 250 with eight copies running).
 const LINEAR_MS = 2000;
+const RATIO_FROM_MS = 200;
 function parsesLinearly(make, n) {
   const time = (text) => {
     let start = performance.now();
@@ -100,19 +105,25 @@ function parsesLinearly(make, n) {
     return best;
   };
   const sizes = [make(n), make(4 * n), make(16 * n)];
-  const ms = [];
-  for (const text of sizes) { ms.push(ms.at(-1) > LINEAR_MS ? Infinity : time(text)); }
+  const measure = () => {
+    const ms = [];
+    for (const text of sizes) { ms.push(ms.at(-1) > LINEAR_MS ? Infinity : time(text)); }
+    return ms;
+  };
+  const grewAsSquare = (ms) => ms[2] >= RATIO_FROM_MS && ms[2] >= 9 * ms[1] && ms[2] >= 100 * ms[0];
+  let ms = measure();
+  if (ms[2] < LINEAR_MS && grewAsSquare(ms)) { ms = measure(); }
   const said = `${JSON.stringify(sizes[0].slice(0, 12))}…: ${sizes.map((t, k) => `${t.length} characters in ${ms[k].toFixed(1)} ms`).join(', ')}`;
   assert.ok(ms[2] < LINEAR_MS, said);
-  assert.ok(ms[2] < 50 || ms[2] < 9 * ms[1], said);
+  assert.ok(!grewAsSquare(ms), said);
 }
 
 test('pathological input parses in time proportional to its length', () => {
   const inputs = [
     [(n) => '*a '.repeat(n), 8300], [(n) => '['.repeat(n), 25000], [(n) => '[]('.repeat(n), 8300], [(n) => '`'.repeat(n), 25000],
     // Every "_" after the first is a closer the word after it refuses: reading each one's span for a
-    // blank line was quadratic, 4.9 s at 512,000 characters.
-    [(n) => '_x'.repeat(n), 12500],
+    // blank line was quadratic, 4.9 s at 512,000 characters. 800,000 at 16n, as its square is small.
+    [(n) => '_x'.repeat(n), 25000],
     [(n) => '> '.repeat(n) + 'x', 12500], [(n) => '- '.repeat(n) + 'x', 12500], [(n) => '**'.repeat(n), 12500],
     [(n) => '['.repeat(n) + ']'.repeat(n), 12500],
   ];
@@ -120,10 +131,11 @@ test('pathological input parses in time proportional to its length', () => {
 });
 
 // #482: each opener searched the rest of the text for a blank line, which paragraph text never holds.
+// 800,000 characters at 16n: the search is fast, so its square needs the length to show.
 test('closed emphasis parses in time proportional to its length', () => {
   const inputs = [
-    [(n) => '*x'.repeat(n), 12500], [(n) => '*a* '.repeat(n), 6250], [(n) => '_a_ '.repeat(n), 6250],
-    [(n) => '**a** '.repeat(n), 4200], [(n) => '~~a~~ '.repeat(n), 4200],
+    [(n) => '*x'.repeat(n), 25000], [(n) => '*a* '.repeat(n), 12500], [(n) => '_a_ '.repeat(n), 12500],
+    [(n) => '**a** '.repeat(n), 8400], [(n) => '~~a~~ '.repeat(n), 8400],
   ];
   for (const [make, n] of inputs) { parsesLinearly(make, n); }
   assert.deepEqual(walk(parseMarkdown('*a* _b_ **c** ~~d~~ *x')).tags, ['p', 'em', 'em', 'strong', 'del']);
@@ -421,7 +433,7 @@ test('nested link brackets parse in linear time, drawn as written', () => {
 test('a link\'s opening repeated parses in linear time, drawn as written', () => {
   // "[a](" repeated took 67 s at 200,000 characters: each destination was read to the end of the text.
   const inputs = [
-    [(n) => '[a]('.repeat(n), 6250], [(n) => '[a](<'.repeat(n), 5000],
+    [(n) => '[a]('.repeat(n), 6250], [(n) => '[a](<'.repeat(n), 10000],
     [(n) => '[a](x'.repeat(n) + ' '.repeat(2 * n) + 'y', 3600], [(n) => '[a](x'.repeat(n) + ' "' + 'x'.repeat(5 * n), 2500],
   ];
   for (const [make, n] of inputs) {
