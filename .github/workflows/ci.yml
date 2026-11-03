@@ -453,11 +453,15 @@ jobs:
         run: |
           out="$RUNNER_TEMP/pwa-coverage"
           mkdir -p "$out"
+          rc=0
           node --test --experimental-test-coverage --test-coverage-exclude='test/**' \
             --test-skip-pattern='^pathological input finishes quickly$' \
             --test-reporter=spec --test-reporter-destination="$out/unit.log" \
             --test-reporter=lcov --test-reporter-destination="$out/lcov.info" \
-            "test/unit/*.test.mjs" || echo "::warning::Some PWA unit tests failed under coverage; see unit.log in the pwa-coverage artifact. The run without coverage passed."
+            "test/unit/*.test.mjs" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::The PWA coverage run exited with $rc (1 is a failed test; see unit.log in the pwa-coverage artifact). The run without coverage passed."
+          fi
           if [ ! -s "$out/lcov.info" ]; then
             echo "::warning::The PWA coverage run wrote no lcov.info."
             exit 0
