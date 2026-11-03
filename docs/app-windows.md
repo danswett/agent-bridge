@@ -257,7 +257,11 @@ list. Non-admin users can register a task for themselves; nothing here needs ele
   not stop; 1 from Task Manager; 0xC000013A for Ctrl+C or logging off. A Stop from the app
   also covers the launcher, which no pipe reaches between crash restarts or while the host it
   restarted is still starting: Stop writes a marker (`host.stopped` in the profile's folder)
-  that the launcher checks after every host exit and every wait before starting the host again;
+  that the launcher checks after every host exit and every wait before starting the host again.
+  It is written only once the host's usage probes are done, just before the host is asked to
+  stop (or when no host answers), so a host that crashes during that wait, or while the app
+  quits during it, is still started again; the Stop then says the host ended unexpectedly
+  rather than that nothing was stopped (#238). The app then
   waits until the task's run has ended, stopping a host that opens its pipe meanwhile; and ends
   the run itself if it is still there after the 20 s start timeout. A host the launcher starts
   also looks for the marker once its pipe is open and, finding it, exits 0 without serving, so

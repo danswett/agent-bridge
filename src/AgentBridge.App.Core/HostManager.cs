@@ -426,18 +426,16 @@ public sealed class HostManager
     // that answers no is not: it is running, and refused this process (one inside an agent
     // session, design §6.3 invariant 13), so ending it anyway would be the very thing it refused.
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
-    public Task StopAsync(CancellationToken ct = default) => StopAsync(ProbeWait, ct);
+    // The app quitting gives up the wait for probes, as it does an update's (#238 review).
+    public Task StopAsync(CancellationToken ct = default) => StopAsync(ProbeWait, ct, quit.Token);
 
     // hold: gives up the wait for the probes only, before anything is stopped.
     async Task StopAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
-        // A stop on purpose: the launcher must not start the host again after it (#106). Before
-        // the stop itself, so a host that crashes while stopping is not started again either.
-        MarkStopped();
         try
         {
             await StopHostAsync(probeWait, ct, hold);
-            await EndLauncherAsync(ct);
+            await EndLauncherAsync(probeWait, ct, hold);
         }
         // Not stopped: refused, still finishing a usage probe (#238), or the wait for its probes
         // given up. It runs on, and is still to be started again should it crash.
@@ -460,15 +458,30 @@ public sealed class HostManager
             pid = (await ch.CallAsync<HostStatus>(HostOps.Status, ct: ct)).ProcessId;
             using (var holding = CancellationTokenSource.CreateLinkedTokenSource(ct, hold))
             {
-                await ProbesDoneAsync(ch, probeWait, "the host", holding.Token);
+                try { await ProbesDoneAsync(ch, probeWait, "the host", holding.Token); }
+                catch (HostBusyException)
+                {
+                    // Its pipe went mid-wait because the host ended: "nothing was stopped" would
+                    // read as though it still ran (#238 review).
+                    if (await IsRunningAsync(ct)) { throw; }
+                    throw new HostBusyException("the host ended unexpectedly while the stop waited for its usage probe to finish; it was not stopped from here, and its launcher, if it has one, starts it again as after any crash");
+                }
             }
+            // A stop on purpose: the launcher must not start the host again after it (#106). Only
+            // once its probes are done, though: the wait for them may last minutes with the host
+            // running, and a marker left then (the app ending, or the host crashing meanwhile) kept
+            // a crashed host down (#238 review). Still before the stop, so a host that crashes while
+            // stopping is not started again.
+            MarkStopped();
             try { await ch.CallAsync(HostOps.Stop, ct: ct); }
             catch (HostErrorException e) { throw new HostRefusedException(e.Message); }
         }
         // Refused at the connection (one of the host and this app elevated, the other not): the
         // host is there and said no, as a refused stop does (#106 review).
         catch (LocalRefusedException e) { throw new HostRefusedException(e.Message); }
-        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { }
+        // No host answering (none running, a launcher between crash restarts, or one not responding):
+        // stopped on purpose all the same, so the launcher starts none (#106).
+        catch (Exception e) when (e is IOException or HostErrorException or TimeoutException) { MarkStopped(); }
         try { await WaitAsync(running: false, StopTimeout, ct); }
         catch (TimeoutException) when (pid is { } p)
         {
@@ -489,7 +502,7 @@ public sealed class HostManager
     // see; one ended below), stops itself, since a host the launcher runs looks for the marker once
     // its pipe is open (HostHandover.StoppedFromTheApp). One still there after the start timeout is
     // ended.
-    async Task EndLauncherAsync(CancellationToken ct)
+    async Task EndLauncherAsync(TimeSpan probeWait, CancellationToken ct, CancellationToken hold = default)
     {
         var deadline = Time.GetUtcNow() + StartTimeout;
         while (LauncherRunning())
@@ -502,7 +515,7 @@ public sealed class HostManager
             }
             if (await AnswersAsync(ct))
             {
-                await StopHostAsync(ProbeWait, ct);
+                await StopHostAsync(probeWait, ct, hold);
                 continue;
             }
             await Task.Delay(Poll, ct);

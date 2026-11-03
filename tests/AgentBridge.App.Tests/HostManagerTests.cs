@@ -440,6 +440,65 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.True(await quick.IsRunningAsync());
     }
 
+    HostManager QuickProbes() => new(manager.Layout, tasks, processes,
+        ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+    {
+        StartTimeout = TimeSpan.FromSeconds(5),
+        StopTimeout = TimeSpan.FromSeconds(1),
+        Poll = TimeSpan.FromMilliseconds(50),
+        ProbeWait = TimeSpan.FromSeconds(5),
+        ProbePoll = TimeSpan.FromMilliseconds(50),
+        PackageHosts = () => [],
+    };
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task No_stop_marker_is_there_while_a_stop_waits_for_the_hosts_usage_probe_only_once_it_is_done()
+    {
+        var m = QuickProbes();
+        var asked = 0;
+        var markedWhileBusy = false;
+        host.On(HostOps.ProbeHold, _ =>
+        {
+            markedWhileBusy |= File.Exists(StopMarker);
+            return ++asked < 4 ? new ProbeHoldResult(true, "Codex's app-server is still finishing") : new ProbeHoldResult(false, null);
+        });
+        var markedAtStop = false;
+        host.On(HostOps.Stop, d => { markedAtStop = File.Exists(StopMarker); _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+
+        await m.StopAsync();
+
+        Assert.False(markedWhileBusy);
+        Assert.True(markedAtStop);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_host_that_crashes_while_a_restart_waits_for_its_usage_probe_is_left_to_its_launcher_and_the_restart_says_it_ended()
+    {
+        var m = QuickProbes();
+        m.SetStartAtSignIn(true);
+        var asked = 0;
+        var markedAtCrash = false;
+        host.On(HostOps.ProbeHold, d =>
+        {
+            if (++asked == 2) { markedAtCrash = File.Exists(StopMarker); _ = Task.Run(host.StopAsync); }
+            return new ProbeHoldResult(true, "Codex's app-server is still finishing");
+        });
+        host.Start();
+
+        var e = await Assert.ThrowsAsync<HostBusyException>(() => m.RestartAsync());
+
+        Assert.StartsWith("the host ended unexpectedly while the stop waited for its usage probe", e.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing was stopped", e.Message, StringComparison.Ordinal);
+        // The launcher looks at the marker the moment its host ends: none there, so it starts the
+        // crashed host again, as after any crash.
+        Assert.False(markedAtCrash);
+        Assert.False(File.Exists(StopMarker));
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Starting_after_a_stop_clears_the_stop_marker_and_the_host_runs()
