@@ -143,11 +143,16 @@ public sealed class FlakesTests : IDisposable
     }
 
     [Fact]
-    public void A_clean_night_passes_and_an_empty_one_is_an_error_not_a_clean_night()
+    public void A_clean_night_passes_one_where_every_run_left_nothing_fails_and_an_empty_one_is_an_error()
     {
         Run("ubuntu-latest", "AgentBridge.Protocol.Tests", 1, 0, ("T.A", "Passed"));
 
         Assert.Equal(0, Program.Run(["flakes", "--results", root], new StringWriter()));
+        var crashed = Directory.CreateDirectory(Path.Combine(root, "crashed", "windows-latest", "run-1")).FullName;
+        File.WriteAllText(Path.Combine(crashed, "exit"), "1");
+        var output = new StringWriter();
+        Assert.Equal(1, Program.Run(["flakes", "--results", Path.Combine(root, "crashed")], output));
+        Assert.Contains("run 1: no results at all (dotnet test exit 1)", output.ToString());
         var empty = Directory.CreateDirectory(Path.Combine(root, "empty")).FullName;
         Assert.Throws<InvalidOperationException>(() => Program.Run(["flakes", "--results", empty], new StringWriter()));
     }

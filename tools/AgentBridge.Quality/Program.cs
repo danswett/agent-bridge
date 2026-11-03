@@ -117,8 +117,8 @@ static class Program
     {
         var results = options.GetValueOrDefault("results") ?? throw new ArgumentException("flakes needs --results DIR.");
         var hunt = FlakeHunt.Load(results);
-        // No runs at all would read as a clean night.
-        if (hunt.Runs.Count == 0)
+        // No runs at all would read as a clean night. Runs that all left nothing are reported below.
+        if (hunt.Runs.Count == 0 && hunt.Broken.Count == 0)
             throw new InvalidOperationException($"{results} holds no runs.");
         var verdicts = hunt.Classify();
         var open = options.TryGetValue("issues", out var issues) ? OpenIssue.Parse(File.ReadAllText(issues)) : [];
