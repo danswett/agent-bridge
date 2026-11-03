@@ -173,10 +173,21 @@ export class SessionsPage {
     });
     // An entry is news, and its mark fades in, as a row is (views.js): once the list was drawn
     // before the change that brought it, and its machine has sent its whole list. Read as the
-    // change comes, since the list draws before the lane does.
+    // change comes, since the list draws before the lane does. A machine whose list is current
+    // again (#269: back, and its snapshot whole) brings back questions that were there all along,
+    // hidden while it was stale: they show at once, as a machine's first list does, until the
+    // next change to the sessions.
     let news = false;
-    this.#unwatchNews = hosts.sessions.onChange(() => { news = this.view.drawn; });
-    this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) });
+    let listed = new Set();
+    let returned = new Set();
+    const unwatchSessions = hosts.sessions.onChange(() => { news = this.view.drawn; returned = new Set(); });
+    const unwatchHosts = hosts.onChange(() => {
+      const now = new Set((hosts.shownIds?.() ?? []).filter((id) => !hosts.staleOf?.(id)));
+      returned = new Set([...returned, ...[...now].filter((id) => !listed.has(id))]);
+      listed = now;
+    });
+    this.#unwatchNews = () => { unwatchSessions(); unwatchHosts?.(); };
+    this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) && !returned.has(el.dataset.hostId) });
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {

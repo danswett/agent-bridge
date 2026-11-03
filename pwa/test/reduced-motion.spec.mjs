@@ -3,7 +3,8 @@
 // every element and its ::before and ::after are read: no animation runs, no transition takes
 // longer than nothing, and none but an opacity cross-fade (`crossFade`, 83 ms) takes any time at
 // all; nothing scrolls smoothly; and nothing is left running. With motion allowed the same walk
-// finds the glyphs turning, the progress ring and the usage bars, so the check can see them.
+// finds the glyphs turning, the progress ring and a disclosure, so the check can see them, and
+// the usage bars still taking each reading at once.
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { go, open, row } from './nav.mjs';
@@ -163,15 +164,19 @@ for (const layout of [
       expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ab-motion-cross-fade').trim())).toBe(`${CROSS_FADE_MS}ms`);
     });
 
-    test('with motion allowed the same walk finds the glyphs turning, the progress ring and the usage bars easing', async ({ page }) => {
+    test('with motion allowed the same walk finds the glyphs turning, the progress ring and a disclosure easing by its token, and the usage bars taking each reading at once', async ({ page }) => {
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       const { steps } = await walk(page, layout);
       const all = steps.flatMap((s) => s.found).join('\n');
       expect(all).toMatch(/glyph-spin: animation glyph-turn 1200ms/);
       expect(all).toMatch(/glyph-orbit: animation glyph-turn 8000ms/);
       expect(all).toMatch(/progress::before: animation spin 1000ms/);
-      expect(all).toMatch(/usage-fill: transition width 400ms/);
-      expect(all).toMatch(/delegate-chevron: transition transform 200ms/);
+      // A delegate's chevron turns in Disclosure's time, opening or closing (ui.md §5.3).
+      const ms = tokens.motion.platform.windows.duration;
+      const disclosure = tokens.motion.catalogue.disclosure;
+      expect(all).toMatch(new RegExp(`delegate-chevron: transition transform (${ms[disclosure.duration]}|${ms[disclosure.exit.duration]})ms`));
+      // A reading isn't something the person did: phase 2 took the bars' 0.4 s ease out (ui.md §5.3).
+      expect(all).not.toMatch(/usage-fill: transition/);
     });
   });
 }
