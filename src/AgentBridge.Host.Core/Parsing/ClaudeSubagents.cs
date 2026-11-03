@@ -20,8 +20,9 @@ internal sealed class ClaudeSubagents
 
     public sealed record Record(string Id, string? Parent, int Depth, string? Description, string? AgentType, string? ToolUseId, bool Background, DateTimeOffset? StartedAt, string? Prompt);
 
-    // By file name: its stamp when read, and what it said (null: not a nested agent, or unreadable).
-    readonly Dictionary<string, (DateTime Written, long Length, Record? Record)> _read = new(StringComparer.Ordinal);
+    // By file name: its stamp when read, its agent's transcript's then, and what it said (null:
+    // not a nested agent, or unreadable).
+    readonly Dictionary<string, (DateTime Written, long Length, (DateTime, long) Head, Record? Record)> _read = new(StringComparer.Ordinal);
 
     // The nested agents recorded beside a transcript, parents first. Past the most that are
     // read, the first by name: the same ones on every read and every platform, whatever order the
@@ -51,13 +52,26 @@ internal sealed class ClaudeSubagents
                 if (!info.Exists) { continue; }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-            // A nested agent whose own transcript had no first line yet is read again.
+            // A nested agent whose own transcript had no first line yet is read again, once that
+            // transcript has changed.
+            var head = Path.Combine(dir, Prefix + id + ".jsonl");
             if (_read.TryGetValue(name, out var known) && known.Written == info.LastWriteTimeUtc && known.Length == info.Length
-                && (known.Record is null || known.Record.StartedAt is not null)) { continue; }
-            _read[name] = (info.LastWriteTimeUtc, info.Length, info.Length <= MaxMetaBytes ? Parse(file, dir, id) : null);
+                && (known.Record is null || known.Record.StartedAt is not null || known.Head == Stamp(head))) { continue; }
+            var stamp = Stamp(head);
+            _read[name] = (info.LastWriteTimeUtc, info.Length, stamp, info.Length <= MaxMetaBytes ? Parse(file, dir, id) : null);
         }
         foreach (var gone in _read.Keys.Where(k => !names.Contains(k)).ToList()) { _read.Remove(gone); }
         return Known();
+    }
+
+    static (DateTime, long) Stamp(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (info.LastWriteTimeUtc, info.Length) : default;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return default; }
     }
 
     List<Record> Known() => [.. _read.Values.Select(v => v.Record).OfType<Record>().OrderBy(r => r.Depth).ThenBy(r => r.Id, StringComparer.Ordinal)];
