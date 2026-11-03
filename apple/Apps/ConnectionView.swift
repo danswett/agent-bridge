@@ -59,16 +59,18 @@ struct ConnectionView: View {
                         }
                         Button("Cancel Sign In", role: .cancel, action: store.cancelSignIn)
                     } else {
-                        Button("Sign In with GitHub") {
-                            applySettings()
-                            copiedCode = false
-                            store.signIn()
+                        if store.signInFailureStage == nil {
+                            Button("Sign In with GitHub") {
+                                applySettings()
+                                copiedCode = false
+                                store.signIn()
+                            }
                         }
                     }
                     if let stage = store.signInFailureStage {
                         Label("\(stage.rawValue) failed", systemImage: "exclamationmark.triangle")
-                        if store.account != nil {
-                            Text(store.remoteStatus).font(.callout).foregroundStyle(.secondary)
+                        if store.signInRecoveryReconnect {
+                            Text(store.signInStatus ?? store.remoteStatus).font(.callout).foregroundStyle(.secondary)
                             Button("Retry Connection", action: connect)
                         } else {
                             if let status = store.signInStatus {
@@ -138,8 +140,9 @@ struct ConnectionView: View {
             .navigationTitle("Connection")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .onChange(of: store.signInCode?.userCode) { _, _ in copiedCode = false }
         #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
+            .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
         #endif
     }
 
