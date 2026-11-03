@@ -70,8 +70,13 @@ function moving({ crossFade, animated }) {
     const opacityOnly = a.transitionProperty === 'opacity' && typeof t.duration === 'number' && t.duration <= crossFade;
     if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty ?? 'animation'}`); }
   }
-  // Shown means drawn: in the layout, and not hidden.
-  const drawn = (e) => e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+  // Shown means drawn: in the layout, not hidden and not transparent. Below the fold counts: what is
+  // read is computed style, which scrolling doesn't change.
+  const drawn = (e) => {
+    if (e.getClientRects().length === 0) { return false; }
+    const s = getComputedStyle(e);
+    return s.visibility !== 'hidden' && s.opacity !== '0';
+  };
   return { found: [...found], shown: animated.filter((sel) => [...document.querySelectorAll(sel)].some(drawn)) };
 }
 

@@ -30,11 +30,18 @@ const REGIONS = [
   ['page', '.route.page'],
 ];
 
+// Pairs of stops known to go against the layout, each tracked by an issue: a selector for the
+// earlier stop, then one for the later.
+const KNOWN_ORDER = [
+  // On a desktop New is above Sort, but after it in the page (#371).
+  { from: '#session-sort', to: '.new-session', issue: 371 },
+];
+
 // Where focus is: which element (an id kept for it), its part of the page, where it sits in that
-// part (scrolled panes counted back, so a pane scrolling to it doesn't reorder it), and whether
-// its focus is shown: an outline or a shadow on it, or a box around it drawn in the focus colour
-// (the reply box's border).
-function where(regions) {
+// part (scrolled panes counted back, so a pane scrolling to it doesn't reorder it), which of
+// KNOWN_ORDER's selectors it matches, and whether its focus is shown: an outline or a shadow on
+// it, or a box around it drawn in the focus colour (the reply box's border).
+function where({ regions, known }) {
   const el = document.activeElement;
   window.__ids ??= new WeakMap();
   window.__n ??= 0;
@@ -63,13 +70,14 @@ function where(regions) {
     id: window.__ids.get(el),
     name: `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? `.${el.className.trim().split(/\s+/).join('.')}` : ''} "${label}"`,
     region: regions.find(([, sel]) => el.closest(sel))?.[0] ?? 'elsewhere',
+    matches: known.filter((sel) => el.matches(sel)),
     top, left, height: r.height,
     visible: el.matches(':focus-visible'),
     shown: outline || s.boxShadow !== 'none' || box,
   };
 }
 
-const focused = (page) => page.evaluate(where, REGIONS);
+const focused = (page) => page.evaluate(where, { regions: REGIONS, known: KNOWN_ORDER.flatMap((k) => [k.from, k.to]) });
 
 // Presses `key` until `target` has focus, at most `max` times, and returns each stop on the way,
 // every one with its focus shown. Past the last control focus leaves the page for the browser's
@@ -98,20 +106,13 @@ async function reachLink(page, browserName, link) {
   expect.soft(stop.visible && stop.shown, `focus shown on ${stop.name}`).toBe(true);
 }
 
-// Pairs of stops known to go against the layout, each tracked by an issue: the earlier stop's
-// name, then the later's, as `where` writes them.
-const KNOWN_ORDER = [
-  // On a desktop New is above Sort, but after it in the page (#371).
-  { from: 'select.sort ', to: 'a.button.new-session ', issue: 371 },
-];
-
 // Reading order: each stop on the same line further right, or on a lower line.
 function readingOrder(stops) {
   const wrong = [];
   for (let i = 1; i < stops.length; i += 1) {
     const [a, b] = [stops[i - 1], stops[i]];
     if (a.region !== b.region) { continue; }
-    if (KNOWN_ORDER.some((k) => a.name.startsWith(k.from) && b.name.startsWith(k.to))) { continue; }
+    if (KNOWN_ORDER.some((k) => a.matches.includes(k.from) && b.matches.includes(k.to))) { continue; }
     const overlap = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
     const sameLine = overlap > Math.min(a.height, b.height) / 2;
     if (sameLine ? b.left <= a.left : b.top < a.top) { wrong.push(`${a.name} then ${b.name}`); }
