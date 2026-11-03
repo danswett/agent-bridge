@@ -229,8 +229,19 @@ public sealed class PaneLayoutViewModel : Observable
         if (e.PropertyName is nameof(DelegatesViewModel.Listed) or nameof(DelegatesViewModel.HasSelected) or "" or null) { Changed(); }
     }
 
+    // The strip appearing above the conversation being read moves it down, and its question's
+    // buttons with it, while the session stays the same (its agent started listing delegates): the
+    // view holds them from the pointer again (AnswerGuard, #491). Not as a session is chosen, which
+    // draws its question afresh, nor where the conversation is not being viewed.
+    public event Action? ConversationShifted;
+    bool stripShown;
+    SessionCardViewModel? stripOf;
+
     void Changed()
     {
+        var strip = ShowStrip;
+        var shifted = strip && !stripShown && stripOf == main.Selected && ViewingConversation;
+        (stripShown, stripOf) = (strip, main.Selected);
         foreach (var p in new[]
         {
             nameof(ShowList), nameof(ShowSession), nameof(ShowBack), nameof(ShowEmpty), nameof(CanToggleInspector), nameof(ShowInspector),
@@ -240,6 +251,7 @@ public sealed class PaneLayoutViewModel : Observable
         }) { Raise(p); }
         SyncHistory();
         SyncDelegate();
+        if (shifted) { ConversationShifted?.Invoke(); }
     }
 
     // The delegate's words likewise: asked for while its detail is on screen, on this card only.

@@ -155,9 +155,9 @@ public sealed partial class SessionView : UserControl
         get => layout;
         set
         {
-            if (layout is not null) { layout.PropertyChanged -= OnLayout; layout.QuestionWanted -= OnQuestionWanted; }
+            if (layout is not null) { layout.PropertyChanged -= OnLayout; layout.QuestionWanted -= OnQuestionWanted; layout.ConversationShifted -= GuardAnswer; }
             layout = value;
-            if (layout is not null) { layout.PropertyChanged += OnLayout; layout.QuestionWanted += OnQuestionWanted; }
+            if (layout is not null) { layout.PropertyChanged += OnLayout; layout.QuestionWanted += OnQuestionWanted; layout.ConversationShifted += GuardAnswer; }
             TabDelegate.Layout = value;
             Bindings.Update();
             ShowTab();

@@ -109,6 +109,24 @@ public sealed class DelegatesTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Delegates_listed_on_the_session_being_read_shift_its_conversation_and_choosing_a_session_does_not()
+    {
+        Resize(1440);
+        var shifts = 0;
+        ui.Post(() => layout.ConversationShifted += () => shifts++);
+        // The strip shown with a session chosen: its question is drawn afresh, nothing moved.
+        Select("del");
+        Select("counts");
+        Assert.False(Read(l => l.ShowStrip));
+        Assert.Equal(0, TestUi.Read(() => shifts));
+
+        // Its agent starts listing delegates: the strip pushes the conversation down under the pointer.
+        await host.SendAsync(Events.SessionUpsert, Delegating("counts"));
+        await Wait.UntilAsync(() => Read(l => l.ShowStrip), "the strip");
+        Assert.Equal(1, TestUi.Read(() => shifts));
+    }
+
+    [Fact]
     public void The_strip_shows_the_main_agents_delegates_with_their_nested_count_and_folds_the_finished_into_one_item()
     {
         Resize(1440);
