@@ -24,6 +24,11 @@ public class DelegateNameTests
     public void Invisible_and_control_characters_are_removed_so_no_words_hide_in_a_name(string raw, string shown) =>
         Assert.Equal(shown, DelegateName.Clean(raw));
 
+    // A [Fact]: xUnit carries theory data as UTF-8, which would turn these into U+FFFD first.
+    [Fact]
+    public void Unpaired_surrogates_are_removed_rather_than_shown_as_replacement_characters() =>
+        Assert.Equal("Fix the build", DelegateName.Clean("Fix\uD800 the\uDC00 build\uD83D"));
+
     [Fact]
     public void Runs_of_whitespace_and_line_breaks_become_one_space() =>
         Assert.Equal("Fix the build now", DelegateName.Clean("  Fix\t the\r\n build\u2028\u00A0now  "));
@@ -89,7 +94,7 @@ public class DelegateNameTests
         var label = DelegateName.Clean(raw)!;
 
         Assert.True(DelegateName.IsLabelled(label), label);
-        Assert.DoesNotMatch("[\"«»“”„‟″‹›＂「」〝〞ʼ]", label[10..^1]);
+        Assert.DoesNotMatch("[\"«»“”„‟″‹›＂「」〝〞ʼ]", label["Delegate “".Length..^"”".Length]);
     }
 
     [Fact]

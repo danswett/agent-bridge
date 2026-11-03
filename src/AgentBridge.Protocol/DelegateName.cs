@@ -19,6 +19,7 @@ public static class DelegateName
 
     const string Opening = "Delegate “";
     const string Closing = "”";
+    static readonly int LabelBytes = Encoding.UTF8.GetByteCount(Opening + Closing);
 
     // 1. Bidi controls, zero-width and other format characters, controls and default-ignorables
     //    go; any whitespace, line and paragraph separators included, becomes one space.
@@ -37,7 +38,7 @@ public static class DelegateName
         if (!PosesAsMainAgent(cut) || IsLabelled(cut)) { return cut; }
         // From the capped text, not the whole: it is a prefix of it, so the shorter cut is the same.
         var inner = Cut(Unquoted(cut), MaxLength - Opening.Length - Closing.Length,
-            Limits.SubagentName - Encoding.UTF8.GetByteCount(Opening + Closing));
+            Limits.SubagentName - LabelBytes);
         return Opening + inner + Closing;
     }
 
@@ -86,13 +87,21 @@ public static class DelegateName
         : label == "Delegate" || label.StartsWith("Delegate ", StringComparison.Ordinal) ? label
         : "Delegate " + label;
 
+    // Stops once the result is longer than any cap could keep, so the work is bounded by the caps
+    // and not by however long a name the agent wrote; Cut still sees that there was more. By
+    // UTF-16 decoding rather than EnumerateRunes, which would hand an unpaired surrogate on as a
+    // visible U+FFFD: it is dropped like every other invalid or hidden character.
     static string Strip(string? text)
     {
         if (string.IsNullOrEmpty(text)) { return ""; }
-        var b = new StringBuilder(text.Length);
+        var b = new StringBuilder(Math.Min(text.Length, Limits.SubagentName + 2));
         var space = false;
-        foreach (var r in text.EnumerateRunes())
+        var rest = text.AsSpan();
+        while (!rest.IsEmpty && b.Length <= Limits.SubagentName)
         {
+            var status = Rune.DecodeFromUtf16(rest, out var r, out var used);
+            rest = rest[used..];
+            if (status != System.Buffers.OperationStatus.Done) { continue; }
             if (Rune.IsWhiteSpace(r))
             {
                 space = b.Length > 0;
@@ -109,32 +118,30 @@ public static class DelegateName
         return b.ToString();
     }
 
+    // Counted as it goes, so it stops at the caps whatever follows.
     static string Cut(string s, int maxLength, int maxBytes)
     {
-        var info = new StringInfo(s);
-        if (info.LengthInTextElements <= maxLength && Encoding.UTF8.GetByteCount(s) <= maxBytes) { return s; }
+        if (s.Length == 0) { return s; }
         const string ellipsis = "…";
         var budget = maxBytes - Encoding.UTF8.GetByteCount(ellipsis);
-        var b = new StringBuilder();
-        var bytes = 0;
         var e = StringInfo.GetTextElementEnumerator(s);
-        for (var n = 0; n < maxLength - 1 && e.MoveNext(); n++)
+        int n = 0, bytes = 0, end = 0, kept = -1;
+        while (e.MoveNext())
         {
-            var element = e.GetTextElement();
-            var size = Encoding.UTF8.GetByteCount(element);
-            if (bytes + size > budget)
-            {
-                // A first character too big for the whole budget (a base under hundreds of
-                // marks) keeps as much of itself as fits rather than leaving only the ellipsis.
-                if (n == 0) { b.Append(Limits.KeepStart(element, budget)); }
-                break;
-            }
-            b.Append(element);
+            var size = Encoding.UTF8.GetByteCount(e.GetTextElement());
+            n++;
             bytes += size;
+            if (n > maxLength || bytes > maxBytes) { break; }
+            // Where an ellipsis would go, should the text turn out too long.
+            if (n <= maxLength - 1 && bytes <= budget) { kept = e.ElementIndex + e.GetTextElement().Length; }
+            end = e.ElementIndex + e.GetTextElement().Length;
+            if (end == s.Length) { return s; }
         }
-        return b.ToString().TrimEnd() + ellipsis;
+        // A first character too big for the whole budget (a base under hundreds of marks) keeps
+        // as much of itself as fits rather than leaving only the ellipsis.
+        var head = kept >= 0 ? s[..kept] : Limits.KeepStart(StringInfo.GetNextTextElement(s), budget)!;
+        return head.TrimEnd() + ellipsis;
     }
-
     // Format (Cf: bidi controls, zero-width space and joiners, soft hyphen, tags), controls,
     // unpaired surrogates, private use and unassigned code points; and the default-ignorables that
     // Unicode files under other categories (Hangul fillers, variation selectors and the like).
