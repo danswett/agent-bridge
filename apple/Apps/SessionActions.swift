@@ -181,9 +181,8 @@ private struct SessionActionContent: View {
             .disabled(busy || attempt?.uncertain == true || replyHold != nil || replyText.wrappedValue.isEmpty && attachments.wrappedValue.isEmpty)
     }
 
-    private var inspector: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("End session").font(.headline)
+    @ViewBuilder private var inspector: some View {
+        Section("End main session") {
             stopControls
             if !host.can("sessions.stop") {
                 Text(host.readOnlyReason ?? (host.isLive ? "This machine does not offer remote stop." : host.status))
@@ -193,7 +192,9 @@ private struct SessionActionContent: View {
                 errorText(error)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        if let attempt, attempt.operation.op == "session.stop" {
+            receipt(attempt, title: "End session result")
+        }
     }
 
     @ViewBuilder private var stopControls: some View {
@@ -211,8 +212,8 @@ private struct SessionActionContent: View {
         Text(message).foregroundStyle(.red).textSelection(.enabled)
     }
 
-    private func receipt(_ attempt: MutationAttempt) -> some View {
-        Section("Last action") {
+    private func receipt(_ attempt: MutationAttempt, title: String = "Last action") -> some View {
+        Section(title) {
             if attempt.isSending {
                 ProgressView("Waiting for the machine…")
             }
