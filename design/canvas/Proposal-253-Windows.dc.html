@@ -257,7 +257,7 @@ class Component extends DCLogic {
     };
     const t = theme === 'light' ? light : dark;
     const row = (title, glyph, status, machine, age, o = {}) => ({
-      title, glyph, status, machine, age,
+      title, glyph, status, machine, age: o.unread ? '' : age,
       statusColor: o.statusColor ?? t.text2, driven: !!o.driven, unread: !!o.unread, selected: !!o.selected,
       weight: o.unread ? 600 : 400, fill: o.selected ? t.sel : 'transparent', mark: !!o.mark, needs: glyph === 'needs'
     });
