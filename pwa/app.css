@@ -864,9 +864,9 @@ summary {
    in a direction guessed from its letters (plaintext would): its hidden characters and right-to-left
    letters are escapes (js/hidden-text.js, ui.md §6.4, #220). */
 .md code, .md pre, .md.md-approval { direction: ltr; unicode-bidi: isolate; }
-/* An approval's text outside its fences, as written (js/markdown.js parseApproval): every line
-   break, space and tab where the agent put it. */
-.md .md-literal { white-space: pre-wrap; tab-size: 4; }
+/* An approval's message, exactly as written (js/markdown.js parseApproval): in the code face, as a
+   code block's text is, every line break, space and tab where the agent put it. */
+.md .md-literal { font: .86em var(--ab-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 /* Beside Copy, never under it: the block's right-to-left letters are drawn as escapes. */
 .md-code-rtl {
   position: absolute; top: 0; left: 10px; right: calc(var(--tap) + 64px); min-height: var(--tap);

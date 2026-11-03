@@ -254,9 +254,10 @@ test.describe('on a phone', () => {
     const q = await ask(page, permission, COPILOT);
     await expect(q).toHaveAttribute('data-answerable', 'true');
     await expect(q.locator('.question-head')).toHaveText('Main agent asks');
-    await expect(q.locator('.question-message pre')).toHaveText('git push origin main --force-with-lease');
-    // The command can be copied; the only answers are the two decisions.
-    await expect(q.locator('.question-message').getByRole('button', { name: 'Copy code' })).toHaveCount(1);
+    // Drawn exactly as written, fence markers included (#415): nothing in it is read as Markdown.
+    expect(await q.locator('.question-message').textContent()).toBe(permission.message);
+    // The only answers are the two decisions.
+    await expect(q.locator('.question-message button')).toHaveCount(0);
     await expect(q.getByRole('button').and(page.locator('button:not(.md-copy)'))).toHaveText(['Approve once', 'Deny']);
     await expect(q.getByRole('button', { name: 'Approve once' })).toHaveClass(/\btone-allow\b/);
     await expect(q.getByRole('button', { name: 'Deny' })).toHaveClass(/\btone-deny\b/);
@@ -272,7 +273,7 @@ test.describe('on a phone', () => {
     await expect(q).toHaveAttribute('data-answerable', 'false');
     await expect(q.locator('.question-message')).toContainText('git push origin main --force-with-lease');
     await expect(q.locator('.read-only-why')).toHaveText('Approving permission prompts from the phone is turned off on this machine. Answer at the machine on Demo machine.');
-    // Nothing that answers: copying the command is all the card offers.
+    // Nothing that answers.
     await expect(q.locator(':is(button, input, select, textarea):not(.md-copy)')).toHaveCount(0);
   });
 

@@ -416,10 +416,11 @@ zero-width, format and other default-ignorable characters, and right-to-left let
 `\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule), and a block with
 right-to-left letters says "Contains right-to-left text". Copy takes the escapes as drawn.
 A bare carriage return (not one of a CRLF), NEL and the line and paragraph separators are
-escaped before parsing, so they never split a line a shell runs as one. An approval's card,
-and its prompt in Needs you, draws all of its message (prose too) that way, and outside its
-fences as its literal source, never Markdown (`parseApproval`, `renderMarkdown`'s `approval`):
-a link, code span, backslash escape or emphasis there could hide part of a Codex command.
+escaped before parsing, so they never split a line a shell runs as one. An approval's message,
+on its card and as its prompt in Needs you, is drawn exactly as written, fence markers
+included, in the code face; nothing in it is read as Markdown (`parseApproval`,
+`renderMarkdown`'s `approval`): a link, code span, backslash escape, emphasis or a fence's own
+backtick lines (a command substitution in bash) could otherwise hide part of what runs.
 
 ## Tests
 

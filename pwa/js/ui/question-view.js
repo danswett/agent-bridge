@@ -93,9 +93,9 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
-  // An approval's message, all of it, reads left to right with its hidden characters and
-  // right-to-left letters as escapes, and outside its fences as written, never as Markdown (#220,
-  // #415, ui.md §6.4): Approve once allows what was read, and a Codex approval's command is prose.
+  // An approval's message, all of it, is drawn exactly as written, fence markers included, in the
+  // code face and left to right, with its hidden characters and right-to-left letters as escapes;
+  // nothing in it is read as Markdown (#220, #415, ui.md §6.4): Approve once allows what runs.
   // Other questions draw as Markdown.
   const approval = q.kind === 'approval';
   const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });

@@ -133,8 +133,9 @@ const codeBlocks = (nodes) => nodes.reduce((n, x) => n + (x && typeof x === 'obj
 
 // How much of an approval's prompt the lane can show whole. Approve once allows everything the
 // prompt describes (a command, a URL, a tool's arguments), so it is offered in the lane only when
-// all of it is on screen, as the card shows it: Markdown drawn as Markdown, code literal and
-// wrapped. A longer one (an edit's diff, a long command) opens its session instead, and so does
+// all of it is on screen, as the card shows it: exactly as written, in the code face and wrapped
+// (markdown.js parseApproval). A longer one (an edit's diff, a long command) opens its session
+// instead, and so does
 // one with a table, which scrolls sideways, or one not shaped as a host writes a permission
 // (literalShape).
 export const PROMPT_MAX = Object.freeze({ chars: 600, lines: 12 });

