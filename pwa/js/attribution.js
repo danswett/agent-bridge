@@ -116,7 +116,16 @@ export function delegateName(agent) {
   }
   const chars = graphemes(name);
   const shown = chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('').trimEnd()}\u2026` : name;
-  return posesAsMainAgent(name) ? `Delegate \u201c${shown.replace(QUOTES, "'")}\u201d` : shown;
+  return posesAsMainAgent(name) && !labelled(name) ? `Delegate \u201c${shown.replace(QUOTES, "'")}\u201d` : shown;
+}
+
+// A name the host already sent as Delegate “<name>” (design/subagents.md §6, #263): "Delegate",
+// then the name in quotes with none of its own inside. Wrapped again, it would read
+// Delegate “Delegate 'Main agent'”. The app's DelegateLabel leaves it alone the same way.
+function labelled(name) {
+  const open = 'Delegate \u201c';
+  if (name.length <= open.length + 1 || !name.startsWith(open) || !name.endsWith('\u201d')) { return false; }
+  return name.slice(open.length, -1).search(QUOTES) === -1;
 }
 
 // A delegate as a line names it when it says who asks or works: a question's heading, the row's
