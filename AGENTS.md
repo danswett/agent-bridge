@@ -87,6 +87,8 @@ text or issues. If a command would echo one, redirect it to a file you never rea
 leaked signing key once forced a production rotation. This repository is public: keep
 home-network details, IP addresses and personal account credentials out of it.
 
+To have gitleaks check each commit for secrets before it is made, run `pre-commit install` once per clone (needs [pre-commit](https://pre-commit.com); see `.pre-commit-config.yaml`).
+
 ## Style
 
 - Comments explain *why*, especially what went wrong before; don't restate the code.

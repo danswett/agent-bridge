@@ -1,0 +1,102 @@
+name: Dependencies
+
+# The supply-chain checks on a pull request's dependencies (quality/README.md, §3.3):
+#  - review (blocking): fails when the pull request adds a NuGet or npm package, or an action,
+#    with a known high or critical vulnerability. It looks only at what the pull request
+#    changes, so a vulnerability already on main never fails it.
+#  - audit (advisory): what is already in the tree, through `dotnet list package --vulnerable`
+#    and `npm audit`. Findings are warnings on the run, never a red X, until what main has
+#    today is cleared; then it can fail like review.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Reads the dependency graph's diff between the base and head. No pull-requests: write,
+      # since its summary goes to the run's summary rather than a comment.
+      contents: read
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          # Development packages too: Playwright and its kind run in CI, next to its token.
+          fail-on-scopes: runtime, development, unknown
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: NuGet packages with known vulnerabilities, direct and transitive
+        shell: pwsh
+        # A finding is a warning; only the audit itself failing (a restore that cannot reach
+        # nuget.org, say) fails the step, since then nothing was checked. The restore runs on its
+        # own, so its failure is reported as such; the listing then reuses it.
+        run: |
+          # A workflow command is one line, so a % or line break in a tool's text could garble
+          # or forge one; GitHub's own escapes keep it inside its message.
+          function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
+          dotnet restore AgentBridge.slnx --nologo -v q
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $json = dotnet list AgentBridge.slnx package --vulnerable --include-transitive --format json --no-restore
+          if ($LASTEXITCODE) { $json; exit $LASTEXITCODE }
+          # One document, not one per line: pwsh captures a command's output as lines.
+          $report = ($json -join "`n") | ConvertFrom-Json
+          foreach ($problem in @($report.problems)) { if ($problem) { Write-Output "::warning title=dotnet list package::$(Format-CommandData $problem.text)" } }
+          # One line per package, version and advisory, however many projects and frameworks
+          # reach it.
+          $found = foreach ($project in @($report.projects)) {
+            foreach ($framework in @($project.frameworks)) {
+              foreach ($package in @($framework.topLevelPackages) + @($framework.transitivePackages)) {
+                foreach ($vulnerability in @($package.vulnerabilities)) {
+                  if ($vulnerability) {
+                    [pscustomobject]@{ Package = "$($package.id) $($package.resolvedVersion)"; Severity = $vulnerability.severity; Advisory = $vulnerability.advisoryurl }
+                  }
+                }
+              }
+            }
+          }
+          $found = @($found | Sort-Object Package, Advisory -Unique)
+          foreach ($f in $found) { Write-Output "::warning title=Vulnerable NuGet package::$(Format-CommandData "$($f.Package) ($($f.Severity)): $($f.Advisory)")" }
+          "### NuGet: $($found.Count) known vulnerabilities (advisory)" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($f in $found) { "- $($f.Package), $($f.Severity): $($f.Advisory)" >> $env:GITHUB_STEP_SUMMARY }
+          exit 0
+      - name: npm runtime packages with known vulnerabilities (pwa)
+        shell: pwsh
+        working-directory: pwa
+        # npm audit exits 1 for findings; it reads only package-lock.json, so nothing is installed.
+        run: |
+          # As in the NuGet step: escape tool text before it goes into a workflow command.
+          function Format-CommandData([string] $text) { $text.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A') }
+          $json = npm audit --omit=dev --json
+          $code = $LASTEXITCODE
+          $report = ($json -join "`n") | ConvertFrom-Json
+          if ($report.error) { Write-Output "::error title=npm audit::$(Format-CommandData $report.error.summary)"; exit 1 }
+          $found = @($report.vulnerabilities.PSObject.Properties | ForEach-Object Value)
+          if ($code -and -not $found.Count) { $json; exit $code }
+          foreach ($v in $found) { Write-Output "::warning title=Vulnerable npm package::$(Format-CommandData "pwa: $($v.name) $($v.range) ($($v.severity))")" }
+          "### npm (pwa, runtime): $($found.Count) vulnerable packages (advisory)" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($v in $found) { "- $($v.name) $($v.range), $($v.severity)" >> $env:GITHUB_STEP_SUMMARY }
+          # Actions ends a pwsh step with `exit $LASTEXITCODE`, which would be npm audit's 1.
+          exit 0
