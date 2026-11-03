@@ -16,6 +16,12 @@ static class Program
           check [--repo DIR]
               Fails when a test project, workflow job or pwa test folder is missing from the
               catalog, a catalog project doesn't exist, or a tracked file is claimed by no rule.
+          flakes --results DIR [--issues FILE] [--run-url URL] [--commit SHA] [--plan FILE]
+                 [--summary FILE] [--dry-run]
+              The flake hunt's reporter: classifies each test in DIR/<os>/<project>/run-<i>.trx
+              as flaky, failing every run or passing, and plans the issues to open or comment
+              on, given the open issues (gh issue list --json number,title,body,labels). Exits 1
+              when a test failed every run on some OS, or a run broke outside any test.
         """;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -41,6 +47,9 @@ static class Program
             return args.Length == 0 ? 2 : 0;
         }
         var options = ParseOptions(args.Skip(1));
+        // The flake hunt's reporter reads test results, not the catalog, so it runs anywhere.
+        if (args[0] == "flakes")
+            return Flakes(options, output);
         var root = options.GetValueOrDefault("repo") ?? ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var catalog = Catalog.Load(Path.Combine(root, "quality", "catalog.yml"));
         var graph = ProjectGraph.Load(root);
@@ -94,8 +103,34 @@ static class Program
         }
     }
 
-    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain" };
-    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo" };
+    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain", "dry-run" };
+    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo", "results", "issues", "run-url", "commit", "plan", "summary" };
+
+    /// <summary>
+    /// The flake hunt's reporter (quality/README.md §5): classifies every test in the hunt's TRX
+    /// files, writes the summary and the issues to open or comment on, and fails when a test
+    /// failed every run on some OS or a run broke outside any test. It never touches GitHub;
+    /// quality/publish-flakes.ps1 carries out the plan.
+    /// </summary>
+    static int Flakes(Dictionary<string, string> options, TextWriter output)
+    {
+        var results = options.GetValueOrDefault("results") ?? throw new ArgumentException("flakes needs --results DIR.");
+        var hunt = FlakeHunt.Load(results);
+        // No runs at all would read as a clean night.
+        if (hunt.Runs.Count == 0)
+            throw new InvalidOperationException($"{results} holds no runs.");
+        var verdicts = hunt.Classify();
+        var open = options.TryGetValue("issues", out var issues) ? OpenIssue.Parse(File.ReadAllText(issues)) : [];
+        var context = new FlakeContext(options.GetValueOrDefault("run-url") ?? "(no run)", options.GetValueOrDefault("commit") ?? "(unknown commit)", DateTimeOffset.UtcNow);
+        var plan = FlakeReport.Plan(verdicts, open, context);
+        var summary = FlakeReport.Summary(hunt, verdicts, plan, options.ContainsKey("dry-run"));
+        if (options.TryGetValue("plan", out var planFile))
+            File.WriteAllText(planFile, JsonSerializer.Serialize(plan, Json));
+        if (options.TryGetValue("summary", out var summaryFile))
+            File.WriteAllText(summaryFile, summary);
+        output.WriteLine(summary);
+        return verdicts.Any(v => v.Kinds.Contains(Verdict.Failing)) || hunt.Broken.Count > 0 ? 1 : 0;
+    }
 
     internal static Dictionary<string, string> ParseOptions(IEnumerable<string> args)
     {

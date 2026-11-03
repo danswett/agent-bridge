@@ -3,8 +3,9 @@
 *Proposed 2026-11-02, Pacific. Status: phase 1 under way, tracked in #357. Merged so far:
 test categories (#375), CodeQL, dependency review and workflow lint (#361), coverage and
 timing (#363), the selector and `quality/run.ps1` (#362), CI's plan, selected jobs and
-`quality-gate` (#436), and CI throughput: drafts run the fast ring, CodeQL per language,
-caches, fewer jobs and a sharded PWA (#459). §1 describes the starting point.*
+`quality-gate` (#436), CI throughput: drafts run the fast ring, CodeQL per language, caches,
+fewer jobs and a sharded PWA (#459), and the nightly flake hunt (#509). §1 describes the
+starting point.*
 
 This folder tracks every test this repository runs, where and when each one runs, and what
 it costs. It also holds the plan for growing the tests into a harness we can repeat, from a
@@ -212,6 +213,8 @@ manual rehearsal to the automated tests.
   the network, fill the disk, change the clock. Every case must hold to the §6.3 invariants
   (an answer is never typed twice, discovery holds rather than reading absence).
 - **Soak:** the shadow soak (exists) becomes a standing ring-3 job on the lab, not a one-off.
+- **Flakes:** the nightly flake hunt (exists, ring 3) runs every .NET test project 10 times on
+  each hosted OS and files what it finds (§5).
 - **Compatibility matrix:** run the product on Windows 10 22H2 and 11 (x64 and Arm64),
   Ubuntu LTS (x64 and Arm64), macOS current and previous, iOS current and previous, the
   current and previous agent CLI versions, and Chromium and WebKit. Ring 2 covers what
@@ -365,11 +368,31 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   summary lists per-project counts and times and the 10 slowest tests. Next, each suite's
   duration is compared with its catalog `baseline`, and one that grows more than 50% slower
   gets flagged in the PR summary.
-- **Flakes:** a test that fails, then passes on rerun with no change, is recorded as flaky
-  with its run link. It's reported, never silently retried to green. Each flaky test gets an
-  issue (label `flaky`) and a row in `quality/flaky.yml` with the issue and date.
+- **Flakes:** a test that passes and fails on the same code is flaky. It's reported, never
+  silently retried to green. The flake record is the `flaky` label and its issues, one per test,
+  each with its run links and counts.
+  - **The nightly flake hunt** (`flake-hunt`, ring 3, [flake-hunt.yml](../.github/workflows/flake-hunt.yml),
+    #509) finds them before they turn a pull request or `main` red. At about 02:30 PT it runs
+    every .NET test project 10 times on `ubuntu-latest`, `windows-latest` and `windows-11-arm`,
+    each run leaving a TRX file. `agent-bridge-quality flakes` then classifies every test, per
+    OS:
+    - **flaky:** failed some runs and passed others. It gets an issue labelled `flaky` with the
+      project, the test, the failures per OS, the first error and the run link. When one is
+      already open (marked by the hunt, or filed by hand with `Flaky` in its title and the
+      test's `Class.Method` in it), the hunt comments the new counts on it and labels it `flaky`;
+    - **failing:** failed every run on some OS. That's a real failure, not a flake: it gets an
+      issue labelled `bug`, and the run fails;
+    - **passing:** never failed.
+
+    A run that fails outside any test (a crash, or a hang that `--blame-hang` ended) also fails
+    the hunt, and is named in its summary. No more than 10 new issues are opened in one night;
+    more than that is something systemic, read once in the summary. Only the `report` job may
+    write issues: it runs on `main` only and executes `quality/publish-flakes.ps1` from `main` on
+    the plan, read as data. The summary also gives the runner minutes the night cost.
+  - **To confirm a fix** on every OS, run it by hand, narrowed and longer, from a branch, where it
+    only says what it would file:
+    `gh workflow run flake-hunt.yml --ref <branch> -f runs=50 -f projects=AgentBridge.Host.Tests -f filter="FullyQualifiedName~AnswerFlowTests"`.
   - Nothing is skipped without the owner's say-so (AGENTS.md: never weaken tests).
-  - Nightly reruns flaky tests 50 times on each platform to confirm a fix.
   - The `--blame-hang` setting stays in place.
 - **Where results go:** artifacts per run. A `quality-data` orphan branch, written only by
   `main`'s and nightly runs, keeps the time series (coverage, durations, flakes, benchmarks,
@@ -468,7 +491,7 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 3. `agent-drift` nightly.
 4. `lab-e2e-agents`: the soak driver as a scenario runner on test accounts.
 5. `perf-host` corpus replay and `perf-relay-load` on staging; `relay-dast`; fuzz targets.
-6. The flake record and the selection-miss report.
+6. The flake record (the nightly flake hunt, done in #509) and the selection-miss report.
 
 **Phase 4: releases (weeks 8–10)**
 1. `dev`, `beta` and `stable` channels with promotion by digest. Migrated machines move to

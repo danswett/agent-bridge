@@ -16,6 +16,7 @@ public sealed class AnswerFlowTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(25);
 
     readonly Fixture f = new();
     readonly FakeProbe probe = new();
@@ -49,13 +50,14 @@ public sealed class AnswerFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    AnswerService Answerer(bool platform = true, bool remoteApproval = true) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    AnswerService Answerer(bool platform = true, bool remoteApproval = true, TimeProvider? time = null) => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
         CopilotRemoteApproval = remoteApproval,
         ConfirmTimeout = TimeSpan.FromSeconds(2),
-        PollInterval = TimeSpan.FromMilliseconds(25),
+        PollInterval = Poll,
+        Time = time ?? TimeProvider.System,
     });
 
     void Serve(ISessionAnswerer answers) =>
@@ -163,17 +165,24 @@ public sealed class AnswerFlowTests : IAsyncLifetime
     [Fact]
     public async Task A_matching_answer_followed_at_once_by_the_call_failing_is_unconfirmed()
     {
+        // The failure follows 300 ms after the answer by the answerer's own clock, well inside the
+        // second it allows for one. It used to follow 300 ms of real time later, which a loaded
+        // runner could stretch past that second of real time, and the answer read delivered (#508).
+        var clock = new WaitedClock();
+        Serve(Answerer(time: clock));
+        ITimer? failing = null;
         injector.OnInject = () =>
         {
             Fixture.Append(events, Recorded("q1", new { pick = "b" }));
-            _ = Task.Delay(300).ContinueWith(_ => Fixture.Append(events, Copilot.ToolDone("q1", second++, success: false)), TaskScheduler.Default);
+            failing = clock.CreateTimer(_ => Fixture.Append(events, Copilot.ToolDone("q1", second++, success: false)), null, TimeSpan.FromMilliseconds(300), Timeout.InfiniteTimeSpan);
         };
         var ch = await OpenAsync();
 
-        var (outcome, reason) = await AnswerAsync(ch, new { pick = "b" });
+        var (outcome, reason) = await clock.Run(AnswerAsync(ch, new { pick = "b" }), Poll);
 
         Assert.Equal("unconfirmed", outcome);
         Assert.Contains("error", reason);
+        failing?.Dispose();
     }
 
     [Fact]

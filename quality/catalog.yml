@@ -230,6 +230,21 @@ suites:
     where: ci.yml plan, quality-gate
     status: exists
 
+  - id: flake-hunt
+    kind: component
+    ring: 3
+    select: always
+    # Every .NET test project above, run 10 times on each OS every night at about 02:30 PT, with
+    # nothing changed between runs (#509, quality/README.md §5). A test that both passes and
+    # fails gets an issue labelled flaky, or the new counts on its open one; a test failing every
+    # run on an OS is a real failure and gets an issue as a bug. It never retries or skips, so it
+    # changes no other suite's result. Off main, or with dry-run, it only says what it would file.
+    platforms: [linux-x64, win-x64, win-arm64]
+    runner: hosted
+    command: see flake-hunt.yml (nightly; by hand, gh workflow run flake-hunt.yml -f runs=N -f projects=<folders> -f filter=<dotnet test filter>)
+    where: flake-hunt.yml projects, hunt, classify, report
+    status: exists
+
   - id: mac-host
     kind: component
     ring: 1
