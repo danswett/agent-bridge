@@ -287,9 +287,11 @@ public sealed class PublicationRuntimeTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Even_nonwriters_require_actual_publication_proof_and_a_fresh_grace_period_before_retirement(bool enabled)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Even_nonwriters_require_actual_publication_proof_and_a_fresh_grace_period_before_retirement(bool enabled, bool lostPolicy)
     {
         sessions.Set(FakeSessions.Copilot(A));
         await using (var writer = Connector())
@@ -300,14 +302,21 @@ public sealed class PublicationRuntimeTests : IDisposable
             Assert.Contains(HaContract.NodeId(A), writer.PendingRetirement);
         }
         var saved = ha.Dashboard;
+        var resources = ha.Resources;
         await using var observer = Connector(Writer with { Enabled = enabled, Participant = "observer" });
         ha.PublicationWrites.Clear();
         await observer.TickAsync();
-        ha.Dashboard = JsonNode.Parse(saved!)!.AsObject().ToJsonString().Replace("Agent Sessions", "Tampered", StringComparison.Ordinal);
+        if (lostPolicy)
+        {
+            ha.Resources = JsonSerializer.SerializeToElement(resources.EnumerateArray().Where(e => e.GetProperty("id").GetString() != "policy").ToArray());
+        }
+        else { ha.Dashboard = JsonNode.Parse(saved!)!.AsObject().ToJsonString().Replace("Agent Sessions", "Tampered", StringComparison.Ordinal); }
         time.Advance(TimeSpan.FromSeconds(30));
         await observer.TickAsync();
         Assert.Contains(HaContract.NodeId(A), observer.PendingRetirement);
+        if (lostPolicy) { Assert.Contains(messages, m => m.Contains("policy was lost", StringComparison.Ordinal)); }
         ha.Dashboard = saved;
+        ha.Resources = resources;
         await observer.TickAsync();
         time.Advance(TimeSpan.FromSeconds(14));
         await observer.TickAsync();
