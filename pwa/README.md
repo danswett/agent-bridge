@@ -357,7 +357,7 @@ without the worker); `sw.js` shows the same fields elsewhere:
 
 | Notice | Shown | Tap |
 |---|---|---|
-| `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and focus has not been moved since |
+| `question` | The session's title; "*machine* · waiting on you" and the question. Alerts | Opens that machine and session, scrolled to it, with focus on the question's first control: once that machine's list is current (#269), only if the session still asks that same question and nothing has been pressed, typed or focused since |
 | `finished` | "*machine* · finished" and the start of the response. Alerts | Opens the session |
 | `resolved` | "*machine* · no longer waiting", silently, in place of the question | Opens the session |
 
