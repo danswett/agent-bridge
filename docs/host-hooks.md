@@ -62,8 +62,9 @@ finishes on the previous image, and an interrupted replacement restores that ima
 retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
 Equivalent home paths (including trailing separators and Windows casing) do not block
 setup or removal, and Windows profile casing does not leave owned Claude commands behind.
-The three agents must use separate home directories: setup and removal refuse shared
-homes, including equivalent paths, before changing registrations or ownership. If an
+The three agents must use separate home directories: setup and removal resolve links
+through existing parents even for homes not yet created, and refuse shared homes before
+changing registrations or ownership. Unresolvable links refuse rather than guess. If an
 existing configuration shares homes, inspect its registrations before changing those
 homes; removal cannot safely decide which agent owns the shared marker.
 

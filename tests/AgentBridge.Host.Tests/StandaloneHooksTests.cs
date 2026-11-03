@@ -17,6 +17,7 @@ public sealed class StandaloneHooksTests : IDisposable
     readonly string root = Path.Combine(Path.GetTempPath(), "ab-hooks-" + Guid.NewGuid().ToString("N"));
     readonly CodexRunner codex = new();
     readonly Locator locator = new();
+    readonly List<string> links = [];
     string? active;
     string Profile => Path.Combine(root, "profiles", "default");
     string Source => Path.Combine(root, "source.exe");
@@ -39,7 +40,11 @@ public sealed class StandaloneHooksTests : IDisposable
         codex.Root = Path.Combine(Profile, "hooks", "codex");
     }
 
-    public void Dispose() => Directory.Delete(root, recursive: true);
+    public void Dispose()
+    {
+        foreach (var link in links) { Directory.Delete(link); }
+        Directory.Delete(root, recursive: true);
+    }
     static void Write(string path, string content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -211,6 +216,69 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Contains("separate agent homes", error.Message);
         Assert.Equal(before, Listing());
         Assert.True(File.Exists(Owner("claude")));
+    }
+
+    [Theory]
+    [Trait("Category", "Process")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Homes_beneath_linked_parent_directories_cannot_share_ownership_even_before_the_homes_exist(bool exists)
+    {
+        var parent = Path.Combine(root, "home-parent");
+        var alias = Path.Combine(root, "home-alias");
+        Directory.CreateDirectory(parent);
+        Link(alias, parent);
+        var shared = Path.Combine(parent, "shared");
+        if (exists) { Directory.CreateDirectory(shared); }
+        var homes = Homes with { Copilot = shared, Claude = Path.Combine(alias, "shared") };
+        var setup = new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+        var before = Listing();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => setup.InstallAsync("copilot", false, TextWriter.Null));
+
+        Assert.Contains("separate agent homes", error.Message);
+        Assert.Equal(before, Listing());
+        var separate = new StandaloneHooks(Profile, homes with { Copilot = homes.Claude, Claude = Homes.Claude },
+            Source, Legacy, () => active, locator, codex);
+        await separate.InstallAsync("copilot", false, TextWriter.Null);
+        await separate.InstallAsync("claude", false, TextWriter.Null);
+        await separate.RemoveAsync("copilot", false, TextWriter.Null);
+        Assert.True(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    [Trait("Category", "Process")]
+    public async Task Removing_through_a_link_cannot_orphan_another_agents_ownership()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var alias = Path.Combine(root, "claude-alias");
+        Link(alias, Homes.Claude);
+        var homes = Homes with { Copilot = alias };
+        (IntakeState.Load(Profile).State! with { Homes = homes }).Save(Profile);
+        Write(Path.Combine(alias, "hooks", "agent-bridge.json"), "{\"version\":1,\"hooks\":{}}");
+        var setup = new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+        var before = Listing();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => setup.RemoveAsync("copilot", false, TextWriter.Null));
+
+        Assert.Contains("separate agent homes", error.Message);
+        Assert.Equal(before, Listing());
+        Assert.True(File.Exists(Owner("claude")));
+    }
+
+    void Link(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); }
+        else
+        {
+            using var process = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", link, target])
+            {
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            })!;
+            process.WaitForExit();
+            Assert.Equal(0, process.ExitCode);
+        }
+        links.Add(link);
     }
 
     [Theory]

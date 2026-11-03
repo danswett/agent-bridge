@@ -42,7 +42,10 @@ public sealed class StandaloneHooks(
     void Preflight(string agent, bool removing)
     {
         _ = Home(agent);
-        if (Same(homes.Copilot, homes.Claude) || Same(homes.Copilot, homes.Codex) || Same(homes.Claude, homes.Codex))
+        var copilotHome = PhysicalHome(homes.Copilot);
+        var claudeHome = PhysicalHome(homes.Claude);
+        var codexHome = PhysicalHome(homes.Codex);
+        if (Same(copilotHome, claudeHome) || Same(copilotHome, codexHome) || Same(claudeHome, codexHome))
         {
             throw new InvalidOperationException("Copilot, Claude and Codex require separate agent homes; shared hook ownership cannot be safely installed or removed. Inspect existing registrations before changing these homes.");
         }
@@ -97,6 +100,27 @@ public sealed class StandaloneHooks(
         static string Normal(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(
             OperatingSystem.IsWindows() && path.StartsWith(@"\\?\", StringComparison.Ordinal) ? path[4..] : path));
         return string.Equals(Normal(left), Normal(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    static string PhysicalHome(string path)
+    {
+        var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        var missing = new Stack<string>();
+        // A fresh home may not exist yet, but its parent can already be a junction.
+        while (!Directory.Exists(current))
+        {
+            if (File.Exists(current) || new DirectoryInfo(current).LinkTarget is not null)
+            {
+                throw new InvalidOperationException($"{path} has a file or unresolved link in its agent home path; inspect it before hook setup or removal");
+            }
+            missing.Push(Path.GetFileName(current));
+            current = Path.GetDirectoryName(current)
+                ?? throw new InvalidOperationException($"{path} has no readable parent directory; hook setup or removal cannot verify ownership");
+        }
+        var physical = Folders.Physical(current)
+            ?? throw new InvalidOperationException($"{path} cannot be physically resolved; hook setup or removal cannot verify ownership");
+        while (missing.TryPop(out var part)) { physical = Path.Combine(physical, part); }
+        return physical;
     }
 
     LaunchConfig LaunchSettings()
