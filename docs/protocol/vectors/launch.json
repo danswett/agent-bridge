@@ -86,7 +86,9 @@
             "workspace": "agent-bridge",
             "model": "gpt-5.6[1m]:latest"
           }
-        },
+        }
+      ],
+      "refused": [
         {
           "name": "a-prompt-led-by-a-byte-order-mark",
           "json": {
@@ -94,10 +96,98 @@
             "agent": "copilot",
             "workspace": "agent-bridge",
             "prompt": "\uFEFF/clear"
-          }
-        }
-      ],
-      "refused": [
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-a-hangul-filler",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "ㅤ/clear"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-shell-command-led-by-a-variation-selector",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "️!dir"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-a-combining-grapheme-joiner",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "͏/clear"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-an-invisible-operator",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "\u2065!dir"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-tag-and-variation-selectors",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "\uDB40\uDC00\uDB40\uDD00/clear"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-a-blank-braille-pattern",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "⠀/clear"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-a-combining-mark",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "́/clear"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-prompt-led-by-an-unassigned-code-point",
+          "json": {
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "prompt": "\u0378!dir"
+          },
+          "refusedBy": "LaunchProtocol.Check",
+          "reason": "a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine"
+        },
         {
           "name": "an-unknown-agent",
           "json": {
@@ -1727,14 +1817,6 @@
       "step": "check",
       "csharp": "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
       "pwa": "checkLaunch takes it"
-    },
-    {
-      "vector": "LaunchRequest/a-prompt-led-by-a-byte-order-mark",
-      "issue": 448,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "takes it: the prompt's first character is U+FEFF, not /",
-      "pwa": "checkLaunch skips U+FEFF as whitespace and refuses it as a slash command"
     }
   ]
 }

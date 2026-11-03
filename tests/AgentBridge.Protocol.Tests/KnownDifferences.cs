@@ -43,12 +43,5 @@ public static class KnownDifferences
         .. UncheckedTransfer.Select(v => new KnownDifference(v, 447, "pwa", "check",
             "LaunchProtocol.Check refuses it with TransferProtocol.Check's reason",
             "checkLaunch takes it")),
-        // #448: U+FEFF is whitespace to JavaScript's \s, not to C#'s char.IsWhiteSpace.
-        new("LaunchRequest/a-prompt-led-by-a-byte-order-mark", 448, "pwa", "check",
-            "takes it: the prompt's first character is U+FEFF, not /",
-            "checkLaunch skips U+FEFF as whitespace and refuses it as a slash command"),
-        new("AnswerRequest/a-byte-order-mark-is-text", 448, "pwa", "check",
-            "takes it: U+FEFF is not whitespace to string.IsNullOrWhiteSpace",
-            "checkAnswer reads it as blank and refuses it as empty"),
     ];
 }

@@ -3161,12 +3161,22 @@
           "context": "an-approval"
         },
         {
-          "name": "a-byte-order-mark-is-text",
+          "name": "words-led-by-a-hangul-filler",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "question": "call_q2",
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uFEFF"
+            "text": "ㅤship it"
+          },
+          "context": "a-plain-question"
+        },
+        {
+          "name": "a-joined-emoji",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uD83D\uDC68‍\uD83D\uDC69‍\uD83D\uDC67"
           },
           "context": "a-plain-question"
         }
@@ -3241,6 +3251,101 @@
           "context": "a-plain-question",
           "refusedBy": "Answers.Check",
           "reason": "the answer is empty"
+        },
+        {
+          "name": "only-a-byte-order-mark",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uFEFF"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "only-a-hangul-filler",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "ㅤ"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "only-a-variation-selector-and-a-combining-mark",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "️́"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "only-a-blank-braille-pattern",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "⠀"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "only-default-ignorables",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "͏\u2065\uDB40\uDC00\uDB40\uDD00"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "only-an-unassigned-code-point",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q2",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\u0378"
+          },
+          "context": "a-plain-question",
+          "refusedBy": "Answers.Check",
+          "reason": "the answer is empty"
+        },
+        {
+          "name": "an-other-answer-of-only-a-hangul-filler",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "fields": {
+              "spike": {
+                "other": "ㅤ"
+              },
+              "parts": [
+                "host",
+                "pwa"
+              ],
+              "confirm": true,
+              "notes": "Run it on Linux too",
+              "count": 3
+            }
+          },
+          "context": "a-form",
+          "refusedBy": "Answers.Check",
+          "reason": "\"Spike\": the other answer is empty"
         },
         {
           "name": "no-answer-at-all",
@@ -3824,6 +3929,14 @@
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
             "text": "\u00A0hello"
           }
+        },
+        {
+          "name": "a-joined-emoji-then-a-slash",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uD83D\uDC68‍\uD83D\uDC69‍\uD83D\uDC67 /tmp is full"
+          }
         }
       ],
       "refused": [
@@ -3886,6 +3999,116 @@
           },
           "refusedBy": "Replies.Check",
           "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-slash-command-after-a-zero-width-space",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "​/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-lone-slash-after-a-hangul-filler",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "ㅤ/"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-shell-command-after-a-tag-character",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uDB40\uDC01!dir"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
+        },
+        {
+          "name": "only-invisible-characters",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "ㅤ​️⠀"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "the reply is empty"
+        },
+        {
+          "name": "a-slash-command-after-a-combining-grapheme-joiner",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "͏/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-shell-command-after-an-invisible-operator",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\u2065!dir"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
+        },
+        {
+          "name": "a-slash-command-after-a-language-tag",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uDB40\uDC00/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-slash-command-after-a-variation-selector-supplement",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\uDB40\uDD00/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-slash-command-after-a-blank-braille-pattern",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "⠀/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-slash-command-after-a-combining-mark",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "́/clear"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
+        },
+        {
+          "name": "a-shell-command-after-an-unassigned-code-point",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+            "text": "\u0378!dir"
+          },
+          "refusedBy": "Replies.Check",
+          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
         },
         {
           "name": "eleven-attachments",
@@ -4447,14 +4670,6 @@
       "step": "read",
       "csharp": "refuses the record: it cannot be deserialized",
       "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "AnswerRequest/a-byte-order-mark-is-text",
-      "issue": 448,
-      "differs": "pwa",
-      "step": "check",
-      "csharp": "takes it: U+FEFF is not whitespace to string.IsNullOrWhiteSpace",
-      "pwa": "checkAnswer reads it as blank and refuses it as empty"
     }
   ]
 }
