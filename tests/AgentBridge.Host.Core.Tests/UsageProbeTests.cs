@@ -95,6 +95,16 @@ public sealed class UsageProbeTests : IDisposable
         await c.Cycle;
     }
 
+    [Theory]
+    [InlineData(0, """{"loggedIn":true,"authMethod":"claude.ai"}""", "ClaudeAi")]
+    [InlineData(1, """{"loggedIn":true,"authMethod":"claude.ai"}""", "Unknown")]
+    [InlineData(1, """{"loggedIn":true,"authMethod":"api_key"}""", "OtherLogin")]
+    [InlineData(1, """{"loggedIn":false}""", "SignedOut")]
+    public void Auth_status_is_a_claude_ai_login_to_probe_only_when_it_says_so_and_ends_well(int exitCode, string output, string state)
+    {
+        Assert.Equal(state, ClaudeUsageCollector.ReadAuth(exitCode, output).State.ToString());
+    }
+
     [Fact]
     public async Task Codex_answers_arriving_together_are_read_one_line_each_and_a_line_too_long_ends_the_conversation()
     {

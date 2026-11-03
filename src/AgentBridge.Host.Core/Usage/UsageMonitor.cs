@@ -125,7 +125,13 @@ public sealed class UsageMonitor : IAsyncDisposable
             // named objects and scheduled tasks, which is not free.
             if (sessionOpen) { defer ??= Deferring(now); }
             var busy = sessionOpen && defer != true;
-            collector.Pace(sessionOpen, busy);
+            // A collector that cannot take its pace still gets its turn, and the other agents
+            // theirs: like a failed read, it ends nothing but itself.
+            try { collector.Pace(sessionOpen, busy); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                log($"usage: pacing {collector.Agent.ToString().ToLowerInvariant()} failed: {e.GetType().Name}");
+            }
             if (!Due(state, busy, now) && !Woken(collector, state, now)) { continue; }
             // Stamped before asking, so an ask that fails still waits its turn rather than
             // being repeated every tick until one works.

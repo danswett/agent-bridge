@@ -251,7 +251,10 @@ public sealed class ClaudeUsageCollector(UsageOptions options, TimeProvider? tim
             }
             var subscription = UsageRead.String(root, "subscriptionType") is { Length: > 0 } s ? s : null;
             if (logged.ValueKind == JsonValueKind.False) { return (Auth.SignedOut, null); }
-            return UsageRead.String(root, "authMethod") == "claude.ai" && exitCode == 0 ? (Auth.ClaudeAi, subscription) : (Auth.OtherLogin, subscription);
+            if (UsageRead.String(root, "authMethod") != "claude.ai") { return (Auth.OtherLogin, subscription); }
+            // A claude.ai login whose check did not end well is no answer: not one to probe on,
+            // nor another kind of login.
+            return exitCode == 0 ? (Auth.ClaudeAi, subscription) : (Auth.Unknown, null);
         }
     }
 

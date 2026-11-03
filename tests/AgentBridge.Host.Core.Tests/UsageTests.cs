@@ -568,6 +568,20 @@ public sealed class UsageTests : IDisposable
     }
 
     [Fact]
+    public async Task A_collector_that_fails_to_take_its_pace_is_still_asked_and_so_is_every_other()
+    {
+        var copilot = new FakeCollector(AgentKind.Copilot, () => Reading(AgentKind.Copilot, 40, time.GetUtcNow()));
+        var claude = new FakeCollector(AgentKind.Claude, () => Reading(AgentKind.Claude, 10, time.GetUtcNow())) { PaceFails = new InvalidOperationException("broken") };
+        var codex = new FakeCollector(AgentKind.Codex, () => Reading(AgentKind.Codex, 20, time.GetUtcNow()));
+        await using var monitor = Monitor(new FakeSessions(), null, copilot, claude, codex);
+
+        Assert.True(await monitor.PassAsync());
+
+        Assert.Equal((1, 1, 1), (copilot.Calls, claude.Calls, codex.Calls));
+        Assert.Contains("usage: pacing claude failed: InvalidOperationException", log);
+    }
+
+    [Fact]
     public async Task An_agent_with_no_session_here_is_asked_every_quarter_hour_and_one_with_a_session_every_two_minutes()
     {
         var sessions = new FakeSessions();
@@ -871,8 +885,13 @@ public sealed class UsageTests : IDisposable
         public AgentKind Agent => agent;
         public DateTimeOffset? WakeAt { get; set; }
         public List<(bool Open, bool Busy)> Paced { get; } = [];
+        public Exception? PaceFails { get; set; }
 
-        public void Pace(bool sessionOpen, bool busy) => Paced.Add((sessionOpen, busy));
+        public void Pace(bool sessionOpen, bool busy)
+        {
+            if (PaceFails is { } e) { throw e; }
+            Paced.Add((sessionOpen, busy));
+        }
 
         public Task<AgentUsage?> CollectAsync(CancellationToken cancellationToken = default)
         {
