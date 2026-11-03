@@ -202,9 +202,11 @@ static partial class CiPlan
         return text.StartsWith("${{", StringComparison.Ordinal) && text.EndsWith("}}", StringComparison.Ordinal) ? text[3..^2].Trim() : text;
     }
 
+    // Named explicitly: a bare "ci.yml" covers every job for the completeness check, but the plan
+    // gates jobs by exact name (Program.JobsOf lists it as "*"), so it would select no job (#523).
     static bool RunsIn(Suite suite, string job) =>
         !string.IsNullOrWhiteSpace(suite.Where)
-        && Completeness.ParseWhere(suite.Where).Any(w => w.File == "ci.yml" && (w.Jobs.Count == 0 || w.Jobs.Contains(job, StringComparer.Ordinal)));
+        && Completeness.ParseWhere(suite.Where).Any(w => w.File == "ci.yml" && w.Jobs.Contains(job, StringComparer.Ordinal));
 
     static YamlNode? Child(YamlMappingNode map, string key) =>
         map.Children.TryGetValue(new YamlScalarNode(key), out var value) ? value : null;

@@ -67,6 +67,17 @@ public class CiPlanTests
         Assert.Equal(["ci.yml job product step \"The NativeAOT transport\" runs when suite ha-integration is selected, but that suite's where: doesn't name ci.yml product"], problems);
     }
 
+    [Fact]
+    public void A_step_whose_suite_names_only_the_workflow_file_is_reported_since_the_plan_gates_jobs_by_name()
+    {
+        var catalog = Fixture.Catalog();
+        catalog.Suites.Single(s => s.Id == "transport").Where = "ci.yml";
+
+        var problems = CiPlan.Check(catalog, Wired).Select(p => p.Message);
+
+        Assert.Equal(["ci.yml job product step \"The NativeAOT transport\" runs when suite transport is selected, but that suite's where: doesn't name ci.yml product"], problems);
+    }
+
     [Theory]
     [InlineData("runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'transport')")]
     // A bypass that's there but can't bypass: main would still skip it unless protocol is selected.
