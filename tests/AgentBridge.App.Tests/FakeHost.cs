@@ -74,7 +74,8 @@ sealed class FakeHost : IAsyncDisposable
         Channels.Add(ch);
         if (op == Ops.SessionsSubscribe)
         {
-            var snapshot = Sessions.ToList();
+            List<Session> snapshot;
+            lock (Sessions) { snapshot = [.. Sessions]; }
             var hold = HoldSynced;
             return Task.FromResult<object?>(new ChannelReply(new SubscribeResult(1, snapshot.Count), async c =>
             {
@@ -88,6 +89,22 @@ sealed class FakeHost : IAsyncDisposable
 
     public async Task SendAsync(string name, object data)
     {
+        // Listed as it is announced, as a host lists its sessions: the next subscribe's snapshot
+        // (a reconnect, or a gap in the events) has it too. Announced only as an event, a session
+        // was gone again from any snapshot after it, and its card with it. TrustTests' card to
+        // open was never seen on Linux CI that way, ten times (#101).
+        if (name == Events.SessionUpsert && data is Session upserted)
+        {
+            lock (Sessions)
+            {
+                var at = Sessions.FindIndex(s => s.Id == upserted.Id);
+                if (at >= 0) { Sessions[at] = upserted; } else { Sessions.Add(upserted); }
+            }
+        }
+        else if (name == Events.SessionRemove && data is SessionRemoved removed)
+        {
+            lock (Sessions) { Sessions.RemoveAll(s => s.Id == removed.Id); }
+        }
         foreach (var ch in Channels.Distinct().Where(c => c.IsOpen))
         {
             // One that closes meanwhile is let go, as a host lets go of a client that hangs up. A
@@ -312,12 +329,13 @@ sealed class HoldingDispatcher : IUiDispatcher
 static class Wait
 {
     // The condition is read under the UI gate, so it never sees a posted action part-way through.
-    public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null)
+    // why: what was seen instead, said when it times out.
+    public static async Task UntilAsync(Func<bool> done, string what, TimeSpan? patience = null, Func<string>? why = null)
     {
         var deadline = DateTime.UtcNow + (patience ?? FakeHost.Patience);
         while (!TestUi.Read(done))
         {
-            if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}"); }
+            if (DateTime.UtcNow > deadline) { throw new TimeoutException($"timed out waiting for {what}{(why is null ? "" : $": {TestUi.Read(why)}")}"); }
             await Task.Delay(20);
         }
     }

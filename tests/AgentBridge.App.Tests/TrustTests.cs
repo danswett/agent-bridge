@@ -109,7 +109,18 @@ public sealed class TrustTests : IAsyncLifetime
         Assert.False(card.CanAnswer);
         // Its card arrives after the outcome, and is opened then.
         await remoteHost.SendAsync(Events.SessionUpsert, Make.Session("there-new", updated: Make.T0.AddMinutes(10)));
-        await Wait.UntilAsync(() => opened.Contains("there-new"), "the new session's card to open");
+        // Only ever missed on Linux CI, and never reproduced elsewhere: what was seen is said, so
+        // the next one names its cause (#101).
+        await Wait.UntilAsync(() => opened.Contains("there-new"), "the new session's card to open", why: () =>
+        {
+            var there = main.MachineOf("remote-id");
+            var trust = there?.Deliveries.Get("trust:q-1");
+            bool listed;
+            lock (remoteHost.Sessions) { listed = remoteHost.Sessions.Any(s => s.Id == "there-new"); }
+            return $"the link {there?.Host.State}, {there?.Host.Sessions.Snapshots} snapshots begun (complete: {there?.Host.Sessions.Complete}), "
+                + $"{remoteHost.Channels.Distinct().Count()} connections to its host; the session listed by its host {listed}, in the app's list {there?.Host.Sessions.Get("there-new") is not null}, "
+                + $"a card {main.Sessions.Any(c => c.Id == "there-new")}, opened [{string.Join(", ", opened)}]; the answer {trust?.State} {trust?.Outcome}";
+        });
     }
 
     [Fact]
