@@ -156,6 +156,8 @@ for (const layout of [
       for (const { label, found } of steps) { expect.soft(found, label).toEqual([]); }
       // The walk showed everything the catalogue animates here, so each of them was read.
       expect(seen.sort()).toEqual(ANIMATED.filter((s) => !layout.absent.includes(s)).sort());
+      // And the cross-fade allowed is the one the page itself uses.
+      expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ab-motion-cross-fade').trim())).toBe(`${CROSS_FADE_MS}ms`);
     });
 
     test('with motion allowed the same walk finds the glyphs turning, the progress ring and the usage bars easing', async ({ page }) => {

@@ -61,7 +61,7 @@ function where({ regions, known }) {
   }
   const focus = window.__focusColour;
   // A colour that shows: not transparent, and not of alpha 0.
-  const opaque = (c) => !!c && c !== 'transparent' && !/^rgba\(.*,\s*0(\.0*)?\)$/.test(c);
+  const opaque = (c) => !!c && c !== 'transparent' && !/[,/]\s*0(\.0*)?\s*\)$/.test(c);
   const s = getComputedStyle(el);
   const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1 && opaque(s.outlineColor);
   const shadow = s.boxShadow !== 'none' && (s.boxShadow.match(/rgba?\([^)]*\)/g) ?? []).some(opaque);
