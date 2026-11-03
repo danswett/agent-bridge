@@ -45,7 +45,7 @@ public sealed class ProbeLauncher : IProbeLauncher
         }
         Process process;
         try { process = Process.Start(start) ?? throw new InvalidOperationException(); }
-        catch (Exception e) when (e is Win32Exception or InvalidOperationException or FileNotFoundException or DirectoryNotFoundException) { return null; }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException or PlatformNotSupportedException) { return null; }
         return new Started(process, command.Stdio);
     }
 

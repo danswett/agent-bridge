@@ -79,6 +79,11 @@ test('of one machines keyed and keyless failures with no reading newer than eith
   assert.deepEqual(latestUsage([{ agents: [keyed, { ...keyless, measuredAt: iso(0) }] }].map(readUsage)).map((r) => r.accountKey ?? null), [null]);
 });
 
+test('keyless readings that name no machine are never merged with each other', () => {
+  const codex = (percent) => ({ agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-percent * 1000), windows: [{ key: 'primary', label: '5h limit', percent }] });
+  assert.deepEqual(mergeUsage([{ agents: [codex(10)] }, { agents: [codex(20)] }].map(readUsage)).map((r) => r.windows[0].percent).sort(), [10, 20]);
+});
+
 test('one machines keyed and keyless readings taken at the same moment are one row, the first reported', () => {
   const vm = { id: 'vm', name: 'vm' };
   const transcript = { agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };

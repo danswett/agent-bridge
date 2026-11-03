@@ -123,9 +123,11 @@ export function latestUsage(reports) {
 // it stays a row of its own for the machine that read it: grouped by agent alone, the newest would
 // stand in for every other user's (#200). Mirrors UsageShare.Key. readBy is always there by now:
 // UsageBook stamps each host's own readings with that host, and a reading passed on already names
-// the machine that took it, so keyless readings of two machines never share a key.
+// the machine that took it, so keyless readings of two machines never share a key. One that still
+// names no machine (a reading kept from before it was stamped) is a row of its own, never merged.
+let unplaced = 0;
 export function usageKey(a) {
-  if (!a.accountKey && !a.account) { return `${a.agent}\u0000\u0000${a.readBy?.id ?? ''}`; }
+  if (!a.accountKey && !a.account) { return `${a.agent}\u0000\u0000${a.readBy?.id ?? `\u0001${++unplaced}`}`; }
   return `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
 }
 
@@ -157,11 +159,14 @@ function current(agents) {
   const newest = new Map();
   const failed = new Map();
   agents.forEach((a, order) => {
+    if (!a.readBy?.id) { return; }
     const latest = a.windows?.length ? newest : failed;
     const n = latest.get(kind(a, keyless(a)));
     if (!n || at(a) > n.at) { latest.set(kind(a, keyless(a)), { at: at(a), order }); }
   });
   return agents.filter((a, i) => {
+    // Of no known machine: nothing to stand in for, or be stood in for by.
+    if (!a.readBy?.id) { return true; }
     const other = newest.get(kind(a, !keyless(a)));
     if (!a.windows?.length) {
       if (other && at(a) <= other.at) { return false; }
