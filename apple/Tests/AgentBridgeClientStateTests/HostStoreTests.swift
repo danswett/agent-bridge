@@ -8,13 +8,14 @@ private actor FixtureHost {
     let instance: String
     let readOnlyReason: String?
     let capabilities: [String]
+    let machineID: String
     var loseReply: Bool
     var mutationIDs: [String] = []
     var requests: [BridgeRequest] = []
     init(instance: String = "run-1", loseReply: Bool = false, readOnlyReason: String? = nil,
-         capabilities: [String] = ["sessions.read", "sessions.reply"])
+         capabilities: [String] = ["sessions.read", "sessions.reply"], machineID: String = "fixture")
     {
-        self.instance = instance; self.loseReply = loseReply
+        self.instance = instance; self.loseReply = loseReply; self.machineID = machineID
         self.readOnlyReason = readOnlyReason; self.capabilities = capabilities
     }
 
@@ -32,7 +33,7 @@ private actor FixtureHost {
         let result: JSONValue
         switch request.op {
         case "hello":
-            var machine: [String: JSONValue] = ["id": .string("fixture"), "name": .string("Fixture"), "instance": .string(instance)]
+            var machine: [String: JSONValue] = ["id": .string(machineID), "name": .string("Fixture"), "instance": .string(instance)]
             machine["readOnly"] = readOnlyReason.map(JSONValue.string)
             result = .object(["protocol": .number(1), "capabilities": .array(capabilities.map(JSONValue.string)), "machine": .object(machine)])
         case "sessions.subscribe": result = .object([:])
@@ -69,9 +70,31 @@ private actor FixtureHost {
     Issue.record("State did not settle")
 }
 
+@MainActor @Test func aRelayHostClaimingAnotherMachinesIDIsRefusedBeforeItsSessionsAreRead() async throws {
+    let impostor = FixtureHost(machineID: "this-mac")
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await impostor.connection() }
+    defer { host.stop() }
+    host.start()
+    try await until { host.status.hasSuffix("Reconnecting…") }
+    #expect(!host.isLive)
+    #expect(host.hello == nil)
+    #expect(host.sessions.isEmpty)
+    let requests = await impostor.requests
+    #expect(!requests.contains { $0.op == "sessions.subscribe" })
+}
+
+@MainActor @Test func theLocalSocketHostIsNamedByItsHelloBecauseNoKeyNamesIt() async throws {
+    let fixture = FixtureHost(machineID: "this-mac")
+    let host = HostStore(id: "local", name: "This Mac", isLocal: true) { await fixture.connection() }
+    defer { host.stop() }
+    host.start()
+    try await until { host.isLive }
+    #expect(host.hello?["machine"]?["id"]?.string == "this-mac")
+}
+
 @MainActor @Test func uncertainReplyKeepsItsIdentityWhenTheSameHostReconnects() async throws {
     let first = FixtureHost(loseReply: true)
-    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await first.connection() }
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await first.connection() }
     host.start()
     try await until { host.isLive }
     #expect(host.sessions.map(\.id) == ["s1"])
@@ -90,7 +113,7 @@ private actor FixtureHost {
 
 @MainActor @Test func anUncertainReplyIsNeverSentToAReplacementHostProcess() async throws {
     let first = FixtureHost(loseReply: true)
-    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await first.connection() }
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await first.connection() }
     host.start()
     try await until { host.isLive }
     let operation = try BridgeSessionOperations.reply(sessionID: "s1", text: "Continue", hasQuestion: false, capabilities: host.capabilities)
@@ -120,7 +143,7 @@ func readOnlyReasonOverridesActionCapabilitiesButKeepsAdvertisedCapabilitiesAndR
                    "sessions.transfer", "sessions.transfer.serve", "launch.trust", "update"]
     let reads = ["sessions.read", "usage", "usage.shared", "push"]
     let fixture = FixtureHost(readOnlyReason: readOnly ? "This host is read-only." : nil, capabilities: actions + reads)
-    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await fixture.connection() }
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.connection() }
     defer { host.stop() }
     host.start()
     try await until { host.isLive }
@@ -136,7 +159,7 @@ func readOnlyReasonOverridesActionCapabilitiesButKeepsAdvertisedCapabilitiesAndR
 
 @MainActor @Test func readOnlyHostDoesNotRecordOrSendANewMutationOrConsumeItsDraft() async throws {
     let fixture = FixtureHost(readOnlyReason: "This host is read-only.")
-    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await fixture.connection() }
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await fixture.connection() }
     defer { host.stop() }
     host.start()
     try await until { host.isLive }
@@ -158,7 +181,7 @@ func readOnlyReasonOverridesActionCapabilitiesButKeepsAdvertisedCapabilitiesAndR
 
 @MainActor @Test func readOnlyReconnectRetainsAnUncertainReplyUntilAnExplicitWritableRetry() async throws {
     let first = FixtureHost(loseReply: true)
-    let host = HostStore(id: "host", name: "Fixture", isLocal: false) { await first.connection() }
+    let host = HostStore(id: "fixture", name: "Fixture", isLocal: false) { await first.connection() }
     defer { host.stop() }
     host.start()
     try await until { host.isLive }

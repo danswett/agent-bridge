@@ -30,7 +30,8 @@ struct AgentBridgeApp: App {
             MenuBarExtra {
                 BridgeMenuView(store: store)
             } label: {
-                Label(store.entries.filter { $0.session.question != nil }.isEmpty ? "Agent Bridge" : "\(store.entries.filter { $0.session.question != nil }.count)", systemImage: "terminal")
+                let waiting = store.entries.lazy.filter { $0.session.question != nil }.count
+                Label(waiting == 0 ? "Agent Bridge" : "\(waiting)", systemImage: "terminal")
             }
         #endif
     }

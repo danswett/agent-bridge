@@ -280,6 +280,16 @@ final class HostStore: Identifiable {
         }
     }
 
+    // A relay host's id is the device id its Noise key proves; hello's machine.id is only its
+    // claim. The store groups hosts, routes notification actions and picks "This Mac" for
+    // transfers by machine.id, so a host claiming another machine's id could stand in for it and
+    // receive commands the user signed for that machine (#260 review sec-260).
+    private func checkIdentity(_ greeting: JSONValue) throws {
+        guard isLocal || greeting["machine"]?["id"]?.string == id else {
+            throw RelayError.refused("This host claims to be a different machine than its key proves.")
+        }
+    }
+
     private func run(generation token: UUID) async {
         var delay = 1
         while !Task.isCancelled, token == generation {
@@ -302,6 +312,7 @@ final class HostStore: Identifiable {
                 else {
                     throw RelayError.refused("This host does not offer compatible session access.")
                 }
+                try checkIdentity(greeting)
                 try Task.checkCancellation()
                 guard token == generation else { await current.close(); return }
                 hello = greeting
@@ -323,6 +334,7 @@ final class HostStore: Identifiable {
                             try await Task.sleep(for: .seconds(10))
                             let refreshed = try await send("hello", transport: current)
                             guard token == generation, attempt == connectionID else { return }
+                            try checkIdentity(refreshed)
                             hello = refreshed
                             if !capabilities.contains("usage") {
                                 usage = nil
