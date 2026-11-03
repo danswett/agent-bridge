@@ -307,6 +307,28 @@ public class DiscoveryHoldTests
         Assert.Null(source.Held);
     }
 
+    // Found in review: a server's name anywhere in the arguments ruled out a terminal waiting on
+    // its question. What runs is told by the subcommand.
+    [Theory]
+    [InlineData("codex.exe --profile mcp-server", true)]
+    [InlineData("codex.exe -- app-server", true)]
+    [InlineData("codex.exe \"Explain the app-server protocol\"", true)]
+    [InlineData("codex.exe -c k=v mcp-server", false)]
+    [InlineData("codex.exe exec \"list the files\"", false)]
+    public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
+    {
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        f.Processes.Run(AgentKind.Codex, 960, commandLine);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromHours(4.5));
+        await source.RefreshAsync();
+
+        Assert.Equal(holds ? "a codex registration names no process" : null, source.Held?.Reason);
+    }
+
     [Fact]
     public async Task A_codex_whose_command_line_cannot_be_read_could_be_the_session_a_registration_naming_no_process_is_for()
     {

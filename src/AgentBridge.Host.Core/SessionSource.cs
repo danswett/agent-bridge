@@ -485,7 +485,8 @@ public sealed class SessionSource : ISessionSource
     // A Codex registration naming no process: its hooks fired before they could tell which Codex
     // was theirs (one waiting on its hooks-trust question, #437). It may be a live session's that
     // cannot be seen, so it holds while any Codex nothing accounts for could be that session and
-    // have written it (an interactive terminal, or one whose command line could not be read, that
+    // have written it (an interactive run by its subcommand, so a server's name as a prompt or an
+    // option's value does not make it a server, or one whose command line could not be read, that
     // started no later than a second after it was written, the slack OfGeneration allows for
     // rounded start times, or whose start is unknown), or while the processes could not be listed, and for
     // Unaccounted.Grace after it was written, as a process nothing accounts for does. A server or
@@ -504,7 +505,7 @@ public sealed class SessionSource : ISessionSource
             // processes does not have it said again after.
             current.Add((r.Path, written));
             var writer = !observed.Listed || observed.Processes.Any(p => !accounted.Contains(p.Id)
-                && (string.IsNullOrEmpty(p.CommandLine) || CodexLockDiscovery.IsTerminal(p.CommandLine))
+                && (string.IsNullOrEmpty(p.CommandLine) || CodexLockDiscovery.IsInteractive(p.CommandLine))
                 && (p.StartedAt is not { } started || written is not { } w || started <= w + TimeSpan.FromSeconds(1)));
             if (writer || written is not { } at || now - at < Unaccounted.Grace)
             {
