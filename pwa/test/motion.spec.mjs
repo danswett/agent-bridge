@@ -1083,6 +1083,44 @@ test('a question held while its machine sends its list again takes no click for 
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });
+test('a question shown to be answered at the machine takes no click for a moment once the same question can be answered here', async ({ page }) => {
+  await openDemo(page);
+  const ask = (truncated) => page.evaluate((truncated) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-opened', kind: 'form', message: 'Which?', askedAt: t, truncated,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  }, truncated);
+  // Cut short on its way here, so it is answered at the machine; then sent whole, the same question.
+  await ask(true);
+  const v = await open(page, CODEX);
+  await expect(v.locator('.question-slot .question')).not.toHaveAttribute('data-answerable', 'true');
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // Sent whole, and a click the moment its first choice can take one, in one go.
+  const clicked = await page.evaluate(async () => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const s = d.host.get('019a1b2c-codex-example');
+    d.upsert({ ...s, updatedAt: t, question: { ...s.question, truncated: false } });
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    let choice = null;
+    for (let i = 0; i < 500 && !choice; i += 1) {
+      choice = view.querySelector('.question-slot .question[data-answerable="true"] .choice:not([disabled])');
+      if (!choice) { await new Promise((r) => setTimeout(r, 0)); }
+    }
+    if (!choice) { return false; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return true;
+  });
+  expect(clicked).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
 test('a session that goes while its machine is still sending its list leaves at once, with no copy fading', async ({ page }) => {
   await openDemo(page);
   await upsert(page, 'demo-unsettled', { agent: 'copilot', title: 'Goes while unsettled', status: 'idle', startedAt: later(), updatedAt: later() });
