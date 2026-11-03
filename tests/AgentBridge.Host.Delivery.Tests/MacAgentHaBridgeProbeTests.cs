@@ -4,6 +4,60 @@ using Xunit;
 
 public sealed class MacAgentHaBridgeProbeTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_incomplete_scan_is_retried_with_a_fresh_complete_result(bool active)
+    {
+        var calls = 0;
+        var delays = new List<TimeSpan>();
+        MacDaemonObservation Read() => ++calls < 3 ? new(false, 501, [])
+            : new(true, 501, active ? [new(123, 501, 501, 501)] : []);
+        var probe = new MacAgentHaBridgeProbe(() => MacAgentHaBridgeProbe.ObserveBounded(Read, delays.Add));
+        Assert.Equal(active, probe.Active() is not null);
+        Assert.Equal(3, calls);
+        Assert.Equal(new[] { TimeSpan.FromMilliseconds(25), TimeSpan.FromMilliseconds(25) }, delays);
+    }
+
+    [Fact]
+    public void Three_incomplete_scans_still_hold_delivery_without_more_retries()
+    {
+        var calls = 0;
+        var delays = 0;
+        var probe = new MacAgentHaBridgeProbe(() => MacAgentHaBridgeProbe.ObserveBounded(
+            () => { calls++; return new(false, 501, []); }, _ => delays++));
+        Assert.NotNull(probe.Active());
+        Assert.Equal(3, calls);
+        Assert.Equal(2, delays);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void A_complete_scan_or_seen_PowerShell_runtime_returns_without_retry(bool complete, bool active)
+    {
+        var calls = 0;
+        var delays = 0;
+        var probe = new MacAgentHaBridgeProbe(() => MacAgentHaBridgeProbe.ObserveBounded(
+            () => { calls++; return new(complete, 501, active ? [new(123, 501, 501, 501)] : []); },
+            _ => delays++));
+        Assert.Equal(active, probe.Active() is not null);
+        Assert.Equal(1, calls);
+        Assert.Equal(0, delays);
+    }
+
+    [Fact]
+    public void A_later_call_never_reuses_an_earlier_complete_clear_scan()
+    {
+        var calls = 0;
+        var probe = new MacAgentHaBridgeProbe(() => MacAgentHaBridgeProbe.ObserveBounded(
+            () => ++calls == 1 ? new(true, 501, []) : new(false, 501, []), _ => { }));
+        Assert.Null(probe.Active());
+        Assert.NotNull(probe.Active());
+        Assert.Equal(4, calls);
+    }
+
     sealed class Native : IMacDaemonNative
     {
         public uint? UserId { get; set; } = 501;
