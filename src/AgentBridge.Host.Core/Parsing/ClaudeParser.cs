@@ -248,7 +248,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var outcome = Tag(text, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed;
         var queuedAt = Dequeue(id, Hash(text), out var wasQueued);
         if (!confirmed && !wasQueued) { return; }
-        var endedAt = wasQueued ? queuedAt : at;
+        var endedAt = wasQueued ? queuedAt ?? at : at;
         var work = S.Background;
         if (work.Knows(id))
         {

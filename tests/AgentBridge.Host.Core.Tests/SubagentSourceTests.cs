@@ -427,7 +427,8 @@ public class ClaudeSubagentTests
             File.WriteAllText(file, $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
             // Where a file system keeps no creation time, it is read from these.
             File.SetLastWriteTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i));
-            File.SetCreationTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i));
+            try { File.SetCreationTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i)); }
+            catch (Exception e) when (e is PlatformNotSupportedException or UnauthorizedAccessException or IOException) { }
         }
 
         var read = new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript);
@@ -606,6 +607,19 @@ public class ClaudeSubagentTests
 
         Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
         Assert.Equal(3, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_delegate_whose_queued_notice_has_no_time_ended_when_it_was_delivered()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+        var queued = JsonNode.Parse(Notice(Files, 8))!.AsObject();
+        queued.Remove("timestamp");
+
+        var s = await r.Append(queued.ToJsonString(), Delivery(Files, 9));
+
+        Assert.Equal(Fixture.T0.AddSeconds(9), Entry(s, Files).EndedAt);
     }
 
     [Fact]
