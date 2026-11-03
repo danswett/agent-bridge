@@ -136,9 +136,9 @@
                     Visibility="Collapsed"
                     AutomationProperties.AutomationId="MoreMachines"
                     ToolTipService.ToolTip="More machines">
-                    <StackPanel Orientation="Horizontal" Spacing="4">
+                    <StackPanel x:Name="MoreMachinesContent" Orientation="Horizontal" Spacing="4">
                         <TextBlock x:Name="MoreMachinesText" VerticalAlignment="Center" Style="{StaticResource AbTypeRow}" />
-                        <ContentControl Style="{StaticResource AbIconChevron}" Width="12" Height="12" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                        <ContentControl x:Name="MoreMachinesChevron" Style="{StaticResource AbIconChevron}" Width="12" Height="12" VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
                             <ContentControl.RenderTransform>
                                 <RotateTransform Angle="90" />
                             </ContentControl.RenderTransform>

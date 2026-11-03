@@ -298,6 +298,7 @@ public sealed partial class SessionsPage : UserControl
     // A tab's own padding and border, beside its name: read from one drawn, until then the default
     // style's (SelectorBarItemPadding 12 each side, a 1 px border).
     double tabChrome = 26;
+    bool chromeSeen;
     // Measures a name as a tab draws it, off the page.
     readonly TextBlock ruler = new() { TextWrapping = TextWrapping.NoWrap };
     bool arrangeQueued;
@@ -332,12 +333,15 @@ public sealed partial class SessionsPage : UserControl
     // A long name is cut short with an ellipsis, as a row's title is, where the tab's own text would
     // wrap onto a second line. The whole name is the tooltip and the accessible name. The tab's own
     // text keeps its pointer-over, pressed and disabled looks, which a Child of ours would lose.
-    static void OnTabLoaded(object sender, RoutedEventArgs e)
+    // The first tab drawn gives the tabs' real padding and face (ObserveTabChrome): until then they
+    // were fitted by the default style's, so they are fitted again.
+    void OnTabLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not SelectorBarItem item || NameOf(item) is not { } name) { return; }
         name.TextWrapping = TextWrapping.NoWrap;
         name.TextTrimming = TextTrimming.CharacterEllipsis;
         name.MaxWidth = DesignLayout.MachineTab;
+        if (!chromeSeen) { QueueArrange(); }
     }
 
     // The tab's name as drawn: its template's text (the self-test reads it too).
@@ -406,7 +410,7 @@ public sealed partial class SessionsPage : UserControl
             MoreMachines.Visibility = Visibility.Visible;
             MoreMachines.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             // Not drawn yet, its template may not be applied: its parts, then.
-            var more = Math.Max(MoreMachines.DesiredSize.Width, TextWidth(MoreMachinesText.Text) + 12 + 4 + MoreMachines.Padding.Left + MoreMachines.Padding.Right);
+            var more = Math.Max(MoreMachines.DesiredSize.Width, TextWidth(MoreMachinesText.Text) + MoreMachinesContent.Spacing + MoreMachinesChevron.Width + MoreMachines.Padding.Left + MoreMachines.Padding.Right);
             split = MachineTabFit.Split(widths, chosen, room, Math.Ceiling(more) + MachineBar.ColumnSpacing);
             Arranged = $"room {room:0}, More {more:0}, tabs {string.Join(" ", widths)}, chrome {tabChrome:0.#}";
         }
@@ -453,6 +457,7 @@ public sealed partial class SessionsPage : UserControl
             if (item.ActualWidth > 0 && NameOf(item) is { ActualWidth: > 0 } name)
             {
                 tabChrome = item.ActualWidth - name.ActualWidth;
+                chromeSeen = true;
                 // The face the tab draws its name in, from its style: the ruler has none of its own.
                 ruler.FontFamily = name.FontFamily;
                 ruler.FontSize = name.FontSize;
