@@ -273,8 +273,12 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
                 return _ => Task.CompletedTask;
             }
         }
-        // Its start time not to be read, or gone meanwhile: waited on, which ends at once if it has gone.
-        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { }
+        // Its start time not to be read: whether it is the host at all cannot be told, so not waited on.
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            process.Dispose();
+            return _ => Task.CompletedTask;
+        }
         return async ct =>
         {
             using (process)
