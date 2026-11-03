@@ -170,4 +170,15 @@ public sealed class PromptOriginTests
         Assert.Equal(new PromptMemory.Seen(false, null, false), omitted.Observe(Prompt(UserMessageFrom.Schedule, "4", null)));
         Assert.Equal(new PromptMemory.Seen(false, null, false), omitted.Observe(Prompt(UserMessageFrom.Schedule, "4", "A")));
     }
+
+    [Theory]
+    [InlineData("nightly-build", "nightly\u00b7build")]
+    [InlineData("\u201ca\u2019b\u201d", "\u201ca'b\u201d")]
+    public void Labels_an_agent_wrote_apart_but_drawn_alike_are_one_same_as_last_time_only_when_the_words_match_the_last_shown_under_it(string one, string two)
+    {
+        var m = new PromptMemory();
+        bool Row(string label, string text, int turns) => m.Observe(Prompt(UserMessageFrom.Schedule, label, text, turns: turns)).Repeat;
+        Assert.Equal([false, false, false, false], new[] { Row(one, "A", 3), Row(two, "B", 4), Row(one, "A", 5), Row(two, "B", 6) });
+        Assert.Equal(PromptOrigin.Of(Prompt(UserMessageFrom.Schedule, one))!.Facts[1], PromptOrigin.Of(Prompt(UserMessageFrom.Schedule, two))!.Facts[1]);
+    }
 }

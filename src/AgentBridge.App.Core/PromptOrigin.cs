@@ -40,10 +40,7 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
         switch (from)
         {
             case UserMessageFrom.Schedule:
-                var label = Fact(a.UserMessageLabel);
-                // "#4" for a number, and anything else in quotes, so no label of an agent's reads as
-                // words of the line's own ("Scheduled prompt · “Main agent”"), whatever letters it draws.
-                var name = label.Length == 0 ? null : label.All(char.IsAsciiDigit) ? $"#{label}" : DelegateLabel.Quoted(label);
+                var name = ScheduleName(a.UserMessageLabel);
                 var facts = new List<string> { "Scheduled prompt" };
                 if (name is not null) { facts.Add(name); }
                 if (repeat) { facts.Add("same as last time"); }
@@ -54,6 +51,15 @@ public sealed record PromptOrigin(UserMessageFrom From, IReadOnlyList<string> Fa
             default:
                 return new(UserMessageFrom.Other, ["Automatic prompt"], null, "Automatic prompt", false, text, preview);
         }
+    }
+
+    // A schedule's label as drawn: "#4" for a number, and anything else in quotes, so no label of
+    // an agent's reads as words of the line's own ("Scheduled prompt · “Main agent”"), whatever
+    // letters it draws.
+    internal static string? ScheduleName(string? raw)
+    {
+        var label = Fact(raw);
+        return label.Length == 0 ? null : label.All(char.IsAsciiDigit) ? $"#{label}" : DelegateLabel.Quoted(label);
     }
 
     // An agent's short text, drawn as a fact on a label line: nothing hidden or steering, on one
@@ -146,7 +152,9 @@ public sealed class PromptMemory
         repeat = false;
         if (from == UserMessageFrom.Schedule)
         {
-            var label = a.UserMessageLabel ?? "";
+            // By the label as drawn: two an agent wrote apart but drawn alike are one to the person,
+            // and "same as last time" means the words last shown under it.
+            var label = $"{from}\n{PromptOrigin.ScheduleName(a.UserMessageLabel)}";
             repeat = bySchedule.TryGetValue(label, out var last) && last == text;
             bySchedule[label] = text;
         }
