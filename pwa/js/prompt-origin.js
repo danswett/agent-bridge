@@ -99,6 +99,8 @@ export class PromptMemory {
   // turn seen running began, until a turn's end is accounted for.
   #idle = null;
   #running = false;
+  // The turn count last seen, in any state.
+  #count = null;
   #ran = null;
   #bySchedule = new Map();
 
@@ -108,9 +110,13 @@ export class PromptMemory {
     const from = a.userMessageFrom ?? 'person';
     const text = a.userMessage ?? null;
     const running = s?.status === 'working' || s?.status === 'waiting';
-    // From when it began, not from a question answered or a resume within it.
-    if (running && !this.#running) { this.#ran = s.statusSince ?? null; }
+    const count = Number.isSafeInteger(a.turnCount) && a.turnCount >= 0 ? a.turnCount : null;
+    // From when it began, not from a question answered or a resume within it; a count that rose
+    // while it ran is a later turn begun, its idle between missed here.
+    const later = this.#running && count !== null && this.#count !== null && count > this.#count;
+    if (running && (!this.#running || later)) { this.#ran = s.statusSince ?? null; }
     this.#running = running;
+    if (count !== null) { this.#count = count; }
     // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the one
     // shown stays it, and the turns that end meanwhile wait to be put down to the words that return.
     if (text === null) { return { repeat: false, at: null, fresh: false }; }

@@ -155,3 +155,12 @@ test('a repeat whose turn ends while the host leaves the words out is still a re
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', text: null, turns: 4 })), { repeat: false, at: null, fresh: false });
   assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', text: 'A', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
 });
+test('a repeat whose turn began with the idle before it missed is dated from its own turn, not the last one\'s', () => {
+  const m = new PromptMemory();
+  m.observe(session({ from: 'schedule', label: '4', turns: 3 }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, since: '2026-11-03T19:01:00Z' }));
+  // A question answered within it is not a new turn; a count risen while it runs is.
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, since: '2026-11-03T19:02:00Z' }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 4, since: '2026-11-03T19:05:00Z' }));
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 5 })), { repeat: true, at: '2026-11-03T19:05:00Z', fresh: true });
+});
