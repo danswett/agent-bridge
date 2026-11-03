@@ -12,6 +12,12 @@ struct SessionEntry: Identifiable {
         host?.name ?? "Sample workspace"
     }
 
+    static func find(id: String, in sessions: [BridgeSession], host: HostStore?, ended: Bool = false) -> SessionEntry? {
+        let machineID = host?.hello?["machine"]?["id"]?.string ?? host?.id ?? "sample"
+        guard let session = sessions.first(where: { machineID + ":" + $0.id == id }) else { return nil }
+        return SessionEntry(session: session, host: host, ended: ended)
+    }
+
     init(session: BridgeSession, host: HostStore?, ended: Bool = false) {
         id = "\(host?.hello?["machine"]?["id"]?.string ?? host?.id ?? "sample"):\(session.id)"
         self.session = session
@@ -80,6 +86,27 @@ final class BridgeStore {
             return SampleSessions.sessions.map { SessionEntry(session: $0, host: nil) }
         }
         return canonicalHosts.flatMap { host in host.sessions.map { SessionEntry(session: $0, host: host) } }
+    }
+
+    func sessionEntry(id: String?) -> SessionEntry? {
+        guard let id else { return nil }
+        if isSample, let entry = SessionEntry.find(id: id, in: SampleSessions.sessions, host: nil) {
+            return entry
+        }
+        let hosts = canonicalHosts
+        if !isSample {
+            for host in hosts {
+                if let entry = SessionEntry.find(id: id, in: host.sessions, host: host) {
+                    return entry
+                }
+            }
+        }
+        for host in hosts {
+            if let entry = SessionEntry.find(id: id, in: host.endedSessions, host: host, ended: true) {
+                return entry
+            }
+        }
+        return nil
     }
 
     var canonicalHosts: [HostStore] {

@@ -13,7 +13,7 @@ struct SessionWorkbench: View {
     @Environment(\.openWindow) private var openWindow
 
     private var selected: SessionEntry? {
-        (store.entries + store.endedEntries).first { $0.id == store.selectedSessionID }
+        store.sessionEntry(id: store.selectedSessionID)
     }
 
     private var needsYou: [SessionEntry] {
