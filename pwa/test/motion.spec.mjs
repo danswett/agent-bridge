@@ -577,6 +577,27 @@ test('a second press inside the last one\'s release shows its fill at once', asy
   await page.mouse.up();
 });
 
+test('a press the browser takes over to scroll is not a release: its fill goes at once, with no easing', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-press-duration', '5000ms'));
+  const main = row(page, CODEX).locator('.row-main');
+  // A finger on the row the browser then takes for a scroll, a pointercancel with no pointerup;
+  // and the same after an earlier release still easing.
+  const after = await main.evaluate((el) => {
+    const send = (type) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: 'touch', isPrimary: true }));
+    send('pointerdown');
+    send('pointercancel');
+    const cancelled = el.dataset.press ?? null;
+    send('pointerdown');
+    send('pointerup');
+    const released = el.dataset.press ?? null;
+    send('pointerdown');
+    send('pointercancel');
+    return [cancelled, released, el.dataset.press ?? null];
+  });
+  expect(after).toEqual([null, 'released', null]);
+});
+
 test('a row moved past the edge of the list by Alt+Down ends in full view', async ({ page }) => {
   await openDemo(page, { height: 520 });
   await many(page);

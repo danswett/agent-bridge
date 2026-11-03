@@ -160,7 +160,12 @@ export function watchPresses(doc = globalThis.document) {
     el.dataset.press = 'released';
     timers.set(el, setTimeout(() => { delete el.dataset.press; }, t.duration + 50));
   };
-  for (const type of ['pointerup', 'pointercancel']) { doc.addEventListener(type, release, true); }
+  doc.addEventListener('pointerup', release, true);
+  // A press the browser takes over (a touch turned into a scroll) wasn't let go: its fill goes at once.
+  doc.addEventListener('pointercancel', () => {
+    if (pressed) { clearTimeout(timers.get(pressed)); delete pressed.dataset.press; }
+    pressed = null;
+  }, true);
 }
 
 // An element arriving where it now is: it fades in, travelling the entry's distance from
