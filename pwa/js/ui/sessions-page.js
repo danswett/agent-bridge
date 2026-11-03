@@ -196,7 +196,14 @@ export class SessionsPage {
       this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
         // Back on Sessions, what it shows is seen now.
-        if (route === 'sessions') { this.#navigate(() => this.#route(rest)); this.view.schedule(); this.view.layoutChanged(); }
+        if (route === 'sessions') {
+          this.#navigate(() => this.#route(rest));
+          this.view.schedule();
+          this.view.layoutChanged();
+          // A question that came while another page was shown is in sight now, where a click
+          // may already be headed: the same wait as a question arriving.
+          this.view.selected?.reshow();
+        }
       });
       this.launchPanel.setOpen(shell.route === 'launch');
       if (shell.route === 'sessions') { this.#route(shell.rest); }

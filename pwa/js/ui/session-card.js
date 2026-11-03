@@ -44,6 +44,10 @@ const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
 // motion token measures this, and reduced motion keeps it: a jump moves the content as surely.
 // A key still acts at once, since nothing moves the focus to a question.
 export const QUESTION_ARRIVAL_GUARD_MS = 500;
+// A smooth scroll steps every frame (16 ms at 60 Hz, 33 ms on a phone saving power): a pause of
+// several frames is a scroll come to rest. Short, so a scroll the person starts just after it
+// isn't taken for part of it.
+const SCROLL_SETTLED_MS = 100;
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -437,6 +441,12 @@ export class SessionCard {
     this.layoutChanged();
   }
 
+  // Its view is on screen again with nothing of its own changed (Sessions back from another
+  // page): a question it shows waits as one arriving does, where it is.
+  reshow() {
+    if (this.#selected && this.#tab === 'conversation' && this.#guarded?.isConnected && this.viewing()) { this.#guard(); }
+  }
+
   // The inspector became a pane of its own, or stopped being one.
   layoutChanged() {
     const { inspector } = this.layout();
@@ -706,12 +716,21 @@ export class SessionCard {
     this.#guard();
     if (!moves || behavior !== 'smooth') { return; }
     // Every step of the scroll re-arms it, so it runs out only after the question has stopped
-    // moving: `scroll` fires in every engine, where `scrollend` (which also ends the listening)
-    // isn't in all of them yet.
+    // moving: `scroll` fires in every engine, where `scrollend` isn't in Safari yet. Listening
+    // stops at `scrollend`, once the steps stop, or as soon as the person takes the scroller
+    // over, so a scroll of their own after it can't hold a click they mean.
     const ended = this.#scrollEnd = new AbortController();
-    sc.addEventListener('scroll', () => this.#guard(), { signal: ended.signal, passive: true });
-    sc.addEventListener('scrollend', () => { this.#guard(); ended.abort(); }, { signal: ended.signal });
-    setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
+    const { signal } = ended;
+    let settle = 0;
+    const done = () => { clearTimeout(settle); ended.abort(); };
+    sc.addEventListener('scroll', () => {
+      this.#guard();
+      clearTimeout(settle);
+      settle = setTimeout(done, SCROLL_SETTLED_MS);
+    }, { signal, passive: true });
+    sc.addEventListener('scrollend', () => { this.#guard(); done(); }, { signal });
+    for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) { sc.addEventListener(type, done, { signal, passive: true }); }
+    setTimeout(done, 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer

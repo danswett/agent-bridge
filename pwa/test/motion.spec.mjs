@@ -3,7 +3,7 @@
 // nothing moves as the app starts; a tap during a motion still lands; and a question that
 // arrives is scrolled to only while the conversation is read to its end.
 import { test, expect } from '@playwright/test';
-import { open, row, view } from './nav.mjs';
+import { go, open, row, view } from './nav.mjs';
 
 const COPILOT = '02d9e5d5-6b35-49bd-b083-39572fbff648';
 const CLAUDE = '6f1c2b7e-claude-example';
@@ -887,7 +887,7 @@ test('bringing a question already in sight into view starts no wait for a later 
   expect(arriving).toBe(false);
   await expect.poll(answers).toBe(before + 1);
 });
-test('where the browser sends no scrollend, as Safari doesn\'t, a question scrolled into sight still takes no click as the scroll comes to rest', async ({ page }) => {
+test('where the browser sends no scrollend, as Safari doesn\'t, a question scrolled into sight takes no click until the scroll comes to rest, and the person\'s own scroll after that holds none back', async ({ page }) => {
   await page.addInitScript(() => {
     const add = EventTarget.prototype.addEventListener;
     EventTarget.prototype.addEventListener = function (type, ...rest) { return type === 'scrollend' ? undefined : add.call(this, type, ...rest); };
@@ -907,20 +907,57 @@ test('where the browser sends no scrollend, as Safari doesn\'t, a question scrol
   const v = await open(page, CODEX);
   await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; });
   // From Needs you. Headless Chromium lands a smooth scroll in one step, so the steps of one that
-  // takes its time, as Safari's does, are sent over 450 ms; 300 ms after the last, past 500 ms
-  // from the start but within 500 ms of where it came to rest, the question still holds its
-  // clicks back.
-  const held = await page.evaluate(async (id) => {
+  // takes its time, as Safari's does, are sent a frame or two apart over 450 ms. 300 ms after the
+  // last, past 500 ms from the start but within 500 ms of where it came to rest, the question
+  // still holds its clicks back. Once that has run out, a scroll the person makes (well inside
+  // the 1.5 s the listening may last) starts no new wait.
+  const r = await page.evaluate(async (id) => {
     const el = document.querySelector(`.session-view[data-id="${id}"] .stream-scroll`);
+    const question = () => el.closest('.session-view').querySelector('.question-slot .question');
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
     document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    for (let i = 0; i < 5; i += 1) {
-      await new Promise((r) => setTimeout(r, 90));
+    for (let i = 0; i < 15; i += 1) {
+      await wait(30);
       el.dispatchEvent(new Event('scroll'));
     }
-    await new Promise((r) => setTimeout(r, 300));
-    return el.closest('.session-view').querySelector('.question-slot .question').hasAttribute('data-arriving');
+    await wait(300);
+    const held = question().hasAttribute('data-arriving');
+    await wait(300);
+    const after = question().hasAttribute('data-arriving');
+    el.dispatchEvent(new Event('scroll'));
+    await wait(50);
+    return { held, after, mine: question().hasAttribute('data-arriving') };
   }, CODEX);
-  expect(held).toBe(true);
+  expect(r).toEqual({ held: true, after: false, mine: false });
+});
+test('a question that arrives while another page is shown takes no click for a moment when Sessions is shown again', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  await go(page, 'settings');
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-route', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // Back to Sessions and a click where the question's first choice now is, in one go.
+  const tapped = await page.evaluate(() => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    tap(document.querySelector('#nav [data-nav="sessions"]'));
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return false; }
+    tap(choice);
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
 });
 test('a session that goes while its machine is still sending its list leaves at once, with no copy fading', async ({ page }) => {
   await openDemo(page);
