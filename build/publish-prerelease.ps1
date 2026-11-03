@@ -246,6 +246,9 @@ if ($publishing) {
             "An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' }), and only ever for its own architecture."
         ) -join "`n"
         Invoke-Gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" -f "body=$notes" -F draft=false -F prerelease=true | Out-Null
+        # For CI's attest job: these assets are this run's, so its SBOMs describe them. A run that
+        # uploads nothing (a re-run, or an older version) leaves it unset and attests nothing.
+        if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'published=true' }
     }
     Write-Plan "$(if ($DryRun) { 'would publish' } else { 'published' }) $tag as a pre-release ($($builds.Channel -join ', '))"
 }
