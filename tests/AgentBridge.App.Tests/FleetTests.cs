@@ -441,7 +441,8 @@ public sealed class FleetTests : IAsyncLifetime
         var sink = new Recorder();
         var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromSeconds(3), OutcomeWait = TimeSpan.FromSeconds(2) };
         main.MachineRemoved += responder.MachineGone;
-        var button = "action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite";
+        // As this build's toast draws it (ToastXml.AnswerVersion).
+        var button = $"action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite&{ToastXml.AnswerVersionKey}={ToastXml.AnswerVersion}";
         await responder.HandleAsync(button, new Dictionary<string, string>());
         var outcome = ToastPlanner.OutcomeTag("there", "remote-id");
         Assert.Equal(outcome, sink.Shown.Last().Tag);

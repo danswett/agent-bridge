@@ -663,6 +663,13 @@ machine, online ones first, then the account's offline machines (#213):
     window narrows to a phone's with one open. Forward to it shows the delegate again, opening
     the finished fold if it has finished meanwhile.
 
+**Notifications (every platform, #253 decision 7, #372):** a notification for an approval
+only opens its question; it never offers Approve once or Deny. The OS draws its body as plain
+text and cuts it short, so it can show neither the whole command nor the escapes and refusals
+that hidden, bidi and right-to-left characters get in the app (#165, #220). Other questions
+keep their buttons where they fit. Windows toasts, Web Push and the Apple notifications (#260)
+follow this, and a button on a toast an older build left in Notification Center only opens.
+
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
 swaps an app icon with the theme, so the mark is always Bridge's dark value. The sizes are in
@@ -698,6 +705,8 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
 - **Numbers before nouns:** "3 delegates", "1 background command".
+- **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
+  approval is approved in the app, never from a notification.
 - **No sentences explaining the UI,** no exclamation marks, and no emoji.
 
 ## 9. Accessibility

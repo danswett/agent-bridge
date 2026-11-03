@@ -242,15 +242,31 @@ public sealed class ToastTests
     }
 
     [Fact]
-    public void A_permission_prompt_offers_approve_once_and_deny_and_one_held_at_the_machine_offers_open()
+    public void An_approval_toast_has_no_approve_or_deny_action_and_every_click_on_it_opens_that_sessions_question()
     {
-        var approval = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Approval()), Caps, "PC"), false));
-        Assert.Equal(["Approve once", "Deny"], approval.Descendants("action").Select(a => (string)a.Attribute("content")!));
-        Assert.Contains("PC · waiting for your approval", approval.Descendants("text").Select(t => t.Value));
+        foreach (var q in new[] { Make.Approval(), Make.Approval() with { AnswerAtMachine = true } })
+        {
+            var approval = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: q), Caps, "PC", "remote-id"), false));
 
+            Assert.Equal(["Open"], approval.Descendants("action").Select(a => (string)a.Attribute("content")!));
+            Assert.Empty(approval.Descendants("input"));
+            var clicks = approval.Descendants("action").Select(a => (string)a.Attribute("arguments")!).Append((string)approval.Attribute("launch")!);
+            Assert.All(clicks.Select(ToastAction.Parse), a => Assert.Equal(("open", "s1", "remote-id"), (a.Action, a.Session, a.Machine)));
+        }
+        var shown = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Approval()), Caps, "PC"), false));
+        Assert.Contains("PC · waiting for your approval", shown.Descendants("text").Select(t => t.Value));
         var held = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Approval() with { AnswerAtMachine = true }), Caps, "PC"), false));
-        Assert.Equal(["Open"], held.Descendants("action").Select(a => (string)a.Attribute("content")!));
         Assert.Contains("PC · waiting at the machine", held.Descendants("text").Select(t => t.Value));
+    }
+
+    [Fact]
+    public void A_question_that_is_not_an_approval_keeps_its_answer_buttons()
+    {
+        var xml = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Choice() with { Message = "Approve the plan?" }), Caps, null), false));
+
+        var actions = xml.Descendants("action").Select(a => ToastAction.Parse((string)a.Attribute("arguments")!)).ToList();
+        Assert.Equal(["answer", "answer"], actions.Select(a => a.Action));
+        Assert.All(actions, a => Assert.True(a.Current));
     }
 
     [Fact]
@@ -296,8 +312,10 @@ public sealed class ToastTests
         var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
         string? opened = null;
         var responder = new ToastResponder(deliveries, sink, s => opened = s);
+        var pg = Xml(new ToastNotice("t", ToastXml.Question(Make.Session(question: Make.Choice("q1")), Caps, null), false))
+            .Descendants("action").Select(a => (string)a.Attribute("arguments")!).First(a => ToastAction.Parse(a).Value == "pg");
 
-        await responder.HandleAsync(ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "option"), ("field", "answer"), ("value", "pg")), new Dictionary<string, string>());
+        await responder.HandleAsync(pg, new Dictionary<string, string>());
 
         var outcome = Assert.Single(sink.Shown);
         Assert.Equal("s1~a", outcome.Tag);
@@ -306,6 +324,57 @@ public sealed class ToastTests
 
         await responder.HandleAsync("action=open&session=s7", new Dictionary<string, string>());
         Assert.Equal("s7", opened);
+    }
+
+    // What an Approve once button said before #372, still in Notification Center after an update.
+    static string OldApproveOnce(string? machine = null)
+    {
+        var args = ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "r1#d"), ("kind", "option"), ("field", "decision"), ("value", "approve"));
+        return machine is null ? args : $"{args}&{ToastXml.Args(("machine", machine))}";
+    }
+
+    [Fact]
+    public async Task An_approve_once_click_on_an_older_toast_opens_the_question_and_answers_nothing()
+    {
+        await using var host = new FakeHost();
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        host.Start();
+        await using var connection = host.Connect();
+        var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
+        var opened = new List<(string?, string?)>();
+        var responder = new ToastResponder(_ => deliveries, sink, (machine, s) => opened.Add((machine, s))) { OutcomeWait = TimeSpan.FromSeconds(2) };
+
+        await responder.HandleAsync(OldApproveOnce(), new Dictionary<string, string>());
+        await responder.HandleAsync(OldApproveOnce("remote-id"), new Dictionary<string, string>());
+
+        Assert.Equal([(null, "s1"), ("remote-id", "s1")], opened);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        Assert.Empty(sink.Shown);
+    }
+
+    [Fact]
+    public async Task A_click_on_a_session_the_app_knows_is_asking_for_approval_opens_it_and_answers_nothing_whatever_question_it_names()
+    {
+        await using var host = new FakeHost();
+        host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        host.Start();
+        await using var connection = host.Connect();
+        var deliveries = new Deliveries(connection, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(50) };
+        var opened = new List<string?>();
+        var responder = new ToastResponder(deliveries, sink, opened.Add)
+        {
+            OutcomeWait = TimeSpan.FromSeconds(2),
+            SessionOf = (_, id) => Make.Session(id, SessionStatus.Waiting, Make.Approval()),
+        };
+        var mark = ToastXml.Args((ToastXml.AnswerVersionKey, ToastXml.AnswerVersion));
+
+        await responder.HandleAsync($"{OldApproveOnce()}&{mark}", new Dictionary<string, string>());
+        // A button for an earlier question, a choice, while the session now asks for approval.
+        await responder.HandleAsync($"{ToastXml.Args(("action", "answer"), ("session", "s1"), ("question", "q1"), ("kind", "option"), ("field", "answer"), ("value", "pg"))}&{mark}", new Dictionary<string, string>());
+
+        Assert.Equal(["s1", "s1"], opened);
+        Assert.Empty(host.Sent(Ops.SessionAnswer));
+        Assert.Empty(sink.Shown);
     }
 }
 

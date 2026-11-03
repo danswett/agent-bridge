@@ -423,9 +423,15 @@ separate, explicit step ([migration.md](migration.md)).
 | Usage | Each agent's windows: percent, amber at 75 %, red at 90 %, pace against the window, "resets in" | PWA usage panel |
 | Settings | Host: running, version, profile, pid, start/stop/restart, start at sign-in, log tail; relay: sign in with GitHub (device code shown in the app), machine name, connection state; this machine: approving Copilot permission prompts from other devices (`permissions.remoteApproval`), answering folder-trust questions from devices (`launch.remoteFolderTrust`, applied at once; turned on with this app approved) and which devices may (`launch.remoteFolderTrustDevices`: this app, the account's phones, browsers and apps the relay lists, and any approved that are not connected; changes from here and from the Launch page go one at a time, each made from the list the host has just then, since the host replaces the whole list; a list changed meanwhile by another app or at a terminal is refused by the host and the change made again from it, so a device revoked there stays revoked), agent-ha-bridge state; on a Microsoft Dev Box only, keeping it awake while the host runs (`devBox.keepAwake`, applied at once; [host-config.md](host-config.md#dev-box-keep-awake)), with the last pass and the next, and a failed or blocked pass (no `az login`, say), Dev Box agent settings the host cannot use, or a stand-back with Task Scheduler unreadable in red since the Dev Box may then hibernate; app: show reasoning and tools (the old Detail toggle, kept in the app since every client now gets the full activity), toasts, start the app at sign-in, version and updates | status card, `install.ps1`, `agent-ha-bridge configure` |
 
-**Toasts** (§7.2): a question raises a toast with its options as buttons (Approve once /
-Deny for a permission prompt) and a text box for Other or a free-text answer; anything
-larger (several fields, multi-select) gets Open. The answer goes to the host over the pipe
+**Toasts** (§7.2): a question raises a toast with its options as buttons and a text box
+for Other or a free-text answer; anything larger (several fields, multi-select) gets Open.
+An approval's toast (a permission prompt) has only Open, and a click anywhere on it opens
+its question ([ui.md](design/ui.md) §7, #372): its body is plain text the OS cuts at about
+300 characters, so it can't show the whole command or the escapes the card gives hidden and
+bidi characters. A button on a toast an older build left in Notification Center, which may
+say Approve once, only opens too: the app answers from a toast only when its arguments carry
+this build's mark (the argument `v=2`: `ToastXml.AnswerVersionKey`, `ToastXml.AnswerVersion`)
+and never for a question it knows is an approval. The answer goes to the host over the pipe
 with a fresh request id, and a follow-up toast says what became of it. A session's toasts
 share one tag, so a question replaces only its own, and a question answered anywhere
 withdraws it. A finished turn raises a toast with the start of the main agent's own response, never a delegate's (it can be turned
