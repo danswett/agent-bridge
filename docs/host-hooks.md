@@ -51,8 +51,12 @@ legacy registrations, migrated profiles and another profile's ownership marker. 
 checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
 home, changes a legacy task or starts a host automatically.
 Every agent's preflight checks Claude bridge commands, excluding this profile's owned
-standalone commands. Codex setup also refuses retained `agent-ha-bridge` or
-`copilot-ha-bridge` marketplaces even when their old directories are gone.
+standalone commands. Every agent's setup and removal also check an existing Codex home
+using the profile's configured Codex CLI, refusing retained `agent-ha-bridge` or
+`copilot-ha-bridge` marketplaces even when their old directories are gone. If that home
+exists but Codex is unavailable or its marketplace list cannot be read, the operation
+refuses without changing hooks; install/configure Codex so the legacy check can finish.
+An absent Codex home does not require Codex when setting up another agent.
 Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
 finishes on the previous image, and an interrupted replacement restores that image before
 retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.

@@ -449,18 +449,107 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Theory]
-    [InlineData("agent-ha-bridge", false)]
-    [InlineData("copilot-ha-bridge", false)]
-    [InlineData("agent-ha-bridge", true)]
-    [InlineData("copilot-ha-bridge", true)]
-    public async Task A_legacy_Codex_marketplace_refuses_setup_even_when_its_old_directory_is_gone(string marketplace, bool owned)
+    [InlineData("codex", "agent-ha-bridge", false)]
+    [InlineData("codex", "copilot-ha-bridge", false)]
+    [InlineData("codex", "agent-ha-bridge", true)]
+    [InlineData("codex", "copilot-ha-bridge", true)]
+    [InlineData("copilot", "agent-ha-bridge", false)]
+    [InlineData("copilot", "copilot-ha-bridge", false)]
+    [InlineData("copilot", "agent-ha-bridge", true)]
+    [InlineData("copilot", "copilot-ha-bridge", true)]
+    [InlineData("claude", "agent-ha-bridge", false)]
+    [InlineData("claude", "copilot-ha-bridge", false)]
+    [InlineData("claude", "agent-ha-bridge", true)]
+    [InlineData("claude", "copilot-ha-bridge", true)]
+    public async Task A_legacy_Codex_marketplace_refuses_setup_even_when_its_old_directory_is_gone(string agent, string marketplace, bool owned)
     {
         if (owned) { await Setup.InstallAsync("codex", false, TextWriter.Null); }
         Directory.CreateDirectory(Homes.Codex);
         codex.LegacyMarketplace = marketplace;
         var before = Listing();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task An_existing_Codex_home_must_be_checkable_before_another_agent_is_registered(string agent)
+    {
+        Directory.CreateDirectory(Homes.Codex);
+        locator.Locate = (launcher, _) => launcher.Id == "codex" ? null : "fixture-" + launcher.Id;
+        var before = Listing();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
+
+        Assert.Contains("existing Codex home", error.Message);
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task Another_agents_setup_checks_the_configured_Codex_CLI_without_installing_Codex_hooks(string agent)
+    {
+        Directory.CreateDirectory(Homes.Codex);
+        var executable = Path.Combine(root, "configured-codex.exe");
+        ConfigurePath("codex", executable);
+        locator.Locate = (launcher, config) =>
+        {
+            if (launcher.Id != "codex") { return "fixture-" + launcher.Id; }
+            Assert.Equal(executable, config.Path);
+            return config.Path;
+        };
+
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+
+        Assert.NotEmpty(codex.Calls);
+        Assert.All(codex.Calls, c => Assert.Equal("list", c[2]));
+        Assert.True(File.Exists(Owner(agent)));
+        Assert.False(File.Exists(Owner("codex")));
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task A_failed_Codex_legacy_probe_does_not_register_another_agent(string agent)
+    {
+        Directory.CreateDirectory(Homes.Codex);
+        codex.FailListing = true;
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task Legacy_Codex_marketplaces_also_block_removing_another_agents_hooks(string agent)
+    {
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+        Directory.CreateDirectory(Homes.Codex);
+        codex.LegacyMarketplace = "agent-ha-bridge";
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.RemoveAsync(agent, false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("claude")]
+    public async Task Legacy_activity_is_rechecked_after_the_Codex_probe_before_registering_another_agent(string agent)
+    {
+        Directory.CreateDirectory(Homes.Codex);
+        codex.OnList = () => active = "fixture legacy process started during probe";
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
 
         Assert.Equal(before, Listing());
     }
@@ -538,6 +627,8 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool Present;
         public bool FailPlugin;
         public bool FailMarketplace;
+        public bool FailListing;
+        public Action? OnList;
         public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
         public Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
@@ -545,6 +636,8 @@ public sealed class StandaloneHooksTests : IDisposable
             Calls.Add(arguments.ToArray());
             if (arguments.SequenceEqual(new[] { "plugin", "marketplace", "list", "--json" }))
             {
+                OnList?.Invoke();
+                if (FailListing) { return Task.FromResult(new CommandResult(true, false, 1, "private-cli-output")); }
                 var path = OperatingSystem.IsWindows() ? @"\\?\" + Root : Root;
                 var entry = new JsonObject { ["name"] = "agent-bridge", ["root"] = path };
                 var marketplaces = Present ? new JsonArray(entry) : new JsonArray();

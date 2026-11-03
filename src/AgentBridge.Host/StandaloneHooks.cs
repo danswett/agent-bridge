@@ -115,6 +115,7 @@ public sealed class StandaloneHooks(
         var executable = locator.Find(launcher, launch.Agent(agent));
         if (agent == "copilot") { executable ??= locator.Find(Launchers.Find("agency")!, launch.Agent("agency")); }
         if (executable is null) { throw new InvalidOperationException($"{agent} is not installed; no hooks were registered"); }
+        await CheckUnselectedCodexAsync(agent, ct);
         var owner = Path.Combine(Home(agent), OwnerFile);
         var ownerBefore = MigrationRecord.Hash(owner);
         var owned = ownerBefore is not null;
@@ -140,6 +141,7 @@ public sealed class StandaloneHooks(
             // marketplace there; writing ownership below creates it before the first CLI write.
             marketplacePresent = Directory.Exists(homes.Codex) && await CheckMarketplaceAsync(executable, owned, ct);
         }
+        Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         if (dryRun) { return; }
         if (agent == "claude" && before is not null)
@@ -176,6 +178,7 @@ public sealed class StandaloneHooks(
         Preflight(agent, removing: true);
         using var held = dryRun ? null : Lock(profile);
         Preflight(agent, removing: true);
+        await CheckUnselectedCodexAsync(agent, ct);
         string? executable = null;
         var present = false;
         JsonObject? root = null;
@@ -192,6 +195,7 @@ public sealed class StandaloneHooks(
             before = MigrationRecord.Hash(path);
             if (before is not null) { root = Read(path); Unregister(root, agent); }
         }
+        Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
         if (agent == "codex")
@@ -322,7 +326,15 @@ public sealed class StandaloneHooks(
         entries.Add(entry);
     }
 
-    async Task<bool> CheckMarketplaceAsync(string executable, bool owned, CancellationToken ct)
+    async Task CheckUnselectedCodexAsync(string agent, CancellationToken ct)
+    {
+        if (agent == "codex" || !Directory.Exists(homes.Codex)) { return; }
+        var executable = locator.Find(Launchers.Find("codex")!, LaunchSettings().Agent("codex"))
+            ?? throw new InvalidOperationException("Codex is unavailable; the existing Codex home cannot be checked for legacy bridge marketplaces; no hooks were changed");
+        await MarketplacesAsync(executable, ct);
+    }
+
+    async Task<JsonArray> MarketplacesAsync(string executable, CancellationToken ct)
     {
         var text = await RunCodexAsync(executable, ["plugin", "marketplace", "list", "--json"], ct);
         var listing = JsonNode.Parse(text) as JsonObject;
@@ -332,6 +344,12 @@ public sealed class StandaloneHooks(
         {
             throw new InvalidOperationException("Codex retains a legacy bridge marketplace; use Migrate; it was left alone");
         }
+        return marketplaces;
+    }
+
+    async Task<bool> CheckMarketplaceAsync(string executable, bool owned, CancellationToken ct)
+    {
+        var marketplaces = await MarketplacesAsync(executable, ct);
         var matches = marketplaces.OfType<JsonObject>().Where(m => (string?)m["name"] == Marketplace).ToList();
         if (matches.Count > 1 || (matches.Count == 1 && (!owned || (string?)matches[0]["root"] is not { } root || !Same(root, CodexMarketplace))))
         {
