@@ -266,8 +266,20 @@ struct SessionWorkbench: View {
         ContentUnavailableView {
             Label(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge", systemImage: "terminal")
         } description: {
-            Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Follow your agents across your machines.")
+            if store.account == nil, !store.isSample, let status = store.signInStatus {
+                Text(status)
+            } else {
+                Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
+            }
         } actions: {
+            if !store.isSample, !store.isFixture, store.account == nil {
+                Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
+                    showingConnection = true
+                    if !store.isSigningIn {
+                        store.signIn()
+                    }
+                }
+            }
             Button("Connection Settings") { showingConnection = true }
             if !store.isSample {
                 Button("Explore Sample Sessions", action: store.showSamples)
@@ -286,7 +298,7 @@ struct SessionWorkbench: View {
                 }
             }
             Label(store.connectionStatus, systemImage: store.isLive ? "checkmark.circle" : "network")
-            ForEach(store.hosts.filter { $0.discoveryHold != nil }) { host in
+            ForEach(store.canonicalHosts.filter { $0.discoveryHold != nil }) { host in
                 Label("\(host.name): \(host.discoveryHold ?? "")", systemImage: "exclamationmark.triangle")
             }
         }
