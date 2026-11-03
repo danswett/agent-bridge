@@ -397,7 +397,19 @@ export class SessionCard {
     e.delegates.hidden = !listed && !counts;
     e.tabD.hidden = e.delegates.hidden;
     if (e.tabD.hidden && this.#tab === 'delegates') { this.setTab('conversation'); }
+    this.#linkDelegatesTab();
     this.#renderEvents(s, now);
+  }
+
+  // Pushed in the list's place, the delegate open is what the Delegates tab shows: the tab
+  // controls it, and it is the tab's panel, named by its own heading. In the inspector it is a
+  // pane of its own, and the tab (where there is one) keeps the list.
+  #linkDelegatesTab() {
+    const pushed = !!this.#delegate && !this.layout().inspector;
+    const pane = this.detail.element;
+    pane.id = this.ids.delegate;
+    this.els.tabD.setAttribute('aria-controls', pushed ? this.ids.delegate : this.ids.delegates);
+    if (pushed) { pane.setAttribute('role', 'tabpanel'); } else { pane.removeAttribute('role'); }
   }
 
   #renderEvents(s, now = Date.now()) {
@@ -583,6 +595,7 @@ export class SessionCard {
     // tab. Only then: a tab chosen at a narrower width is left as it was.
     if (this.#delegate && this.#wasInspector && !inspector && !this.layout().wide && this.#tab !== 'delegates') { this.setTab('delegates'); }
     this.#wasInspector = inspector;
+    this.#linkDelegatesTab();
     this.els.inspectorButton.setAttribute('aria-label', inspector ? 'Hide inspector' : 'Show inspector');
     this.els.inspectorButton.title = this.els.inspectorButton.getAttribute('aria-label');
     this.#revealTools();

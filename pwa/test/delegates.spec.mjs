@@ -341,6 +341,22 @@ test.describe('where the inspector is not a pane of its own', () => {
     await expect(c.locator('.conversation')).toBeVisible();
   });
 
+  test('a delegate pushed in the list\'s place is the Delegates tab\'s panel, and the list is again once it goes', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    const tab = c.getByRole('tab', { name: 'Delegates' });
+    await showList(page);
+    await openRow(page, 'demo-agent-witness');
+    await expect(pane(page)).toBeVisible();
+    await expect(pane(page)).toHaveAttribute('role', 'tabpanel');
+    const controlled = await tab.getAttribute('aria-controls');
+    await expect(c.locator(`[id="${controlled}"]`)).toBeVisible();
+    await expect(c.locator(`[id="${controlled}"]`)).toHaveClass(/delegate-pane/);
+    await pane(page).getByRole('button', { name: 'All delegates' }).click();
+    await expect(c.locator(`[id="${await tab.getAttribute('aria-controls')}"]`)).toHaveClass(/delegates-panel/);
+    await expect(c.locator('.delegates-panel')).toBeVisible();
+  });
+
   test('a delegate opened from the list is pushed in its place, its name focused, and All delegates goes back to its row', async ({ page }) => {
     await openDemo(page);
     const c = card(page);
