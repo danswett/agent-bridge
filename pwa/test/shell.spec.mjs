@@ -91,7 +91,7 @@ test('Ctrl+K focuses search, which narrows the list to the sessions that match, 
   await expect(page.locator('#session-list')).toHaveAttribute('data-filtered', 'true');
   await page.keyboard.type('zzz');
   await expect(page.locator('.session')).toHaveCount(0);
-  await expect(page.locator('#sessions-empty')).toHaveText('No sessions match your search.');
+  await expect(page.locator('#sessions-empty')).toHaveText('No sessions match your search. Clear search');
   await page.keyboard.press('Escape');
   await expect(page.locator('#search')).toHaveValue('');
   await expect(page.locator('.session')).toHaveCount(4);
@@ -462,4 +462,17 @@ test('every search term can match a different field, including ended sessions', 
   await page.locator('.ended-group summary').click();
   await expect(page.locator(`.ended[data-id="${CODEX}"]`)).toBeVisible();
   await expect(page.locator('#sessions-empty')).toBeHidden();
+});
+
+
+test('a failed search can be cleared inline and returns focus to search', async ({ page }) => {
+  await openDemo(page);
+  await page.locator('#search').fill('not-a-session');
+  const empty = page.locator('#sessions-empty');
+  await expect(empty).toBeVisible();
+  await empty.getByRole('button', { name: 'Clear search' }).click();
+  await expect(page.locator('#search')).toHaveValue('');
+  await expect(page.locator('#search')).toBeFocused();
+  await expect(page.locator('.session')).toHaveCount(4);
+  await expect(empty).toBeHidden();
 });
