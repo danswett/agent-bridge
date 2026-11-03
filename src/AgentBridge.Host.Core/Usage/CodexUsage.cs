@@ -24,6 +24,13 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     AgentUsage? signedOutReading;
     // A login no probe reads replaced one whose reading or sign-out was published (TakeWithdrawal).
     bool withdrawn;
+    // A Codex session has run here since the sign-out: the probe that lets go ahead decides whether
+    // it has ended, and the sign-out stands until then. Taken down on the session's arrival alone,
+    // it went out, was withdrawn and came back whenever the user was still signed out (#238 review).
+    bool ending;
+    // Readings measured no later than a sign-out that ended without one of its own: older than what
+    // was published, so never put back in its place.
+    DateTimeOffset? hiddenUpTo;
     bool sessionOpen, busy, wasOpen;
     Task? running;
     Task? answering;
@@ -40,15 +47,11 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         {
             (this.sessionOpen, this.busy) = (sessionOpen, busy);
             // A Codex session running here again ends the hold a sign-out put on the probes: it
-            // has signed in, or it will say so itself.
+            // may have signed in. The sign-out stands until a probe, or a reading measured since,
+            // says so (ending).
             if (sessionOpen && !wasOpen && signedOutAt is not null)
             {
-                // The sign-out published (a failure of its own when there was no reading) is no
-                // longer so: withdrawn unless something newer replaces it at the next look (#238
-                // review). Without this, a CollectAsync with nothing to say left it standing.
-                withdrawn = true;
-                signedOutAt = null;
-                signedOutReading = null;
+                ending = true;
                 pace.Release();
                 nextDue = null;
             }
@@ -101,12 +104,17 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
         lock (gate)
         {
             finished = false;
-            newest = Newer(transcript, probed);
+            newest = Visible(Newer(transcript, probed));
+            // No probe can say whether the sign-out has ended: the session's arrival must.
+            if (probes is null && ending) { EndSignOut(); }
         }
         if (probes is not null) { Consider(newest?.MeasuredAt, now); }
         lock (gate)
         {
-            newest = Newer(transcript, probed);
+            newest = Visible(Newer(transcript, probed));
+            // A reading measured since the sign-out was found (the session that arrived, writing
+            // its own) says it has ended.
+            if (ending && signedOutAt is { } since && newest is not null && newest.MeasuredAt > since && !ReferenceEquals(newest, signedOutReading)) { EndSignOut(); }
             // Something to say again replaces what was withdrawn.
             if (newest is not null) { withdrawn = false; }
             if (signedOutAt is { } at)
@@ -130,6 +138,19 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
     // probe, and a probe newer than any transcript.
     static AgentUsage? Newer(AgentUsage? a, AgentUsage? b) => a is null ? b : b is null ? a : b.MeasuredAt > a.MeasuredAt ? b : a;
 
+    AgentUsage? Visible(AgentUsage? reading) => reading is not null && hiddenUpTo is { } upTo && reading.MeasuredAt <= upTo ? null : reading;
+
+    // The sign-out is over, and what was published for it withdrawn unless something measured since
+    // replaces it. Under gate.
+    void EndSignOut()
+    {
+        hiddenUpTo = signedOutAt;
+        signedOutAt = null;
+        signedOutReading = null;
+        ending = false;
+        withdrawn = true;
+    }
+
     void Consider(DateTimeOffset? readingAt, DateTimeOffset now)
     {
         lock (gate)
@@ -148,7 +169,12 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                 return;
             }
             // Codex has been used here: a machine where it is installed and never run says nothing.
-            if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions"))) { return; }
+            // Nor can any probe then say whether a sign-out has ended: the session's arrival must.
+            if (!Directory.Exists(Path.Combine(options.CodexHome, "sessions")))
+            {
+                if (ending) { EndSignOut(); }
+                return;
+            }
             pace.Started(now);
             var run = new CodexUsageProbe(options, probes!, clock, say).Start();
             answering = run.Released;
@@ -209,12 +235,20 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     pace.Succeeded();
                     signedOutAt = null;
                     signedOutReading = null;
+                    ending = false;
                     line = null;
                     break;
                 case CodexProbeKind.SignedOut:
                     // No more probes until the longest back-off ends or a Codex session runs here.
                     // Timed at the first finding; the reading of every probe that found it, the
-                    // newest, still goes out.
+                    // newest, still goes out. Found again after a Codex session ran here, it is a
+                    // finding of its own, and stands throughout: never withdrawn in between.
+                    if (ending)
+                    {
+                        signedOutAt = now;
+                        signedOutReading = null;
+                        ending = false;
+                    }
                     signedOutAt ??= now;
                     if (outcome.Reading is { } fresh && ReferenceEquals(fresh, probed)) { signedOutReading = fresh; }
                     pace.Hold(now);
@@ -227,6 +261,7 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
                     withdrawn |= probed is not null || signedOutAt is not null;
                     signedOutAt = null;
                     signedOutReading = null;
+                    ending = false;
                     probed = null;
                     pace.Hold(now);
                     line = $"usage: Codex is not asked for its allowance ({outcome.Why}); its transcripts are read";

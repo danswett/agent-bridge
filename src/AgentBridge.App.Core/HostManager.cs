@@ -624,17 +624,17 @@ public sealed class HostManager
     // was never held. own: this profile's host, which its own stop holds.
     async Task OthersDoneAsync(int? own, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + ProbeWait;
+        var deadline = Time.GetUtcNow() + ProbeWait;
         while (true)
         {
             var seen = await OthersHeldAsync(own, deadline, ct);
             if (PackageHosts().All(p => p == own || seen.Contains(p))) { return; }
-            if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: hosts kept starting from this installation for {FormatWait(ProbeWait)}; try again later"); }
+            if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: hosts kept starting from this installation for {FormatWait(ProbeWait)}; try again later"); }
         }
     }
 
     // One look at the package: every other host of it held until none is busy. The hosts held.
-    async Task<HashSet<int>> OthersHeldAsync(int? own, DateTime deadline, CancellationToken ct)
+    async Task<HashSet<int>> OthersHeldAsync(int? own, DateTimeOffset deadline, CancellationToken ct)
     {
         var package = PackageHosts();
         var seen = new HashSet<int>();
@@ -677,7 +677,7 @@ public sealed class HostManager
                     if (await HoldAsync(ch, who, ct) is { } why) { busy ??= $"{who}: {why}"; }
                 }
                 if (busy is null) { return seen; }
-                if (DateTime.UtcNow >= deadline) { throw new HostBusyException($"nothing was stopped: {busy}, after {FormatWait(ProbeWait)}; try again later"); }
+                if (Time.GetUtcNow() >= deadline) { throw new HostBusyException($"nothing was stopped: {busy}, after {FormatWait(ProbeWait)}; try again later"); }
                 await Task.Delay(ProbePoll, ct);
             }
         }

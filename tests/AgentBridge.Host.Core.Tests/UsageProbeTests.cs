@@ -1319,11 +1319,14 @@ public sealed class UsageProbeTests : IDisposable
         Assert.True(monitor.Current.Version > version);
     }
 
-    [Fact]
-    public async Task A_Codex_session_opening_after_a_sign_out_with_no_reading_withdraws_the_published_sign_out()
+    [Theory]
+    // Still signed out, signed in again, or a probe that fails for an ordinary reason.
+    [InlineData("signed-out")]
+    [InlineData("reading")]
+    [InlineData("failed")]
+    public async Task A_sign_out_with_no_reading_stands_after_a_Codex_session_opens_until_the_probe_it_allows_says_otherwise(string then)
     {
         CodexUsed();
-        var later = new TaskCompletionSource();
         AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
         var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
         var sessions = new FakeSessions();
@@ -1332,24 +1335,57 @@ public sealed class UsageProbeTests : IDisposable
         await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
         Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
+        var gone = false;
+        monitor.Changed += (report, _) => gone |= !report.Agents.Any(a => a.Agent == AgentKind.Codex);
 
-        // A Codex session runs here: signed in again, or it will say so itself. No transcript has a
-        // reading, and the probe its arrival allows again is still under way at the next look.
+        // A Codex session runs here, and the probe its arrival allows is under way at the next look.
+        var later = new TaskCompletionSource();
         AppServer(s =>
         {
             s.Before["account/rateLimits/read"] = later.Task;
-            s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized");
+            if (then != "reading")
+            {
+                s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error(then == "signed-out"
+                    ? "failed to fetch codex rate limits: 401 Unauthorized"
+                    : "failed to fetch codex rate limits: application network policy is unavailable");
+            }
         });
         sessions.Open(AgentKind.Codex);
         time.Advance(TimeSpan.FromMinutes(16));
-        var version = monitor.Current.Version;
+        await monitor.PassAsync();
+        await Until(() => launcher.Started.Count == 2);
+        Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
+
+        later.SetResult();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
         await monitor.PassAsync();
 
-        Assert.DoesNotContain(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
-        Assert.True(monitor.Current.Version > version);
-        later.SetResult();
+        var codexEntry = Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
+        if (then == "reading") { Assert.Equal((23.0, (string?)null), (codexEntry.Windows[0].Percent, codexEntry.Error)); }
+        else { Assert.Equal(CodexUsageProbe.SignedOutError, codexEntry.Error); }
+        Assert.False(gone);
     }
 
+    [Fact]
+    public async Task A_sign_out_ends_without_a_probe_only_where_none_can_run_and_an_older_reading_never_takes_its_place()
+    {
+        CodexUsed();
+        Fixture.Append(f.CodexTranscript("t"), Codex.Event(new { type = "token_count", rate_limits = new { primary = new { used_percent = 33.0 } } }, 1));
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        await codex.CollectAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        Assert.Equal(CodexUsageProbe.SignedOutError, (await codex.CollectAsync())!.Error);
+
+        // Codex's sessions folder is gone, so no probe can say; a Codex session running here must.
+        Directory.Delete(Path.Combine(f.CodexHome, "sessions"), recursive: true);
+        codex.Pace(sessionOpen: true, busy: false);
+        time.Advance(TimeSpan.FromMinutes(16));
+
+        Assert.Null(await codex.CollectAsync());
+        Assert.True(codex.TakeWithdrawal());
+        Assert.Single(launcher.Started);
+    }
     [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
     {
@@ -1451,9 +1487,10 @@ public sealed class UsageProbeTests : IDisposable
         await codex.CollectAsync();
         Assert.Equal(probes, launcher.Started.Count);
 
-        // A Codex session running here again ends the hold.
+        // A Codex session running here again ends the hold: a probe goes ahead, and the sign-out
+        // stands until it says otherwise.
         codex.Pace(sessionOpen: true, busy: true);
-        Assert.Null((await codex.CollectAsync())!.Error);
+        Assert.Equal("Codex needs signing in again on this machine", (await codex.CollectAsync())!.Error);
         await Until(() => launcher.Started.Count > probes);
     }
 
