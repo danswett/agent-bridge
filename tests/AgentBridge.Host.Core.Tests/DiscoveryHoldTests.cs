@@ -306,6 +306,25 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    public async Task A_codex_registration_naming_no_process_carried_on_without_is_said_once_across_a_pass_that_held()
+    {
+        // Found in review: a pass that could not list the processes held, and forgot it was said.
+        using var f = new Fixture();
+        f.CodexRegistration(C, 0, null);
+        var log = new List<string>();
+        await using var source = f.Source(log: log.Add);
+        await source.RefreshAsync();
+        f.Processes.Unreadable(AgentKind.Codex);
+        await source.RefreshAsync();
+        f.Processes.Unreadable(AgentKind.Codex, false);
+
+        await source.RefreshAsync();
+
+        Assert.Null(source.Held);
+        Assert.Single(log, l => l.StartsWith($"carrying on without codex registration {C}:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_codex_registration_naming_no_process_rewritten_while_it_is_read_holds_until_it_reads_whole()
     {
         using var f = new Fixture();

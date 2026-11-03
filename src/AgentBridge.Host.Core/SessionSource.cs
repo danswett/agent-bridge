@@ -497,6 +497,9 @@ public sealed class SessionSource : ISessionSource
         foreach (var r in pidless)
         {
             var written = Written(r);
+            // Kept while the file is unchanged, held or not, so a pass that could not list the
+            // processes does not have it said again after.
+            current.Add((r.Path, written));
             var writer = !observed.Listed || observed.Processes.Any(p => !accounted.Contains(p.Id)
                 && (p.StartedAt is not { } started || written is not { } w || started <= w + TimeSpan.FromSeconds(1)));
             if (writer || written is not { } at || now - at < Unaccounted.Grace)
@@ -504,7 +507,6 @@ public sealed class SessionSource : ISessionSource
                 holds.Add("a codex registration names no process");
                 continue;
             }
-            current.Add((r.Path, written));
             if (_pidlessExcused.Add((r.Path, written)))
             {
                 Log($"carrying on without codex registration {r.SessionId}: it names no process, was written {(int)(now - at).TotalMinutes} min ago, and no running codex could have written it");
