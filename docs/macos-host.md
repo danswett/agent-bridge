@@ -50,6 +50,36 @@ the app remain withheld; use the operator CLI above. Hook takeover/migration,
 Windows console adoption, Dev Box operations and Windows updates are not Mac
 features. No legacy hooks, Home Assistant settings or daemon are changed here.
 
+## Installed CLI compatibility
+
+Managed Mac launches inspect only the installed Codex/Copilot `--help` and, when
+needed, Codex `--version`. Each probe has a three-second deadline and a 64 Ki-character
+limit on each output pipe. Results are cached for a minute against the executable
+path, size and timestamps; changed metadata causes a new check, and a change
+during launch preparation refuses the launch. Output is never logged. This check
+does not authenticate an agent or make a model call. Other platforms keep their
+existing launch arguments and tuning tables.
+
+Codex normally retains `--no-daemon`. Exact `codex-cli 0.140.0`, which does not
+recognize that flag, instead retains the mandatory
+`-c model_reasoning_summary=detailed` override. In that exact release, a nonempty
+CLI override disables implicit daemon reuse and selects the embedded server;
+explicit `--remote` would override that decision. See the pinned upstream
+[reuse guard](https://github.com/openai/codex/blob/rust-v0.140.0/codex-rs/tui/src/lib.rs#L829)
+and [server selection](https://github.com/openai/codex/blob/rust-v0.140.0/codex-rs/tui/src/lib.rs#L793).
+All nonempty `launch.agents.codex.extraArgs` are therefore refused in managed Mac
+mode, including on newer versions: arbitrary extras can select another command or
+server. This conservative restriction does not affect model/effort/context or
+resume settings supplied through the launch form. Unknown versions without an
+advertised `--no-daemon` fail with an instruction to check the CLI at the machine;
+the host never upgrades it automatically.
+
+Copilot effort choices are intersected with its help output, including configured
+choices and defaults. For example, CLI 1.0.64 advertises `none`, `low`, `medium`,
+`high`, `xhigh` and `max`, so `minimal` is removed and an explicit request for it is
+refused. An unrecognized help format refuses the launch instead of assuming the
+generic fallback table is accepted. Agency is not treated as the Copilot binary.
+
 ## Isolation and safety
 
 The profile stores its keys, account, attachments, managed socket and registration

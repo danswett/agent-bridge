@@ -72,7 +72,7 @@ public static class Launchers
     // Model, effort and context are already validated against what the agent offers; empty
     // means pass nothing. The prompt is already flattened to one line (LaunchProtocol.Flatten).
     public static IReadOnlyList<string> Arguments(Launcher launcher, string sessionId, bool resume, string model, string effort, string context,
-        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt)
+        bool allowAll, IReadOnlyList<string> extras, string profile, string prompt, bool codexNoDaemon = true)
     {
         var args = new List<string>();
         var extra = extras.Where(e => !string.IsNullOrWhiteSpace(e)).ToList();
@@ -90,7 +90,8 @@ public static class Launchers
             case "codex":
                 // Without its shared background daemon, Codex runs hooks from its own window's
                 // process; reasoning summaries are what a card streams.
-                args.AddRange(["--no-daemon", "-c", "model_reasoning_summary=detailed"]);
+                if (codexNoDaemon) { args.Add("--no-daemon"); }
+                args.AddRange(["-c", "model_reasoning_summary=detailed"]);
                 if (effort.Length > 0) { args.AddRange(["-c", $"model_reasoning_effort={effort}"]); }
                 if (context.Length > 0) { args.AddRange(["-c", $"model_context_window={context}"]); }
                 if (resume) { args.Add("resume"); }

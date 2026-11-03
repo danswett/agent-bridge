@@ -9,7 +9,7 @@ public sealed class MacAgentHaBridgeProbe : IAgentHaBridgeProbe
 {
     readonly Func<MacDaemonObservation> observe;
 
-    public MacAgentHaBridgeProbe() : this(Observe) { }
+    public MacAgentHaBridgeProbe() : this(() => ObserveBounded(Observe, Thread.Sleep)) { }
     internal MacAgentHaBridgeProbe(Func<MacDaemonObservation> observe) => this.observe = observe;
 
     public string? Active()
@@ -40,6 +40,22 @@ public sealed class MacAgentHaBridgeProbe : IAgentHaBridgeProbe
 
     static MacDaemonObservation Observe() => OperatingSystem.IsMacOS()
         ? Observe(new MacDaemonNative()) : new(false, 0, []);
+
+    internal static MacDaemonObservation ObserveBounded(Func<MacDaemonObservation> observe, Action<TimeSpan> delay)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            var current = observe();
+            // A live Mac scan observed transient EPERM, with no established cause. Retry
+            // the whole observation, never skip that PID or reuse a previous clear.
+            // A seen PowerShell runtime already suffices to hold delivery, even if
+            // a later process made this snapshot incomplete.
+            if (current.Complete || current.Processes.Any(p => p.UserId == current.UserId
+                || p.RealUserId == current.UserId || p.SavedUserId == current.UserId) || attempt == 2)
+            { return current; }
+            delay(TimeSpan.FromMilliseconds(25));
+        }
+    }
 
     // GetProcessesByName silently drops processes whose name/path cannot be read on
     // macOS. G5 needs to distinguish a complete empty scan from an unreadable daemon.
