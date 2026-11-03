@@ -46,6 +46,10 @@ export const readFieldType = tolerant(['choice', 'multi', 'boolean', 'text', 'nu
 // Who drives the session's turn. Absent, and anything unknown, is the person: a wrong purple
 // edge is worse than none.
 export const readDriver = tolerant(['person', 'agent'], 'person');
+// Who sent activity.userMessage (#489). Absent is the person, as from a host before the field;
+// a value this client doesn't know is still one the host says the person didn't type, so it is
+// never drawn as theirs.
+export const readUserMessageFrom = (v) => (typeof v !== 'string' || v === '' ? 'person' : tolerant(['person', 'schedule', 'agent', 'other'], 'other')(v));
 // An outcome from a newer host is unconfirmed: never delivered, and never a reason to
 // answer again.
 export const readOutcome = tolerant(Outcomes, 'unconfirmed');
@@ -205,6 +209,10 @@ export function readSession(raw) {
       currentTool: readTool(a.currentTool),
       history: Array.isArray(a.history) ? a.history.map(readTool).filter(Boolean) : null,
       userMessage: str(a.userMessage),
+      // Who sent it (person, schedule, agent or other), and a short label of the host's, such as
+      // a schedule's number: an agent's text, shown only through prompt-origin.js (#489).
+      userMessageFrom: readUserMessageFrom(a.userMessageFrom),
+      userMessageLabel: str(a.userMessageLabel),
       turnCount: num(a.turnCount),
       compactions: num(a.compactions),
       background: readBackground(a.background),

@@ -1,0 +1,141 @@
+// A prompt the person didn't type (#489, ui.md §6.4): a schedule's, another agent's, or one the
+// host knows only as not the person's (activity.userMessageFrom). It is never drawn as the
+// person's bubble, but as a line of its own in agent colour, collapsed; the person's own prompt,
+// and every prompt from a host that doesn't send the field, is unchanged. No DOM here, so the
+// rules are tested once (test/unit/prompt-origin.test.mjs); the app's PromptOrigin follows them.
+import { DOTS, aloud, cleanLabel, quoted } from './attribution.js';
+import { reveal } from './hidden-text.js';
+
+// The protocol's cap on userMessageLabel (v1-sessions.md), held here too: an agent's text, from
+// a host that might not.
+export const LABEL_MAX_BYTES = 64;
+
+const encoder = new TextEncoder();
+const bytes = (s) => encoder.encode(s).length;
+const segmenter = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+const graphemes = (s) => (segmenter ? Array.from(segmenter.segment(s), (g) => g.segment) : Array.from(s));
+
+// An agent's short text, drawn as a fact on a label line: nothing hidden or steering, on one
+// line, and no middle dot of its own, which would add a fact ("4 · same as last time"); cut to
+// max UTF-8 bytes at a whole grapheme, the ellipsis included.
+export function promptFact(text, max = LABEL_MAX_BYTES) {
+  const clean = cleanLabel(text).replace(DOTS, '-');
+  if (bytes(clean) <= max) { return clean; }
+  let out = '';
+  for (const g of graphemes(clean)) {
+    if (bytes(`${out}${g}\u2026`) > max) { break; }
+    out += g;
+  }
+  return `${out.trimEnd()}\u2026`;
+}
+
+// A schedule's label as drawn: "#4" for a number, and anything else in quotes, so no label of an
+// agent's reads as words of the line's own ("Scheduled prompt · “Main agent”"), whatever letters
+// it draws them with.
+function scheduleName(label) {
+  if (!label) { return null; }
+  return /^\d+$/.test(label) ? `#${label}` : quoted(label);
+}
+
+// Who sent the session's latest prompt, when not the person, or null for the person's own (and
+// for no prompt). repeat: the schedule sent the same text last time (PromptMemory).
+//   from: 'schedule', 'agent' or 'other';
+//   icon: 'clock' (a schedule) or 'driven' (the driven-badge diamond);
+//   facts: the label line's words, in agent colour, joined with " · " only to be drawn;
+//   by: secondary text after them (the agent driving, when the host knows), or null;
+//   spoken: what the label reads as aloud, before the disclosure's words;
+//   preview: the prompt on one line, for the two-line preview; text: all of it, for Show prompt.
+// Every word an agent chose has gone through promptFact or reveal: no hidden or bidi character
+// is drawn as nothing, and no label can read as the person's or the main agent's.
+export function promptOrigin(session, { repeat = false } = {}) {
+  const a = session?.activity ?? {};
+  const from = a.userMessageFrom ?? 'person';
+  if (from === 'person' || !a.userMessage) { return null; }
+  const text = reveal(a.userMessage);
+  const preview = text.replace(/\s+/gu, ' ').trim();
+  if (from === 'schedule') {
+    const label = promptFact(a.userMessageLabel);
+    const name = scheduleName(label);
+    return {
+      from, icon: 'clock', by: null, repeat, text, preview,
+      facts: ['Scheduled prompt', name, repeat ? 'same as last time' : null].filter(Boolean),
+      spoken: aloud(name ? `Scheduled prompt ${name.replace(/^#/, '')}` : 'Scheduled prompt'),
+    };
+  }
+  const by = from === 'agent' && session.driver === 'agent' && session.driverPrincipal ? promptFact(session.driverPrincipal, 128) || null : null;
+  return from === 'agent'
+    ? { from, icon: 'driven', by, repeat: false, text, preview, facts: ['Sent by an agent'], spoken: 'Prompt sent by an agent' }
+    : { from: 'other', icon: 'driven', by: null, repeat: false, text, preview, facts: ['Automatic prompt'], spoken: 'Automatic prompt' };
+}
+
+// The disclosure's name (ui.md §9): whose prompt, then the words on it, "Scheduled prompt 4, Show
+// prompt", and aria-expanded says collapsed or expanded after it. The words shown stay in the name
+// (WCAG 2.5.3, label in name), so speech input can say "Show prompt", and the state is said once.
+export const disclosureName = (origin, open) => `${origin.spoken}, ${open ? 'Hide prompt' : 'Show prompt'}`;
+
+// A finished turn count (v1-sessions.md turnCount) read only while the session is idle, where it is
+// every prompt sent. While a turn runs it can be one less or not (a turn no prompt started, such as
+// Claude's for a delegate reporting back, takes none off), and so can't say a prompt was sent.
+function idleTurns(s) {
+  const n = s?.activity?.turnCount;
+  return s?.status === 'idle' && Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+// What a session's view remembers of its prompts, to fold a schedule's repeats and date them.
+// A session carries only its latest prompt, so "the same as last time" is what this view saw.
+// A new prompt is one whose words or sender changed, or, with the same words, a finished turn more
+// than this view has seen idle and can put down to the prompts it knows: a schedule sending the
+// same text again shows once its turn is done, since a turn of the same prompt (an agent's reply to
+// a delegate reporting back) looks the same while it runs. It repeats when its schedule's previous
+// prompt, seen here, had the same text. Seen for the first time, nothing is folded: a wrong "same
+// as last time" would hide a prompt that changed. Its age is when its turn began (statusSince, seen
+// while it ran); a prompt first seen after its turn has no age to show.
+export class PromptMemory {
+  #current = null;
+  // The most turns seen finished, while idle; the prompts seen arrive whose turns it doesn't hold
+  // yet; and when the latest turn seen running began.
+  #idle = null;
+  #owed = 0;
+  #ran = null;
+  #bySchedule = new Map();
+
+  // { repeat, at, fresh } for the session's latest prompt; fresh: it is a new one since the last.
+  observe(s) {
+    const a = s?.activity ?? {};
+    const from = a.userMessageFrom ?? 'person';
+    const text = a.userMessage ?? null;
+    const key = text === null ? null : `${from}\n${a.userMessageLabel ?? ''}\n${text}`;
+    const running = s?.status === 'working' || s?.status === 'waiting';
+    if (running) { this.#ran = s.statusSince ?? null; }
+    const turns = idleTurns(s);
+    // More than ever seen idle here: a host can say idle a moment before it counts the turn done.
+    let more = 0;
+    if (turns !== null) {
+      if (this.#idle === null) { this.#owed = 0; } else { more = Math.max(0, turns - this.#idle); }
+      this.#idle = Math.max(this.#idle ?? -1, turns);
+    }
+    const cur = this.#current;
+    let at;
+    if (!cur || cur.key !== key) {
+      // New words: a turn it starts is still to be counted, or is among those just counted.
+      if (running) { this.#owed += 1; } else { more = Math.max(0, more - 1); }
+      this.#owed = Math.max(0, this.#owed - more);
+      at = running ? s.statusSince ?? null : null;
+    } else {
+      const unexplained = more - this.#owed;
+      this.#owed = Math.max(0, this.#owed - more);
+      if (unexplained <= 0) { return { repeat: cur.repeat, at: cur.at, fresh: false }; }
+      // The same words sent again, its turn over now: dated by the turn seen running before.
+      at = this.#ran;
+      this.#ran = null;
+    }
+    let repeat = false;
+    if (from === 'schedule' && text !== null) {
+      const label = a.userMessageLabel ?? '';
+      repeat = this.#bySchedule.get(label) === text;
+      this.#bySchedule.set(label, text);
+    }
+    this.#current = { key, repeat, at };
+    return { repeat, at, fresh: cur !== null };
+  }
+}

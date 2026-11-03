@@ -802,6 +802,37 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
 .user-message { justify-self: end; max-width: 85%; min-width: 0; }
 .bubble { padding: var(--ab-space-2) var(--ab-space-3); background: var(--ab-card); border: 1px solid var(--ab-stroke2); border-radius: var(--ab-radius-card); }
 .bubble .plain { margin: 0; }
+/* A prompt the person didn't type (#489, §6.4): never a bubble, and never at the right, which is
+   the person's. At the column's start and across it: a label line in agent colour (a clock or the
+   driven diamond, then its facts, then who sent it and its age in meta style), two lines of the
+   prompt in secondary text, and Show prompt; open, all of it in reading style inside a thin agent
+   rule on the leading edge, not a filled card. */
+.prompt-origin { min-width: 0; }
+.prompt-label { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--ab-space-2); margin: 0; font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums; }
+.prompt-icon { flex: none; align-self: center; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--ab-agent); forced-color-adjust: none; }
+.driven-diamond { --ab-glyph-knockout: transparent; overflow: visible; }
+.prompt-facts { min-width: 0; color: var(--ab-agent-text); overflow-wrap: anywhere; }
+.prompt-by { min-width: 0; overflow-wrap: anywhere; }
+.prompt-preview {
+  margin: var(--ab-space-1) 0 0; color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+}
+.prompt-origin[data-open] .prompt-preview { display: none; }
+.prompt-toggle {
+  display: inline-flex; align-items: center; gap: var(--ab-space-1); min-height: 32px; margin-top: var(--ab-space-1); padding: var(--ab-space-1) 0;
+  border: 0; background: none; color: var(--ab-text); font: inherit; font-size: var(--type-meta); line-height: var(--type-meta-line); cursor: pointer;
+}
+@media (pointer: coarse) { .prompt-toggle { min-height: var(--tap); } }
+/* Disclosure (ui.md §5.3): the chevron turns, and what opens settles in a nudge down while its space
+   opens at once; closing is at once. The tokens are 0 under reduced motion, so it is instant. */
+.prompt-chevron { color: var(--ab-text2); transition: transform var(--ab-motion-disclosure-exit-duration) var(--ab-motion-disclosure-exit-ease); }
+.prompt-origin[data-open] .prompt-chevron { transform: rotate(90deg); transition-duration: var(--ab-motion-disclosure-duration); transition-timing-function: var(--ab-motion-disclosure-ease); }
+.prompt-full {
+  margin-top: var(--ab-space-2); padding-inline-start: var(--ab-space-3); border-inline-start: 2px solid var(--ab-agent);
+  animation: prompt-settle var(--ab-motion-disclosure-duration) var(--ab-motion-disclosure-ease);
+}
+.prompt-full .plain { margin: 0; }
+@keyframes prompt-settle { from { opacity: 0; transform: translateY(calc(-1 * var(--ab-motion-disclosure-distance))); } }
 .agent-block { min-width: 0; }
 .speaker { display: flex; align-items: baseline; gap: var(--ab-space-2); margin: 0 0 var(--ab-space-2); font-size: var(--type-meta); line-height: var(--type-meta-line); color: var(--ab-text2); font-variant-numeric: tabular-nums; }
 .speaker-name { color: var(--ab-text); font-weight: 600; }

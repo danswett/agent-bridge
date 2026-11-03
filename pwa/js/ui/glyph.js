@@ -72,6 +72,24 @@ export function setGlyph(svg, name, { size = 16, label = null, driven = false } 
 
 export const ICON_SIZES = Object.freeze([16, 20, 22, 24]);
 
+// The driven-badge diamond on its own (ui.md §2.1), for a line an agent's prompt heads (#489):
+// the glyph's 16 grid cut down to the diamond, so it draws at the size given and is centred.
+// Decorative: the words beside it say who sent the prompt.
+export function drivenBadge(size = 12) {
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '9.8 9.8 7 7');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('class', 'driven-diamond');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const u = use('glyph-driven-badge');
+  u.setAttribute('width', '16');
+  u.setAttribute('height', '16');
+  svg.append(u);
+  return svg;
+}
+
 // An icon from design/icons, at 16 or 20 on a desktop and 22 or 24 on a phone, its stroke
 // scaled to look the same weight at each (design/README.md). Decorative: the control it sits
 // in carries the name. With no size, the size and stroke come from app.css (cls).

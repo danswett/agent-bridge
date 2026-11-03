@@ -63,6 +63,17 @@ test('sub-agents are read tolerantly: unknown kinds are tasks, unknown statuses 
   assert.deepEqual([none.subagents, none.subagentsMore, none.waitingOn, none.question.agent], [null, 0, null, null]);
 });
 
+test('a prompt is the person\'s when the host doesn\'t say who sent it, and a sender this client doesn\'t know is still not theirs', () => {
+  const from = (v) => readSession({ id: 'x', activity: { userMessage: 'hi', userMessageFrom: v, userMessageLabel: '4' } }).activity.userMessageFrom;
+  // An older host sends no userMessageFrom at all (#489).
+  assert.equal(readSession({ id: 'x', activity: { userMessage: 'hi' } }).activity.userMessageFrom, 'person');
+  assert.deepEqual([from('person'), from('schedule'), from('agent'), from('other')], ['person', 'schedule', 'agent', 'other']);
+  assert.deepEqual([from(undefined), from(null), from(''), from(4)], ['person', 'person', 'person', 'person']);
+  assert.equal(from('cron'), 'other');
+  assert.equal(readSession({ id: 'x', activity: { userMessageLabel: 4 } }).activity.userMessageLabel, null);
+  assert.equal(readSession({ id: 'x', activity: { userMessageLabel: '4' } }).activity.userMessageLabel, '4');
+});
+
 test('a session is the person\'s unless the host says an agent drives it, and only then has a principal', () => {
   // An older host sends no driver at all.
   assert.deepEqual([readSession({ id: 'x' }).driver, readSession({ id: 'x' }).driverPrincipal], ['person', null]);

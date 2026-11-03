@@ -62,7 +62,7 @@ const BREAKS = /[\t\n\v\f\r\u0085\u2028\u2029]/gu;
 const HIDDEN = /[\p{Cf}\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Bidi_Control}\p{Default_Ignorable_Code_Point}]/gu;
 // U+00B7 and what looks like it or normalises to it: the fact separator, real or forged. By code
 // point (the u flag), since U+10101 is outside the BMP. The app's DelegateLabel.Dots (#303).
-const DOTS = /[\u00b7\u0387\u1427\u16eb\u2022\u2027\u2219\u22c5\u2e31\u2e33\u30fb\u318d\ua78f\uff65\u{10101}]/gu;
+export const DOTS = /[\u00b7\u0387\u1427\u16eb\u2022\u2027\u2219\u22c5\u2e31\u2e33\u30fb\u318d\ua78f\uff65\u{10101}]/gu;
 // Inside Delegate “…”, a quote of the name's own could close the quotes and carry on as other
 // words: everything Unicode files as an opening or closing quote (Pi, Pf) or marks
 // Quotation_Mark, and what is drawn like one: primes, the Hebrew geresh and gershayim,
@@ -76,6 +76,9 @@ const QUOTES = new RegExp(QUOTE, 'gu');
 const COMMAS = /[\u002c\u055d\u060c\u066b\u07f8\u1363\u1802\u1808\u201a\u2e41\u2e4c\u3001\ua4fe\ua60d\ua6f5\ufe10\ufe11\ufe50\ufe51\uff0c\uff64]/gu;
 const OPENING = 'Delegate \u201c';
 const CLOSING = '\u201d';
+
+// Text in curly quotes that none of its own can close: each made a plain apostrophe.
+export const quoted = (text) => `\u201c${String(text ?? '').replace(QUOTES, "'")}${CLOSING}`;
 
 // Text an agent wrote, safe to put in a label: nothing hidden or steering, on one line.
 export function cleanLabel(text) {
