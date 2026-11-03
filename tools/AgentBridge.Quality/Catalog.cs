@@ -40,7 +40,7 @@ sealed class Catalog
 
     static readonly string[] Kinds = ["unit", "component", "process", "integration", "e2e", "live", "ui", "perf", "security", "a11y", "static", "packaging"];
     static readonly string[] Selects = ["affected", "always"];
-    static readonly string[] PlatformNames = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "macos-arm64", "ios-sim", "ios-device", "browser"];
+    internal static readonly string[] PlatformNames = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "macos-arm64", "ios-sim", "ios-device", "browser"];
     static readonly string[] Runners = ["local", "hosted", "lab", "staging", "device"];
     static readonly string[] Statuses = ["exists", "partial", "planned"];
     // A person runs these from the command's instructions, so no workflow job runs them.

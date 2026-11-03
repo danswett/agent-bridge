@@ -54,12 +54,8 @@ static class Program
                     if (schema.Count > 0)
                         throw new FormatException("quality/catalog.yml breaks its schema; run check for the list. First: " + schema[0].Message);
                     var ring = ParseRing(options.GetValueOrDefault("ring"));
-                    var platform = options.GetValueOrDefault("platform") switch
-                    {
-                        null or "any" => null,
-                        "this" => Selector.ThisPlatform(),
-                        var p => p,
-                    };
+                    var platform = ParsePlatform(options.GetValueOrDefault("platform"));
+
                     var named = List(options.GetValueOrDefault("suite"));
                     var baseRef = options.GetValueOrDefault("base") ?? "origin/main";
                     var head = options.GetValueOrDefault("head");
@@ -127,6 +123,15 @@ static class Program
         return options;
     }
 
+    // A misspelled platform would match no suite, and every one would be skipped as if that were
+    // the plan.
+    internal static string? ParsePlatform(string? value) => value switch
+    {
+        null or "any" => null,
+        "this" => Selector.ThisPlatform(),
+        _ when Catalog.PlatformNames.Contains(value, StringComparer.Ordinal) => value,
+        _ => throw new ArgumentException($"--platform {value} is not a platform: use any, this, or one of {string.Join(", ", Catalog.PlatformNames)}."),
+    };
     // Out of range would select nothing at all, and look like a passing plan.
     internal static int ParseRing(string? value)
     {

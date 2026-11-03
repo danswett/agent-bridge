@@ -198,6 +198,14 @@ public class SelectorTests
         Assert.Throws<ArgumentException>(() => Program.ParseRing(ring));
 
     [Fact]
+    public void An_unknown_platform_is_refused_rather_than_skipping_every_suite()
+    {
+        Assert.Throws<ArgumentException>(() => Program.ParsePlatform("windows-x64"));
+        Assert.Equal("linux-arm64", Program.ParsePlatform("linux-arm64"));
+        Assert.Null(Program.ParsePlatform("any"));
+    }
+
+    [Fact]
     public void Deleting_a_projects_csproj_still_reaches_the_tests_that_reference_it()
     {
         // src/HostCore's .csproj is gone from disk, but Host and HomeAssistant still reference it.
