@@ -35,6 +35,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -89,7 +91,7 @@ jobs:
         run: |
           docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
           docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
-          for i in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          for _ in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
           curl -fsS http://127.0.0.1:8080/readyz
   ha-integration:
@@ -105,6 +107,8 @@ jobs:
       MOSQUITTO_IMAGE: eclipse-mosquitto:2.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -125,6 +129,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -182,6 +188,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -306,6 +314,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -333,6 +343,8 @@ jobs:
         working-directory: spikes/s2-noise-interop
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -359,6 +371,8 @@ jobs:
         working-directory: spikes/s4-relay
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -383,6 +397,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -400,6 +416,8 @@ jobs:
         working-directory: pwa
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -413,10 +431,19 @@ jobs:
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
           grep -q "connect-src 'self' https://relay.example wss://relay.example;" "$RUNNER_TEMP/site/index.html"
-          ! node tools/build-site.mjs --out "$RUNNER_TEMP/bad" --relay "https://relay.example/'; script-src *"
+          # Each refusal is an explicit if: bash -e ignores a command negated with `!`, so this step
+          # used to pass even when the build accepted the bad relay (#360). And it must refuse for
+          # that reason: a build that crashed on something else would have passed just the same.
+          if node tools/build-site.mjs --out "$RUNNER_TEMP/bad" --relay "https://relay.example/'; script-src *" 2> "$RUNNER_TEMP/bad.err"; then
+            echo "::error::build-site.mjs accepted a relay that breaks out of the CSP"; exit 1
+          fi
+          grep -q -- '--relay must be an origin' "$RUNNER_TEMP/bad.err" || { cat "$RUNNER_TEMP/bad.err"; echo "::error::build-site.mjs failed, but not by refusing the relay"; exit 1; }
           node tools/build-site.mjs --out "$RUNNER_TEMP/site-blobs" --relay https://relay.example --blob-origin https://abblobs.blob.core.windows.net
           grep -q "connect-src 'self' https://relay.example wss://relay.example https://abblobs.blob.core.windows.net;" "$RUNNER_TEMP/site-blobs/index.html"
-          ! node tools/build-site.mjs --out "$RUNNER_TEMP/bad-blobs" --relay https://relay.example --blob-origin https://evil.example
+          if node tools/build-site.mjs --out "$RUNNER_TEMP/bad-blobs" --relay https://relay.example --blob-origin https://evil.example 2> "$RUNNER_TEMP/bad-blobs.err"; then
+            echo "::error::build-site.mjs accepted a blob origin that is not an Azure blob store"; exit 1
+          fi
+          grep -q -- '--blob-origin must be an origin' "$RUNNER_TEMP/bad-blobs.err" || { cat "$RUNNER_TEMP/bad-blobs.err"; echo "::error::build-site.mjs failed, but not by refusing the blob origin"; exit 1; }
       - run: npx playwright install --with-deps chromium webkit
       - run: npx playwright test
       - uses: actions/upload-artifact@v4
