@@ -6,6 +6,9 @@ import { sleep } from './bytes.js';
 const seconds = (value, max) => Number.isInteger(value) && value >= 1 && value <= max;
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 
+const validAccount = account => nonempty(account?.token) && nonempty(account.accountId) && nonempty(account.login);
+const invalidAccount = () => new Error('The relay returned incomplete sign-in information. Start sign-in again.');
+
 export async function startDeviceFlow(base) {
   const r = await fetch(`${base}/v1/auth/device`, { method: 'POST' });
   if (!r.ok) { throw new Error(`sign-in is unavailable (${r.status})`); }
@@ -41,7 +44,8 @@ export async function startDeviceFlow(base) {
           interval = Math.max(interval, j.interval ?? interval);
           continue;
         }
-        if (!t.ok) { throw new Error(`sign-in failed: ${j.error ?? t.status}`); }
+        if (t.status !== 200) { throw new Error(`sign-in failed (${t.status}); start sign-in again`); }
+        if (!validAccount(j)) { throw invalidAccount(); }
         return j;
       }
       throw new Error('the code expired; sign in again');
@@ -56,11 +60,14 @@ export const accountStore = {
   load(storage = localStorage) {
     try {
       const a = JSON.parse(storage.getItem(ACCOUNT) ?? 'null');
-      return a && typeof a.token === 'string' ? a : null;
+      return validAccount(a) ? a : null;
     } catch { return null; }
   },
   // The relay's token as issued. The product will keep a short-lived token and refresh it;
   // that needs relay support that does not exist yet.
-  save(account, storage = localStorage) { storage.setItem(ACCOUNT, JSON.stringify(account)); },
+  save(account, storage = localStorage) {
+    if (!validAccount(account)) { throw invalidAccount(); }
+    storage.setItem(ACCOUNT, JSON.stringify(account));
+  },
   clear(storage = localStorage) { storage.removeItem(ACCOUNT); },
 };
