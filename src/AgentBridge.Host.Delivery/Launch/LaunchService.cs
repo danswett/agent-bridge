@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery.Copilot;
+using AgentBridge.Host.Delivery.Mac;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 
@@ -785,6 +786,16 @@ public sealed partial class LaunchService : ISessionLauncher
 
             Started started;
             try { started = starter.Start(spec); }
+            catch (ManagedTmuxStartUnconfirmedException e)
+            {
+                // tmux may have started the agent even though the reply or identity check
+                // failed. Its staged paths may already be in use, and a worktree must not
+                // be reclaimed while an unregistered process could still be working there.
+                if (claim is not null) { attachments!.Consume(claim); handed.Value = true; }
+                reservation = null;
+                log($"launch {Short(key)}: {plan.Launcher.Label} start was not confirmed; any worktree reservation is retained");
+                return new LaunchResult(LaunchOutcome.Unconfirmed, $"{plan.Launcher.Label} may have started: {e.Message}; check at the machine before starting another session") { Launched = launched };
+            }
             catch (Exception e)
             {
                 log($"launch {Short(key)}: {plan.Launcher.Label} could not be started: {e.Message}");
