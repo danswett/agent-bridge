@@ -268,7 +268,9 @@ refresh and locking, and runs no model turn.
   usage the probe read just before goes out as the reading, carrying that error (a later probe's
   too, should it find the same). An answer that comes after the 60 s the host waits to report
   (below) still counts: a sign-out found then is a sign-out, and a reading found then is kept. No probe follows for 2 hours or
-  until a Codex session next runs here. `codex login status` cannot tell: Codex's access token lives 240 hours,
+  until a Codex session next runs here. A session running here ends the sign-out: the reading
+  goes out again without its error, or, with no reading at all, the host's Codex entry is
+  withdrawn until the next reading. `codex login status` cannot tell: Codex's access token lives 240 hours,
   and a lost refresh token only shows at the next refresh. A slow sign-in service
   ("...cloud config: request timed out", "workspace routing discovery timed out", "...application
   network policy is unavailable") is a failure that backs off, not a sign-out, even when only the

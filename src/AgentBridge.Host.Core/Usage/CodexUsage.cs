@@ -43,6 +43,10 @@ public sealed class CodexUsageCollector(UsageOptions options, TimeProvider? time
             // has signed in, or it will say so itself.
             if (sessionOpen && !wasOpen && signedOutAt is not null)
             {
+                // The sign-out published (a failure of its own when there was no reading) is no
+                // longer so: withdrawn unless something newer replaces it at the next look (#238
+                // review). Without this, a CollectAsync with nothing to say left it standing.
+                withdrawn = true;
                 signedOutAt = null;
                 signedOutReading = null;
                 pace.Release();

@@ -1320,6 +1320,37 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Codex_session_opening_after_a_sign_out_with_no_reading_withdraws_the_published_sign_out()
+    {
+        CodexUsed();
+        var later = new TaskCompletionSource();
+        AppServer(s => s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized"));
+        var codex = new CodexUsageCollector(Options(), time, Probes(), Log);
+        var sessions = new FakeSessions();
+        var monitor = new UsageMonitor([codex], sessions, Options(), time, log: Log);
+        await monitor.PassAsync();
+        await AdvanceUntil(time, () => codex.Running.IsCompleted, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(2));
+        await monitor.PassAsync();
+        Assert.Equal(CodexUsageProbe.SignedOutError, Assert.Single(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex).Error);
+
+        // A Codex session runs here: signed in again, or it will say so itself. No transcript has a
+        // reading, and the probe its arrival allows again is still under way at the next look.
+        AppServer(s =>
+        {
+            s.Before["account/rateLimits/read"] = later.Task;
+            s.Answers["account/rateLimits/read"] = _ => FakeAppServer.Error("failed to fetch codex rate limits: 401 Unauthorized");
+        });
+        sessions.Open(AgentKind.Codex);
+        time.Advance(TimeSpan.FromMinutes(16));
+        var version = monitor.Current.Version;
+        await monitor.PassAsync();
+
+        Assert.DoesNotContain(monitor.Current.Report.Agents, a => a.Agent == AgentKind.Codex);
+        Assert.True(monitor.Current.Version > version);
+        later.SetResult();
+    }
+
+    [Fact]
     public async Task A_switch_to_an_api_key_login_drops_the_last_probe_reading_for_the_transcripts()
     {
         CodexUsed();
