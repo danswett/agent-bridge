@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Collections.Concurrent;
 
 namespace AgentBridge.HomeAssistant;
 
@@ -139,13 +138,47 @@ internal sealed class HaPublicationWriter(IHomeAssistant ha, string dashboard, H
 {
     // Targets come only from locally configured endpoints. This process-local
     // transaction gate is shared across client/profile instances, not a writer lease.
-    static readonly ConcurrentDictionary<string, SemaphoreSlim> transactions = new(StringComparer.Ordinal);
-    sealed class Transaction(SemaphoreSlim gate) : IDisposable { public void Dispose() => gate.Release(); }
+    static readonly Lock transactionSync = new();
+    static readonly Dictionary<string, TransactionEntry> transactions = new(StringComparer.Ordinal);
+    sealed class TransactionEntry
+    {
+        public readonly SemaphoreSlim Gate = new(1, 1);
+        public int References;
+    }
+    sealed class Transaction(string key, TransactionEntry entry) : IDisposable
+    {
+        int disposed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0) { return; }
+            entry.Gate.Release();
+            ReleaseEntry(key, entry);
+        }
+    }
+    static void ReleaseEntry(string key, TransactionEntry entry)
+    {
+        lock (transactionSync)
+        {
+            if (--entry.References != 0) { return; }
+            transactions.Remove(key);
+            entry.Gate.Dispose();
+        }
+    }
     async Task<IDisposable> BeginAsync(CancellationToken ct)
     {
-        var gate = transactions.GetOrAdd(receipts.PublicationKey, _ => new(1, 1));
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-        return new Transaction(gate);
+        var key = receipts.PublicationKey;
+        TransactionEntry entry;
+        lock (transactionSync)
+        {
+            if (!transactions.TryGetValue(key, out entry!)) { transactions.Add(key, entry = new()); }
+            entry.References++;
+        }
+        try
+        {
+            await entry.Gate.WaitAsync(ct).ConfigureAwait(false);
+            return new Transaction(key, entry);
+        }
+        catch { ReleaseEntry(key, entry); throw; }
     }
 
     public Task<HaPublicationObservation> ReadAsync(CancellationToken cancellationToken = default) =>

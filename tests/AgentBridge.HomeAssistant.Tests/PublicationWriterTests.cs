@@ -164,8 +164,10 @@ public sealed class PublicationWriterTests : IDisposable
             card = otherProfile.PublishCardAsync(Card("2.0.0"));
             Assert.False(card.IsCompleted);
             using var cancel = new CancellationTokenSource();
+            var canceled = otherProfile.PublishCardAsync(Card("3.0.0"), cancel.Token);
+            Assert.False(canceled.IsCompleted);
             cancel.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => otherProfile.PublishCardAsync(Card("3.0.0"), cancel.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
         }
         finally
         {
