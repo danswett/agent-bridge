@@ -1,8 +1,9 @@
 # Quality: the test harness, its rings and its plan
 
-*Proposed 2026-11-02, Pacific. Status: phase 0 under way, tracked in #357. Merged so far:
-test categories (#375), CodeQL, dependency review and workflow lint (#361), and coverage and
-timing (#363). §1 describes the starting point.*
+*Proposed 2026-11-02, Pacific. Status: phase 1 under way, tracked in #357. Merged so far:
+test categories (#375), CodeQL, dependency review and workflow lint (#361), coverage and
+timing (#363), the selector and `quality/run.ps1` (#362), and CI's plan, selected jobs and
+`quality-gate` (#436). §1 describes the starting point.*
 
 This folder tracks every test this repository runs, where and when each one runs, and what
 it costs. It also holds the plan for growing the tests into a harness we can repeat, from a
@@ -203,7 +204,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 `check` command is the completeness check in step 5.
 
 1. **What changed:** `git diff --name-only <merge-base>...HEAD`, plus uncommitted and untracked
-   files locally. CI checks out with the base fetched, not shallow.
+   files locally. In CI a pull request's checkout is its merge commit, so the change is
+   `HEAD^1..HEAD`: what merging adds to the base, even when the branch is behind.
 2. **.NET, derived from the code itself, not hand-kept:** map each changed file to the
    project that owns it. Walk the `ProjectReference` graph backwards to every test project
    that reaches it. A file a project links in from outside its folder (a shared fixture,
@@ -224,7 +226,7 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 3. **Everything else:** each suite's `triggers` globs in the catalog (`pwa/**`, `apple/**`,
    `infra/**`, `build/**` and so on).
 4. **Always:** the sentinels (`select: always` at that ring). Everything runs on
-   `global_triggers` (the solution, NuGet config, workflows, `quality/` itself). When every
+   `global_triggers` (the solution, NuGet config, workflows and their actions, `quality/` itself). When every
    file is in `no_test_paths`, only the catalog's `docs-links` suite runs; there's no hidden
    docs logic in the selector.
 5. **Fail safe:** a file that no rule claims runs the full ring. A ring-1 check fails if any
@@ -232,11 +234,28 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
 6. **Output:** JSON with the suites, the OS matrix and **why**, each suite naming the files
    that pulled it in. The PR summary shows that table, so a reviewer can see what didn't
    run and why.
-7. **GitHub mechanics:** one `plan` job runs the selector, and the test jobs take their
-   matrix from its output (`fromJSON`) and are skipped when not selected. A final
-   `quality-gate` job (`if: always()`) needs all of them and passes only if none failed. It's
-   the single required check, so skipped jobs never leave branch protection waiting.
-8. **Keeping the selector honest:** ring 2 runs everything on `main`. For every ring-2
+7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
+   `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`. It writes the "what runs
+   and why" table to the run's summary, and outputs:
+   - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
+     says which suites a job runs, and moving a suite moves its trigger. On a pull request a
+     job runs only when it's true; on `main` every job runs whatever the plan says;
+   - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
+     the build scripts, the relay container);
+   - `product`'s test projects, tested through a solution filter, still under
+     `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
+     `AgentBridge.slnx` as before. The whole solution is always built, since projects no
+     test references (the benchmarks) are compiled nowhere else on a pull request;
+   - `product`'s runners, from its selected suites' `platforms` (all three when the whole
+     ring runs).
+
+   A final `quality-gate` job (`if: always()`) needs all of them and fails if any failed or
+   was cancelled; skipped is fine. It's the check to make required, so skipped jobs never
+   leave branch protection waiting (§9: the owner decides when). `publish-gate` still needs
+   `product` and `app` to have succeeded, and on `main` they always run, so a selection miss
+   is caught before a release publishes.
+8. **Keeping the selector honest:** ring 2 runs everything on `main`, and each `main` run's
+   summary also says which jobs ring 1 chose for the same change. For every ring-2
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
@@ -355,8 +374,9 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 **Phase 1: the inner loop and the PR gate (weeks 2–3)**
 1. The selector (`tools/AgentBridge.Quality`) with its tests: graph walk, triggers, fail-safe, explain.
 2. `quality/run.ps1` for ring 0.
-3. `ci.yml` restructured: `plan`, then selected jobs, then `quality-gate`. Branch protection
-   moved to `quality-gate` alone, and the owner asked first.
+3. `ci.yml` restructured: `plan`, then selected jobs, then `quality-gate` (#436), with
+   `docs-links` (lychee, offline, advisory). Then branch protection moved to `quality-gate`
+   alone, once the owner agrees.
 4. The catalog completeness check, and diff coverage (advisory).
 5. axe in the PWA's Playwright specs, with keyboard-only and reduced-motion specs.
 6. actionlint and zizmor on workflows; PSRule on `infra/`.

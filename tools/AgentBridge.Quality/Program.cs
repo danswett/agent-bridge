@@ -153,6 +153,7 @@ static class Program
             selection.Files,
             selection.Unclaimed,
             Matrix = selection.Matrix,
+            Jobs = JobsOf(selection),
             Suites = selection.Suites.Select(s => new
             {
                 s.Suite.Id,
@@ -163,6 +164,7 @@ static class Program
                 s.Suite.Platforms,
                 s.Suite.Project,
                 s.Suite.Command,
+                s.Suite.Where,
                 // What run.ps1 runs: the command with this ring's test filter, if any.
                 RunCommand = RingCommand.For(s.Suite.Command, selection.Ring),
                 s.Suite.SecuritySensitive,
@@ -170,6 +172,31 @@ static class Program
             }),
             Skipped = selection.Skipped.Select(s => new { s.Suite.Id, s.Why }),
         }, Json);
+
+    /// <summary>
+    /// The workflow jobs the selected suites run in, by their where:, with the suites each one
+    /// runs: CI's plan job skips any job not listed (quality/README.md §4.7). Read from the
+    /// catalog, not kept in ci.yml as well, so moving a suite to another job moves its trigger with
+    /// it. A where naming a whole workflow ("ha-contract-drift.yml") is listed as job "*".
+    /// </summary>
+    internal static SortedDictionary<string, SortedDictionary<string, List<string>>> JobsOf(Selection selection)
+    {
+        var jobs = new SortedDictionary<string, SortedDictionary<string, List<string>>>(StringComparer.Ordinal);
+        foreach (var s in selection.Suites.Where(s => !string.IsNullOrWhiteSpace(s.Suite.Where)))
+            foreach (var (file, names) in Completeness.ParseWhere(s.Suite.Where!))
+            {
+                if (!jobs.TryGetValue(file, out var byJob))
+                    jobs[file] = byJob = new(StringComparer.Ordinal);
+                foreach (var job in names.Count == 0 ? ["*"] : names)
+                {
+                    if (!byJob.TryGetValue(job, out var ids))
+                        byJob[job] = ids = [];
+                    if (!ids.Contains(s.Suite.Id))
+                        ids.Add(s.Suite.Id);
+                }
+            }
+        return jobs;
+    }
 
     internal static void Explain(Selection selection, string source, TextWriter output)
     {

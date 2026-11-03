@@ -29,18 +29,72 @@ env:
   APP_RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge' }}
 
 jobs:
+  plan:
+    # What this run tests (quality/README.md §4): the selector reads quality/catalog.yml and the
+    # change, and each job below runs on a pull request only when a suite it runs is selected.
+    # A push to main is ring 2, which selects everything, so every job runs before a release
+    # publishes. First, the catalog must be complete, or the selection could be silently wrong.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      product: ${{ steps.select.outputs.product }}
+      ha-integration: ${{ steps.select.outputs.ha-integration }}
+      spikes: ${{ steps.select.outputs.spikes }}
+      app: ${{ steps.select.outputs.app }}
+      s2-noise-interop: ${{ steps.select.outputs.s2-noise-interop }}
+      s4-relay: ${{ steps.select.outputs.s4-relay }}
+      design: ${{ steps.select.outputs.design }}
+      pwa: ${{ steps.select.outputs.pwa }}
+      docs-links: ${{ steps.select.outputs.docs-links }}
+      suites: ${{ steps.select.outputs.suites }}
+      test-projects: ${{ steps.select.outputs.test-projects }}
+      whole-solution: ${{ steps.select.outputs.whole-solution }}
+      product-os: ${{ steps.select.outputs.product-os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          # A pull request's checkout is its merge commit, whose first parent is the base it merges
+          # into, so the change is HEAD^1..HEAD: what merging adds, even when the branch is behind.
+          # On main, HEAD^1 is the previous commit. Either way two commits are enough.
+          fetch-depth: 2
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the selector
+        run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
+      - name: The catalog is complete
+        run: dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll check
+      - name: What runs and why
+        id: select
+        shell: pwsh
+        env:
+          EVENT: ${{ github.event_name }}
+        # The jobs listed here are the ones gated below; plan.ps1 gives each a true or false output.
+        run: |
+          $ring = if ($env:EVENT -eq 'pull_request') { 1 } else { 2 }
+          ./quality/plan.ps1 -Ring $ring -Base HEAD^1 -Head HEAD -CompareRing1:($ring -gt 1) -Jobs product, ha-integration, spikes, app, s2-noise-interop, s4-relay, design, pwa, docs-links
+
   product:
     # The product itself (src/, tests/), separate from the spikes. Windows and Linux,
     # since nothing in it may depend on Windows, and Windows on Arm, which the Arm64 package
     # runs on: the injector's console calls and the hook are tried there natively (#222).
+    # On a pull request, only the selected test projects, on the systems their suites declare
+    # (quality/catalog.yml platforms), and only the shipped-binary checks that were selected.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.product == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, windows-11-arm]
+        os: ${{ fromJSON(needs.plan.outputs.product-os) }}
     runs-on: ${{ matrix.os }}
     # A clean run takes about five minutes. The Linux test step has hung in dotnet test for hours
     # (#129); this caps what a hang can cost.
     timeout-minutes: 30
+    env:
+      SUITES: ${{ needs.plan.outputs.suites }}
+      TEST_PROJECTS: ${{ needs.plan.outputs.test-projects }}
+      WHOLE_SOLUTION: ${{ needs.plan.outputs.whole-solution }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -48,10 +102,32 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+      - name: Choose what to test
+        # The whole solution when the whole ring runs (main, or a change to the solution, a
+        # workflow or quality/), as before. Otherwise a solution filter of the selected test
+        # projects. The AOT checks below run their test projects too; the catalog gives those
+        # suites their project, so it's here.
+        shell: pwsh
+        run: |
+          if ($env:WHOLE_SOLUTION -eq 'true') {
+            $target = 'AgentBridge.slnx'
+          } elseif (($tests = @($env:TEST_PROJECTS | ConvertFrom-Json)).Count -eq 0) {
+            $target = ''
+          } else {
+            # The catalog's check makes sure each folder holds exactly one project.
+            $projects = @($tests | ForEach-Object { "$_/" + (Get-ChildItem $_ -Filter *.csproj).Name })
+            $target = Join-Path $env:RUNNER_TEMP selected.slnf
+            @{ solution = @{ path = (Resolve-Path AgentBridge.slnx).Path; projects = $projects } } | ConvertTo-Json -Depth 3 | Set-Content $target
+            Write-Host "selected.slnf: $($projects -join ', ')"
+          }
+          "DOTNET_TARGET=$target" | Add-Content $env:GITHUB_ENV
       # dotnet-coverage and ReportGenerator, pinned in .config/dotnet-tools.json.
       - run: dotnet tool restore
+        if: env.DOTNET_TARGET != ''
       # Built apart from the tests so coverage is collected from the tests alone, not from MSBuild
-      # and the compiler too.
+      # and the compiler too. Always the whole solution, even when only some tests run: projects
+      # no test references (the benchmarks, perf-hook's driver) are compiled nowhere else on a
+      # pull request, and one broken there would first fail main's build.
       - run: dotnet build AgentBridge.slnx -c Release --nologo
         timeout-minutes: 10
       # --blame-hang: a test running five minutes is a hang (none takes one); its test host is dumped
@@ -61,21 +137,26 @@ jobs:
       # needs no package in the test projects. Coverage and the TRX timings are only reported
       # (quality/README.md §5): nothing here fails the run but the tests themselves.
       - name: dotnet test, with coverage and per-test times
-        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test AgentBridge.slnx -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
+        if: env.DOTNET_TARGET != ''
+        shell: pwsh
+        run: dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o TestResults/coverage.cobertura.xml "dotnet test $env:DOTNET_TARGET -c Release --no-build --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults --logger trx"
         timeout-minutes: 20
         env:
           DOTNET_COVERAGE_TELEMETRY_OPTOUT: '1'
       - name: Coverage and timing report
         # Also after a failure: the slowest tests are most useful then. A fault in the report
         # itself must not fail the build, since nothing is gated on coverage yet.
-        if: success() || failure()
+        if: (success() || failure()) && env.DOTNET_TARGET != ''
         continue-on-error: true
         shell: pwsh
+        # The matrix now comes from the plan's output, so it reaches the script as data, not code.
+        env:
+          MATRIX_OS: ${{ matrix.os }}
         run: |
           if (Test-Path TestResults/coverage.cobertura.xml) {
-            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge ${{ matrix.os }}"
+            dotnet tool run reportgenerator -reports:TestResults/coverage.cobertura.xml -targetdir:TestResults/coverage-report "-reporttypes:Cobertura;JsonSummary;Html" "-title:agent-bridge $env:MATRIX_OS"
           }
-          pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
+          pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title ".NET tests: $env:MATRIX_OS" >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -98,7 +179,7 @@ jobs:
           retention-days: 14
       - name: The NativeAOT injector types into a real console
         # The same integration tests again, against the worker as it ships.
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'injector-aot')
         shell: pwsh
         run: |
           $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
@@ -108,17 +189,17 @@ jobs:
           dotnet test tests/AgentBridge.Host.Delivery.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~InjectorIntegrationTests"
       - name: The shadow install leaves the previous one running when it fails
         # Against stand-ins for the scheduled tasks, dotnet and the host: nothing is registered.
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'build-scripts')
         shell: pwsh
         run: pwsh -NoProfile -File build/test-shadow-week.ps1
       - name: Publishing makes one pre-release per version and prunes only old pre-releases
         # Against stand-ins for gh, vpk and dotnet: nothing is uploaded or deleted.
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'build-scripts')
         shell: pwsh
         run: pwsh -NoProfile -File build/test-publish-prerelease.ps1
       - name: The NativeAOT hook replies and spools as an agent runs it
         # The hook every agent waits on, as it ships: NativeAOT, started fresh for each event.
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'hook-aot')
         shell: pwsh
         run: |
           $rid = if ($env:RUNNER_ARCH -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
@@ -128,8 +209,9 @@ jobs:
           dotnet test tests/AgentBridge.Hooks.Tests -c Release --no-build --nologo --filter "FullyQualifiedName~HookProcessTests" --logger "console;verbosity=normal"
       - name: Relay container builds and serves
         # Run as it ships: its own unprivileged user and a read-only file system. The first product
-        # image built but crashed at start, which only running it shows.
-        if: runner.os == 'Linux'
+        # image built but crashed at start, which only running it shows. container-scan scans the image
+        # this builds, so it needs this step too.
+        if: runner.os == 'Linux' && (contains(fromJSON(env.SUITES), 'relay-container') || contains(fromJSON(env.SUITES), 'container-scan'))
         run: |
           docker build -f src/AgentBridge.Relay/Dockerfile -t agent-bridge-relay .
           docker run -d --name relay --read-only --tmpfs /tmp -p 8080:8080 -e Relay__Version=ci agent-bridge-relay
@@ -143,11 +225,11 @@ jobs:
       # high or critical finding, fixed or not, when this was added (#433). To accept one for a
       # while, list it in .trivyignore with a reason and an exp: date.
       - name: Install Trivy
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && contains(fromJSON(env.SUITES), 'container-scan')
         uses: ./.github/actions/install-trivy
       - name: The relay image has no fixable high or critical vulnerability
         id: relay-scan
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && contains(fromJSON(env.SUITES), 'container-scan')
         run: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
       - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
         # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
@@ -198,6 +280,8 @@ jobs:
     # runner, started empty, onboarded for this run (tools/ha-ci/onboard.py) and thrown away with
     # it. The disposable Home Assistant every HA connector change is checked against
     # (docs/ha-connector.md, "Validation"); nothing here can reach any other.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.ha-integration == 'true'
     runs-on: ubuntu-latest
     env:
       # The Home Assistant release the connector is checked against. Keep it at, or close to,
@@ -225,6 +309,8 @@ jobs:
         if: failure()
         run: docker logs homeassistant 2>&1 | tail -n 300
   spikes:
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.spikes == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -272,6 +358,8 @@ jobs:
     # copy installed before Arm64 builds reads, under the artifact name the publish job always
     # took; Arm64 in `win-arm64` (build/app-channels.ps1), built and self-tested on Arm64.
     name: app (${{ matrix.runtime }})
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.app == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -394,8 +482,14 @@ jobs:
     # group, cancelling the older pending one when another arrives, so a slow build of an older
     # merge reaching the group could evict a newer one waiting there, then find itself superseded,
     # leaving the newest merge unpublished. Turned away here, before the group, it never gets there.
+    # product and app must each have run and passed. On main their if: lets every push through
+    # whatever the plan selected; if the plan itself failed they were skipped, and a skipped job's
+    # result is 'skipped', not 'success', so nothing publishes. Said outright, rather than left to
+    # the default success() an if: without a status function gets.
     needs: [product, app]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      && needs.product.result == 'success' && needs.app.result == 'success'
     runs-on: ubuntu-latest
     outputs:
       newest: ${{ steps.head.outputs.newest }}
@@ -515,6 +609,8 @@ jobs:
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in
     # Node, Chromium and WebKit (Safari's engine), and live over a WebSocket.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.s2-noise-interop == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -543,6 +639,8 @@ jobs:
   s4-relay:
     # The relay's security and routing checks against a fake GitHub, then the PWA in
     # Chromium and WebKit through the same relay, then the container build.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.s4-relay == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -572,6 +670,8 @@ jobs:
     # The design language (design/README.md): every client's generated copy matches design/,
     # so a token or SVG changed without regenerating fails here, and every theme meets the
     # contrast rules in design/tokens.json.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.design == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -588,6 +688,8 @@ jobs:
   pwa:
     # The product PWA: unit tests in Node, then Chromium and WebKit against the published
     # build (with its CSP) in demo mode and end to end through the dev stack's relay.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.pwa == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -667,3 +769,52 @@ jobs:
           name: pwa-test-results
           path: pwa/test-results
           retention-days: 7
+
+  docs-links:
+    # Relative links and their #anchors in every Markdown file resolve (quality/catalog.yml,
+    # docs-links), so renaming a doc or a heading can't strand the links to it. Offline: web links
+    # are not fetched, so a site being down never fails a run. Advisory for now: a broken link is
+    # a warning on the run, and the job stays green.
+    needs: plan
+    if: github.event_name != 'pull_request' || needs.plan.outputs.docs-links == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Links and anchors in Markdown resolve
+        id: lychee
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          lycheeVersion: v0.24.2
+          args: --offline --include-fragments --no-progress '**/*.md'
+          fail: false
+      - name: Broken links are warnings, for now
+        if: steps.lychee.outputs.exit_code != '0'
+        env:
+          EXIT_CODE: ${{ steps.lychee.outputs.exit_code }}
+        run: echo "::warning title=docs-links::lychee found broken links or anchors (exit $EXIT_CODE); the job summary lists them."
+
+  quality-gate:
+    # The one check that sums up this workflow (quality/README.md §4.7), and the one to make
+    # required: a job the plan skipped isn't selected, so a pull request never waits on it, but
+    # one that failed or was cancelled fails this. The plan itself is in needs, since when it
+    # fails every other job is skipped. publish-gate, publish, attest and relay-image-sarif are
+    # not: they deliver rather than check, and run only on main, where a superseded publish is
+    # cancelled by design.
+    needs: [plan, product, ha-integration, spikes, app, s2-noise-interop, s4-relay, design, pwa, docs-links]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job that ran passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [ -n "$bad" ]; then
+            echo "::error title=quality-gate::failed or cancelled: $bad"
+            exit 1
+          fi
