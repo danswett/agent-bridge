@@ -230,6 +230,25 @@ Selection survives a resize across breakpoints. #166 has the acceptance criteria
   bottom navigation gives way to it, and Back (the header's, or the platform's own) returns
   to the list.
 
+**Resizing (the Windows app, #297).** A divider between the list and the session, and between
+the session and the inspector, wherever both show. The widths above are the defaults; at two
+panes the app's list is 320 too, as long as the session keeps its narrowest.
+- **Limits** (`tokens.json` `layout.windows`): the list 264–480, so a row's two lines keep a
+  title and its facts (§6.1); the inspector 280–560, so Details keeps its label column and a
+  value beside it; and the session never under 440, about 50 characters of the Reading role
+  (§4.3) inside its padding, with the header's actions on its title's row.
+- **The window still decides how many panes show.** A pane's width never hides it: short of
+  room, the inspector gives way first, down to its narrowest, then the list, so the session
+  keeps its narrowest and nothing goes past the window's edge. At every breakpoint the narrowest
+  of each fit. The width kept is unchanged by this: the window widened again gets it back.
+- **Per device:** the widths are kept on the device, beside Your order (§6.1), across restarts,
+  and never sent to a host. One list width serves two and three panes.
+- **A divider** is a grip as tall as the page, with the resize cursor. It is clear at rest (the
+  panes' hairline is its line), a line in `stroke2` while pointed at, and in Bridge while dragged
+  or focused from the keyboard; each is a system colour in high contrast. Left and Right move a
+  focused divider 16 px, a screen reader sees a splitter whose value is its pane's width, and a
+  double-click puts its pane back to its default.
+- **The PWA** keeps its fixed widths for now.
 ### 5.3 Motion
 
 *Signed off by the owner on 2026-11-02 (#232). That includes three calls: platform

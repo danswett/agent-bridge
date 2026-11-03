@@ -224,6 +224,7 @@ static partial class SelfTest
             Check(settled && shown > hidden && hidden >= 0, $"a row's control listens while shown and lets go when hidden, however often the tabs change ({hidden} listeners hidden: {hiddenBy}; {shown} shown: {shownBy}; {Listeners(watched)} after five more changes: {ListenersBy(watched)})");
 
             await CheckPanes(window, main, Check, outFile);
+            await CheckDividers(window, main, Check, outFile);
             await CheckDelegates(window, main, Check, outFile);
 
             // Launch a session from the Launch page: it starts, its row appears, and Open goes to it.

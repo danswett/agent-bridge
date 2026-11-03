@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="AgentBridge.App.PaneDividerView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Width="{StaticResource AbLayoutDivider}"
+    HorizontalAlignment="Left"
+    IsTabStop="True"
+    UseSystemFocusVisuals="True">
+    <!-- A divider between two panes (docs/design/ui.md §5.2, #297): a grip as tall as the page, clear
+         until pointed at (a line in AbStroke2) or dragged or focused from the keyboard (one in Bridge).
+         The panes' own hairlines are the line at rest. Each line is its own element so its
+         ThemeResource follows a theme change, which a visual state's setter would not until entered
+         again. -->
+    <Grid Background="Transparent">
+        <Rectangle
+            x:Name="HoverLine"
+            Width="{StaticResource AbLayoutDividerLine}"
+            HorizontalAlignment="Left"
+            Fill="{ThemeResource AbStroke2}"
+            Visibility="Collapsed" />
+        <Rectangle
+            x:Name="ActiveLine"
+            Width="{StaticResource AbLayoutDividerLine}"
+            HorizontalAlignment="Left"
+            Fill="{ThemeResource AbBridge}"
+            Visibility="Collapsed" />
+    </Grid>
+</UserControl>

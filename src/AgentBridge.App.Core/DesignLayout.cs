@@ -14,6 +14,12 @@ public static class DesignLayout
     public const double MinHeight = 600;
     public const double List = 320;
     public const double ListMin = 264;
+    public const double ListMax = 480;
     public const double Inspector = 336;
+    public const double InspectorMin = 280;
+    public const double InspectorMax = 560;
+    public const double SessionMin = 440;
+    public const double Divider = 8;
+    public const double DividerLine = 3;
     public const double ReadingMax = 712;
 }

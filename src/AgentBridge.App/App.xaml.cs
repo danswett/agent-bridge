@@ -161,6 +161,8 @@ public partial class App : Application
         var launch = new LaunchViewModel(main, ui);
         // Where the window was left, kept beside the settings (#180).
         window = new MainWindow(main, launch, options.SelfTest is not null, Path.Combine(appData, $"{options.Profile}-window.json"));
+        // The panes' widths as their dividers were left, beside them too (#297); the self-test's are its own.
+        window.Sessions.Widths = new PaneWidths(options.SelfTest is null ? Path.Combine(appData, $"{options.Profile}-panes.json") : null);
         window.CloseRequested += OnWindowClosing;
         connection.Start();
 
