@@ -317,7 +317,11 @@ public sealed partial class HaConnector
         }
         // Each said before the publish is marked used: if saying it fails, the next pass reads the
         // same publish again rather than finding it used with nothing done.
-        if (usable) { p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow()); }
+        if (usable)
+        {
+            p.ArmDriver(attributes && Str(a, "driver") == "agent" ? "agent" : "human", time.GetUtcNow());
+            p.Drive.Expect(text);
+        }
         if (!usable || images.Count + files.Count != requested)
         {
             p.DriverPendingAt = null;
@@ -427,6 +431,7 @@ public sealed partial class HaConnector
         // A press that waited for its words is armed again now: something else (an agent's
         // publish, say) may have armed the next turn meanwhile, and these words are the press's.
         if (!first) { p.ArmDriver(DriverOf(press.Snapshot?.UserId), now, PrincipalOf(press.Snapshot?.UserId)); }
+        if (text is { } words) { p.Drive.Expect(words); }
         await TransientAsync(p, "Sending...", [], ct);
         p.Reply.HandledPress = press.Value;
         p.Reply.PendingPress = null;

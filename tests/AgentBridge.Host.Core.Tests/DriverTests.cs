@@ -251,6 +251,90 @@ public class DriverTests
         Assert.Null(source.Get(Id)!.Activity.UserMessageFrom);
     }
 
+    // A bridge reply that comes while a notice's turn is running, uncounted, brings no new count:
+    // known only by its new prompt, it is still the arm's.
+    [Fact]
+    public async Task A_reply_that_comes_while_a_notice_is_being_handled_is_still_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3),
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i4", source = "system" }, 4),
+            Copilot.TurnStart(5));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Read in one refresh, an agent's reply and the person's prompt typed after it: the latest is
+    // the person's, and the words the reply was sent with say it is not the agent's.
+    [Fact]
+    public async Task A_persons_prompt_read_with_an_agents_reply_in_one_refresh_is_the_persons()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        drivers.For(Id).Expect("the agent's words");
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11), Copilot.User("mine, typed meanwhile", 12));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("mine, typed meanwhile", (UserMessageFrom?)null), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
+    // Read again from the start (the file was replaced), a Codex prompt now before the parsed window
+    // is known by the same record as before: the agent's stays the agent's.
+    [Fact]
+    public async Task An_agents_codex_prompt_read_again_from_before_the_window_is_still_the_agents()
+    {
+        const string Codex1 = "66666666-6666-4666-8666-666666666677";
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var rollout = f.CodexTranscript(Codex1);
+        f.CodexRegistration(Codex1, 950, rollout, updated: Fixture.T0);
+        f.Processes.Run(AgentKind.Codex, 950);
+        Fixture.Append(rollout,
+            Codex.Line("session_meta", new { id = Codex1, timestamp = Copilot.At(0), cwd = "/work/codex" }, 0),
+            Codex.Event(new { type = "task_started" }, 1), Codex.Event(new { type = "user_message", message = "go" }, 1),
+            Codex.Event(new { type = "task_complete", last_agent_message = "Done." }, 2));
+        await using var source = f.Source(tailBytes: 4096, drivers: drivers);
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Codex1).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        Fixture.Append(rollout, Codex.Event(new { type = "task_started" }, 10), Codex.Event(new { type = "user_message", message = "the agent's words" }, 10));
+        await source.RefreshAsync();
+        Fixture.Append(rollout, [.. Enumerable.Range(0, 8).Select(i => Codex.Event(new { type = "agent_reasoning", text = new string('x', 1000) }, 11 + i))]);
+        await source.RefreshAsync();
+        Assert.Equal(UserMessageFrom.Agent, source.Get(Codex1)!.Activity.UserMessageFrom);
+
+        // Replaced by a shorter copy: read again, the prompt now skimmed rather than in the window.
+        var lines = File.ReadAllLines(rollout);
+        File.WriteAllLines(rollout, lines[..^1]);
+        await source.RefreshAsync();
+
+        var s = source.Get(Codex1)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent), (s.Activity.UserMessage, s.Activity.UserMessageFrom));
+    }
+
     [Fact]
     public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
     {

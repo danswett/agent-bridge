@@ -102,9 +102,17 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
                 {
                     var (from, label, injected) = Source(Json.Str(data, "source"));
-                    if (injected) { break; }
+                    if (injected)
+                    {
+                        // One delivered while no turn ran (not "steering") starts a turn no prompt's:
+                        // kept past the skim, since the window may begin inside it, as Claude's
+                        // notices are. A prompt after it starts a counted turn again.
+                        if (Json.Str(data, "delivery") != "steering") { S.UncountedTurn = true; }
+                        break;
+                    }
                     Prompted(text, from, label, Json.Str(e, "id"));
                     S.Prompts++;
+                    S.UncountedTurn = false;
                     S.OwnReasoning = null;
                 }
                 break;

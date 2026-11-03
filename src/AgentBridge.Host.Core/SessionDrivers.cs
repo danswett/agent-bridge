@@ -103,6 +103,10 @@ public sealed class SessionDriver
     string? agentPrompt;
     bool awaitingAgentPrompt;
     string? lastMessage;
+    // The words an agent's reply was sent with, where the arm knows them (Expect): only a prompt
+    // that starts with them is the agent's. A prompt the person typed while it was on its way, read
+    // in the same refresh, is then theirs rather than taken for the agent's.
+    string? expected;
     // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and the arm
     // is for that turn alone. The opening turn may be here already (the session registered before
     // its launch was reported), so it is looked for as well as waited for; the turn after it is
@@ -161,6 +165,16 @@ public sealed class SessionDriver
 
     internal void ApplyIf(string by, DateTimeOffset? pending, long generation) => Apply(by, pending, null, null, false, generation);
 
+    // The words the reply armed for is being sent with, once they are known (a press of Send arms
+    // before the box is read). For the arm pending now; a later arm forgets them.
+    public void Expect(string text)
+    {
+        lock (gate)
+        {
+            if (pendingAt is not null && Collapse(text) is { Length: > 0 } said) { expected = said; }
+        }
+    }
+
     void Apply(string by, DateTimeOffset? pending, string? agentPrincipal, string? opening, bool resumed, long? onlyAt)
     {
         bool changed;
@@ -168,6 +182,7 @@ public sealed class SessionDriver
         {
             if (onlyAt is { } g && generation != g) { return; }
             var before = ShownLocked();
+            expected = null;
             driver = by;
             principal = by == SessionDrivers.Agent ? agentPrincipal : null;
             pendingAt = pending;
@@ -226,6 +241,14 @@ public sealed class SessionDriver
                 pendingAt = null;
                 openingPrompt = null;
             }
+            // A new prompt the count did not show, since a notice's uncounted turn was running when
+            // it came: the arm waiting for the next prompt is for this one.
+            else if (turnKey is not null && pendingAt is { } armed && now - armed < arm && openingPrompt is null
+                && Prompt(full, prompt) is { } next && next != lastMessage)
+            {
+                awaitingAgentPrompt = driver == SessionDrivers.Agent;
+                pendingAt = null;
+            }
             else if (openingPrompt is { } opening)
             {
                 var message = full.Activity.UserMessage is { } m ? Collapse(m) : "";
@@ -239,7 +262,7 @@ public sealed class SessionDriver
             }
             // The agent's turn's own text: the first message it brings that is new.
             var said = Prompt(full, prompt);
-            if (awaitingAgentPrompt && said is not null && said != lastMessage)
+            if (awaitingAgentPrompt && said is not null && said != lastMessage && Sent(full))
             {
                 (agentPrompt, awaitingAgentPrompt) = (said, false);
             }
@@ -250,6 +273,10 @@ public sealed class SessionDriver
     }
 
     static string Collapse(string text) => Regex.Replace(text, @"\s+", " ").Trim();
+
+    // Whether the prompt shown is the one the arm expected, when it knows what to expect.
+    bool Sent(Session full) =>
+        expected is null || (full.Activity.UserMessage is { } m && Collapse(m).StartsWith(expected[..Math.Min(80, expected.Length)], StringComparison.Ordinal));
 
     static string? Prompt(Session full, string? prompt) =>
         full.Activity.UserMessage is null ? null : prompt ?? Collapse(full.Activity.UserMessage);

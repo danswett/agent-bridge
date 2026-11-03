@@ -106,6 +106,36 @@ public class CopilotTests
         Assert.Equal(("fix the build", (UserMessageFrom?)null, (string?)null), From(after));
     }
 
+    // A notice delivered while idle starts a turn no prompt's. Skimmed, with the window starting
+    // inside that turn, it read as a counted turn in progress: one fewer turn than a full read gave.
+    [Fact]
+    public async Task A_notices_turn_counts_the_same_read_whole_or_from_inside_it()
+    {
+        string[] lines =
+        [
+            Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.Assistant("Done.", 3), Copilot.TurnEnd(4),
+            Sourced("<system_notification> Shell command completed.</system_notification>", "system", 5),
+            .. Enumerable.Range(0, 8).Select(i => Copilot.TurnStart(6 + i)),
+            .. Enumerable.Range(0, 8).Select(i => Copilot.Assistant(new string('x', 1000), 20 + i)),
+        ];
+        async Task<Session> ReadAsync(long tailBytes)
+        {
+            using var f = new Fixture();
+            var events = f.CopilotSession(Id, 100);
+            f.Processes.Run(AgentKind.Copilot, 100);
+            await using var source = f.Source(tailBytes);
+            Fixture.Append(events, lines);
+            await source.RefreshAsync();
+            return source.Get(Id)!;
+        }
+
+        var whole = await ReadAsync(4 * 1024 * 1024);
+        var windowed = await ReadAsync(4096);
+
+        Assert.Equal((SessionStatus.Working, 1, "go"), (whole.Status, whole.Activity.TurnCount, whole.Activity.UserMessage));
+        Assert.Equal((whole.Status, whole.Activity.TurnCount, whole.Activity.UserMessage), (windowed.Status, windowed.Activity.TurnCount, windowed.Activity.UserMessage));
+    }
+
     [Theory]
     [InlineData("schedule-", null)]
     [InlineData("schedule-4a", null)]
