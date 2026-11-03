@@ -169,6 +169,19 @@ public class SelectorTests
     }
 
     [Fact]
+    public void An_option_without_its_value_or_an_unknown_option_is_refused_and_repeats_accumulate()
+    {
+        Assert.Throws<ArgumentException>(() => Program.ParseOptions(["--ring"]));
+        Assert.Throws<ArgumentException>(() => Program.ParseOptions(["--platform", "--explain"]));
+        Assert.Throws<ArgumentException>(() => Program.ParseOptions(["--rings", "1"]));
+
+        var options = Program.ParseOptions(["--files", "a.cs", "--explain", "--files", "b.cs"]);
+
+        Assert.Equal("a.cs,b.cs", options["files"]);
+        Assert.True(options.ContainsKey("explain"));
+    }
+
+    [Fact]
     public void The_json_lists_each_suite_with_its_reasons_and_the_os_matrix()
     {
         var selection = Fixture.Selector().Select(["src/Relay/Program.cs"], ring: 1);

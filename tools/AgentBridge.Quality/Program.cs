@@ -98,34 +98,32 @@ static class Program
         }
     }
 
-    static Dictionary<string, string> ParseOptions(IEnumerable<string> args)
+    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "explain" };
+    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "ring", "base", "head", "files", "suite", "platform", "repo" };
+
+    internal static Dictionary<string, string> ParseOptions(IEnumerable<string> args)
     {
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
         string? pending = null;
         foreach (var arg in args)
         {
-            if (arg.StartsWith("--", StringComparison.Ordinal))
+            if (pending is not null)
             {
-                if (pending is not null)
-                    options[pending] = "";
-                pending = arg[2..];
-                if (pending is "explain")
-                {
-                    options[pending] = "";
-                    pending = null;
-                }
-            }
-            else if (pending is not null)
-            {
+                if (arg.StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException($"--{pending} needs a value.");
                 // Repeated --files and --suite accumulate, so a shell can pass one per argument.
                 options[pending] = options.TryGetValue(pending, out var existing) && existing.Length > 0 ? existing + "," + arg : arg;
                 pending = null;
             }
+            else if (arg.StartsWith("--", StringComparison.Ordinal) && Flags.Contains(arg[2..]))
+                options[arg[2..]] = "";
+            else if (arg.StartsWith("--", StringComparison.Ordinal) && Valued.Contains(arg[2..]))
+                pending = arg[2..];
             else
                 throw new ArgumentException($"Unexpected argument '{arg}'.");
         }
         if (pending is not null)
-            options[pending] = "";
+            throw new ArgumentException($"--{pending} needs a value.");
         return options;
     }
 

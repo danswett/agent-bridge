@@ -22,7 +22,7 @@ sealed record Selection(
         Suites.SelectMany(s => s.Suite.Platforms.Select(p => (Platform: p, s.Suite.Id)))
             .GroupBy(x => x.Platform)
             .OrderBy(g => g.Key, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(x => x.Id).ToList());
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(x => x.Id).ToList(), StringComparer.Ordinal);
 }
 
 /// <summary>
