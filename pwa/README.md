@@ -491,8 +491,8 @@ running another checkout's tests at the same time.
   in the order they are laid out with focus shown on every stop, and Shift+Tab walks it back;
   opening a session with Enter, answering with Tab, Space and Enter, replying, End session's two
   presses, launching from the rail, Back on a phone, and the overflow menu closed by Escape, all
-  without the mouse. WebKit tabs only to form controls, as Safari does by default, so there a link
-  is focused directly and then pressed with Enter.
+  without the mouse. WebKit on Windows and macOS tabs only to form controls, as Safari does by
+    default, so in WebKit a link is focused directly and then pressed with Enter.
 * `test/reduced-motion.spec.mjs`, in demo mode (#356): with `prefers-reduced-motion: reduce`, every
   view and change ui.md §5.3's catalogue animates is walked through, and no element runs an
   animation or a transition but an opacity cross-fade no longer than the tokens' `crossFade`; with motion

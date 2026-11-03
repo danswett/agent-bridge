@@ -75,6 +75,7 @@ function where({ regions, known }) {
     name: `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? `.${el.className.trim().split(/\s+/).join('.')}` : ''} "${label}"`,
     region: regions.find(([, sel]) => el.closest(sel))?.[0] ?? 'elsewhere',
     matches: known.filter((sel) => el.matches(sel)),
+    link: el.matches('a[href]'),
     top, left, height: r.height,
     visible: el.matches(':focus-visible'),
     shown: outline || shadow || box,
@@ -99,10 +100,10 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
   throw new Error(`${key} never reached ${target.toString()}: stopped on ${stops.slice(-5).map((s) => s.name).join(', ')}`);
 }
 
-// WebKit, as Safari does unless "Press Tab to highlight each item" is on, tabs to form controls
-// and not to links, which Safari reaches with Option+Tab and Playwright's WebKit not at all. There
-// a link (the rail, New, Leave demo) is focused directly, as Option+Tab would, and operated as
-// everywhere else, with Enter.
+// WebKit on Windows and macOS, as Safari does unless "Press Tab to highlight each item" is on, tabs
+// to form controls and not to links, which Safari reaches with Option+Tab and Playwright's WebKit
+// there not at all; WebKit on Linux (CI) tabs to links. In WebKit a link (the rail, New, Leave
+// demo) is focused directly, as Option+Tab would, and operated as everywhere else, with Enter.
 async function reachLink(page, browserName, link) {
   if (browserName !== 'webkit') { await tabTo(page, link); return; }
   await link.focus();
@@ -138,11 +139,12 @@ test.describe('on a desktop', () => {
     const last = v.locator('.end-session').getByRole('button', { name: 'End session' });
     const stops = await tabTo(page, last, { max: 200 });
     // The parts in the order they are laid out, each once: focus never leaves one and comes back.
-    // WebKit's walk has no links (reachLink), so no skip link, rail or banner.
+    // Where WebKit doesn't tab to links (reachLink), there is no skip link, rail or banner.
     const parts = stops.map((s) => s.region).filter((r, i, all) => r !== all[i - 1]);
     const links = ['skip link', 'navigation', 'banner'];
+    const tabsToLinks = browserName !== 'webkit' || stops.some((s) => s.link);
     expect(parts).toEqual(['skip link', 'app bar', 'navigation', 'banner', 'list', 'session header', 'conversation', 'inspector']
-      .filter((p) => browserName !== 'webkit' || !links.includes(p)));
+      .filter((p) => tabsToLinks || !links.includes(p)));
     expect(readingOrder(stops)).toEqual([]);
     // Shift+Tab walks the same stops in reverse.
     const back = [];
