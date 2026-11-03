@@ -92,8 +92,9 @@ internal sealed class ClaudeSubagents
     }
 
     // When the agent started and what it was asked: its transcript's first entry, the prompt,
-    // stamped with its agentId. One too long to read whole is dated by the file instead; one
-    // with no newline yet is read whole, and again later if it is not complete.
+    // stamped with its agentId. One too long to read whole is dated by its own timestamp, read as
+    // far as it goes, with no prompt; one with no newline yet is read whole, and again later if it
+    // is not complete.
     static (DateTimeOffset? At, string? Prompt) Head(string path, string id)
     {
         byte[] bytes;
@@ -110,11 +111,7 @@ internal sealed class ClaudeSubagents
         if (newline < 0)
         {
             if (length <= MaxHeadBytes) { newline = bytes.Length; }
-            else
-            {
-                try { return (new DateTimeOffset(File.GetCreationTimeUtc(path), TimeSpan.Zero), null); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return (null, null); }
-            }
+            else { return (Started(bytes, id), null); }
         }
         try
         {
@@ -126,6 +123,31 @@ internal sealed class ClaudeSubagents
             return (Json.Time(e, "timestamp"), prompt);
         }
         catch (JsonException) { return (null, null); }
+    }
+
+    // A first entry too long to read whole: its own timestamp, read as far as it goes. Claude
+    // writes timestamp and agentId before the message (tests/fixtures/claude), so what is read
+    // has them; none is taken unless the entry says it is this agent's.
+    static DateTimeOffset? Started(byte[] bytes, string id)
+    {
+        var reader = new Utf8JsonReader(bytes, isFinalBlock: false, state: default);
+        (DateTimeOffset? at, bool mine) = (null, false);
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1) { continue; }
+                var name = reader.GetString();
+                if (name is not ("timestamp" or "agentId")) { continue; }
+                if (!reader.Read()) { break; }
+                if (reader.TokenType != JsonTokenType.String) { continue; }
+                if (name == "timestamp") { at = Json.ParseTime(reader.GetString()); }
+                else { mine = reader.GetString() == id; }
+                if (at is not null && mine) { return at; }
+            }
+        }
+        catch (JsonException) { }
+        return null;
     }
 
     static byte[] ReadShared(string path, int max)

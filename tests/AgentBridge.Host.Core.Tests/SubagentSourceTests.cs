@@ -90,13 +90,14 @@ public class ClaudeSubagentTests
             return Source.Get(Id)!;
         }
 
-        // A delegate's record and its transcript's first line, the newline not written yet.
-        public async Task<Session> FirstLineOnly(string agent)
+        // A delegate's record and its transcript's first line (changed by edit), the newline not
+        // written yet.
+        public async Task<Session> FirstLineOnly(string agent, Func<string, string>? edit = null)
         {
             var (meta, lines) = _agents["agent-" + agent];
             Directory.CreateDirectory(_beside);
             File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".meta.json"), meta);
-            File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".jsonl"), lines[0]);
+            File.WriteAllText(Path.Combine(_beside, "agent-" + agent + ".jsonl"), edit is null ? lines[0] : edit(lines[0]));
             await Source.RefreshAsync();
             return Source.Get(Id)!;
         }
@@ -406,6 +407,26 @@ public class ClaudeSubagentTests
 
         Assert.Equal(Fixture.T0.AddMilliseconds(6943), nested.StartedAt);
         Assert.Equal("Show the latest three commits in this folder and reply with them.", nested.Task);
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_whose_first_line_is_too_long_to_read_whole_is_dated_by_its_own_timestamp()
+    {
+        // Found in review: it was dated by the file's creation time, which not every file system keeps.
+        await using var r = new Replay();
+        r.Held.Add("agent-" + Nested);
+        await r.Through(7);
+        static string Long(string line)
+        {
+            var e = JsonNode.Parse(line)!;
+            e["message"]!["content"] = new string('x', 80 * 1024);
+            return e.ToJsonString() + "\n";
+        }
+
+        var nested = Entry(await r.FirstLineOnly(Nested, Long), Nested);
+
+        Assert.Equal(Fixture.T0.AddMilliseconds(6943), nested.StartedAt);
+        Assert.Null(nested.Task);
     }
 
     [Fact]

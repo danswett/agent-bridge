@@ -46,6 +46,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     ];
 
     const string NotificationStart = "<subagent_notification>";
+    const string NotificationEnd = "</subagent_notification>";
     const string NotificationKind = "multi_agent.subagent_notification";
 
     protected override IReadOnlyList<byte[]> SkimMarkers => Markers;
@@ -312,7 +313,10 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         if (Json.Obj(p, "internal_chat_message_metadata_passthrough") is not { } metadata || Json.Arr(metadata, "content_item_kinds") is not { } kinds
             || !kinds.EnumerateArray().Any(k => k.ValueKind == JsonValueKind.String && k.GetString() == NotificationKind)) { return false; }
         if (ContentText(p) is not { } text || !text.StartsWith(NotificationStart, StringComparison.Ordinal)) { return false; }
-        var (start, end) = (text.IndexOf('{', StringComparison.Ordinal), text.LastIndexOf('}'));
+        // Only what is between the tags is the notice's JSON.
+        var close = text.IndexOf(NotificationEnd, NotificationStart.Length, StringComparison.Ordinal);
+        if (close < 0) { return false; }
+        var (start, end) = (text.IndexOf('{', NotificationStart.Length), text.LastIndexOf('}', close));
         if (start < 0 || end < start) { return false; }
         var before = S.Background.Version;
         try
