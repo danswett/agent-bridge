@@ -40,6 +40,11 @@ registration. Ambiguous shell wrappers and later image changes fail closed. An
 explicit native CLI path is preferable to a wrapper which replaces itself with a
 different executable. Root or set-user-ID processes are refused.
 
+The registry retains exact kernel microseconds. At the `Started`/stop interface it
+also recognizes the exact floating-point conversion used by .NET's macOS
+`Process.StartTime`, which can differ by a few 100-nanosecond ticks. This is an
+explicit representation conversion, not a time tolerance for identifying processes.
+
 tmux receives separate arguments, with no generated shell command. Its argv parser
 also treats trailing semicolons as command separators, so those are escaped using
 the behavior of

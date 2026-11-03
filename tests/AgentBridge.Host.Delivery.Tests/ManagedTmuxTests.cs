@@ -219,4 +219,24 @@ public sealed class ManagedTmuxTests
         Assert.NotNull(reason);
         Assert.Empty(commands.Calls);
     }
+
+    [Fact]
+    public void Stop_accepts_the_exact_dotnet_start_time_representation_without_relaxing_kernel_identity()
+    {
+        var commands = new Commands(); var probe = new Probe();
+        var kernelTime = DateTimeOffset.FromUnixTimeSeconds(1793669689).AddTicks(941950);
+        probe.Identities[300] = probe.Identities[300] with { StartedAt = kernelTime };
+        var backend = new ManagedTmuxBackend(commands, probe, _ => "/test/agent");
+        var started = backend.Start(new("/test/agent", [], "/workspace"));
+        var identity = probe.Identities[300];
+        Assert.NotEqual(identity.StartedAt, identity.ProcessStartTime);
+        Assert.Equal(DateTimeOffset.UnixEpoch + TimeSpan.FromSeconds(1793669689 + 94195 / 1_000_000d), started.StartedAt);
+        using var managed = Assert.IsAssignableFrom<IHeldProcess>(backend.Open(300, identity.ProcessStartTime).Process);
+        using var native = Assert.IsAssignableFrom<IHeldProcess>(backend.Open(300, identity.StartedAt).Process);
+        Assert.NotNull(backend.Open(300, identity.ProcessStartTime.AddTicks(1)).Refusal);
+        probe.Identities[300] = identity with { StartedAt = identity.StartedAt.AddTicks(10) };
+        Assert.NotNull(managed.Terminate());
+        Assert.NotNull(native.Terminate());
+        Assert.Empty(commands.Writes);
+    }
 }

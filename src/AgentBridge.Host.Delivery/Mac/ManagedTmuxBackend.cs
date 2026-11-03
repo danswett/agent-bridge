@@ -112,7 +112,7 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
             var server = processes.Capture(pane.ServerId);
             if (root is null || !Safe(server) || server!.Executable != tmuxImage)
             { throw new ManagedTmuxStartUnconfirmedException("the launched pane's process identity could not be verified; it remains read-only"); }
-            var started = new Started(root.ProcessId, root.StartedAt);
+            var started = new Started(root.ProcessId, root.ProcessStartTime);
             var hint = spec.Environment?.GetValueOrDefault("AGENT_BRIDGE_SESSION");
             // Only the known session UUID (or fixed Codex launch marker) is published.
             if (hint != "launched" && !Guid.TryParseExact(hint, "D", out _)) { hint = null; }
@@ -254,7 +254,8 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
     public HeldOpen Open(int processId, DateTimeOffset startedAt)
     {
         var entry = Find(processId, out var target);
-        if (Unavailable() is not null || entry is null || target is null || target.StartedAt != startedAt) { return HeldOpen.Refused(Unknown); }
+        if (Unavailable() is not null || entry is null || target is null
+            || (target.StartedAt != startedAt && target.ProcessStartTime != startedAt)) { return HeldOpen.Refused(Unknown); }
         return HeldOpen.Of(new HeldPane(this, entry, target));
     }
 
