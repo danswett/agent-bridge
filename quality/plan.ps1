@@ -12,16 +12,22 @@
                          always did, rather than a filter of the selected projects
     product-os           product's runners, from its selected suites' platforms (all three when the
                          whole ring runs), as a JSON array
+    test-filter          the dotnet test --filter product adds: ring 0's in-process filter under
+                         -FastRing, otherwise empty
   and a "what runs and why" table to GITHUB_STEP_SUMMARY. Locally, without those variables, it
   prints both, so `pwsh quality/plan.ps1 -Ring 1 -Base HEAD~1 -Head HEAD` shows what CI would plan.
 
 .EXAMPLE
-  pwsh quality/plan.ps1 -Ring 1 -Base origin/main -Head HEAD -Jobs product,app,pwa
+  pwsh quality/plan.ps1 -Ring 1 -Base origin/main -Head HEAD -Jobs product,app,pwa-ui
+  pwsh quality/plan.ps1 -FastRing -Base origin/main -Head HEAD -Jobs product,light   # a draft's plan
 #>
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 4)]
+    [ValidateRange(0, 4)]
     [int] $Ring = 1,
+    # A draft pull request's run (quality/README.md §2): ring 0's suites, on Linux only, with ring
+    # 0's test filter. The summary says plainly that it's partial; ready for review runs ring 1.
+    [switch] $FastRing,
     [Parameter(Mandatory)]
     [string] $Base,
     [Parameter(Mandatory)]
@@ -40,10 +46,17 @@ $Jobs = @($Jobs -split '[,\s]+' | Where-Object { $_ })
 $root = Split-Path -Parent $PSScriptRoot
 $tool = Join-Path $root 'tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll'
 if (-not (Test-Path $tool)) { throw "Build the selector first: dotnet build tools/AgentBridge.Quality -c Release" }
+if ($FastRing) {
+    if ($CompareRing1) { throw '-CompareRing1 is for main''s ring 2, not -FastRing.' }
+    $Ring = 0
+}
+# The fast ring runs on Linux only. Otherwise no --platform: CI plans for every platform at once,
+# and each job's runners come from that.
+$platform = if ($FastRing) { 'linux-x64' } else { $null }
 
-# No --platform: CI plans for every platform at once, and each job's runners come from that.
 function Select-Suites([int] $ring) {
-    $json = (dotnet $tool select --repo $root --ring $ring --base $Base --head $Head) -join "`n"
+    $platformArgs = if ($platform) { @('--platform', $platform) } else { @() }
+    $json = (dotnet $tool select --repo $root --ring $ring --base $Base --head $Head @platformArgs) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "The selector failed (exit $LASTEXITCODE)." }
     $json | ConvertFrom-Json -AsHashtable
 }
@@ -61,8 +74,8 @@ $whole = $selection.mode -in 'full', 'everything'
 # GitHub's runner for each platform a product suite declares, in the order the matrix always had.
 $runners = [ordered]@{ 'linux-x64' = 'ubuntu-latest'; 'win-x64' = 'windows-latest'; 'win-arm64' = 'windows-11-arm' }
 $platforms = @($productSuites | ForEach-Object { $_.platforms })
-# The whole ring runs as product always did: everything, on every runner.
-$productOs = @($runners.Keys | Where-Object { $whole -or $_ -in $platforms } | ForEach-Object { $runners[$_] })
+# The whole ring runs as product always did: everything, on every runner. The fast ring is Linux's.
+$productOs = @($runners.Keys | Where-Object { ($whole -or $_ -in $platforms) -and (-not $platform -or $_ -eq $platform) } | ForEach-Object { $runners[$_] })
 
 $outputs = [ordered]@{}
 foreach ($job in $Jobs) { $outputs[$job] = if ($ci.ContainsKey($job)) { 'true' } else { 'false' } }
@@ -70,6 +83,7 @@ $outputs['suites'] = ConvertTo-JsonArray $ids
 $outputs['test-projects'] = ConvertTo-JsonArray $testProjects
 $outputs['whole-solution'] = if ($whole) { 'true' } else { 'false' }
 $outputs['product-os'] = ConvertTo-JsonArray $productOs
+$outputs['test-filter'] = "$($selection.testFilter)"
 $lines = $outputs.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }
 if ($env:GITHUB_OUTPUT) { $lines | Add-Content -Path $env:GITHUB_OUTPUT -Encoding utf8 } else { $lines | Write-Output }
 
@@ -89,6 +103,10 @@ function Test-WholeRing([string] $rule) { $rule.StartsWith('global_triggers ') -
 $md = [System.Collections.Generic.List[string]]::new()
 $md.Add("## What runs and why")
 $md.Add("")
+if ($FastRing) {
+    $md.Add("> **A draft: this run is partial.** Only the fast ring runs: ring 0's suites on Linux, in-process tests only (``$($selection.testFilter)``), the catalog check, and actionlint when a workflow changes. Nothing on Windows, no browsers, no CodeQL or dependency review. Marking the pull request ready for review runs ring 1: everything it selects, on every system.")
+    $md.Add("")
+}
 $md.Add("Ring $Ring over $($selection.files.Count) changed file(s) from $(Text $selection.source). Mode: **$($selection.mode)**.")
 $wholeRing = $suites.reasons | Where-Object { Test-WholeRing $_.rule } | Group-Object rule
 foreach ($g in $wholeRing) {

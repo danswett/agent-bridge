@@ -7,48 +7,53 @@ name: Dependencies
 #  - audit (advisory): what is already in the tree, through `dotnet list package --vulnerable`
 #    and `npm audit`. Findings are warnings on the run, never a red X, until what main has
 #    today is cleared; then it can fail like review.
+# Both run in one job, on one runner (#459): the review takes seconds, and a runner is what pull
+# requests wait for. Not on a draft: ready for review runs it.
 
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions: {}
 
+# As ci.yml groups its runs: a newer push to a pull request cancels that pull request's older run.
 concurrency:
-  group: dependencies-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   review:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
-      # Reads the dependency graph's diff between the base and head. No pull-requests: write,
-      # since its summary goes to the run's summary rather than a comment.
+      # Reads the dependency graph's diff between the base and head, and checks out the code for
+      # the audit. No pull-requests: write, since the review's summary goes to the run's summary
+      # rather than a comment.
       contents: read
     steps:
-      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      - name: The review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           # Development packages too: Playwright and its kind run in CI, next to its token.
           fail-on-scopes: runtime, development, unknown
-
-  audit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
+      # The audit runs whatever the review found, so a red review still reports what's in the tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() }}
         with:
           persist-credentials: false
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: ${{ !cancelled() }}
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !cancelled() }}
         with:
           node-version: '22'
       - name: NuGet packages with known vulnerabilities, direct and transitive
+        if: ${{ !cancelled() }}
         shell: pwsh
         # A finding is a warning; only the audit itself failing (a restore that cannot reach
         # nuget.org, say) fails the step, since then nothing was checked. The restore runs on its
@@ -83,6 +88,7 @@ jobs:
           foreach ($f in $found) { "- $($f.Package), $($f.Severity): $($f.Advisory)" >> $env:GITHUB_STEP_SUMMARY }
           exit 0
       - name: npm runtime packages with known vulnerabilities (pwa)
+        if: ${{ !cancelled() }}
         shell: pwsh
         working-directory: pwa
         # npm audit exits 1 for findings; it reads only package-lock.json, so nothing is installed.

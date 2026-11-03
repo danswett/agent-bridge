@@ -6,26 +6,90 @@ name: CodeQL
 # only on alerts the pull request adds, at GitHub's default threshold (high or critical security
 # alerts, and errors), so findings already on main never turn a pull request red. The weekly run
 # picks up new queries and advisories while nothing is merged.
+#
+# A pull request analyses only the languages it changes (the languages job, #459): code a pull
+# request doesn't touch has the same alerts as main's, and each analysis holds a runner for one to
+# two minutes. main and the weekly run analyse every language, so main's alerts stay complete. A
+# draft runs none; ready for review runs them.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
   schedule:
     # Mondays 13:41 UTC: early morning Pacific, off the hour.
     - cron: '41 13 * * 1'
 
 permissions: {}
 
+# As ci.yml groups its runs: a newer push to a pull request cancels that pull request's older
+# analysis. Anything else is grouped by its own run id, so main's and the weekly run all finish,
+# and none waits behind, or is displaced from, a shared group's one pending slot.
 concurrency:
-  group: codeql-${{ github.ref }}
-  # A newer push to a pull request supersedes its analysis; main's and the weekly run all finish.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  languages:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      languages: ${{ steps.pick.outputs.languages }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          # The merge commit and its first parent, the base: HEAD^1..HEAD is what merging adds.
+          fetch-depth: 2
+      - name: The languages this run analyses
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+        # Each language's files, as the code it analyses sees them: C# with what decides how its
+        # projects resolve, JavaScript wherever a script or page is (and pwa/, tools/ and the
+        # spikes' web/ whole), Actions anything under .github/. A rename counts as both its paths.
+        # A change to this workflow, or a diff that can't be read, analyses everything.
+        run: |
+          all='["csharp","javascript-typescript","actions"]'
+          if [ "$EVENT" != pull_request ]; then
+            echo "languages=$all" >> "$GITHUB_OUTPUT"
+            echo "$EVENT: every language." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! files=$(git diff --no-renames --name-only HEAD^1 HEAD); then
+            echo "::warning title=CodeQL::could not read the change, so every language is analysed"
+            echo "languages=$all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A here-string, not a pipe: with pipefail, grep -q exiting early could fail the printf.
+          has() { grep -Eq "$1" <<< "$files"; }
+          if has '^\.github/workflows/codeql\.yml$|^\.github/codeql/'; then
+            langs=(csharp javascript-typescript actions)
+          else
+            langs=()
+            has '\.(cs|csproj|props|targets|slnx?|razor|cshtml)$|(^|/)(nuget\.config|global\.json|dotnet-tools\.json)$' && langs+=(csharp)
+            has '\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|html?|vue|json)$|^pwa/|^tools/|^spikes/[^/]+/web/' && langs+=(javascript-typescript)
+            has '^\.github/' && langs+=(actions)
+          fi
+          json=$(printf '%s\n' "${langs[@]}" | jq -R . | jq -sc 'map(select(length > 0))')
+          echo "languages=$json" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CodeQL on this pull request: ${langs[*]:-no language}"
+            echo
+            echo "Only the languages its change reaches; main and the weekly run analyse every language."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   analyze:
     name: analyze (${{ matrix.language }})
+    needs: languages
+    # An empty matrix is an error, not a skip.
+    if: needs.languages.outputs.languages != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -36,7 +100,7 @@ jobs:
       matrix:
         # build-mode none everywhere: C# is analysed from source, so this needs none of the
         # product's build steps (some of which only run on Windows).
-        language: [csharp, javascript-typescript, actions]
+        language: ${{ fromJSON(needs.languages.outputs.languages) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

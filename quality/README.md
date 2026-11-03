@@ -2,8 +2,9 @@
 
 *Proposed 2026-11-02, Pacific. Status: phase 1 under way, tracked in #357. Merged so far:
 test categories (#375), CodeQL, dependency review and workflow lint (#361), coverage and
-timing (#363), the selector and `quality/run.ps1` (#362), and CI's plan, selected jobs and
-`quality-gate` (#436). §1 describes the starting point.*
+timing (#363), the selector and `quality/run.ps1` (#362), CI's plan, selected jobs and
+`quality-gate` (#436), and CI throughput: drafts run the fast ring, CodeQL per language,
+caches, fewer jobs and a sharded PWA (#459). §1 describes the starting point.*
 
 This folder tracks every test this repository runs, where and when each one runs, and what
 it costs. It also holds the plan for growing the tests into a harness we can repeat, from a
@@ -78,10 +79,24 @@ Each ring runs everything in the rings below it, plus its own suites. The rule i
 | Ring | When | Budget | What runs | Where | Blocks |
 |---|---|---|---|---|---|
 | **0 Inner loop** | On demand, and as a pre-push hook | < 60 s typical | The suites a change reaches (§4), unit and component only, on this machine's OS; secret scan of staged files; design check if `design/` changed | Developer machine or agent session | Nothing; it's advice |
-| **1 PR gate** | Every push to a PR | < 15 min wall | Selected suites on every OS they declare, plus the sentinels (`protocol`, CodeQL, dependency review). Shipped-binary checks (AOT, container, package) when reached. axe for PWA changes. Diff coverage | GitHub-hosted runners | Merge (one required check: `quality-gate`) |
+| **1 PR gate** | Every push to a PR that isn't a draft, and marking one ready for review | < 15 min wall | Selected suites on every OS they declare, plus the sentinels (`protocol`, CodeQL, dependency review). Shipped-binary checks (AOT, container, package) when reached. axe for PWA changes. Diff coverage | GitHub-hosted runners | Merge (one required check: `quality-gate`) |
 | **2 Main** | Every merge to `main`, before publish | < 30 min | **Everything** hosted, on every platform: upgrade by delta, WinUI and Apple UI tests, a11y scans, benchmarks recorded, SBOM and attestation, container scan, relay staging smoke | Hosted runners and staging | Publishing to the `dev` channel |
 | **3 Nightly / candidate** | Nightly on `main`'s head, and on demand for a candidate | < 3 h | Lab VMs: install the dev build on clean Windows x64 and Arm64, Linux and macOS. End to end with simulated agents, then real agents. Agent drift. Perf on quiet machines against baselines. Relay load and DAST on staging. Fuzzing | Lab (§6), staging | Promotion to `beta` |
 | **4 Release** | Before promotion to `stable`, or relay production | Hours to days | Migrate and roll back from the S0 snapshot. Shadow soak gate. Relay production smoke. iPhone PWA and screen-reader checklists. A release-readiness report | Lab, real devices, the owner | Promotion to `stable`; relay production approval |
+
+**Drafts run the fast ring** (#459). Runners are what every session waits for, and a work in
+progress pushes often. So a push to a draft PR runs, in CI:
+
+- ring 0's selected suites on Linux only, with ring 0's in-process test filter (no `Process`,
+  `Network` or `HomeAssistantIntegration` tests);
+- the catalog check (the plan job);
+- actionlint (Workflow lint) when a workflow changes.
+
+There's nothing on Windows, no browsers, no CodeQL and no dependency review. A draft's result
+says plainly that it's partial: the plan's summary opens with it, and `quality-gate` adds a
+notice. Marking the PR ready for review runs ring 1 on the same head, and so does every later
+push while it stays ready. GitHub won't merge a draft, so nothing merges on the fast ring alone.
+A docs-only draft runs just `plan` and `quality-gate`.
 
 Escalations within ring 1:
 
@@ -235,19 +250,47 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    that pulled it in. The PR summary shows that table, so a reviewer can see what didn't
    run and why.
 7. **GitHub mechanics:** ci.yml's `plan` job checks the catalog, then runs the selector through
-   `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`. It writes the "what runs
-   and why" table to the run's summary, and outputs:
+   `quality/plan.ps1`: ring 1 on a pull request, ring 2 on `main`, and on a draft the fast ring
+   (`-FastRing`: ring 0, Linux only, §2). It writes the "what runs and why" table to the run's
+   summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
      says which suites a job runs, and moving a suite moves its trigger. On a pull request a
      job runs only when it's true; on `main` every job runs whatever the plan says;
    - the selected suites, which gate the steps inside `product` (the AOT injector and hook,
-     the build scripts, the relay container);
+     the build scripts, the relay container) and inside `light`;
    - `product`'s test projects, tested through a solution filter, still under
      `dotnet-coverage` with TRX and `--blame-hang`. When the whole ring runs, it's
      `AgentBridge.slnx` as before. The whole solution is always built, since projects no
      test references (the benchmarks) are compiled nowhere else on a pull request;
    - `product`'s runners, from its selected suites' `platforms` (all three when the whole
-     ring runs).
+     ring runs; only Linux on a draft);
+   - the test filter `product` adds: ring 0's on a draft, none otherwise.
+
+   The jobs, and what each one's for (#459):
+   - `light` holds the small Linux checks on one runner: `design-gen`, `a11y-contrast`,
+     `pwa-unit` with its coverage pass, `pwa-site-csp` and `docs-links`. Each step runs when its
+     suite is selected, and every selected one runs even after another fails. It isn't folded
+     into `plan`, since a failure there would skip every job that needs the plan.
+   - `pwa-ui` runs Playwright on four runners: Chromium in one, WebKit (about twice as slow) in
+     three `--shard`s, with `--fully-parallel` so a shard splits by test rather than by file.
+     `pwa-e2e` runs `test/e2e`, in both browsers, in the one job that builds the dev stack. The
+     shards set `PWA_SKIP_E2E`, so `test/e2e` is left out of them rather than skipping itself;
+     together the five run every spec. The one PWA job these replace took a median of 15
+     minutes.
+   - `spikes-linux` is S2's and S4's checks, on one runner since both install the same browsers.
+     It runs only when `spikes/` changes, like `spikes` on Windows.
+   - Caches: NuGet packages for `product` and `app`, keyed by every `*.csproj`, `Directory.*`
+     file, `nuget.config`, `global.json` and the pinned dotnet tools; `vpk` for `app`; and
+     Playwright's browsers, by Playwright's version. Only `main` saves a cache, so a pull request
+     can't fill the repository's 10 GB or seed what main restores. A pull request restores
+     main's, and the nearest older key when its projects differ. `app` restores only on a pull
+     request: the package main publishes is built from what the feeds serve.
+   - CodeQL on a pull request analyses only the languages the change reaches (`codeql.yml`
+     `languages`): C# for `.cs`, `.csproj`, `.props` and the like; JavaScript for scripts,
+     pages, `pwa/`, `tools/` and the spikes' `web/`; Actions for `.github/`. `main` and the
+     weekly run analyse every language. CodeQL and dependency review skip drafts and run on
+     ready for review; CodeQL, Dependencies and Workflow lint each cancel a superseded run of
+     the same pull request, as ci.yml does.
 
    A final `quality-gate` job (`if: always()`) needs all of them and fails if any failed or
    was cancelled; skipped is fine. It's the check to make required, so skipped jobs never

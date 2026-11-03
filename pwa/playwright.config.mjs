@@ -9,6 +9,10 @@ const PORT = Number(process.env.PWA_TEST_PORT) || 8790;
 export default defineConfig({
   testDir: 'test',
   testMatch: /.*\.spec\.mjs$/,
+  // CI runs test/e2e in a job of its own, the one that builds the dev stack those specs need
+  // (ci.yml pwa-e2e). Its other Playwright jobs set PWA_SKIP_E2E to leave them out, rather than
+  // have them skip themselves there.
+  testIgnore: process.env.PWA_SKIP_E2E ? '**/e2e/**' : undefined,
   timeout: 60000,
   fullyParallel: false,
   workers: process.env.CI ? 2 : undefined,
