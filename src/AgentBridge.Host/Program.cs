@@ -105,7 +105,7 @@ var options = new SessionSourceOptions
     CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
     ClaudeConfigDirExplicit = Option("--claude-home") is not null ? true
-        : intakeState?.Homes is { } savedHomes ? savedHomes.ClaudeConfigDirExplicit : defaults.ClaudeConfigDirExplicit,
+        : HookCommands.ClaudeModeFor(intakeState?.Homes, defaults, command == "hooks"),
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
     ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),

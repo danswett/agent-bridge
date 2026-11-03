@@ -161,6 +161,23 @@ public sealed class StandaloneHooksTests : IDisposable
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public void CLI_setup_recovers_an_unknown_Claude_mode_only_from_its_matching_invocation_profile(bool explicitConfigDir)
+    {
+        var current = new SessionSourceOptions
+        {
+            CopilotHome = Homes.Copilot, ClaudeHome = Homes.Claude + Path.DirectorySeparatorChar, CodexHome = Homes.Codex,
+            ClaudeConfigDirExplicit = explicitConfigDir,
+        };
+
+        Assert.Equal(explicitConfigDir, HookCommands.ClaudeModeFor(Homes, current, setup: true));
+        Assert.Null(HookCommands.ClaudeModeFor(Homes, current, setup: false));
+        Assert.Null(HookCommands.ClaudeModeFor(Homes with { Claude = Path.Combine(root, "other-claude") }, current, setup: true));
+        Assert.Equal(!explicitConfigDir, HookCommands.ClaudeModeFor(Homes with { ClaudeConfigDirExplicit = !explicitConfigDir }, current, setup: true));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task Retrying_setup_records_a_previously_unknown_Claude_mode_and_does_not_reset_it(bool explicitConfigDir)
     {
         await Setup.InstallAsync("copilot", false, TextWriter.Null);

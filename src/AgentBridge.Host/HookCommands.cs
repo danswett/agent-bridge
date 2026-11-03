@@ -13,6 +13,13 @@ namespace AgentBridge.Host;
 // counts the spool only on a profile that has taken it over.
 public static class HookCommands
 {
+    internal static bool? ClaudeModeFor(IntakeState.AgentHomes? saved, SessionSourceOptions current, bool setup)
+    {
+        if (saved is null) { return current.ClaudeConfigDirExplicit; }
+        return saved.ClaudeConfigDirExplicit ?? (setup && Folders.Same(Path.GetFullPath(saved.Claude), Path.GetFullPath(current.ClaudeHome))
+            ? current.ClaudeConfigDirExplicit : null);
+    }
+
     public static async Task<int> SetupAsync(IReadOnlyList<string> args, string profileRoot, SessionSourceOptions defaults,
         TextWriter output, TextWriter error, Func<bool> refuseWrite, CancellationToken ct = default)
     {
