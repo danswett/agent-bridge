@@ -1,0 +1,239 @@
+{
+  "suite": "bench-micro",
+  "schema": 1,
+  "platform": "win-x64",
+  "measuredAt": "2026-11-03T16:27:24Z",
+  "environment": {
+    "runner": "local",
+    "os": "Microsoft Windows 10.0.26200",
+    "runtime": ".NET 10.0.14",
+    "processors": 16
+  },
+  "fixtures": {
+    "upsertBytes": {
+      "typical": 2700,
+      "p99": 7300,
+      "oversized": 31884
+    },
+    "oversizedBeforeFitBytes": 65607,
+    "transcriptBytes": 21428583
+  },
+  "benchmarks": [
+    {
+      "name": "MarkdownBenchmarks.Parse",
+      "parameters": "Bytes=1500",
+      "meanNs": 13206.7,
+      "medianNs": 12897.4,
+      "p95Ns": 15123.2,
+      "stdDevNs": 1077.7,
+      "allocatedBytes": 9696
+    },
+    {
+      "name": "MarkdownBenchmarks.Parse",
+      "parameters": "Bytes=16384",
+      "meanNs": 126831.4,
+      "medianNs": 124098.9,
+      "p95Ns": 150514.4,
+      "stdDevNs": 11017.5,
+      "allocatedBytes": 108904
+    },
+    {
+      "name": "NoiseHandshakeBenchmarks.Handshake",
+      "parameters": "",
+      "meanNs": 8910489.8,
+      "medianNs": 8674831.2,
+      "p95Ns": 11366416.7,
+      "stdDevNs": 1342707,
+      "allocatedBytes": 29250
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Decrypt",
+      "parameters": "Size=Oversized",
+      "meanNs": 9684.4,
+      "medianNs": 9696,
+      "p95Ns": 9817,
+      "stdDevNs": 85.7,
+      "allocatedBytes": 32032
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Decrypt",
+      "parameters": "Size=P99",
+      "meanNs": 3157,
+      "medianNs": 3152.1,
+      "p95Ns": 3195.2,
+      "stdDevNs": 22.1,
+      "allocatedBytes": 7448
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Decrypt",
+      "parameters": "Size=Typical",
+      "meanNs": 1861.1,
+      "medianNs": 1851.2,
+      "p95Ns": 1908.2,
+      "stdDevNs": 28.5,
+      "allocatedBytes": 2848
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Encrypt",
+      "parameters": "Size=Oversized",
+      "meanNs": 9100.1,
+      "medianNs": 9139.3,
+      "p95Ns": 9176.5,
+      "stdDevNs": 106.3,
+      "allocatedBytes": 32048
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Encrypt",
+      "parameters": "Size=P99",
+      "meanNs": 3069.1,
+      "medianNs": 3052.6,
+      "p95Ns": 3190.9,
+      "stdDevNs": 58.7,
+      "allocatedBytes": 7464
+    },
+    {
+      "name": "NoiseTransportBenchmarks.Encrypt",
+      "parameters": "Size=Typical",
+      "meanNs": 1845.3,
+      "medianNs": 1814.4,
+      "p95Ns": 2011.3,
+      "stdDevNs": 82.9,
+      "allocatedBytes": 2864
+    },
+    {
+      "name": "ProtocolBenchmarks.Parse",
+      "parameters": "Size=Oversized",
+      "meanNs": 128346.9,
+      "medianNs": 128249.4,
+      "p95Ns": 129547.9,
+      "stdDevNs": 884.3,
+      "allocatedBytes": 69344
+    },
+    {
+      "name": "ProtocolBenchmarks.Parse",
+      "parameters": "Size=P99",
+      "meanNs": 25575,
+      "medianNs": 25568.9,
+      "p95Ns": 25820.9,
+      "stdDevNs": 178.4,
+      "allocatedBytes": 17632
+    },
+    {
+      "name": "ProtocolBenchmarks.Parse",
+      "parameters": "Size=Typical",
+      "meanNs": 8017.7,
+      "medianNs": 8013,
+      "p95Ns": 8094.8,
+      "stdDevNs": 43.5,
+      "allocatedBytes": 6192
+    },
+    {
+      "name": "ProtocolBenchmarks.Serialize",
+      "parameters": "Size=Oversized",
+      "meanNs": 48129.4,
+      "medianNs": 48075.6,
+      "p95Ns": 48439.9,
+      "stdDevNs": 202.5,
+      "allocatedBytes": 36513
+    },
+    {
+      "name": "ProtocolBenchmarks.Serialize",
+      "parameters": "Size=P99",
+      "meanNs": 10685.5,
+      "medianNs": 10695.2,
+      "p95Ns": 10732.4,
+      "stdDevNs": 38.4,
+      "allocatedBytes": 9064
+    },
+    {
+      "name": "ProtocolBenchmarks.Serialize",
+      "parameters": "Size=Typical",
+      "meanNs": 3990.6,
+      "medianNs": 3984.8,
+      "p95Ns": 4011.5,
+      "stdDevNs": 13.4,
+      "allocatedBytes": 3600
+    },
+    {
+      "name": "SessionOrderBenchmarks.Arrange",
+      "parameters": "Sort=Machine",
+      "meanNs": 548280,
+      "medianNs": 545879.2,
+      "p95Ns": 561957.4,
+      "stdDevNs": 7681,
+      "allocatedBytes": 988976
+    },
+    {
+      "name": "SessionOrderBenchmarks.Arrange",
+      "parameters": "Sort=Recent",
+      "meanNs": 210063.2,
+      "medianNs": 202470.5,
+      "p95Ns": 247663.7,
+      "stdDevNs": 18481,
+      "allocatedBytes": 416432
+    },
+    {
+      "name": "SessionOrderBenchmarks.Arrange",
+      "parameters": "Sort=Yours",
+      "meanNs": 516551.7,
+      "medianNs": 515009.1,
+      "p95Ns": 525151,
+      "stdDevNs": 5166.2,
+      "allocatedBytes": 1162736
+    },
+    {
+      "name": "SessionTrackerBenchmarks.Unchanged",
+      "parameters": "",
+      "meanNs": 331398.9,
+      "medianNs": 333503.3,
+      "p95Ns": 415968.7,
+      "stdDevNs": 52650.6,
+      "allocatedBytes": 41250
+    },
+    {
+      "name": "TranscriptAppendBenchmarks.AppendOneTurn",
+      "parameters": "",
+      "meanNs": 539264,
+      "medianNs": 507290.6,
+      "p95Ns": 782382,
+      "stdDevNs": 173153,
+      "allocatedBytes": 17076
+    },
+    {
+      "name": "TranscriptFirstReadBenchmarks.FirstRead",
+      "parameters": "",
+      "meanNs": 42582468.9,
+      "medianNs": 41910975,
+      "p95Ns": 45878700,
+      "stdDevNs": 1889164.1,
+      "allocatedBytes": 14178776
+    },
+    {
+      "name": "UpsertBuildBenchmarks.Commit",
+      "parameters": "Size=Oversized",
+      "meanNs": 1856544.9,
+      "medianNs": 1835363,
+      "p95Ns": 1937637.2,
+      "stdDevNs": 44107,
+      "allocatedBytes": 1382684
+    },
+    {
+      "name": "UpsertBuildBenchmarks.Commit",
+      "parameters": "Size=P99",
+      "meanNs": 112690.9,
+      "medianNs": 112930.6,
+      "p95Ns": 115808.7,
+      "stdDevNs": 2189.7,
+      "allocatedBytes": 92923
+    },
+    {
+      "name": "UpsertBuildBenchmarks.Commit",
+      "parameters": "Size=Typical",
+      "meanNs": 47267.1,
+      "medianNs": 45168,
+      "p95Ns": 60151.3,
+      "stdDevNs": 5673.3,
+      "allocatedBytes": 37001
+    }
+  ]
+}

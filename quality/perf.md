@@ -34,7 +34,9 @@ is all the hook reads of it. For "up" the tool writes the heartbeat before each 
 the spool after it, as the intake would. For "down" there is no heartbeat.
 
 "Cold" means a new executable, not a cold disk: the OS's file cache still holds the bytes just
-copied. On Windows most of the cold cost is Defender scanning the new file the first time it runs.
+copied. On a Windows machine with real-time scanning, most of the cold cost is the scan of the
+new file the first time it runs: about 140 ms locally when the baseline was taken, against
+about 25 ms on a hosted runner.
 
 Run it locally. On Windows, NativeAOT's linker needs `vswhere` on `PATH`:
 
@@ -72,18 +74,27 @@ and 31,884 after it, inside the 40 KiB budget.
 | `UpsertBuildBenchmarks` | `SessionSource.Commit`: the get and list forms fitted to the budget, and the JSON compared |
 | `SessionTrackerBenchmarks` | One session's share of a discovery pass when its transcript has not changed |
 | `TranscriptFirstReadBenchmarks` | The first read of a 21 MB Copilot transcript: the last 4 MiB parsed, the rest skimmed |
-| `TranscriptAppendBenchmarks` | One 12 KB turn appended, then read and parsed. On Windows, opening the just-written file (a file system filter's scan) is most of it |
+| `TranscriptAppendBenchmarks` | One 12 KB turn appended, then read and parsed |
 | `SessionOrderBenchmarks` | The app arranging 300 sessions over three machines, in each sort |
 | `MarkdownBenchmarks` | A reply rendered to the app's Markdown model, at 1.5 KB and at the 16 KiB cut |
 
 Transcript tailing and upsert building are internal to `AgentBridge.Host.Core`. They are reached
 through an `InternalsVisibleTo` granted to this assembly alone.
 
-To run it locally (Release only; BenchmarkDotNet refuses a Debug build):
+The transcript and tracker benchmarks open a real file each time, as the host does. Real-time
+scanning makes those opens far dearer on a developer's Windows machine than on a hosted runner.
+In the first baselines, `SessionTrackerBenchmarks.Unchanged` took 331 µs locally and 49 µs on
+`windows-latest`, so compare those two only against a baseline from the same kind of machine.
+
+To run it locally (Release only; BenchmarkDotNet refuses a Debug build), from the repository's
+root, where BenchmarkDotNet looks for the project it builds each benchmark from:
 
 ```powershell
 dotnet run -c Release --project tests/AgentBridge.Benchmarks -- --filter '*' --summary $env:TEMP\perf\bench-micro.json
 ```
+
+BenchmarkDotNet restores the projects it generates, too: a machine that restores through a
+mirror rather than nuget.org sets `$env:RestoreSources` to the mirror's index for the run.
 
 `--filter '*Noise*'` runs one class, and `--job short` gives a quick, rough look. Every other
 BenchmarkDotNet option works too. BenchmarkDotNet's own reports go to
@@ -96,7 +107,8 @@ sizes, so a change to the fixtures is not mistaken for a change in speed.
 
 The baselines are `quality/baselines/<suite>/<platform>.json`, named as `catalog.yml` names
 platforms (`win-x64`, `linux-x64`). `environment.runner` in each file says where it was measured
-(`local` or `github-actions`).
+(`local` or `github-actions`). The first `win-x64` files are from a local run on a developer's
+Windows machine, and the first `linux-x64` files are from the first Perf run on `ubuntu-latest`.
 
 Compare like with like: a local run against a local baseline, a hosted run against a hosted one,
 on the same platform. Even then, read anything under about 10% (hook p95 under about 20%) as

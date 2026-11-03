@@ -37,9 +37,9 @@ public class TranscriptFirstReadBenchmarks
 
 // What a busy session costs each pass: one turn (about 12 KB: a prompt, a tool call and its
 // output, a reply) appended, read and parsed. The append itself is in the time, a write to the
-// OS's cache, and so is opening the file again just after it: on Windows a file system filter
-// (Defender's scan) made that open about 10 ms of the whole when this was written. Each
-// iteration starts again from the same transcript, so the file does not grow without end.
+// OS's cache, and so is opening the file again just after it, which real-time scanning can make
+// most of the cost. Each iteration starts again from the same transcript, so the file does not
+// grow without end.
 [InvocationCount(64, 1)]
 public class TranscriptAppendBenchmarks
 {
