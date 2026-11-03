@@ -125,7 +125,8 @@ Agent-ha-bridge's usage card, kept exactly:
   keyed and keyless readings of an agent are never shown side by side: whichever it took last stands
   for that machine, the other is left out, so Codex alternating between a probe's keyed reading and
   its transcripts' keyless ones is still one row. A failure is held to the same rule: one older than
-  that machine's last reading of the other kind is left out, and one newer still shows. Two
+  that machine's last reading of the other kind is left out, and one newer still shows; of two
+  failures of the two kinds with no reading newer than either, only the later shows. Two
   readings of the two kinds measured at the same moment go to the one reported first.
 * **Rows in order of the fullest window**, highest first. The folded summary is
   `GitHub Copilot 79% · Claude Code 12%`, each figure in its own colour.

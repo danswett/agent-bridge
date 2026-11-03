@@ -71,6 +71,14 @@ test('a machines older keyless sign-out is dropped once it gives a newer keyed r
   assert.ok(later.some((r) => r.error === 'Codex needs signing in again on this machine'));
 });
 
+test('of one machines keyed and keyless failures with no reading newer than either, only the later stands', () => {
+  const vm = { id: 'vm', name: 'vm' };
+  const keyless = { agent: 'codex', label: 'Codex', error: 'Codex needs signing in again on this machine', measuredAt: iso(-600_000), windows: [], readBy: vm };
+  const keyed = { ...keyless, accountKey: 'c0dec0dec0de', measuredAt: iso(-60_000) };
+  assert.deepEqual(mergeUsage([{ agents: [keyless] }, { agents: [keyed] }].map(readUsage)).map((r) => r.accountKey ?? null), ['c0dec0dec0de']);
+  assert.deepEqual(latestUsage([{ agents: [keyed, { ...keyless, measuredAt: iso(0) }] }].map(readUsage)).map((r) => r.accountKey ?? null), [null]);
+});
+
 test('one machines keyed and keyless readings taken at the same moment are one row, the first reported', () => {
   const vm = { id: 'vm', name: 'vm' };
   const transcript = { agent: 'codex', label: 'Codex', source: 'transcript', measuredAt: iso(-60_000), windows: [{ key: 'primary', label: '5h limit', percent: 10 }], readBy: vm };

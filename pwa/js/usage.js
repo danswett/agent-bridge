@@ -147,23 +147,28 @@ function usageSlots(reports) {
 // probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and kept
 // apart they were one allowance shown twice. A failure is held to the same rule: a sign-out older
 // than the other kind's last reading is history, and one newer than it still stands. Readings of
-// the two kinds measured at the same moment go to whichever was reported first. Mirrors
-// UsageMerge.Current.
+// the two kinds measured at the same moment go to whichever was reported first. Of two failures of
+// the two kinds, with no reading newer than either, the later stands. Mirrors UsageMerge.Current.
 function current(agents) {
   const of = (a) => `${a.agent}\u0000${a.readBy?.id ?? ''}`;
   const at = (a) => Date.parse(a.measuredAt ?? '') || 0;
   const keyless = (a) => !a.accountKey && !a.account;
   const kind = (a, bare) => `${of(a)}\u0000${bare}`;
   const newest = new Map();
+  const failed = new Map();
   agents.forEach((a, order) => {
-    if (!a.windows?.length) { return; }
-    const n = newest.get(kind(a, keyless(a)));
-    if (!n || at(a) > n.at) { newest.set(kind(a, keyless(a)), { at: at(a), order }); }
+    const latest = a.windows?.length ? newest : failed;
+    const n = latest.get(kind(a, keyless(a)));
+    if (!n || at(a) > n.at) { latest.set(kind(a, keyless(a)), { at: at(a), order }); }
   });
   return agents.filter((a, i) => {
     const other = newest.get(kind(a, !keyless(a)));
+    if (!a.windows?.length) {
+      if (other && at(a) <= other.at) { return false; }
+      const f = failed.get(kind(a, !keyless(a)));
+      return !f || at(a) > f.at || (at(a) === f.at && i < f.order);
+    }
     if (!other) { return true; }
-    if (!a.windows?.length) { return at(a) > other.at; }
     return at(a) > other.at || (at(a) === other.at && i < other.order);
   });
 }

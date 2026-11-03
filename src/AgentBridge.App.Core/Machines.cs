@@ -806,24 +806,31 @@ public static class UsageMerge
     // a probe's keyed reading while idle and its transcripts' keyless ones while a session runs, and
     // kept apart they were one allowance shown twice, the older of the two going stale beside it.
     // A failure is held to the same rule: a sign-out older than the other kind's last reading is
-    // history, and one newer than it still stands. Readings of the two kinds measured at the same
-    // moment go to whichever was reported first, as two readings of one account do.
+    // history, and one newer than it still stands; of two failures of the two kinds and no reading
+    // newer than either, the later stands. Entries of the two kinds measured at the same moment go
+    // to whichever was reported first, as two readings of one account do.
     static IEnumerable<AgentUsage> Current(List<AgentUsage> all)
     {
         static (AgentKind, string?) Of(AgentUsage a) => (a.Agent, a.ReadBy?.Id);
         var newest = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
+        var failed = new Dictionary<((AgentKind, string?) Machine, bool Keyless), (DateTimeOffset At, int Order)>();
         for (var i = 0; i < all.Count; i++)
         {
             var a = all[i];
-            if (a.Windows.Count == 0) { continue; }
+            var latest = a.Windows.Count == 0 ? failed : newest;
             var kind = (Of(a), UsageShare.Keyless(a));
-            if (!newest.TryGetValue(kind, out var n) || a.MeasuredAt > n.At) { newest[kind] = (a.MeasuredAt, i); }
+            if (!latest.TryGetValue(kind, out var n) || a.MeasuredAt > n.At) { latest[kind] = (a.MeasuredAt, i); }
         }
         return all.Where((a, i) =>
         {
-            if (!newest.TryGetValue((Of(a), !UsageShare.Keyless(a)), out var other)) { return true; }
-            if (a.Windows.Count == 0) { return a.MeasuredAt > other.At; }
-            return a.MeasuredAt > other.At || (a.MeasuredAt == other.At && i < other.Order);
+            var otherKind = (Of(a), !UsageShare.Keyless(a));
+            var read = newest.TryGetValue(otherKind, out var other);
+            if (a.Windows.Count == 0)
+            {
+                if (read && a.MeasuredAt <= other.At) { return false; }
+                return !failed.TryGetValue(otherKind, out var f) || a.MeasuredAt > f.At || (a.MeasuredAt == f.At && i < f.Order);
+            }
+            return !read || a.MeasuredAt > other.At || (a.MeasuredAt == other.At && i < other.Order);
         });
     }
 

@@ -1207,6 +1207,17 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Of_one_machines_keyed_and_keyless_failures_with_no_reading_newer_than_either_only_the_later_stands()
+    {
+        var vm = new UsageReader(new string('a', 32), "VM");
+        var keyless = new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.None, Error = "Codex needs signing in again on this machine", MeasuredAt = Make.T0, ReadBy = vm };
+        var keyed = keyless with { AccountKey = "c0dec0dec0de", MeasuredAt = Make.T0.AddMinutes(10) };
+
+        Assert.Equal("c0dec0dec0de", Assert.Single(UsageMerge.Merge([new UsageReport([keyless]), new UsageReport([keyed])]).Agents).AccountKey);
+        Assert.Null(Assert.Single(UsageMerge.Latest([new UsageReport([keyed, keyless with { MeasuredAt = Make.T0.AddMinutes(20) }])])).AccountKey);
+    }
+
+    [Fact]
     public void One_machines_keyed_and_keyless_readings_taken_at_the_same_moment_are_one_row_the_first_reported()
     {
         var vm = new UsageReader(new string('a', 32), "VM");
