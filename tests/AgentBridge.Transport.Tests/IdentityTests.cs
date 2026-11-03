@@ -104,6 +104,45 @@ public sealed class IdentityTests : IDisposable
         }
     }
 
+    [NotWindowsFact("Unix permissions and symlinks")]
+    public void An_existing_public_identity_directory_is_made_private_before_credentials_are_created()
+    {
+        if (OperatingSystem.IsWindows()) { return; }
+        Directory.CreateDirectory(Path.Combine(root, "p"));
+        File.SetUnixFileMode(root, (UnixFileMode)511);
+        File.SetUnixFileMode(Path.Combine(root, "p"), (UnixFileMode)511);
+        var identity = Identity.Load("p", KeyStorage.File, root);
+        const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Assert.Equal(ownerOnly, File.GetUnixFileMode(root));
+        Assert.Equal(ownerOnly, File.GetUnixFileMode(identity.Folder));
+    }
+
+    [NotWindowsFact("Unix permissions and symlinks")]
+    public void A_linked_profile_is_refused_without_creating_a_key_in_its_target()
+    {
+        if (OperatingSystem.IsWindows()) { return; }
+        var target = Directory.CreateDirectory(Path.Combine(root, "target")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(root, "p"), target);
+        Assert.Throws<IOException>(() => Identity.Load("p", KeyStorage.File, root));
+        Assert.False(File.Exists(Path.Combine(target, "key.json")));
+    }
+
+    [NotWindowsFact("Unix permissions and symlinks")]
+    public void A_linked_account_is_neither_read_nor_overwritten_and_a_failed_save_keeps_the_previous_account()
+    {
+        if (OperatingSystem.IsWindows()) { return; }
+        var identity = Identity.Load("p", KeyStorage.File, root);
+        var target = Path.Combine(root, "unrelated.json");
+        const string original = "{\"Token\":\"fixture-token\",\"AccountId\":\"1\",\"Login\":\"fixture\"}";
+        File.WriteAllText(target, original);
+        File.CreateSymbolicLink(Path.Combine(identity.Folder, "account.json"), target);
+        Assert.Throws<IOException>(() => Identity.Load("p", KeyStorage.File, root));
+        Assert.False(identity.ReloadAccount());
+        Assert.Throws<IOException>(() => identity.Save(new SignInResult("fixture-new", "2", "new")));
+        Assert.Null(identity.Account);
+        Assert.Equal(original, File.ReadAllText(target));
+    }
+
     [WindowsFact("DPAPI exists only on Windows")]
     [SupportedOSPlatform("windows")]
     public void A_DPAPI_key_is_encrypted_on_disk_the_same_key_on_reload_and_a_tampered_file_is_refused()

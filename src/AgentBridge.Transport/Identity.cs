@@ -39,7 +39,8 @@ public sealed class Identity
         KeyStorage storage;
         if (File.Exists(keyFile))
         {
-            var k = JsonDocument.Parse(File.ReadAllText(keyFile)).RootElement;
+            using var document = JsonDocument.Parse(ReadPrivate(keyFile));
+            var k = document.RootElement;
             key = P256KeyPair.FromParameters(Wire.Unhex(k.GetProperty("d").GetString()!), Wire.Unhex(k.GetProperty("x").GetString()!), Wire.Unhex(k.GetProperty("y").GetString()!));
             storage = KeyStorage.File;
         }
@@ -58,15 +59,15 @@ public sealed class Identity
             storage = KeyStorage.File;
         }
         var accountFile = Path.Combine(folder, "account.json");
-        var account = File.Exists(accountFile) ? JsonSerializer.Deserialize<SignInResult>(File.ReadAllText(accountFile)) : null;
+        var account = File.Exists(accountFile) ? JsonSerializer.Deserialize<SignInResult>(ReadPrivate(accountFile)) : null;
         return new Identity(folder, key, storage, account);
     }
 
     // The account token is a bearer credential for the relay, so it is as private as the key.
     public void Save(SignInResult account)
     {
-        Account = account;
         WritePrivate(Path.Combine(Folder, "account.json"), JsonSerializer.Serialize(account));
+        Account = account;
     }
 
     // Reads account.json again, for a long-running host: another process (the CLI's sign-in)
@@ -77,7 +78,7 @@ public sealed class Identity
         try
         {
             var file = Path.Combine(Folder, "account.json");
-            now = File.Exists(file) ? JsonSerializer.Deserialize<SignInResult>(File.ReadAllText(file)) : null;
+            now = File.Exists(file) ? JsonSerializer.Deserialize<SignInResult>(ReadPrivate(file)) : null;
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return false; }
         if (now is null || now == Account) { return false; }
@@ -88,7 +89,25 @@ public sealed class Identity
     static void CreatePrivateDirectory(string path)
     {
         if (OperatingSystem.IsWindows()) { Directory.CreateDirectory(path); }
-        else { Directory.CreateDirectory(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+        else
+        {
+            const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+            Directory.CreateDirectory(path, ownerOnly);
+            if (new DirectoryInfo(path).LinkTarget is not null) { throw new IOException("An identity directory cannot be a symbolic link."); }
+            // CreateDirectory's mode only applies to a new directory. A pre-existing
+            // development root must be private before any credentials are read or made.
+            File.SetUnixFileMode(path, ownerOnly);
+        }
+    }
+
+    static string ReadPrivate(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            if (new FileInfo(path).LinkTarget is not null) { throw new IOException("An identity credential cannot be a symbolic link."); }
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        return File.ReadAllText(path);
     }
 
     // Off Windows the file is created owner-only, rather than made and then narrowed, so
@@ -98,8 +117,20 @@ public sealed class Identity
     {
         if (OperatingSystem.IsWindows()) { File.WriteAllText(path, text); return; }
         const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-        using (var fs = new FileStream(path, new FileStreamOptions { Mode = FileMode.Create, Access = FileAccess.Write, UnixCreateMode = ownerOnly }))
-        using (var w = new StreamWriter(fs)) { w.Write(text); }
-        File.SetUnixFileMode(path, ownerOnly);
+        CreatePrivateDirectory(Path.GetDirectoryName(path)!);
+        if (new FileInfo(path).LinkTarget is not null) { throw new IOException("An identity credential cannot be a symbolic link."); }
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(temporary, new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, UnixCreateMode = ownerOnly }))
+            {
+                using (var writer = new StreamWriter(fs, leaveOpen: true)) { writer.Write(text); }
+                fs.Flush(flushToDisk: true);
+            }
+            // Readers see the old or new token whole, and no existing file or link is
+            // opened for writing (which could overwrite a different file).
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) { File.Delete(temporary); } }
     }
 }
