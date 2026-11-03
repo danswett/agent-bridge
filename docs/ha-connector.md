@@ -18,6 +18,35 @@ update buttons; stage 7 the daemon's upkeep** (the Detailed activity switch, the
 sensor's repair, a live session's entities put back) and what forgetting a machine means here.
 The plan, with every stage done, is below.
 
+### Retaining HA without a legacy daemon (#317)
+
+The owner decided on 2026-11-02 to keep the HA dashboard after the legacy daemon is
+retired. #318 implements native shared dashboard/card publication; #319 depends on it
+for an explicit writer handover, rollback and disposable-HA rehearsal. This is not
+permission to bypass G7: the current connector still does not publish shared resources,
+and writer migration remains refused until the replacement is verified.
+
+The first implementation slice ports protocol 1's policy validation, ordinal canonical
+policy JSON/digest/resource URL, receipt-progress checks and writer/artifact authorization
+to `HaPublicationPolicy`. Exact rollback pins independently verify the served inline
+card's version and bytes; an opaque file URL cannot prove a pin. It is internal
+contract code only: no runtime publisher, policy mutation, migration permission or
+live HA write is added by this slice.
+
+`PublicationTests` compares those decisions with the original functions, recorded by:
+
+```
+pwsh -NoProfile -File tools/ha-contract/Export-HaPublication.ps1 -Source <legacy-checkout>
+```
+
+The separate fixture `Fixtures/ha-publication.json` records its own source commit
+(`ef5454e8ea6fd1dab304658ca097b5aae7667e97` initially); it does not re-pin the per-machine
+fixtures below. The exporter loads only named pure functions from the source syntax
+tree, stubs local settings in memory and performs no HA or installed-config access.
+Malformed resources are not absence, observers cannot acquire writer authority, and
+generation/high-water regressions remain refusals. Policy validation additionally
+rejects duplicate JSON members instead of letting a parser silently select one.
+
 ## What it never does
 
 * **Publish the shared card resource, the Lovelace dashboard or the publication policy.**

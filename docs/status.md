@@ -36,6 +36,12 @@ with rollback, and the publication writer (DSWETT-HOME) moves last.
 **Current goal (decided 2026-10-29):** parity with agent-ha-bridge first, then migrate
 real machines. New features wait, except the few marked "beyond parity" in parity.md.
 
+**HA retention (owner, 2026-11-02):** the optional HA dashboard must keep working
+without any legacy daemon. #317 tracks native fenced publication (#318) followed by
+writer migration, rollback and rehearsal (#319). This replaces the planned dashboard
+retirement, not the current G7 migration refusal. Copilot CLI session
+`d5ac689c-a9f6-4618-8e8f-9220793487f4` owns this implementation; coordination is on #170.
+
 ## 2. Where things are (2026-11-02)
 
 ### Built and merged
@@ -87,6 +93,14 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 - **Next on track A:** S2 (#174), using the sub-agent transcripts the soak recorded (in `~/repos/wt/agent-bridge-soak-transcripts`, not committed). #175 still needs its live check.
 - **Queued backend:** #231 (agents installed later), #257 (provider-neutral account ID), #239, #206, #207, #241.
 
+In flight on #317 (publication owner above):
+- #318: first slice is the native protocol-1 policy/fence contract, verified against
+  legacy-function recordings (`PublicationTests`). It does not enable publication.
+  Next: protected receipts and actual HA resource/dashboard observation, renderer and
+  versioned card publication, then integration into the connector.
+- #319: writer cutover remains blocked until #318 and the disposable-HA handover/
+  rollback rehearsal pass. No live HA or legacy-install changes during development.
+
 ## 3. Shadow gate (#40)
 
 The gate is coverage-based (design §10, Stage 4). Since DEV-VM1 migrated (11-02 14:16 PT) and
@@ -124,7 +138,9 @@ current gate reading. The record of that shadow follows.
 2. ~~**HOME view-only install**~~ Done 2026-11-01: the PWA lists HOME online and read-only.
 3. **Migrate machines while the soak runs** (owner, 2026-11-01): ~~ARM8~~ done. ~~DEV-VM1~~ done 11-02 14:16 PT. Its keep-awake has landed (#224), and the commands are with the owner. Then DASDESK when it's online, and the Mac after P5. Repeat rehearsal step E6-07 (worktree reclaim) on one of them.
 4. **The VM soak's gate** (§3): report it when it passes, then run `-Finish` to deallocate.
-5. **HOME last** (P7): move the publication-writer role, migrate, then retire the HA dashboard as an explicit operator action.
+5. **Writer migration** (P7, #317): native shared publication first (#318), then a
+   reversible, verified handover (#319). Keep the HA dashboard working without a
+   legacy daemon; do not bypass G7 or retire the dashboard as a migration prerequisite.
 6. **UI design track** (§5).
 7. **Later:** code signing, macOS (P5), native phone apps (P8), relay scale (S9), observability (§5.10), and decommissioning the old relay stamp in the trial subscription (awaiting the owner's approval).
 
