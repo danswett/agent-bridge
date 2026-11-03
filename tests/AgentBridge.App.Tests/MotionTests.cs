@@ -157,4 +157,20 @@ public sealed class MotionTests
         Assert.Equal(TimeSpan.FromMilliseconds(100), guard.Remaining(t0.AddMilliseconds(800)));
         Assert.True(guard.Accepts(pointer: true, t0.AddMilliseconds(900)));
     }
+
+    [Fact]
+    public void Answer_controls_take_no_click_again_when_their_tab_comes_back_but_not_while_it_stays()
+    {
+        var t0 = DateTimeOffset.Parse("2026-11-02T16:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var guard = new AnswerGuard();
+        Assert.True(guard.Shown(true, t0));
+        Assert.False(guard.Shown(true, t0.AddSeconds(1)));
+        Assert.True(guard.Accepts(pointer: true, t0.AddSeconds(1)));
+
+        // Tools picked, then Conversation again: its question is back under the pointer.
+        Assert.False(guard.Shown(false, t0.AddSeconds(2)));
+        Assert.True(guard.Shown(true, t0.AddSeconds(3)));
+        Assert.False(guard.Accepts(pointer: true, t0.AddSeconds(3).AddMilliseconds(499)));
+        Assert.True(guard.Accepts(pointer: true, t0.AddSeconds(3).AddMilliseconds(500)));
+    }
 }

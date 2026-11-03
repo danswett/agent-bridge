@@ -167,6 +167,18 @@ public sealed class AnswerGuard
     // The controls appeared, or were brought into view: the window starts again.
     public void Arm(DateTimeOffset now) => armed = now;
 
+    bool shown;
+
+    // Whether the controls' place (the conversation, behind a tab) is on screen. Coming back into
+    // view puts them under a pointer aimed at the tab that was there, so it arms as appearing does.
+    public bool Shown(bool visible, DateTimeOffset now)
+    {
+        var revealed = visible && !shown;
+        shown = visible;
+        if (revealed) { Arm(now); }
+        return revealed;
+    }
+
     public TimeSpan Remaining(DateTimeOffset now) =>
         armed is { } at && at + Window - now is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
 

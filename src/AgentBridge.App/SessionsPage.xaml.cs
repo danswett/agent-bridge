@@ -148,9 +148,10 @@ public sealed partial class SessionsPage : UserControl
     // there at once, and never fade or move.
     void OnLaneChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        // An entry appearing, or the lane's entries moving, can put Approve once under a pointer
-        // aimed at something else: the lane takes no click for a moment (AnswerGuard).
-        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Move) { GuardLane(); }
+        // Any change to the lane can put Approve once under a pointer aimed at something else: an
+        // entry appearing, the entries moving, or those after a removed one shifting up into its
+        // place. The lane takes no click for a moment (AnswerGuard).
+        GuardLane();
         if (!ready || viewModel is null || Layout?.ShowList != true || e.Action != NotifyCollectionChangedAction.Add) { return; }
         foreach (NeedsYouEntry entry in e.NewItems ?? Array.Empty<object>())
         {

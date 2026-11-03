@@ -317,6 +317,10 @@ public sealed partial class SessionView : UserControl
     void OnLayout(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(PaneLayoutViewModel.ShownTab) or "" or null) { ShowTab(); }
+        // The conversation back (its tab picked again, the session pushed in, the window shown):
+        // its question is under a pointer aimed at what was there, motion or none.
+        if (e.PropertyName is (nameof(PaneLayoutViewModel.ShowConversation) or "" or null) && layout is not null
+            && guard.Shown(layout.ShowConversation && layout.OnScreen, DateTimeOffset.UtcNow)) { GuardAnswer(); }
     }
 
     // The tab the panes show, selected in the bar: the one picked, or Conversation once the picked
