@@ -546,6 +546,9 @@ host would, and a second pretend host ("Build server") that the app reaches as i
 another machine through the relay. For trying the app without agents, for screenshots, and for CI. It never
 reaches the real host or its profile.
 
+Settings shows the host log in monospace with **Wrap lines** enabled initially. Turn it off
+for structured data that needs fixed columns; Refresh preserves the chosen wrapping mode.
+
 ## Deferred, explicitly
 
 * **Pairing and a Devices page**: the account's other devices are trusted by signing in to
