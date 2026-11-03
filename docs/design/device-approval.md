@@ -40,11 +40,11 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | Party | Assumption | What it must not be able to do |
 |---|---|---|
 | **The account's GitHub sign-in** (a stolen token, a phished device flow, a leaked relay session token) | Can admit new keys to the relay, with any `kind` and `name` | Read or drive a session, pass a person-only check, appear as an approved machine, approve itself, or replace the roster |
-| **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host the remover has never had an attestation from until the roster is imported there (§3.3) |
+| **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host that does not yet hold the removal's parent (one the remover has no attestation from, or one behind a just-made confirmation) until the roster is imported there (§3.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
 | **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs. Hosts in `enforce` hold to this from the start; the relay does once the account's relay mode is `enforce` (§4.5), which the owner switches on after the cutover (§8.2) |
 | **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4); touch a device senior to it in any way. Its removals of devices junior to it are not held, and apply at once. It **can** disable devices that are not senior to it by copying their keys: a conflict makes one inactive, and for a device junior to it the copy can displace the genuine enrollment. Both are announced naming it, and undone by removing it (§3.3) |
-| **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host the remover has never had an attestation from, where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
+| **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host that does not yet hold the removal's parent (one the remover has no attestation from, or one behind a signer's just-made confirmation), where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
 | **The local pipe and the HA connector** | Unchanged: same-OS-user trust, and Home Assistant credentials respectively | Out of scope for the roster; see §9.5 |
 
@@ -225,10 +225,16 @@ history state. It is valid only if:
   other), seniority decides, because displacing a device must need the same authority as removing
   it. `add₂`, signed by S₂, may displace the device `add₁` made only if S₂ is senior to that
   device (§3.4), that is, S₂'s own add is an ancestor of `add₁`; and the same the other way round.
-  If one may displace the other and not the reverse, the add that cannot is **subordinate**, and
-  void. Otherwise (both may, or neither, as with two devices on concurrent branches) the id is
-  **conflicted**: inactive in every state that holds both, whichever arrived first, and so with no
-  lineage or signing key there. Subordination is structural: it depends only on which adds are
+  The rule decides over the **whole set** of such adds at once, so that three or more cannot form
+  a cycle that verifiers resolve differently. The set is the id's adds that are non-void for every
+  other reason (§3.5); this rule's own outcome never feeds back into it. One add in the set
+  **wins** if its signer may displace every other add's device and no other add's signer may
+  displace it. At most one add can win. If one does, every other add in the set is
+  **subordinate**, and void. Otherwise (two that may displace each other, two that cannot, or a
+  cycle such as A's add displacing B's, B's displacing C's and C's displacing A's) the id is
+  **conflicted**: inactive in every state that holds the set, whichever arrived first, and so with
+  no lineage or signing key there. For two adds this is the pairwise rule: the one that may
+  displace the other and cannot be displaced wins. Subordination is structural: it depends only on which adds are
   ancestors of which, never on removals. So a device H that adds the public key of a device A it is
   not senior to, on a branch where A is absent (A and H added by G on concurrent branches, say),
   achieves nothing: G is senior to H's copy and H is not senior to A, so H's add is subordinate
@@ -1815,6 +1821,11 @@ Each slice adds its own. Together they cover:
   new enrollment. A cosigned removal of H by two confirmed devices, signed on a parent from before
   the copy, does the same. H's attempt to copy G's key, or that of any device senior to it, is
   refused as a re-added id.
+* **A cycle of copies.** Concurrent approvers A, B and C each add one id, over histories holding
+  A and C, A and B, and B and C respectively, so A's add displaces B's, B's displaces C's and C's
+  displaces A's: no add wins, the id is conflicted at every verifier holding all three, in every
+  delivery order, and no verifier picks a signing key for it. With only two of the three, the one
+  that wins pairwise is active.
 * **Displacement.** G adds H, then G adds A on top of that, and A adds X, so H is senior to X. H
   signs a copy of X's key with its own add as parent, before A's: A is not senior to the copy and
   H is senior to X, so X's genuine add is subordinate. X stays active under H's `sign` key, X's own entries and
@@ -2088,11 +2099,15 @@ Each slice adds its own. Together they cover:
      remove them, and if none are left it is a reset;
    * a reset when a senior device is lost without two confirmed, independently approved survivors,
      including when it is lost within three days of approving them;
-   * a removal refused for evidence at a host the remover's device has no attestation from (one
-     offline since before the target was added, say), because there a hostile target can make it
+   * a removal refused for evidence at some hosts, because there a hostile target can make it
      need more evidence than the limits allow. The client signs every removal on a parent every
-     attested host holds, so elsewhere it needs none (§3.3). That host shows as not having
-     confirmed the removal, and importing the roster at the machine admits it.
+     attested host holds when one holds what the removal needs, and then only a host it has no
+     attestation from (one offline since before the target was added, say) can need evidence
+     (§3.3). When none does, because a signer's `confirm` or a kept device's add is newer than what
+     some attested hosts hold, the removal's parent lies outside their common history, and the
+     target's entries that precede that `confirm` on the relay's line can need evidence at those
+     attested hosts too. Either way such a host shows as not having confirmed the removal, the
+     client says which hosts lack the parent, and importing the roster at each machine admits it.
    Seniority follows causality (one device's add is an ancestor of the other's), so a relay that
    hides heads cannot make a newer device outrank an older one.
    (b) Seniority without the two-signature removal: a lost senior device then always means a reset.
