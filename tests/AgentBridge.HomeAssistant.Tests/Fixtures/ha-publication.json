@@ -1,0 +1,1764 @@
+{
+  "source": {
+    "dirty": false,
+    "commit": "ef5454e8ea6fd1dab304658ca097b5aae7667e97"
+  },
+  "policy": {
+    "highRender": {
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "version": "2.0.0"
+    },
+    "writer": "test-writer",
+    "render": {
+      "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "version": "2.0.0"
+    },
+    "highCard": {
+      "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+      "version": "1.0.0"
+    },
+    "mode": "advance",
+    "generation": 3,
+    "card": {
+      "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+      "version": "1.0.0"
+    },
+    "protocol": 1,
+    "legacyCard": "",
+    "dashboard": "agent-decisions",
+    "authority": "test-authority"
+  },
+  "canonical": "{\"authority\":\"test-authority\",\"card\":{\"hash\":\"a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d\",\"version\":\"1.0.0\"},\"dashboard\":\"agent-decisions\",\"generation\":3,\"highCard\":{\"hash\":\"a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d\",\"version\":\"1.0.0\"},\"highRender\":{\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"version\":\"2.0.0\"},\"legacyCard\":\"\",\"mode\":\"advance\",\"protocol\":1,\"render\":{\"hash\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"version\":\"2.0.0\"},\"writer\":\"test-writer\"}",
+  "hash": "ee367d6ae69130f2b1ed2a94602d60bffc900658ef83515fdb61847abc22221c",
+  "resourceUrl": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+  "validations": [
+    {
+      "accepted": true,
+      "name": "valid",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": true,
+      "name": "pinned",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "0.9.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "extra-member",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority",
+        "extra": true
+      }
+    },
+    {
+      "accepted": false,
+      "name": "missing-member",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "protocol",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 2,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "identity",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "not a writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "generation",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 0,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "dashboard",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "other-dashboard",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "mode",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "automatic",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "hash",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "artifact-member",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0",
+          "extra": true
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "version",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "target-above-high",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "3.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "advance-below-high",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "3.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    }
+  ],
+  "progress": [
+    {
+      "accepted": true,
+      "name": "unchanged",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": true,
+      "name": "catch-up",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "next-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 5,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "authority-change",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "other-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "generation-regression",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 2,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "writer-same-generation",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "other-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "mode-same-generation",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "high-regression",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "1.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "1.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 4,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "high-conflict",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "target-conflict",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": true,
+      "name": "advance-upgrade",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "3.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "3.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": true,
+      "name": "explicit-pin",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "1.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 4,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": false,
+      "name": "pinned-target-change",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "1.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    },
+    {
+      "accepted": true,
+      "name": "pin-exit-new-generation",
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "1.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "current": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 4,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      }
+    }
+  ],
+  "writers": [
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "exact",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": true
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "observer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "observer",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "other-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "wrong-authority",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "other-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "wrong-writer",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 2,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "wrong-generation",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "1.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "older",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "equal-version-conflict",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "3.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "newer",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": true
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "pin-exact",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": true
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "3.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "pin-newer",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "02.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "pin-alias",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "",
+      "name": "pin-missing-card",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "/local/agent-bridge-reply-card.js?v=1.0.0",
+      "name": "pin-opaque-card",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "2.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "data:text/javascript;base64,Y29uc3QgQ0FSRF9WRVJTSU9OID0gJzEuMC4wJzs=#agent-bridge-reply-card.js?v=1.0.0",
+      "name": "pin-wrong-card",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "render",
+      "accepted": false
+    },
+    {
+      "artifact": {
+        "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+        "version": "1.0.0"
+      },
+      "settings": {
+        "writer": "test-writer",
+        "authority": "test-authority",
+        "generation": 3,
+        "participant": "test-writer"
+      },
+      "cardUrl": "",
+      "name": "card-repair",
+      "policy": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "pin",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "component": "card",
+      "accepted": true
+    }
+  ]
+}
