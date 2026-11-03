@@ -379,6 +379,10 @@ public sealed class MainTests(Xunit.Abstractions.ITestOutputHelper output) : IAs
         Assert.Equal(["plan"], Find("migration").Select(h => h.SessionId));
         Assert.Equal(["fix"], Find("plan ha-bridge").Select(h => h.SessionId));
         Assert.Equal(["fix"], Find("fix/").Select(h => h.SessionId));
+        Assert.Equal(Find("plan ha-bridge"), Find("plan\tha-bridge"));
+        Assert.Equal(Find("plan ha-bridge"), Find("  plan\r\nha-bridge  "));
+        Assert.Equal(Find("plan migration"), Find("plan\tmigration"));
+        Assert.Empty(Find("\t\r\n"));
         Assert.Empty(Find("plan nowhere"));
         Assert.Empty(Find("   "));
         var plain = Find("a session");
