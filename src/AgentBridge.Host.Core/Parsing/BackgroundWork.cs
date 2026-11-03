@@ -20,6 +20,9 @@ namespace AgentBridge.Host.Core.Parsing;
 // started, and Running drops whatever began before the session's current process did.
 // Without that, a CLI that was replaced, or a host reading an old tail, left a session
 // "delegating" for good, waiting on work nothing would ever finish.
+//
+// Claude's and Codex's delegates are entries here too (ClaudeParser, CodexParser), as far
+// as their transcripts say anything of them (docs/design/subagents.md §3).
 internal sealed class BackgroundWork
 {
     // Enough for any real session; a hostile transcript cannot grow these without bound.
@@ -239,13 +242,109 @@ internal sealed class BackgroundWork
 
     // agent_idle: spent on the oldest run still owed one; only a notice no run is owed
     // ends the current run (one whose end its own events never showed), or says how one
-    // ended whose start was only skimmed.
-    public void AgentIdle(string? agentId, DateTimeOffset? at = null)
+    // ended whose start was only skimmed. Claude's task-notification and Codex's agent
+    // states are notices of the same kind, the only word of a run's end, with its outcome.
+    public bool AgentIdle(string? agentId, DateTimeOffset? at = null, SubagentOutcome outcome = SubagentOutcome.Done)
     {
-        if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return; }
-        if (agent.IdleOwed > 0) { agent.IdleOwed--; return; }
-        if (!agent.Working) { Outcome(agent, at, SubagentOutcome.Done); return; }
-        Stop(agent, at, SubagentOutcome.Done);
+        if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return false; }
+        if (agent.IdleOwed > 0) { agent.IdleOwed--; return false; }
+        if (!agent.Working) { Outcome(agent, at, outcome); return true; }
+        Stop(agent, at, outcome);
+        return true;
+    }
+
+    // A run's end said before the notice that says it again (Codex's wait returning with the
+    // agent's state, then its subagent_notification): that notice is owed to this run, and
+    // spent on it rather than ending one a message has started since. So is one for a run whose end was not known yet (its start only skimmed past
+    // bytes never read); the same end said again owes nothing more.
+    public void AgentRunEnded(string agentId, DateTimeOffset? at, SubagentOutcome outcome)
+    {
+        if (!_agents.TryGetValue(agentId, out var agent)) { return; }
+        if (agent.Working) { EndRun(agent, at, outcome); return; }
+        if (agent.Outcome is not null) { return; }
+        Outcome(agent, at, outcome);
+        agent.IdleOwed++;
+    }
+
+    // Closed for good by its starter (Codex's close_agent, or a state saying it is shut down):
+    // a run still going failed, and no notice is owed for it, so one that says how a run after a
+    // resume ended is not spent on this one.
+    public void AgentClosed(string agentId, DateTimeOffset? at)
+    {
+        if (!_agents.TryGetValue(agentId, out var agent)) { return; }
+        if (agent.Working) { Stop(agent, at, SubagentOutcome.Failed); }
+        Finish(agent);
+    }
+
+    // Bytes were never read (TranscriptTail's skim budget spent): a run the skim saw start may
+    // have ended there. Kept listed, as between runs with no outcome known, until the window says
+    // more; left running, a Claude or Codex delegate, whose own events are not in the session's
+    // transcript, read as running for as long as its CLI lived. A notice owed may have been there
+    // too: kept owed, it would be spent on the end of a run started after, which then ran for good.
+    public void ForgetRuns()
+    {
+        foreach (var agent in _agents.Values)
+        {
+            agent.IdleOwed = 0;
+            if (agent.Working) { ForgetRun(agent); }
+        }
+    }
+
+    public void ForgetRun(string agentId)
+    {
+        if (_agents.TryGetValue(agentId, out var agent) && agent.Working) { ForgetRun(agent); }
+    }
+
+    void ForgetRun(Agent agent)
+    {
+        agent.Working = false;
+        agent.Outcome = null;
+        agent.EndedAt = null;
+        agent.AskedForTools = false;
+        Version++;
+    }
+
+    // Whether any sub-agent is known: only one can have started another.
+    public bool HasAgents => _agents.Count > 0;
+
+    public bool Knows(string agentId) => _agents.ContainsKey(agentId);
+
+    // When a working agent's current run started.
+    public DateTimeOffset? RunSince(string agentId) => _agents.TryGetValue(agentId, out var agent) && agent.Working ? agent.Since : null;
+
+    // Whether a known agent is between runs, since when, and how its latest run ended (null when
+    // that was never said).
+    public bool Stopped(string agentId, out DateTimeOffset? endedAt, out SubagentOutcome? outcome)
+    {
+        (endedAt, outcome) = (null, null);
+        if (!_agents.TryGetValue(agentId, out var agent) || agent.Working) { return false; }
+        (endedAt, outcome) = (agent.EndedAt, agent.Outcome);
+        return true;
+    }
+
+    // Claude notifies an agent's end only once it has no live background agents of its own
+    // (its task-notification says so), so every one under it has stopped by then, whether or
+    // not its own notice was read.
+    // One woken since (its run started after, or spare says a message woke it after) is a run
+    // the end said nothing of.
+    public void DescendantsStopped(string agentId, DateTimeOffset? at, Func<string, bool>? spare = null)
+    {
+        foreach (var agent in _agents.Values.Where(a => a.Working && Under(a, agentId)).ToList())
+        {
+            if (at is { } end && (agent.Since > end || spare?.Invoke(agent.Id) == true)) { continue; }
+            Stop(agent, at, SubagentOutcome.Done);
+        }
+    }
+
+    bool Under(Agent agent, string ancestor)
+    {
+        var a = agent;
+        for (var depth = 0; depth < 64 && a.Parent is { } parent; depth++)
+        {
+            if (parent == ancestor) { return true; }
+            if (!_agents.TryGetValue(parent, out a)) { return false; }
+        }
+        return false;
     }
 
     // Written once, after the agent's first run; written again for every agent as the
@@ -408,9 +507,11 @@ internal sealed class BackgroundWork
         Version++;
     }
 
-    public void ShellEnded(string? id)
+    public bool ShellEnded(string? id)
     {
-        if (id is not null && _shells.Remove(id)) { Version++; }
+        if (id is null || !_shells.Remove(id)) { return false; }
+        Version++;
+        return true;
     }
 
     public void ForgetShells()

@@ -33,6 +33,9 @@ internal sealed class SessionState
     public DateTimeOffset? LastActivityAt;
     // Prompts the user sent; turnCount is these less the one still in progress.
     public int Prompts;
+    // The turn in progress is not a prompt's (Claude's turn for a delegate's notice), so no
+    // prompt is still in progress.
+    public bool UncountedTurn;
     public int Compactions;
     public bool Seen;
 
@@ -54,7 +57,7 @@ internal sealed class SessionState
         AgentTitle = null; UserMessage = null; Response = null; Reasoning = null; Model = null;
         ResponseBy = null; ReasoningBy = null; OwnResponse = null; OwnResponseCut = false; OwnReasoning = null; OwnAt = null;
         Cwd = null; Branch = null; Repository = null; StartedAt = null; UpdatedAt = null; LastActivityAt = null;
-        Prompts = 0; Compactions = 0; Seen = false;
+        Prompts = 0; Compactions = 0; Seen = false; UncountedTurn = false;
         Status = SessionStatus.Idle; StatusSince = null; EffectiveSince = null;
         Tools.Clear();
         Background.Clear();

@@ -445,6 +445,17 @@ comparing:
   not: the daemon showing words neither side wrote last, or the main agent's words where
   the host's latest writer is a sub-agent. Reasoning is not compared ("Not compared"), so
   the same rule for `reasoning` needs no label.
+* **Claude's and Codex's delegates, and Claude's background commands** (#174,
+  [design/subagents.md](design/subagents.md) §3). agent-ha-bridge counts background agents
+  only from Copilot's `subagent.*` events and background commands only from Copilot's shell
+  markers, so for a Claude or Codex session it counts none, and keeps its behaviour (§7).
+  The host counts Claude's `Agent` delegates and Codex's sub-agent threads in
+  `background.agents`, and Claude's `run_in_background` commands in `background.shells`. A
+  `background.agents` difference is the known difference `copilot-only-background (#174)`
+  only for a Claude or Codex session on both sides, with the daemon at 0 and every agent the
+  host counts in its `subagents` list; a `background.shells` one only for a Claude session
+  with the daemon at 0. It is tallied, never a mismatch. A daemon counting any, a Copilot
+  session, a count the host's list does not back, or Codex commands, stay mismatches.
 * **Forms answered at the machine** (§2). Where either side cannot drive a prompt from
   another device (agent-ha-bridge's `terminalOnly`, the host's `answerAtMachine`, or a
   question the host had to cut), each shapes it its own way, so only that it is asked, and

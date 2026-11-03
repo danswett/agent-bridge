@@ -896,9 +896,9 @@ session is at most 40 KiB.
 | Claude Code | The bridge's registration files, else Claude Code's own `~/.claude/sessions/<pid>.json` (an interactive CLI, its pid running, written no earlier than that process started); and `~/.claude/projects/<slug>/<id>.jsonl` | Transcript `assistant` entries (`text`, `thinking`, `tool_use`) and `user` entries | A `tool_use` named `AskUserQuestion`, pending until a `tool_result` with its id. Claude Code 2.1.312 writes that `tool_use` only once the question is answered, so without agent-ha-bridge's `PreToolUse` hook a waiting question is not seen. A permission prompt, which only agent-ha-bridge's hook reports (its status `waiting`, newer than the transcript, over a running tool), is an `approval` with that tool's id, `answerAtMachine` |
 | Codex | The bridge's registration files, else (Windows) `~/.codex/thread-writer-locks/<id>.lock`, as the Restart Manager reports who holds it open. The lock must be held by exactly one running `codex.exe`, and that one must be an interactive terminal: its command line read, with no subcommand (a prompt at most), `resume` or `fork`, and no `app-server` or `mcp-server` argument. That is a Codex run with `--no-daemon`, not `exec`, `review`, `migrate-rollouts` and the like. A lock shared with the daemon or with an unreadable Codex names nobody. Each decision is checked again after 30 s. A terminal holding several locks is the session of the one whose rollout `session_meta` is its own top-level thread (`id` and `session_id` equal, `thread_source` "user") with an event since it started, else of none. A lone lock whose rollout names another thread (a sub-agent's) is not a session either. A registration agent-ha-bridge marked ended keeps its thread from being found this way; and `~/.codex/sessions/…/rollout-*.jsonl` | Rollout `event_msg` payloads | An approval agent-ha-bridge's hook recorded in `<id>.approval.json` beside the registration: an `approval` whose `id` is the marker's `DecisionId` (its generation), `answerAtMachine` once the marker records agent-ha-bridge's own attempt (`DeliveryAttempted`). An `exec_approval_request` or `apply_patch_approval_request` in the rollout with no marker is an `approval` keyed by its `call_id`, `answerAtMachine` |
 
-Only Copilot reports `background` and `subagents` so far. Claude Code can run Bash with
-`run_in_background`, and Codex may have equivalents, but no transcript of either doing
-so has been examined yet, so neither sends it.
+Copilot, Claude Code and Codex report `background` and `subagents`, each from what its own
+transcript says (below, and [design/subagents.md](../design/subagents.md) §3). A host
+older than `subagents` sends counts alone.
 
 On a machine that still runs agent-ha-bridge, a shadow host **only reads**. It never
 opens the hook spool, never writes into a session folder, and never deletes or locks
@@ -983,3 +983,73 @@ that added `background`).
     `ask_user` stamped with an `agentId` would be that agent's question, but Copilot gives
     its sub-agents no `ask_user`: none of 33,966 sub-agent tool calls in two months of
     transcripts on that machine was one.
+
+### Background work (Claude Code)
+
+Read from the session's own transcript, and for a nested delegate from the files beside it.
+Checked against a Claude Code 2.1.316 recording (two delegates, one nested, and a background
+command); the shapes are in `tests/fixtures/claude`.
+
+* **Delegates.** A `user` entry whose `toolUseResult` has `status: "async_launched"` and an
+  `agentId` (an `Agent` call's result) starts one: `kind` `background`, `name` and `task`
+  its `description` and `prompt`, `model` its `resolvedModel`. 2.1.316 launches every
+  `Agent` call that way; a result of any other shape lists nothing.
+* **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
+  `run_in_background`) starts one, counted in `background.shells`.
+* **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
+  Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
+  (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's
+  `remove` with `reason` `delivered_to_agent` (for one delivered to a sub-agent) of a notice
+  queued earlier. The person can type the same text, and a prompt typed while the agent works
+  is queued the same way: a `user` entry not so marked is their prompt, and a `queue-operation`
+  `enqueue` (written the moment the agent stops, with no mark of who wrote it) ends nothing by
+  itself, but dates the end its delivery confirms. One delivered after a message woke the agent
+  since it was queued is of the run before, and the agent is still working. An agent's run ends `done` for `<status>completed</status>` and
+  `failed` for any other, and it is `idle`; any run still going under it ends `done` too,
+  since Claude notifies an agent only once none of its own is live. A `SendMessage` `tool_use`
+  whose `input.to` is an agent's id wakes it, a nested one whose record is read only later
+  too. A notice delivered to the main agent starts a
+  turn of the main agent's (`working`), but is neither `userMessage` nor a prompt counted in
+  `turnCount`, and the delegate's result in it is not the session's text.
+* **Nested delegates.** Only `<session id>/subagents/agent-<agentId>.meta.json` says one
+  exists and who started it (`parentAgentId`, `description`, `agentType`, `toolUseId`,
+  `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
+  and its prompt. Read once a delegate is known, each again only when it changes, at most
+  256 of them (the first by name), and listed only under a delegate that is listed. It ends as above (its notice
+  is queued in the session's transcript too), or when the delegate above it ends. One that
+  started before the delegate above it began its current run belongs to an earlier run, which
+  was notified only once it had stopped: with its end not read, it is listed with no `outcome`
+  and not counted. A message
+  the delegate above it sends it is in that delegate's own transcript, which is not read (and
+  was not recorded): one woken that way stays listed as it stopped.
+* Starts and ends are read from the skimmed part of the transcript too. Where the host could
+  not read everything before the window, a run the skim saw start is listed with no
+  `outcome` and not counted, since its end may be in what was not read, and no delivery is
+  taken as owed across what was not read. Nothing a delegate
+  writes is in the session's transcript, so `activity.source` is never set.
+
+### Background work (Codex)
+
+Read from the session's own rollout. Checked against a Codex CLI 0.166.0 recording
+(`multi_agent` v1, one sub-agent thread); the shapes are in `tests/fixtures/codex`.
+
+* **Sub-agents.** An `item_completed` event whose item is a `CollabAgentToolCall` with
+  `tool: "spawn_agent"` starts one per `receiver_thread_ids` entry: `kind` `background`,
+  `name` its `receiver_agents[].agent_nickname`, `task` and `model` the item's `prompt` and
+  `model`. A `sender_thread_id` other than the session's own thread names its `parent`.
+* **States.** Every such item's `agents_states` says how each thread stood:
+  `pending_init` and `running` working; `{"completed": text}` ends the run `done`, the text its
+  `line`; `{"errored": text}` and `interrupted` end it `failed`; it is then `idle`, open for
+  more input. `shutdown` and `not_found` end it. A `user` message
+  `<subagent_notification>{"agent_path", "status"}</subagent_notification>`, marked by its
+  `internal_chat_message_metadata_passthrough.content_item_kinds`
+  `multi_agent.subagent_notification`, says the same (the same text without that mark is the
+  person's); after
+  a `wait` that already said so it is spent on that run, never ending one input has started
+  since.
+  `send_input`, `resume_agent`, `send_message` and `followup_task` wake their receivers;
+  `close_agent` ends them.
+* Read from the skimmed part of the rollout too, with the same rule as Claude's where not
+  everything before the window was read. A sub-agent's own words and its own
+  sub-agents are only in its own rollout, which the host does not read: what it says never
+  reaches the session's text, and its sub-agents are neither listed nor counted.
