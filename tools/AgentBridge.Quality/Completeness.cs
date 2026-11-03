@@ -25,9 +25,7 @@ static class Completeness
             if (graph[folder]?.IsTestProject == true && !cataloged.Contains(folder))
                 problems.Add(new("test-project", $"{folder} is a test project in AgentBridge.slnx, but no suite's project names it"));
 
-        foreach (var suite in catalog.Suites.Where(s => s.Project is not null))
-            if (graph[suite.Project!] is null)
-                problems.Add(new("project-path", $"suite {suite.Id} names project {suite.Project}, which has no .csproj"));
+        problems.AddRange(catalog.Validate(graph.CsprojCount));
 
         var covered = new HashSet<(string File, string Job)>();
         foreach (var suite in catalog.Suites.Where(s => !string.IsNullOrWhiteSpace(s.Where)))

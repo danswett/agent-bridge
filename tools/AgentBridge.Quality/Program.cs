@@ -49,6 +49,10 @@ static class Program
         {
             case "select":
                 {
+                    // A catalog that breaks its own schema would select wrongly, and silently.
+                    var schema = catalog.Validate(graph.CsprojCount);
+                    if (schema.Count > 0)
+                        throw new FormatException("quality/catalog.yml breaks its schema; run check for the list. First: " + schema[0].Message);
                     var ring = int.Parse(options.GetValueOrDefault("ring") ?? "0", System.Globalization.CultureInfo.InvariantCulture);
                     var platform = options.GetValueOrDefault("platform") switch
                     {
@@ -165,7 +169,7 @@ static class Program
         foreach (var reason in wholeRing)
             output.WriteLine($"The whole ring runs, by {reason.Rule}: {Files(reason.Files)}");
         if (selection.Mode == "docs-only")
-            output.WriteLine("Every file is in no_test_paths, so nothing but the docs checks runs.");
+            output.WriteLine("Every file is in no_test_paths, so only suites whose triggers name them run, and no sentinels.");
         output.WriteLine();
 
         if (selection.Suites.Count == 0)

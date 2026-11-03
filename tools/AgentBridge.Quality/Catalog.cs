@@ -37,14 +37,71 @@ sealed class Catalog
     }
 
     public static Catalog Load(string path) => Parse(File.ReadAllText(path));
+
+    static readonly string[] Kinds = ["unit", "component", "process", "integration", "e2e", "live", "ui", "perf", "security", "a11y", "static", "packaging"];
+    static readonly string[] Selects = ["affected", "always"];
+    static readonly string[] PlatformNames = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "macos-arm64", "ios-sim", "ios-device", "browser"];
+    static readonly string[] Runners = ["local", "hosted", "lab", "staging", "device"];
+    static readonly string[] Statuses = ["exists", "partial", "planned"];
+    // A person runs these from the command's instructions, so no workflow job runs them.
+    static readonly string[] ManualRunners = ["lab", "staging", "device"];
+
+    /// <summary>
+    /// The schema in catalog.yml's header. <paramref name="csprojCount"/> counts the .csproj files
+    /// directly in a project folder, which must be exactly one so "project" names one project.
+    /// </summary>
+    public IReadOnlyList<Problem> Validate(Func<string, int> csprojCount)
+    {
+        var problems = new List<Problem>();
+        void Add(Suite suite, string message) => problems.Add(new("schema", $"suite {suite.Id} {message}"));
+        void OneOf(Suite suite, string field, string? value, string[] allowed)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                Add(suite, $"has no {field}");
+            else if (!allowed.Contains(value, StringComparer.Ordinal))
+                Add(suite, $"has {field} '{value}', not one of {string.Join(", ", allowed)}");
+        }
+
+        foreach (var suite in Suites)
+        {
+            OneOf(suite, "kind", suite.Kind, Kinds);
+            if (suite.Ring is null)
+                Add(suite, "has no ring");
+            else if (suite.Ring is < 0 or > 4)
+                Add(suite, $"has ring {suite.Ring}, not 0 to 4");
+            OneOf(suite, "select", suite.Select, Selects);
+            if (suite.Platforms.Count == 0)
+                Add(suite, "has no platforms");
+            foreach (var platform in suite.Platforms.Where(p => !PlatformNames.Contains(p, StringComparer.Ordinal)))
+                Add(suite, $"has platform '{platform}', not one of {string.Join(", ", PlatformNames)}");
+            OneOf(suite, "runner", suite.Runner, Runners);
+            OneOf(suite, "status", suite.Status, Statuses);
+            if (suite.Status == "exists")
+            {
+                if (string.IsNullOrWhiteSpace(suite.Command))
+                    Add(suite, "exists but has no command");
+                if (string.IsNullOrWhiteSpace(suite.Where) && !ManualRunners.Contains(suite.Runner, StringComparer.Ordinal))
+                    Add(suite, $"exists on a {suite.Runner} runner but has no where");
+            }
+            if (suite.Select == "affected" && suite.Project is null && suite.Triggers.Count == 0)
+                Add(suite, "is select: affected with neither project nor triggers, so nothing can select it");
+            if (suite.Project is not null)
+            {
+                var count = csprojCount(suite.Project);
+                if (count != 1)
+                    Add(suite, $"names project {suite.Project}, which holds {(count == 0 ? "no" : count.ToString(System.Globalization.CultureInfo.InvariantCulture))} .csproj files, not one");
+            }
+        }
+        return problems;
+    }
 }
 
 sealed class Suite
 {
     public string Id { get; set; } = "";
     public string? Kind { get; set; }
-    public int Ring { get; set; }
-    public string Select { get; set; } = "affected";
+    public int? Ring { get; set; }
+    public string? Select { get; set; }
     public bool SecuritySensitive { get; set; }
     public List<string> Platforms { get; set; } = [];
     public string? Runner { get; set; }

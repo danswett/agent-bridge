@@ -5,7 +5,7 @@ public class CatalogTests
     // The one test that reads the live repository: the selector is only as good as its ability
     // to read the real catalog, so a schema change there must fail here, not in CI's plan job.
     [Fact]
-    public void The_repository_catalog_loads_and_every_project_it_names_is_a_test_project()
+    public void The_repository_catalog_keeps_its_schema_and_every_project_it_names_is_a_test_project()
     {
         var root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "AgentBridge.slnx")))
@@ -15,6 +15,7 @@ public class CatalogTests
         var graph = ProjectGraph.Load(root);
 
         Assert.NotEmpty(catalog.Suites);
+        Assert.Empty(catalog.Validate(graph.CsprojCount).Select(p => p.Message));
         Assert.All(catalog.Suites.Where(s => s.Project is not null), s => Assert.True(graph[s.Project!]?.IsTestProject, $"{s.Id}: {s.Project}"));
     }
 

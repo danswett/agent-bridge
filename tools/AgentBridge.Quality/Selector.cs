@@ -87,7 +87,13 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
                     continue;
                 }
                 if (noTestPaths.Any(g => g.IsMatch(file)))
+                {
+                    // A file with no tests of its own still reaches suites that name it in
+                    // triggers (docs-links' '**/*.md'), but never the graph, the sentinels or
+                    // the fail-safe. What a docs-only change runs is the catalog's choice.
+                    MatchTriggers(file, ring, Add);
                     continue;
+                }
                 docsOnly = false;
                 if (!Claim(file, ring, Add))
                 {
@@ -100,7 +106,8 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
             foreach (var (rule, file) in full)
                 foreach (var suite in inRing)
                     Add(suite, rule, file);
-            // Docs-only changes run nothing but the docs checks (§4.4), not even the sentinels.
+            // A change only to no_test_paths runs what their triggers select and nothing else,
+            // not even the sentinels (§4.4).
             if (!docsOnly)
                 foreach (var suite in inRing.Where(s => s.IsSentinel))
                     Add(suite, Sentinel, null);
@@ -130,16 +137,7 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
     /// </summary>
     bool Claim(string file, int ring, Action<Suite, string, string?> add)
     {
-        var claimed = false;
-        foreach (var (suite, globs) in triggers)
-        {
-            var match = globs.FirstOrDefault(g => g.IsMatch(file));
-            if (match is null)
-                continue;
-            claimed = true;
-            if (suite.Ring <= ring)
-                add(suite, $"triggers {match.Pattern}", file);
-        }
+        var claimed = MatchTriggers(file, ring, add);
         foreach (var owner in graph.OwnersOf(file))
         {
             var reachers = graph.ReachersOf(owner.Folder);
@@ -155,6 +153,21 @@ sealed class Selector(Catalog catalog, ProjectGraph graph)
 
     public bool IsClaimed(string file) =>
         globalTriggers.Any(g => g.IsMatch(file)) || noTestPaths.Any(g => g.IsMatch(file)) || Claim(file, -1, (_, _, _) => { });
+
+    bool MatchTriggers(string file, int ring, Action<Suite, string, string?> add)
+    {
+        var matched = false;
+        foreach (var (suite, globs) in triggers)
+        {
+            var match = globs.FirstOrDefault(g => g.IsMatch(file));
+            if (match is null)
+                continue;
+            matched = true;
+            if (suite.Ring <= ring)
+                add(suite, $"triggers {match.Pattern}", file);
+        }
+        return matched;
+    }
 
     /// <summary>
     /// Browser suites run wherever Node and the browsers do, so on any desktop OS locally.

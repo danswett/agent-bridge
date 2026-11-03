@@ -62,10 +62,10 @@ if ($Json) {
 }
 $selection = $selectionJson | ConvertFrom-Json
 
-# Ring 0 is unit and component only. Tests that start real processes or bind sockets carry
-# Category=Process or Category=Network (#354) and wait for ring 1; untagged tests are unit, so the
-# filter is harmless in a project that has no such traits yet.
-$quickFilter = 'Category!=Process&Category!=Network'
+# Ring 0 is in-process tests only (catalog.yml's header, #375): Category=Process starts real
+# processes, Category=Network binds sockets, ports or pipes, and Category=HomeAssistantIntegration
+# needs a disposable HA. Untagged tests are in-process.
+$quickTerms = @('Category!=Process', 'Category!=Network', 'Category!=HomeAssistantIntegration')
 
 function Get-Skip($s) {
     $command = "$($s.command)".Trim()
@@ -81,10 +81,15 @@ function Get-Skip($s) {
 
 function Get-RingCommand([string] $command) {
     if ($Ring -ne 0 -or $command -notmatch '^\s*dotnet\s+test\b') { return $command }
-    if ($command -match '--filter\s+"([^"]*)"') {
-        return $command -replace '--filter\s+"([^"]*)"', "--filter `"(`$1)&$quickFilter`""
+    if ($command -notmatch '--filter\s+"([^"]*)"') {
+        return "$command --filter `"$($quickTerms -join '&')`""
     }
-    return "$command --filter `"$quickFilter`""
+    $existing = $Matches[1]
+    # A plain AND of terms merges, so homeassistant's own HomeAssistantIntegration term isn't
+    # repeated; anything with | or parentheses is kept whole and ANDed.
+    $merged = if ($existing -match '[|()]') { @("($existing)") + $quickTerms }
+              else { @($existing -split '&' | ForEach-Object Trim) + $quickTerms | Select-Object -Unique }
+    return $command -replace '--filter\s+"[^"]*"', "--filter `"$($merged -join '&')`""
 }
 
 $platform = $selection.platform

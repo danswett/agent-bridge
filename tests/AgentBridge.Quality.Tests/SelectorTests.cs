@@ -50,18 +50,24 @@ public class SelectorTests
     {
         var selection = Fixture.Selector().Select([".github/workflows/ci.yml", "pwa/app.css"], ring: 1);
 
-        Assert.Equal(["protocol", "transport", "host", "homeassistant", "ha-integration", "pwa-unit", "pwa-ui", "apple-core", "infra", "codeql"], Fixture.Ids(selection));
+        Assert.Equal(["protocol", "transport", "host", "homeassistant", "ha-integration", "docs-links", "pwa-unit", "pwa-ui", "apple-core", "infra", "codeql"], Fixture.Ids(selection));
         Assert.Equal("full", selection.Mode);
         Assert.Equal([".github/workflows/ci.yml"], Fixture.ReasonFor(selection, "transport", "global_triggers .github/workflows/**").Files);
     }
 
     [Fact]
-    public void A_docs_only_change_selects_nothing_not_even_the_sentinels()
+    public void A_docs_only_change_selects_only_what_its_triggers_name_not_the_sentinels()
     {
-        var selection = Fixture.Selector().Select(["README.md", "docs/status.md"], ring: 1);
+        var selector = Fixture.Selector();
 
-        Assert.Empty(selection.Suites);
-        Assert.Equal("docs-only", selection.Mode);
+        var ring1 = selector.Select(["README.md", "docs/status.md", "docs/design/mock.gif"], ring: 1);
+        var ring0 = selector.Select(["README.md"], ring: 0);
+
+        Assert.Equal(["docs-links"], Fixture.Ids(ring1));
+        Assert.Equal(["README.md", "docs/status.md"], Fixture.ReasonFor(ring1, "docs-links", "triggers **/*.md").Files);
+        Assert.Equal("docs-only", ring1.Mode);
+        Assert.Empty(ring1.Unclaimed);
+        Assert.Empty(ring0.Suites);
     }
 
     [Fact]
@@ -107,7 +113,7 @@ public class SelectorTests
     {
         var selection = Fixture.Selector().Select(["README.md"], ring: 2);
 
-        Assert.Equal(11, selection.Suites.Count);
+        Assert.Equal(12, selection.Suites.Count);
         Assert.Equal("everything", selection.Mode);
     }
 

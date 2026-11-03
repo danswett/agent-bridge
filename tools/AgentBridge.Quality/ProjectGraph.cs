@@ -21,12 +21,23 @@ sealed class ProjectGraph
     static readonly HashSet<string> SkippedFolders = new(StringComparer.OrdinalIgnoreCase) { "bin", "obj", "node_modules", ".git", ".vs", "TestResults", "out" };
 
     readonly Dictionary<string, Project> projects;
+    readonly Dictionary<string, int> csprojCounts;
     readonly Dictionary<string, List<string>> referencedBy = new(StringComparer.Ordinal);
     readonly Dictionary<string, IReadOnlySet<string>> reachers = new(StringComparer.Ordinal);
 
     public ProjectGraph(IEnumerable<Project> projects)
     {
-        this.projects = projects.ToDictionary(p => p.Folder, StringComparer.Ordinal);
+        // Two .csproj files in one folder share its files, so the selector treats them as one
+        // project; the catalog check refuses such a folder as a suite's project.
+        var byFolder = projects.GroupBy(p => p.Folder, StringComparer.Ordinal).ToList();
+        csprojCounts = byFolder.ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+        this.projects = byFolder.ToDictionary(
+            g => g.Key,
+            g => g.Count() == 1 ? g.First() : new Project(g.Key,
+                g.SelectMany(p => p.References).Distinct(StringComparer.Ordinal).ToList(),
+                g.SelectMany(p => p.LinkedFiles).ToList(),
+                g.Any(p => p.IsTestProject)),
+            StringComparer.Ordinal);
         foreach (var project in this.projects.Values)
             foreach (var reference in project.References)
             {
@@ -39,6 +50,9 @@ sealed class ProjectGraph
     public IReadOnlyCollection<Project> Projects => projects.Values;
 
     public Project? this[string folder] => projects.GetValueOrDefault(RepoPath.Normalize(folder));
+
+    /// <summary>The .csproj files directly in a folder.</summary>
+    public int CsprojCount(string folder) => csprojCounts.GetValueOrDefault(RepoPath.Normalize(folder));
 
     public static ProjectGraph Load(string repoRoot)
     {
