@@ -16,7 +16,7 @@ button,input{font:inherit}
 <div style="width: 390px; height: 844px; box-sizing: border-box; background: {{t.bg}}; color: {{t.text}}; font-family: -apple-system, 'SF Pro Text', sans-serif; font-size: 17px; line-height: 22px; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; border-radius: 44px">
   <div style="padding: 60px 16px 4px; display: flex; align-items: center; gap: 8px">
     <h1 style="margin: 0; flex: 1; font-family: -apple-system, 'SF Pro Display', sans-serif; font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: 0.4px">Sessions</h1>
-    <button aria-label="Filters: Needs you · 1, Machines" style="position: relative; width: 36px; height: 36px; border-radius: 18px; border: 0; background: {{t.fill}}; color: {{t.tint}}; display: grid; place-items: center"><dc-import name="Icon" icon="machine" size="20" hint-size="20px,20px"></dc-import><span style="position: absolute; top: -3px; right: -3px; display: flex"><dc-import name="Glyph" kind="needs" theme="{{theme}}" size="14" hint-size="14px,14px"></dc-import></span></button>
+    <button aria-label="Filters: Needs you · 1, Machines" style="position: relative; width: 36px; height: 36px; border-radius: 18px; border: 0; background: {{t.fill}}; color: {{t.tint}}; display: grid; place-items: center"><dc-import name="Icon" icon="machine" size="20" hint-size="20px,20px"></dc-import><span aria-hidden="true" style="position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: {{t.badge}}; color: {{t.badgeInk}}; font-size: 12px; font-weight: 600; line-height: 18px; text-align: center">1</span></button>
     <button aria-label="New session" style="width: 36px; height: 36px; border-radius: 18px; border: 0; background: {{t.tint}}; color: {{t.onTint}}; display: grid; place-items: center"><dc-import name="Icon" icon="plus" size="20" hint-size="20px,20px"></dc-import></button>
   </div>
   <label style="margin: 4px 16px 20px; height: 36px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 10px; background: {{t.fill}}; color: {{t.text2}}">
@@ -78,12 +78,12 @@ class Component extends DCLogic {
     const dark = {
       bg: '#000000', cell: '#1C1C1E', fill: 'rgba(118,118,128,0.24)', sep: 'rgba(84,84,88,0.65)', text: '#FFFFFF', text2: 'rgba(235,235,245,0.6)',
       tint: '#2DD4BF', onTint: '#062621', chevron: 'rgba(235,235,245,0.3)', tabBg: 'rgba(18,18,18,0.94)', tabOff: 'rgba(235,235,245,0.6)',
-      amberHead: '#FFB224', violet: '#C4B5FD'
+      amberHead: '#FFB224', violet: '#C4B5FD', badge: '#FFB224', badgeInk: '#14100A'
     };
     const light = {
       bg: '#F2F2F7', cell: '#FFFFFF', fill: 'rgba(118,118,128,0.12)', sep: 'rgba(60,60,67,0.29)', text: '#000000', text2: 'rgba(60,60,67,0.76)',
       tint: '#0B7A6E', onTint: '#FFFFFF', chevron: 'rgba(60,60,67,0.3)', tabBg: 'rgba(249,249,249,0.94)', tabOff: 'rgba(60,60,67,0.76)',
-      amberHead: '#8F5300', violet: '#5B3CC4'
+      amberHead: '#8F5300', violet: '#5B3CC4', badge: '#8F5300', badgeInk: '#FFFFFF'
     };
     return { theme, t: theme === 'light' ? light : dark };
   }
