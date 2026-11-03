@@ -595,6 +595,25 @@ test.describe('at three panes', () => {
     await expect(input).toHaveValue('Please stop your delegate demo-agent-suite.');
   });
 
+  test('a delegate open as its machine stops taking replies has nothing to ask, and has it again once replies are back', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.strip-item[data-id="demo-agent-witness"]').click();
+    const ask = pane(page).getByRole('button', { name: 'Ask main agent to stop it' });
+    await expect(ask).toBeVisible();
+    const reconnect = (taking) => page.evaluate((on) => {
+      const h = window.agentBridgeDemo.host;
+      h.capabilities = on ? [...h.capabilities, 'sessions.reply'] : h.capabilities.filter((x) => x !== 'sessions.reply');
+      h.disconnect();
+    }, taking);
+    await reconnect(false);
+    await expect(c.locator('form.reply')).toHaveCount(0);
+    await expect(ask).toBeHidden();
+    await reconnect(true);
+    await expect(c.locator('form.reply')).toHaveCount(1);
+    await expect(ask).toBeVisible();
+  });
+
   test('nothing in a delegate\'s inspector types to it or stops it, and a finished one has nothing to ask', async ({ page }) => {
     await openDemo(page);
     const c = card(page);

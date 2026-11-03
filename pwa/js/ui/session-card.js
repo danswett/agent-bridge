@@ -706,6 +706,9 @@ export class SessionCard {
     this.#renderQuestion(this.#s);
     this.#renderReply(this.#s);
     this.#renderStop(this.#s);
+    // An open delegate's "Ask main agent to stop it" goes in the reply box: shown only while
+    // there is one, which a change of what the machine takes adds or takes away.
+    this.#renderDelegates(this.#s);
     this.#bringQuestion(atEnd);
   }
 
