@@ -49,7 +49,8 @@ if ($env:AGENT_BRIDGE_NUGET_SOURCE) {
     # Under obj/, which git ignores, so it can't be committed by mistake.
     $mirrorConfig = Join-Path $root 'tools/AgentBridge.Quality/obj/nuget.mirror.config'
     New-NuGetMirrorConfig -Source $env:AGENT_BRIDGE_NUGET_SOURCE -Path $mirrorConfig
-    if (-not $Json) { Write-Host "Restoring packages and auditing them through $env:AGENT_BRIDGE_NUGET_SOURCE (AGENT_BRIDGE_NUGET_SOURCE)." -ForegroundColor DarkGray }
+    # Not the URL itself: a mirror's URL can carry a token, and this output gets pasted into PRs.
+    if (-not $Json) { Write-Host "Restoring packages and auditing them through the mirror in AGENT_BRIDGE_NUGET_SOURCE." -ForegroundColor DarkGray }
 }
 
 $restore = @()

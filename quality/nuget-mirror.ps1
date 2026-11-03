@@ -17,10 +17,11 @@ function New-NuGetMirrorConfig {
         [Parameter(Mandatory)] [string] $Path
     )
     # A feed's key name (azure-default, say) instead of its URL would otherwise reach NuGet as a
-    # relative folder, and fail far from the variable that caused it.
+    # relative folder, and fail far from the variable that caused it. The value isn't echoed, in
+    # case it holds a token.
     $uri = $null
     if (-not [uri]::TryCreate($Source, [UriKind]::Absolute, [ref] $uri)) {
-        throw "AGENT_BRIDGE_NUGET_SOURCE must be a feed's absolute URL or folder, such as https://<mirror>/nuget/v3/index.json, not '$Source'."
+        throw "AGENT_BRIDGE_NUGET_SOURCE must be a feed's absolute URL or folder, such as https://<mirror>/nuget/v3/index.json; a feed's name or a relative path won't do."
     }
     $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path)
     $settings = [System.Xml.XmlWriterSettings]@{ Indent = $true; Encoding = [System.Text.UTF8Encoding]::new($false) }
