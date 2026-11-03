@@ -109,6 +109,8 @@ var options = new SessionSourceOptions
     CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
+    // Only serve keeps what it listed for its next start (#147); every other command only reads.
+    StateFile = command == "serve" && serveFolder is not null ? Path.Combine(serveFolder, "sessions-listed.json") : null,
 };
 var pretty = new JsonSerializerOptions(ProtocolJson.Options) { WriteIndented = !Flag("--compact") };
 

@@ -35,6 +35,11 @@ public sealed class SessionSourceOptions
     // Where discovery says what holds it and what it carried on without. Null: nowhere.
     public Action<string>? Log { get; init; }
 
+    // Where the sessions listed are kept for the next start, so a restart while discovery is held
+    // does not drop a running session only the hold was keeping (#147). The serving host's own
+    // profile folder; null (tests, the one-shot commands, the shadow): nothing is kept or read.
+    public string? StateFile { get; init; }
+
     // Runs between reading a registration and checking it did not change meanwhile, so a test
     // can change it there. Null outside tests.
     public Action<string>? AfterRegistrationRead { get; init; }

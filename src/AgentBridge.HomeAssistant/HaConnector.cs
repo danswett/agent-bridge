@@ -167,6 +167,8 @@ public sealed partial class HaConnector : IAsyncDisposable
     readonly Dictionary<string, string> problems = new(StringComparer.Ordinal);
     readonly SemaphoreSlim passes = new(1, 1);
     bool started;
+    // Whether the last retirement pass waited for the host's discovery hold, so that is said once.
+    bool retirementHeld;
     bool allDirty;
     string? pausedFor;
     DateTimeOffset retryAt = DateTimeOffset.MinValue;
@@ -1051,14 +1053,31 @@ public sealed partial class HaConnector : IAsyncDisposable
     // The served config is read as text and a node anywhere in it holds its retirement: that is
     // stricter than "rendered" (a mention in display text holds too), which errs the safe way,
     // and needs no trust in who wrote the config. A dashboard that cannot be read holds them all.
+    //
+    // Nothing at all while the host's discovery is held: a session missing from a held pass may be
+    // one it could not see, and a host restarted under a hold retired the entities of a Codex
+    // session that ran on (#147). A session listed now is never retired, whether or not this
+    // connector has published it yet. Once a complete pass has removed what really ended, the queue
+    // carries on where it was.
     async Task RetireAsync(DateTimeOffset now, CancellationToken ct)
     {
+        if (source.Held is { } held)
+        {
+            if (!retirementHeld) { log($"Home Assistant connector retires nothing while session discovery is held ({held.Reason})"); }
+            retirementHeld = true;
+            return;
+        }
+        retirementHeld = false;
         List<string> nodes;
+        // Listed but not yet published by this connector: skipped, not taken off the queue, so one
+        // that ends before its first publication still has its old entities retired.
+        var listed = source.Snapshot().Select(s => HaContract.NodeId(s.Id)).ToHashSet(StringComparer.Ordinal);
         lock (gate)
         {
             var live = published.Values.Select(p => p.Node).ToHashSet(StringComparer.Ordinal);
             foreach (var node in retiring.Keys.Where(live.Contains).ToList()) { retiring.Remove(node); }
-            nodes = [.. retiring.Keys];
+            foreach (var node in retiring.Keys.Where(listed.Contains)) { retiring[node].AbsentSince = null; }
+            nodes = [.. retiring.Keys.Where(n => !listed.Contains(n))];
         }
         if (nodes.Count == 0) { return; }
         var dashboard = await ha.ReadDashboardAsync(options.DashboardUrlPath, ct);

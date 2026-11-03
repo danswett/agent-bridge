@@ -231,7 +231,6 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #122: the Launch page's busy banner;
   - #123: Codex's cached plugin on a migrated machine;
   - #146: no reason given for a missing Other;
-  - #147: a host restart under a held discovery drops a Codex session;
   - #157 and #158: folder-trust follow-ups;
   - #161: remote-update follow-ups;
   - #163: shadow episodes.

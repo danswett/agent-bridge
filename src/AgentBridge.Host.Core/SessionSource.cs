@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using AgentBridge.Host.Core.Discovery;
@@ -44,6 +47,11 @@ public sealed class SessionSource : ISessionSource
     readonly Unaccounted _unaccounted;
     string? _heldLogged;
     DateTimeOffset _heldLoggedAt;
+    // Only on the pass: whether the first discovery pass has looked at StateFile (Restore), and
+    // what was last written to it.
+    bool _restored;
+    string? _saved;
+    string? _saveProblem;
 
     // How often a hold that has not changed is said again in the log: it is a standing
     // condition, and a line written only when it began scrolls away long before anyone comes
@@ -266,6 +274,11 @@ public sealed class SessionSource : ISessionSource
             found = [.. observed.SelectMany(o => o.Sessions)];
             var live = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
             var holding = observed.Where(o => o.Holds.Count > 0).Select(o => o.Agent).ToHashSet();
+            if (!_restored)
+            {
+                _restored = true;
+                found.AddRange(Restore(observed, found));
+            }
             List<string> gone;
             lock (_gate)
             {
@@ -314,6 +327,7 @@ public sealed class SessionSource : ISessionSource
         }
         if (unread.Count > 0) { (held, release) = (WithUnread(held, unread), true); }
         if (release) { SetHeld(held); }
+        if (discover) { Save(); }
     }
 
     static DiscoveryHeld WithUnread(DiscoveryHeld? held, List<AgentKind> unread)
@@ -335,8 +349,10 @@ public sealed class SessionSource : ISessionSource
     }
 
     // One agent's part of a discovery pass: what it found, and anything that kept it from
-    // being sure that is all (none when complete).
-    sealed record AgentDiscovery(AgentKind Agent, IReadOnlyList<DiscoveredSession> Sessions, IReadOnlyList<string> Holds);
+    // being sure that is all (none when complete). Observed and Ended are what a restart's
+    // first pass checks a remembered session against (Restore).
+    sealed record AgentDiscovery(AgentKind Agent, IReadOnlyList<DiscoveredSession> Sessions, IReadOnlyList<string> Holds,
+        AgentProcessObservation Observed, IReadOnlySet<string>? Ended = null);
 
     List<AgentDiscovery> Discover()
     {
@@ -357,7 +373,7 @@ public sealed class SessionSource : ISessionSource
             // Scout's embedded `copilot --headless` is nobody's session and never will be.
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsEmbedded(p.CommandLine)).Select(p => p.Id));
             Account(AgentKind.Copilot, observed, accounted, previous, holds);
-            result.Add(new(AgentKind.Copilot, sessions, holds));
+            result.Add(new(AgentKind.Copilot, sessions, holds, observed));
         }
         // Listing processes is the expensive part; without a registration folder or Claude's
         // own sessions folder there is nothing it could match, and an agent that was never
@@ -413,7 +429,7 @@ public sealed class SessionSource : ISessionSource
             accounted.UnionWith(observed.Processes.Where(p => CommandLine.IsCodexAppServer(p.CommandLine)).Select(p => p.Id));
         }
         Account(agent, observed, accounted, previous, holds);
-        return new(agent, sessions, holds);
+        return new(agent, sessions, holds, observed, ended);
     }
 
     // What makes an agent's pass incomplete beyond what it could not read: agent-ha-bridge's
@@ -475,6 +491,124 @@ public sealed class SessionSource : ISessionSource
 
     static bool Same(DiscoveryHeld? a, DiscoveryHeld? b) =>
         a is null ? b is null : b is not null && a.Reason == b.Reason && a.Agents.SequenceEqual(b.Agents);
+
+    // A hold keeps every session an agent had, so one its pass could not see stays listed. But a
+    // host that has just started had none: a session only the hold was keeping was dropped by a
+    // restart, and the Home Assistant connector retired its entities, while it ran on (#147). So
+    // the first discovery pass of a host that keeps StateFile brings back each session it listed
+    // when it last ran, of an agent that pass holds, whose own process is still running (the same
+    // pid, started at the same time) and is no other session's now. It is then kept, read and
+    // judged like any other session a hold keeps: removed only by a complete pass that does not
+    // find it. A complete pass is believed as ever, and a registration that says the session
+    // ended is too.
+    List<DiscoveredSession> Restore(List<AgentDiscovery> observed, List<DiscoveredSession> found)
+    {
+        var restored = new List<DiscoveredSession>();
+        if (_options.StateFile is not { } path || !observed.Any(o => o.Holds.Count > 0)) { return restored; }
+        var remembered = Load(path);
+        var ids = found.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+        var pids = found.Where(f => f.ProcessId is not null).Select(f => (f.Agent, f.ProcessId!.Value)).ToHashSet();
+        foreach (var o in observed.Where(o => o.Holds.Count > 0))
+        {
+            var running = o.Observed.Processes.Concat(o.Observed.Unidentified).ToList();
+            foreach (var s in remembered.Where(s => s.Agent == o.Agent))
+            {
+                if (ids.Contains(s.Id) || o.Ended?.Contains(s.Id) == true) { continue; }
+                // Only a process that can be told from a later one given its pid: a session is
+                // never put back on a stranger.
+                if (s.ProcessId is not { } pid || s.ProcessStartedAt is not { } started || pids.Contains((s.Agent, pid))) { continue; }
+                if (!running.Any(p => p.Id == pid && p.StartedAt is { } at && (at - started).Duration() <= TimeSpan.FromSeconds(1))) { continue; }
+                restored.Add(s);
+                ids.Add(s.Id);
+                pids.Add((s.Agent, pid));
+            }
+        }
+        if (restored.Count > 0)
+        {
+            Log($"kept {restored.Count} session(s) listed across the restart while discovery is held: {string.Join(", ", restored.Select(s => $"{s.Agent.ToString().ToLowerInvariant()} {s.Id[..Math.Min(8, s.Id.Length)]} (pid {s.ProcessId})"))}");
+        }
+        return restored;
+    }
+
+    // What StateFile says was listed; nothing when it cannot be read whole.
+    List<DiscoveredSession> Load(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > MaxStateBytes) { return []; }
+            using var doc = JsonDocument.Parse(stream);
+            if (Json.Arr(doc.RootElement, "sessions") is not { } list) { return []; }
+            var sessions = new List<DiscoveredSession>();
+            foreach (var e in list.EnumerateArray())
+            {
+                var id = Json.Str(e, "id");
+                if (string.IsNullOrWhiteSpace(id) || RegistrationDiscovery.SafeKey(id) != id) { continue; }
+                var agent = Json.Str(e, "agent") switch { "copilot" => AgentKind.Copilot, "claude" => AgentKind.Claude, "codex" => AgentKind.Codex, _ => (AgentKind?)null };
+                if (agent is null) { continue; }
+                sessions.Add(new DiscoveredSession(id, agent.Value, Json.Str(e, "transcript"), Json.Str(e, "stateDirectory"), Json.Int(e, "pid"),
+                    ProcessStartedAt: Json.Time(e, "processStartedAt")));
+            }
+            return sessions;
+        }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return []; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Log($"could not read the sessions listed when the host last ran ({e.Message}); none is kept across the restart");
+            return [];
+        }
+    }
+
+    const long MaxStateBytes = 4 * 1024 * 1024;
+
+    // StateFile, written whole and renamed into place whenever what discovery lists changes, so
+    // it always says what the next start would need to keep. Only on the pass.
+    void Save()
+    {
+        if (_options.StateFile is not { } path) { return; }
+        List<DiscoveredSession> sessions;
+        lock (_gate) { sessions = [.. _entries.Values.Select(e => e.Tracker.Discovered).OrderBy(d => d.Id, StringComparer.Ordinal)]; }
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var w = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
+        {
+            w.WriteStartObject();
+            w.WriteStartArray("sessions");
+            foreach (var d in sessions)
+            {
+                w.WriteStartObject();
+                w.WriteString("id", d.Id);
+                w.WriteString("agent", d.Agent.ToString().ToLowerInvariant());
+                if (d.TranscriptPath is { } transcript) { w.WriteString("transcript", transcript); }
+                if (d.StateDirectory is { } state) { w.WriteString("stateDirectory", state); }
+                if (d.ProcessId is { } pid) { w.WriteNumber("pid", pid); }
+                if (d.ProcessStartedAt is { } started) { w.WriteString("processStartedAt", started.ToString("o", CultureInfo.InvariantCulture)); }
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+            w.WriteEndObject();
+        }
+        var json = Encoding.UTF8.GetString(buffer.WrittenSpan);
+        if (json == _saved) { return; }
+        var partial = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            File.WriteAllText(partial, json);
+            File.Move(partial, path, overwrite: true);
+            _saved = json;
+            _saveProblem = null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            if (_saveProblem != e.Message) { Log($"could not keep the listed sessions for the next start ({e.Message}); trying again"); }
+            _saveProblem = e.Message;
+        }
+        finally
+        {
+            try { File.Delete(partial); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+    }
 
     // A registration written before the agent reported its transcript: Claude's is
     // projects/<slug>/<id>.jsonl, Codex's sessions/<y>/<m>/<d>/rollout-*-<id>.jsonl.
