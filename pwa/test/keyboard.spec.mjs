@@ -102,8 +102,9 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
 async function reachLink(page, browserName, link) {
   if (browserName !== 'webkit') { await tabTo(page, link); return; }
   await link.focus();
+  // Focused by script, so :focus-visible is the engine's guess; the outline drawn is what counts.
   const stop = await focused(page);
-  expect.soft(stop.visible && stop.shown, `focus shown on ${stop.name}`).toBe(true);
+  expect.soft(stop.shown, `focus shown on ${stop.name}`).toBe(true);
 }
 
 // Reading order: each stop on the same line further right, or on a lower line.

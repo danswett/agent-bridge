@@ -51,7 +51,8 @@ function moving({ crossFade, animated }) {
   for (const e of document.querySelectorAll('*')) {
     for (const pseudo of [null, '::before', '::after']) {
       const s = getComputedStyle(e, pseudo);
-      if (pseudo && s.content === 'none') { continue; }
+      // A ::before or ::after with no content isn't drawn.
+      if (pseudo && (s.content === 'none' || s.content === 'normal')) { continue; }
       const durations = list(s.animationDuration).map(ms);
       list(s.animationName).forEach((n, i) => {
         if (n !== 'none' && durations[i % durations.length] > 0) { found.add(`${name(e, pseudo)}: animation ${n} ${durations[i % durations.length]}ms`); }
@@ -78,7 +79,7 @@ function moving({ crossFade, animated }) {
   const drawn = (e) => {
     if (e.getClientRects().length === 0) { return false; }
     const s = getComputedStyle(e);
-    return s.visibility !== 'hidden' && s.opacity !== '0';
+    return s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
   };
   return { found: [...found], shown: animated.filter((sel) => [...document.querySelectorAll(sel)].some(drawn)) };
 }
