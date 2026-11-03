@@ -164,6 +164,8 @@ public sealed class HostManager
     public TimeSpan StartTimeout { get; init; } = TimeSpan.FromSeconds(20);
     public TimeSpan StopTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public TimeSpan Poll { get; init; } = TimeSpan.FromMilliseconds(250);
+    // The clock a start through the logon task is timed by; tests step it.
+    public TimeProvider Time { get; init; } = TimeProvider.System;
     // Whether this app runs elevated; tests pretend.
     public Func<bool> Elevated { get; init; } = PeerPolicy.SelfElevated;
 
@@ -213,19 +215,25 @@ public sealed class HostManager
     // registered IgnoreNew, so sign-in never runs a second host. A Run while the instance of a
     // host just stopped is still on its way out is therefore dropped without a word: on
     // 2026-11-02 a Restart stopped the host, ran the task into that instance, and reported "the
-    // host did not start" (#280). So the task is run only once its last instance has ended,
-    // within the same start timeout; and while one runs, a host it is still bringing up (a Start
-    // pressed during sign-in) is as good as one this started. Run once only: a run that brings
-    // no host up is a failed start, reported as one, not retried.
+    // host did not start" (#280). So the task is run only once its last instance has ended, waited
+    // for up to the start timeout; and while one runs, a host it is still bringing up (a Start
+    // pressed during sign-in) is as good as one this started. The host a run starts then gets the
+    // whole start timeout of its own, so one run just as the wait ran out is not judged at once.
+    // Run once only: a run that brings no host up is a failed start, reported as one, not retried.
     async Task RunTaskAsync(CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow + StartTimeout;
+        var deadline = Time.GetUtcNow() + StartTimeout;
         var ran = false;
         while (true)
         {
-            if (!ran && !tasks.IsRunning(TaskName)) { tasks.Run(TaskName); ran = true; }
+            if (!ran && !tasks.IsRunning(TaskName))
+            {
+                tasks.Run(TaskName);
+                ran = true;
+                deadline = Time.GetUtcNow() + StartTimeout;
+            }
             if (await IsRunningAsync(ct)) { return; }
-            if (DateTime.UtcNow > deadline)
+            if (Time.GetUtcNow() > deadline)
             {
                 throw new TimeoutException(ran ? "the host did not start; see its log" : $"the host did not start: its logon task's last run had not ended after {StartTimeout.TotalSeconds:0} s");
             }

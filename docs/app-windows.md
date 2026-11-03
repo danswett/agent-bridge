@@ -146,9 +146,9 @@ can register a task for themselves; nothing here needs elevation.
 * The task allows one instance at a time (`IgnoreNew`), and its instance is the launcher, which
   outlives the host it waits for by a moment. Task Scheduler drops a run asked for meanwhile
   without a word, so a start right after a stop (Restart, an update that failed to apply, the
-  app quitting during one) runs the task only once its last instance has ended, within the
-  same 20 s start timeout (#280). A host that instance is still bringing up counts as
-  started.
+  app quitting during one) runs the task only once its last instance has ended, waiting up to
+  the 20 s start timeout for that, and then gives the host it starts the start timeout of its
+  own (#280). A host that instance is still bringing up counts as started.
 
 ### Updates: Velopack, one version for app and host
 

@@ -3,6 +3,7 @@ using System.Xml.Linq;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 // Installing and running the host: the logon task's definition and name, and starting,
@@ -163,6 +164,36 @@ public sealed class HostManagerTests : IAsyncLifetime
         Assert.Equal("the package is damaged", failed.Message);
         Assert.Empty(tasks.Ignored);
         Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
+    public async Task A_task_run_that_ends_just_as_the_start_timeout_runs_out_still_gives_its_host_the_whole_timeout()
+    {
+        var clock = new FakeTimeProvider(Make.T0);
+        var starting = false;
+        // Each look at the pipe takes a second; the host a run starts answers from the second look.
+        var timed = new HostManager(manager.Layout, tasks, processes, async ct =>
+        {
+            clock.Advance(TimeSpan.FromSeconds(1));
+            if (starting) { starting = false; host.Start(); throw new IOException("not listening yet"); }
+            return await LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct);
+        }, userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
+        {
+            StartTimeout = TimeSpan.FromSeconds(5),
+            Poll = TimeSpan.FromMilliseconds(10),
+            Time = clock,
+        };
+        timed.SetStartAtSignIn(true);
+        tasks.OnRun = () => starting = true;
+        // The first look (is it running?) moves the clock to T0+1 s, so the wait for the task ends
+        // at T0+6 s, the very moment the old run is over.
+        tasks.StillRunningWhile = () => clock.GetUtcNow() < Make.T0.AddSeconds(6);
+
+        await timed.StartAsync();
+
+        Assert.Equal([timed.TaskName], tasks.Ran);
+        Assert.Empty(tasks.Ignored);
+        Assert.True(await timed.IsRunningAsync());
     }
 
     [Fact]
