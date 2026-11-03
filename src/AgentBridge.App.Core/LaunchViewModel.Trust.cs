@@ -246,7 +246,12 @@ public sealed partial class LaunchViewModel
         var sent = via.Deliveries.Submit(TrustKey + question.Id, TrustProtocol.Answer, Data, outcome => outcome != "refused", payload: choice,
             replayAfterRestart: false, timeout: TrustTimeout, resendOnBusy: false);
         trustAnswers[key] = new TrustAnswer(m.Key, via, question, choice, sent.Request, Data);
-        DrawTrust();
+        // The outcome can be in before Submit returns: a host that answers before the call has had
+        // to wait completes it there and then. Its Changed came before the answer above was known,
+        // and found nothing to act on, so the session it started never opened and the prompt that
+        // went with it stayed (#476: seen on Linux CI, where the test host can answer that fast).
+        if (via.Deliveries.Get(TrustKey + question.Id) is { State: DeliveryState.Done } done && done.Request == sent.Request) { OnTrustDelivery(m, done); }
+        else { DrawTrust(); }
     }
 
     // After an error: that same request again, which the machine answers with its first outcome.

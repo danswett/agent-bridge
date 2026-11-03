@@ -1413,9 +1413,13 @@ public sealed class FleetTests : IAsyncLifetime
         {
             if (State != FleetState.Connected || !Hosts.Any(h => h.Id == hostId) || !Endpoints.TryGetValue(hostId, out var e)) { throw new HostNotRunningException("the machine is offline"); }
             IClientChannel ch = await LocalClient.ConnectAsync(e, TimeSpan.FromSeconds(1), ct);
+            if (Through is { } through) { ch = through(hostId, ch); }
             lock (open) { open.Add((hostId, ch)); }
             return ch;
         }
+
+        // What each channel opened is seen through, when a test changes how it answers.
+        public Func<string, IClientChannel, IClientChannel>? Through { get; set; }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
