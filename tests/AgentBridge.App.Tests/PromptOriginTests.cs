@@ -181,4 +181,14 @@ public sealed class PromptOriginTests
         Assert.Equal([false, false, false, false], new[] { Row(one, "A", 3), Row(two, "B", 4), Row(one, "A", 5), Row(two, "B", 6) });
         Assert.Equal(PromptOrigin.Of(Prompt(UserMessageFrom.Schedule, one))!.Facts[1], PromptOrigin.Of(Prompt(UserMessageFrom.Schedule, two))!.Facts[1]);
     }
+
+    [Fact]
+    public void A_repeat_whose_turn_ends_while_the_host_leaves_the_words_out_is_still_a_repeat_once_they_return_dated_from_its_turn()
+    {
+        var m = new PromptMemory();
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A", turns: 3));
+        m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A", SessionStatus.Working, turns: 3, since: Since.AddMinutes(1)));
+        Assert.Equal(new PromptMemory.Seen(false, null, false), m.Observe(Prompt(UserMessageFrom.Schedule, "4", null, turns: 4)));
+        Assert.Equal(new PromptMemory.Seen(true, Since.AddMinutes(1), true), m.Observe(Prompt(UserMessageFrom.Schedule, "4", "A", turns: 4)));
+    }
 }

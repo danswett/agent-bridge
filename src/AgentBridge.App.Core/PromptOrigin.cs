@@ -118,6 +118,10 @@ public sealed class PromptMemory
         // From when it began, not from a question answered or a resume within it.
         if (running && !wasRunning) { ran = s.StatusSince; }
         wasRunning = running;
+        // A host that omits the words (SessionBudget can) says nothing of which prompt this is: the
+        // one shown stays it, and the turns that end meanwhile wait to be put down to the words
+        // that return.
+        if (text is null) { return new(false, null, false); }
         int? turns = s.Status == SessionStatus.Idle && a.TurnCount is >= 0 and int n ? n : null;
         var more = 0;
         if (turns is { } t)
@@ -129,8 +133,6 @@ public sealed class PromptMemory
         if (turns is not null) { ran = null; }
         DateTimeOffset? when;
         bool nowSettled;
-        // A host that omits the words says nothing of which prompt this is: the one shown stays it.
-        if (text is null) { return new(false, null, false); }
         var key = (from, a.UserMessageLabel, text);
         if (current != key)
         {
