@@ -1009,9 +1009,11 @@ command); the shapes are in `tests/fixtures/claude`.
   exists and who started it (`parentAgentId`, `description`, `agentType`, `toolUseId`,
   `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
   and its prompt. Read once a delegate is known, each again only when it changes, at most
-  256 of them. It ends as above (its notice is queued in the session's transcript too), or
-  when the delegate above it ends.
-* Starts and ends are read from the skimmed part of the transcript too. Nothing a delegate
+  256 of them, and listed only under a delegate that is listed. It ends as above (its notice
+  is queued in the session's transcript too), or when the delegate above it ends.
+* Starts and ends are read from the skimmed part of the transcript too. Where the host could
+  not read everything before the window, a run the skim saw start is listed with no
+  `outcome` and not counted, since its end may be in what was not read. Nothing a delegate
   writes is in the session's transcript, so `activity.source` is never set.
 
 ### Background work (Codex)
@@ -1027,9 +1029,12 @@ Read from the session's own rollout. Checked against a Codex CLI 0.166.0 recordi
   `pending_init` and `running` working; `{"completed": text}` ends the run `done`, the text its
   `line`; `{"errored": text}` and `interrupted` end it `failed`; it is then `idle`, open for
   more input. `shutdown` and `not_found` end it. A `user` message
-  `<subagent_notification>{"agent_path", "status"}</subagent_notification>` says the same.
+  `<subagent_notification>{"agent_path", "status"}</subagent_notification>` says the same; after
+  a `wait` that already said so it is spent on that run, never ending one input has started
+  since.
   `send_input`, `resume_agent`, `send_message` and `followup_task` wake their receivers;
   `close_agent` ends them.
-* Read from the skimmed part of the rollout too. A sub-agent's own words and its own
+* Read from the skimmed part of the rollout too, with the same rule as Claude's where not
+  everything before the window was read. A sub-agent's own words and its own
   sub-agents are only in its own rollout, which the host does not read: what it says never
   reaches the session's text, and its sub-agents are neither listed nor counted.

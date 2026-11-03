@@ -244,12 +244,46 @@ internal sealed class BackgroundWork
     // ends the current run (one whose end its own events never showed), or says how one
     // ended whose start was only skimmed. Claude's task-notification and Codex's agent
     // states are notices of the same kind, the only word of a run's end, with its outcome.
-    public void AgentIdle(string? agentId, DateTimeOffset? at = null, SubagentOutcome outcome = SubagentOutcome.Done)
+    public bool AgentIdle(string? agentId, DateTimeOffset? at = null, SubagentOutcome outcome = SubagentOutcome.Done)
     {
-        if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return; }
-        if (agent.IdleOwed > 0) { agent.IdleOwed--; return; }
-        if (!agent.Working) { Outcome(agent, at, outcome); return; }
+        if (agentId is null || !_agents.TryGetValue(agentId, out var agent)) { return false; }
+        if (agent.IdleOwed > 0) { agent.IdleOwed--; return false; }
+        if (!agent.Working) { Outcome(agent, at, outcome); return true; }
         Stop(agent, at, outcome);
+        return true;
+    }
+
+    // A run's end said before the notice that says it again (Codex's wait returning with the
+    // agent's state, then its subagent_notification): that notice is owed to this run, and spent
+    // on it rather than ending one a message has started since.
+    public void AgentRunEnded(string agentId, DateTimeOffset? at, SubagentOutcome outcome)
+    {
+        if (!_agents.TryGetValue(agentId, out var agent)) { return; }
+        if (agent.Working) { EndRun(agent, at, outcome); }
+        else { Outcome(agent, at, outcome); }
+    }
+
+    // Bytes were never read (TranscriptTail's skim budget spent): a run the skim saw start may
+    // have ended there. Kept listed, as between runs with no outcome known, until the window says
+    // more; left running, a Claude or Codex delegate, whose own events are not in the session's
+    // transcript, read as running for as long as its CLI lived.
+    public void ForgetRuns()
+    {
+        foreach (var agent in _agents.Values.Where(a => a.Working).ToList()) { ForgetRun(agent); }
+    }
+
+    public void ForgetRun(string agentId)
+    {
+        if (_agents.TryGetValue(agentId, out var agent) && agent.Working) { ForgetRun(agent); }
+    }
+
+    void ForgetRun(Agent agent)
+    {
+        agent.Working = false;
+        agent.Outcome = null;
+        agent.EndedAt = null;
+        agent.AskedForTools = false;
+        Version++;
     }
 
     // Whether any sub-agent is known: only one can have started another.
@@ -257,12 +291,13 @@ internal sealed class BackgroundWork
 
     public bool Knows(string agentId) => _agents.ContainsKey(agentId);
 
-    // Whether a known agent is between runs, and since when.
-    public bool Stopped(string agentId, out DateTimeOffset? endedAt)
+    // Whether a known agent is between runs, since when, and how its latest run ended (null when
+    // that was never said).
+    public bool Stopped(string agentId, out DateTimeOffset? endedAt, out SubagentOutcome? outcome)
     {
-        endedAt = null;
+        (endedAt, outcome) = (null, null);
         if (!_agents.TryGetValue(agentId, out var agent) || agent.Working) { return false; }
-        endedAt = agent.EndedAt;
+        (endedAt, outcome) = (agent.EndedAt, agent.Outcome);
         return true;
     }
 

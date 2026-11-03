@@ -34,7 +34,7 @@ public class ClaudeSubagentTests
         int _next;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Replay(Func<string, string?>? edit = null, long tailBytes = 4 * 1024 * 1024)
+        public Replay(Func<string, string?>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null)
         {
             _transcript = _f.ClaudeTranscript(Id);
             _beside = Path.Combine(Path.GetDirectoryName(_transcript)!, Id, "subagents");
@@ -47,7 +47,7 @@ public class ClaudeSubagentTests
                 _agents[name] = (File.ReadAllText(meta), File.ReadAllLines(Path.Combine(Path.GetDirectoryName(meta)!, name + ".jsonl")));
                 _written[name] = 0;
             }
-            Source = _f.Source(tailBytes);
+            Source = skim is null ? _f.Source(tailBytes) : _f.Source(tailBytes, maxSkim: skim(_lines));
         }
 
         public async Task<Session> Through(double second)
@@ -240,6 +240,24 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
+    public async Task A_delegate_whose_start_was_skimmed_and_whose_end_fell_in_bytes_never_read_is_not_left_running()
+    {
+        // The skim budget covers the session's start up to the first delegate's launch, the
+        // window only the last turn: everything between is never read (found in review).
+        await using var r = new Replay(tailBytes: 3 * 1024, skim: lines => Through(lines, l => l.Contains("async_launched", StringComparison.Ordinal)));
+
+        var s = await r.Through(200);
+
+        var files = Assert.Single(s.Subagents!);
+        Assert.Equal((Files, SubagentStatus.Idle, (SubagentOutcome?)null), (files.Id, files.Status, files.Outcome));
+        Assert.Null(s.Activity.Background);
+    }
+
+    // The bytes up to and including the first line that matches, as the replay writes them.
+    internal static long Through(string[] lines, Func<string, bool> last) =>
+        lines.TakeWhile(l => !last(l)).Concat(lines.SkipWhile(l => !last(l)).Take(1)).Sum(l => System.Text.Encoding.UTF8.GetByteCount(l) + 1L);
+
+    [Fact]
     public async Task A_nested_delegate_whose_own_notice_was_never_read_stops_when_the_one_above_it_does()
     {
         // Claude notifies a delegate's end only once none of its own is live.
@@ -322,14 +340,14 @@ public class CodexSubagentTests
         int _threadNext;
         public readonly AgentBridge.Host.Core.SessionSource Source;
 
-        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024)
+        public Replay(Func<string, string>? edit = null, long tailBytes = 4 * 1024 * 1024, Func<string[], long>? skim = null)
         {
             _rollout = _f.CodexTranscript(Id);
             _thread = _f.CodexTranscript(Thread);
             _f.CodexRegistration(Id, 950, _rollout);
             _f.Processes.Run(AgentKind.Codex, 950);
-            _lines = [.. Recorded(Id).Select(l => edit is null ? l : edit(l))];
-            Source = _f.Source(tailBytes);
+            _lines = [.. Recorded(Id).SelectMany(l => (edit is null ? l : edit(l)).Split('\n'))];
+            Source = skim is null ? _f.Source(tailBytes) : _f.Source(tailBytes, maxSkim: skim(_lines));
         }
 
         public async Task<Session> Through(double second)
@@ -437,6 +455,33 @@ public class CodexSubagentTests
     }
 
     [Fact]
+    public async Task A_sub_agent_whose_start_was_skimmed_and_whose_end_fell_in_bytes_never_read_is_not_left_running()
+    {
+        // Found in review: the skim budget covers the spawn, the window only the last turn.
+        await using var r = new Replay(tailBytes: 2 * 1024, skim: lines => ClaudeSubagentTests.Through(lines, l => l.Contains("\"spawn_agent\"", StringComparison.Ordinal)));
+
+        var s = await r.Through(200);
+
+        var thread = Assert.Single(s.Subagents!);
+        Assert.Equal((SubagentStatus.Idle, (SubagentOutcome?)null), (thread.Status, thread.Outcome));
+        Assert.Null(s.Activity.Background);
+    }
+
+    [Fact]
+    public async Task The_notice_of_a_run_its_wait_already_ended_does_not_end_the_run_a_message_started_since()
+    {
+        // Found in review: the wait returns with the thread completed, a message wakes it, and only
+        // then is the notice of the first run delivered.
+        await using var r = new Replay(l => l.Contains("\"tool\":\"wait\"", StringComparison.Ordinal) ? l + "\n" + Collab("send_input", 22.93, "running") : l);
+
+        var s = await r.Through(23);
+
+        var thread = Assert.Single(s.Subagents!);
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (thread.Status, thread.Outcome));
+        Assert.Equal(1, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
     public async Task A_sub_agent_that_errored_failed()
     {
         await using var r = new Replay(l => l.Replace($"{{\"completed\":\"{Answer}\"}}", "{\"errored\":\"model unavailable\"}", StringComparison.Ordinal)
@@ -464,7 +509,9 @@ public class CodexSubagentTests
         Assert.Null(closed.Activity.Background);
     }
 
-    static string Collab(string tool, int s, string state) => Codex.Event(new
+    static string Collab(string tool, double s, string state)
+    {
+        var line = JsonNode.Parse(Codex.Event(new
     {
         type = "item_completed",
         thread_id = Id,
@@ -480,5 +527,8 @@ public class CodexSubagentTests
             receiver_agents = new[] { new { thread_id = Thread, agent_nickname = "Fermat" } },
             agents_states = new Dictionary<string, string> { [Thread] = state },
         },
-    }, s);
+    }, 0))!;
+        line["timestamp"] = Fixture.T0.AddMilliseconds(s * 1000).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        return line.ToJsonString();
+    }
 }

@@ -82,9 +82,14 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         _unclaimedOrder.Clear();
     }
 
-    // A command the skim saw start may have ended in bytes never read; counted, it would read as
-    // running for as long as its CLI lives. One still running is said again in the window.
-    public override void Skipped() => S.Background.ForgetShells();
+    // A command or delegate the skim saw start may have ended in bytes never read; counted, it
+    // would read as running for as long as its CLI lives. One still running is said again in the
+    // window, a delegate by its notice; until then it is listed with no outcome.
+    public override void Skipped()
+    {
+        S.Background.ForgetShells();
+        S.Background.ForgetRuns();
+    }
 
     protected override void Count(JsonElement e)
     {
@@ -243,11 +248,19 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             if (record.StartedAt is not null) { work.KnowMode(record.ToolUseId, record.Id, record.Background, info, record.StartedAt); }
             return false;
         }
+        // Listed only under a delegate that is: one whose start was in bytes never read says
+        // nothing of whether this one still runs. Records are read parents first.
+        if (!work.Knows(parent)) { return false; }
         var before = work.Version;
         work.AgentStarted(record.ToolUseId, record.Id, record.StartedAt, record.Background, info);
         work.AgentPrompt(record.Id, record.Prompt);
         if (_unclaimed.Remove(record.Id, out var end)) { work.AgentIdle(record.Id, end.At, end.Outcome); }
-        else if (work.Stopped(parent, out var parentEnded)) { work.AgentIdle(record.Id, parentEnded ?? record.StartedAt); }
+        else if (work.Stopped(parent, out var parentEnded, out var parentOutcome))
+        {
+            // One whose own end was never read (bytes the tail skipped) says nothing of this one's.
+            if (parentOutcome is not null) { work.AgentIdle(record.Id, parentEnded ?? record.StartedAt); }
+            else { work.ForgetRun(record.Id); }
+        }
         return work.Version != before;
     }
 

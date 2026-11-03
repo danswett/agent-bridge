@@ -165,7 +165,7 @@ took over from f7ba0bcc when DEV-VM1 began migrating. The sources:
 | Slice | Issue | What | State (2026-11-02, 15:00 PT) |
 |---|---|---|---|
 | S1 | #173 | Sub-agents: host model and protocol, Copilot first. May start before sign-off | Merged (#187) |
-| S2 | #174 | Sub-agents: Claude and Codex sources | Track A, in review |
+| S2 | #174 | Sub-agents: Claude and Codex sources | Track A, in review (#304) |
 | S5 | #175 | Sub-agents: HA connector and shadow | Track A (#199) |
 | U1 | #164 | Session list keeps the person's order | **Done**: #190 (PWA), #194 (app) |
 | U2 | #165 | "Needs you" lane | **Done**: #202 (PWA), #203 (app); approve-once refuses bidi and invisible characters |

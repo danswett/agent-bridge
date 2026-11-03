@@ -57,6 +57,10 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         _thread = null;
     }
 
+    // A sub-agent the skim saw start may have stopped in bytes never read: listed with no
+    // outcome until the window says more, never running for as long as the CLI lives.
+    public override void Skipped() => S.Background.ForgetRuns();
+
     protected override void Count(JsonElement e)
     {
         var payload = Json.Obj(e, "payload") ?? default;
@@ -294,7 +298,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         }
         if (Json.Obj(item, "agents_states") is { } states)
         {
-            foreach (var p in states.EnumerateObject()) { State(p.Name, p.Value, at); }
+            foreach (var p in states.EnumerateObject()) { State(p.Name, p.Value, at, notice: false); }
         }
     }
 
@@ -311,7 +315,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             if (doc.RootElement.ValueKind == JsonValueKind.Object && Text.NonBlank(Json.Str(doc.RootElement, "agent_path")) is { } agent
                 && Json.Get(doc.RootElement, "status") is { } status)
             {
-                State(agent, status, at);
+                State(agent, status, at, notice: true);
             }
         }
         catch (JsonException) { return false; }
@@ -319,8 +323,10 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
     }
 
     // A sub-agent's status as Codex reports it: running, stopped (completed is done; errored or
-    // interrupted failed), or gone for good (shut down, or no longer known).
-    void State(string agent, JsonElement state, DateTimeOffset? at)
+    // interrupted failed), or gone for good (shut down, or no longer known). A stop is said twice
+    // when the session waited for it, by the wait and then by the notice: the notice is then
+    // spent on the run the wait ended, never on one a message has started since.
+    void State(string agent, JsonElement state, DateTimeOffset? at, bool notice)
     {
         var work = S.Background;
         if (!work.Knows(agent)) { return; }
@@ -333,7 +339,7 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
                         work.AgentActive(agent, at);
                         break;
                     case "interrupted":
-                        work.AgentIdle(agent, at, SubagentOutcome.Failed);
+                        Stopped(null, SubagentOutcome.Failed);
                         break;
                     case "shutdown" or "not_found":
                         work.AgentEnded(agent, at, aborted: false);
@@ -343,15 +349,20 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
             case JsonValueKind.Object:
                 if (Json.Get(state, "completed") is { } completed)
                 {
-                    work.AgentSaid(agent, completed.ValueKind == JsonValueKind.String ? completed.GetString() : null, null, null);
-                    work.AgentIdle(agent, at);
+                    Stopped(completed.ValueKind == JsonValueKind.String ? completed.GetString() : null, SubagentOutcome.Done);
                 }
                 else if (Json.Get(state, "errored") is { } errored)
                 {
-                    work.AgentSaid(agent, errored.ValueKind == JsonValueKind.String ? errored.GetString() : null, null, null);
-                    work.AgentIdle(agent, at, SubagentOutcome.Failed);
+                    Stopped(errored.ValueKind == JsonValueKind.String ? errored.GetString() : null, SubagentOutcome.Failed);
                 }
                 break;
+        }
+
+        void Stopped(string? text, SubagentOutcome outcome)
+        {
+            if (!notice) { work.AgentRunEnded(agent, at, outcome); }
+            else if (!work.AgentIdle(agent, at, outcome)) { return; }
+            if (text is not null) { work.AgentSaid(agent, text, null, null); }
         }
     }
 
