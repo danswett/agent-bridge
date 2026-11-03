@@ -36,7 +36,11 @@ namespace AgentBridge.Host.Core.Parsing;
 //     depth, and delivered later as a user entry to whoever started it: the main agent's is a
 //     turn of the main agent's, not a prompt of the person's, and holds the sub-agent's
 //     result; a sub-agent's is in that agent's own transcript, and this one has only the
-//     queue's "remove". An agent notifies only once none of its own background agents is
+//     queue's "remove" (reason "delivered_to_agent"). The delivery is marked as Claude's
+//     (origin.kind "task-notification", turnOrigin "task_notification"); the queue is not, and a
+//     prompt the person types while the agent works is queued too, as "human" when delivered.
+//     So only a marked delivery, or a remove delivering a notice queued earlier, ends anything.
+//     An agent notifies only once none of its own background agents is
 //     live, and notifies again each time a message (SendMessage, as its launch says) has
 //     woken it and it stops.
 // A nested agent's start and parent are written only beside it (ClaudeSubagents, Nested).
@@ -61,20 +65,28 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
 
     // The message whose text the response holds, so its later blocks extend it.
     string? _responseMessage;
+    // Notices queued and not yet delivered, by task id, oldest first, each by its content's hash.
+    // The queue carries no mark of who wrote to it, and a prompt the person types while the agent
+    // works is queued the same way, so a queued notice is not an end until its delivery is (see
+    // Delivered); the queue says only when that end came.
+    readonly Dictionary<string, List<(DateTimeOffset? At, string Hash)>> _queued = new(StringComparer.Ordinal);
+    const int MaxQueuedPerAgent = 8;
+    // When a message last woke each agent: a delivered notice is of a run before it when it
+    // was queued before that.
+    readonly Dictionary<string, DateTimeOffset?> _wokenAt = new(StringComparer.Ordinal);
     // Ends of agents not known yet: a nested agent is known only from its own record, which
-    // can be read after the session's transcript says it stopped. Owed: queued, its delivery not
-    // read yet. The latest end is kept, with every delivery still owed (one per notice queued
-    // and not yet delivered, each run's own), and WokenAt: a message woke it since. As many as
+    // can be read after the session's transcript says it stopped. The latest is kept. As many as
     // there can be records (ClaudeSubagents); past that, a record with no end kept is not known
     // to be running.
-    readonly Dictionary<string, Unclaimed> _unclaimed = new(StringComparer.Ordinal);
-    readonly record struct Unclaimed(SubagentOutcome Outcome, DateTimeOffset? At, int Owed, DateTimeOffset? WokenAt = null);
+    readonly Dictionary<string, (SubagentOutcome Outcome, DateTimeOffset? At)> _unclaimed = new(StringComparer.Ordinal);
     bool _unclaimedDropped;
 
     public override void Reset()
     {
         base.Reset();
         _responseMessage = null;
+        _queued.Clear();
+        _wokenAt.Clear();
         _unclaimed.Clear();
         _unclaimedDropped = false;
     }
@@ -86,9 +98,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     {
         S.Background.ForgetShells();
         S.Background.ForgetRuns();
-        // An end not claimed yet keeps its outcome; what was owed it, or a run a message started
-        // since, may have been settled in the bytes never read.
-        foreach (var id in _unclaimed.Keys.ToList()) { _unclaimed[id] = _unclaimed[id] with { Owed = 0, WokenAt = null }; }
+        // A queued notice may have been delivered, and an agent woken and stopped again, in the
+        // bytes never read. An end not claimed yet keeps its outcome.
+        _queued.Clear();
+        _wokenAt.Clear();
     }
 
     protected override void Count(JsonElement e)
@@ -102,7 +115,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 if (Prompt(e) is not { } text || IsInterrupt(text)) { break; }
                 // Which turn the last is, a prompt's or a notice's, holds past the skim: the
                 // window may begin inside it.
-                if (IsNotice(text)) { S.UncountedTurn = true; break; }
+                if (IsNotice(e, text)) { S.UncountedTurn = true; break; }
                 S.FirstUserMessage ??= text;
                 S.UserMessage = text;
                 S.Prompts++;
@@ -167,20 +180,20 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         var work = S.Background;
         switch (Json.Str(e, "type"))
         {
-            case "queue-operation" when Json.Str(e, "content") is { } queued && IsNotice(queued):
+            case "queue-operation" when Json.Str(e, "content") is { } queued && IsNoticeText(queued):
                 switch (Json.Str(e, "operation"))
                 {
-                    case "enqueue": Notice(queued, at, queued: true); break;
+                    case "enqueue": Queue(queued, at); break;
                     // Delivered to the sub-agent that started it, not to the main agent.
-                    case "remove": Notice(queued, at, queued: false); break;
+                    case "remove" when Json.Str(e, "reason") == "delivered_to_agent": Delivered(queued, at, confirmed: false); break;
                 }
                 break;
             case "user":
                 {
                     var message = Json.Obj(e, "message");
-                    if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } content && content.GetString() is { } text && IsNotice(text))
+                    if (message is { } m && Json.Get(m, "content") is { ValueKind: JsonValueKind.String } content && content.GetString() is { } text && IsNotice(e, text))
                     {
-                        Notice(text, at, queued: false);
+                        Delivered(text, at, confirmed: true);
                         break;
                     }
                     if (Json.Obj(e, "toolUseResult") is not { } result) { break; }
@@ -202,46 +215,74 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                     if (Json.Str(block, "type") == "tool_use" && Json.Str(block, "name") == "SendMessage"
                         && Json.Obj(block, "input") is { } input && Json.Str(input, "to") is { } to)
                     {
-                        if (work.Knows(to)) { work.AgentActive(to, at); }
-                        // A nested agent whose record is not read yet, woken after it stopped.
-                        else if (_unclaimed.TryGetValue(to, out var stopped)) { _unclaimed[to] = stopped with { WokenAt = at }; }
+                        work.AgentActive(to, at);
+                        // Also for a nested agent whose record is not read yet.
+                        if (_wokenAt.ContainsKey(to) || _wokenAt.Count < ClaudeSubagents.MaxRecords) { _wokenAt[to] = at; }
                     }
                 }
                 break;
         }
     }
 
+    // A notice queued: when the agent or command it names stopped, should its delivery say so.
+    void Queue(string text, DateTimeOffset? at)
+    {
+        if (Tag(text, "task-id") is not { } id) { return; }
+        if (!_queued.TryGetValue(id, out var queued))
+        {
+            if (_queued.Count >= ClaudeSubagents.MaxRecords) { _queued.Remove(_queued.MinBy(p => p.Value[0].At ?? DateTimeOffset.MinValue).Key); }
+            _queued[id] = queued = [];
+        }
+        if (queued.Count >= MaxQueuedPerAgent) { queued.RemoveAt(0); }
+        queued.Add((at, Hash(text)));
+    }
+
     // A delegate or a background command stopped: "completed" is done, any other status failed.
-    // Queued, a delegate's notice ends its run and is owed the delivery that says it again
-    // (a user entry, or the queue's "remove" for one delivered to a sub-agent): that delivery
-    // is spent on this run, never ending one a message has started since. A delivery owed
-    // nothing (Claude writing no queue, or its enqueue never read) ends the run itself.
-    void Notice(string text, DateTimeOffset? at, bool queued)
+    // Only Claude's own delivery says so: a user entry it marks as a task notification (confirmed),
+    // or the queue's "remove" delivering one it queued to the sub-agent that started the agent
+    // (Claude delivers nothing the person typed to a sub-agent). The end is when it was queued,
+    // when that was read; a run a message started after then is still going.
+    void Delivered(string text, DateTimeOffset? at, bool confirmed)
     {
         if (Tag(text, "task-id") is not { } id) { return; }
         var outcome = Tag(text, "status") == "completed" ? SubagentOutcome.Done : SubagentOutcome.Failed;
+        var queuedAt = Dequeue(id, Hash(text), out var wasQueued);
+        if (!confirmed && !wasQueued) { return; }
+        var endedAt = wasQueued ? queuedAt : at;
         var work = S.Background;
         if (work.Knows(id))
         {
-            if (queued) { work.AgentRunEnded(id, at, outcome); }
-            else if (!work.AgentIdle(id, at, outcome)) { return; }
-            work.DescendantsStopped(id, at);
+            if (WokenSince(id, endedAt) is { } woken) { work.AgentActive(id, woken); return; }
+            work.AgentIdle(id, endedAt, outcome);
+            work.DescendantsStopped(id, endedAt);
             return;
         }
         if (work.ShellEnded(id)) { return; }
-        var exists = _unclaimed.TryGetValue(id, out var known);
-        if (exists && known.Owed > 0 && !queued)
-        {
-            _unclaimed[id] = known with { Owed = known.Owed - 1 };
-            return;
-        }
-        if (!exists && _unclaimed.Count >= ClaudeSubagents.MaxRecords)
+        if (!_unclaimed.ContainsKey(id) && _unclaimed.Count >= ClaudeSubagents.MaxRecords)
         {
             _unclaimed.Remove(_unclaimed.MinBy(p => p.Value.At ?? DateTimeOffset.MinValue).Key);
             _unclaimedDropped = true;
         }
-        _unclaimed[id] = new Unclaimed(outcome, at, (exists ? known.Owed : 0) + (queued ? 1 : 0));
+        _unclaimed[id] = (outcome, endedAt);
     }
+
+    DateTimeOffset? Dequeue(string id, string hash, out bool found)
+    {
+        found = false;
+        if (!_queued.TryGetValue(id, out var queued)) { return null; }
+        var i = queued.FindIndex(q => q.Hash == hash);
+        if (i < 0) { return null; }
+        var at = queued[i].At;
+        queued.RemoveAt(i);
+        if (queued.Count == 0) { _queued.Remove(id); }
+        found = true;
+        return at;
+    }
+
+    DateTimeOffset? WokenSince(string id, DateTimeOffset? endedAt) =>
+        _wokenAt.TryGetValue(id, out var woken) && woken is { } w && endedAt is { } e && w > e ? w : null;
+
+    static string Hash(string text) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
 
     // A sub-agent another one started, known from its own record: listed as working unless the
     // session's transcript already said it stopped, or the agent above it has stopped since (it
@@ -268,8 +309,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         if (_unclaimed.Remove(record.Id, out var end))
         {
             work.AgentIdle(record.Id, end.At, end.Outcome);
-            work.Owe(record.Id, end.Owed);
-            if (end.WokenAt is { } woken) { work.AgentActive(record.Id, woken); }
+            if (WokenSince(record.Id, end.At) is { } woken) { work.AgentActive(record.Id, woken); }
         }
         else if (_unclaimedDropped) { work.ForgetRun(record.Id); }
         // Started before the agent above it began its current run: in an earlier one, which
@@ -284,7 +324,13 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         return work.Version != before;
     }
 
-    static bool IsNotice(string text) => text.StartsWith(NoticeStart, StringComparison.Ordinal);
+    static bool IsNoticeText(string text) => text.StartsWith(NoticeStart, StringComparison.Ordinal);
+
+    // A notice Claude delivered, marked as such (origin.kind "task-notification", turnOrigin
+    // "task_notification", as 2.1.316 writes). The person can type the same text: Claude marks
+    // that "human", and it is their prompt like any other.
+    static bool IsNotice(JsonElement e, string text) => IsNoticeText(text)
+        && (Json.Obj(e, "origin") is { } origin && Json.Str(origin, "kind") == "task-notification" || Json.Str(e, "turnOrigin") == "task_notification");
 
     static string? Tag(string text, string name)
     {
@@ -314,7 +360,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             return;
         }
         if (Prompt(e) is not { } text) { return; }
-        if (IsNotice(text))
+        if (IsNotice(e, text))
         {
             // A turn of the main agent's, about a delegate or a command that stopped: neither
             // the person's message nor a prompt counted, and the text in it is the delegate's.

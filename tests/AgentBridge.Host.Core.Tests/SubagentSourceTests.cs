@@ -164,10 +164,14 @@ public class ClaudeSubagentTests
     {
         await using var r = new Replay();
 
-        // The main agent's turn has ended; the list-files delegate notified at 8.69 s.
+        // The list-files delegate's notice was queued at 8.69 s; until Claude delivers it, the
+        // queue alone (which carries no mark of who wrote to it) ends nothing.
         var s = await r.Through(9.25);
-
         Assert.Equal(SessionStatus.Idle, s.Status);
+        Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
+
+        // Delivered at 9.276 s, marked as Claude's task notification: it stopped when queued.
+        s = await r.Through(9.3);
         Assert.Equal(new Background { Agents = 2, Shells = 1 }, s.Activity.Background);
         var files = Entry(s, Files);
         Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (files.Status, files.Outcome));
@@ -488,14 +492,15 @@ public class ClaudeSubagentTests
     [Fact]
     public async Task A_nested_delegate_found_between_its_queued_notice_and_its_delivery_is_not_stopped_again_by_the_delivery()
     {
-        // Found in review: its record is read only after the queue said it stopped, a message
-        // wakes it, and then the queue's remove (its delivery to the delegate above) arrives.
+        // Found in review: its record is read only after its notice was queued, a message wakes
+        // it, and then the queue's remove (its delivery to the delegate above) arrives. Queued
+        // and not delivered, the notice has not ended it yet.
         await using var r = new Replay();
         r.Held.Add("agent-" + Nested);
         await r.Through(10.23);
 
         var found = Entry(await r.Release(Nested, 10.23), Nested);
-        Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (found.Status, found.Outcome));
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (found.Status, found.Outcome));
 
         var wake = JsonNode.Parse(Claude.Assistant(0, "tool_use", Claude.ToolUse("toolu_wake", "SendMessage", new JsonObject { ["to"] = Nested, ["summary"] = "Again", ["message"] = "Show them again." })))!;
         wake["timestamp"] = Fixture.T0.AddMilliseconds(10240).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
@@ -511,7 +516,7 @@ public class ClaudeSubagentTests
     {
         await using var r = new Replay(l => l.Contains($"<task-id>{Files}</task-id>", StringComparison.Ordinal) ? l.Replace("<status>completed</status>", "<status>failed</status>", StringComparison.Ordinal) : l);
 
-        var s = await r.Through(9.25);
+        var s = await r.Through(9.3);
 
         Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Failed), (Entry(s, Files).Status, Entry(s, Files).Outcome));
         Assert.Equal(2, s.Activity.Background!.Agents);
@@ -533,21 +538,91 @@ public class ClaudeSubagentTests
         Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(woken, Files).Status, Entry(woken, Files).Outcome));
         Assert.Equal(1, woken.Activity.Background!.Agents);
 
-        var again = await r.Append(Notice(Files, 220));
+        var again = await r.Append(Notice(Files, 220), Delivery(Files, 221));
 
         Assert.Equal((SubagentStatus.Idle, SubagentOutcome.Done), (Entry(again, Files).Status, Entry(again, Files).Outcome));
         Assert.Equal(Fixture.T0.AddSeconds(220), Entry(again, Files).EndedAt);
         Assert.Null(again.Activity.Background);
     }
 
-    static string Notice(string task, int s) => new JsonObject
+    static string NoticeText(string task, string status = "completed") =>
+        $"<task-notification>\n<task-id>{task}</task-id>\n<status>{status}</status>\n<summary>Agent \"List the files\" finished</summary>\n<result>README.md</result>\n</task-notification>";
+
+    // A notice queued, as Claude queues one the moment an agent stops, and as it queues a prompt
+    // the person types while the agent works.
+    static string Notice(string task, int s, string status = "completed") => new JsonObject
     {
         ["type"] = "queue-operation",
         ["operation"] = "enqueue",
         ["timestamp"] = Copilot.At(s),
         ["sessionId"] = Id,
-        ["content"] = $"<task-notification>\n<task-id>{task}</task-id>\n<status>completed</status>\n<summary>Agent \"List the files\" finished</summary>\n<result>README.md</result>\n</task-notification>",
+        ["content"] = NoticeText(task, status),
     }.ToJsonString();
+
+    // The notice delivered to the main agent: marked as Claude's own, or typed by the person.
+    static string Delivery(string task, int s, bool typed = false, string status = "completed") => new JsonObject
+    {
+        ["type"] = "user",
+        ["isSidechain"] = false,
+        ["timestamp"] = Copilot.At(s),
+        ["sessionId"] = Id,
+        ["promptSource"] = typed ? "typed" : "system",
+        ["turnOrigin"] = typed ? "human" : "task_notification",
+        ["origin"] = new JsonObject { ["kind"] = typed ? "human" : "task-notification" },
+        ["message"] = new JsonObject { ["role"] = "user", ["content"] = NoticeText(task, status) },
+    }.ToJsonString();
+
+    [Fact]
+    public async Task A_notification_the_person_typed_does_not_stop_a_delegate_and_is_their_prompt()
+    {
+        // Found in security review: only the text was checked, not Claude's mark on the entry.
+        await using var r = new Replay();
+        var before = await r.Through(7);
+        Assert.Equal(SubagentStatus.Working, Entry(before, Files).Status);
+
+        var s = await r.Append(Delivery(Files, 8, typed: true, status: "failed"));
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Files).Status, Entry(s, Files).Outcome));
+        Assert.Equal(3, s.Activity.Background!.Agents);
+        Assert.Equal(NoticeText(Files, "failed"), s.Activity.UserMessage);
+        Assert.Equal(SessionStatus.Working, s.Status);
+        Assert.Equal(1, s.Activity.TurnCount);
+    }
+
+    [Fact]
+    public async Task A_notification_the_person_typed_while_the_agent_works_is_queued_but_stops_no_delegate()
+    {
+        // Found in security review: a typed prompt is queued like a notice, and the queue says
+        // nothing of who wrote to it.
+        await using var r = new Replay();
+        await r.Through(7);
+
+        var queued = await r.Append(Notice(Files, 8, status: "failed"));
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(queued, Files).Status, Entry(queued, Files).Outcome));
+        Assert.Equal(3, queued.Activity.Background!.Agents);
+
+        // Delivered as the person's own prompt, it is still not Claude's notice.
+        var s = await r.Append(Delivery(Files, 8, typed: true, status: "failed"));
+
+        Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
+        Assert.Equal(3, s.Activity.Background!.Agents);
+    }
+
+    [Fact]
+    public async Task A_notice_removed_from_the_queue_ends_nothing_unless_it_was_queued_and_delivered_to_a_delegate()
+    {
+        await using var r = new Replay();
+        await r.Through(7);
+        var removed = JsonNode.Parse(Notice(Files, 8, status: "failed"))!;
+        removed["operation"] = "remove";
+
+        var s = await r.Append(removed.ToJsonString());
+        Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
+
+        removed["reason"] = "delivered_to_agent";
+        s = await r.Append(removed.ToJsonString());
+        Assert.Equal(SubagentStatus.Working, Entry(s, Files).Status);
+    }
 }
 
 public class CodexSubagentTests

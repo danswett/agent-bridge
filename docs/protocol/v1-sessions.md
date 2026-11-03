@@ -996,11 +996,15 @@ command); the shapes are in `tests/fixtures/claude`.
   `Agent` call that way; a result of any other shape lists nothing.
 * **Background commands.** A `toolUseResult.backgroundTaskId` (a `Bash` call with
   `run_in_background`) starts one, counted in `background.shells`.
-* **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`: a
-  `queue-operation` `enqueue` whose `content` is one, written the moment it stops, or a `user`
-  entry whose content is one, when it is delivered (or the queue's `remove`, for one delivered
-  to a sub-agent). A delivery of a notice that was queued is spent on the run the queued one
-  ended, never ending one a message has started since. An agent's run ends `done` for `<status>completed</status>` and
+* **Ends.** A `<task-notification>` naming the agent or command by its `<task-id>`, once
+  Claude has delivered it: a `user` entry whose content is one and which Claude marks as its own
+  (`origin.kind` `task-notification` or `turnOrigin` `task_notification`), or the queue's
+  `remove` with `reason` `delivered_to_agent` (for one delivered to a sub-agent) of a notice
+  queued earlier. The person can type the same text, and a prompt typed while the agent works
+  is queued the same way: a `user` entry not so marked is their prompt, and a `queue-operation`
+  `enqueue` (written the moment the agent stops, with no mark of who wrote it) ends nothing by
+  itself, but dates the end its delivery confirms. One delivered after a message woke the agent
+  since it was queued is of the run before, and the agent is still working. An agent's run ends `done` for `<status>completed</status>` and
   `failed` for any other, and it is `idle`; any run still going under it ends `done` too,
   since Claude notifies an agent only once none of its own is live. A `SendMessage` `tool_use`
   whose `input.to` is an agent's id wakes it, a nested one whose record is read only later

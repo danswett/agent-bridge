@@ -254,9 +254,8 @@ internal sealed class BackgroundWork
     }
 
     // A run's end said before the notice that says it again (Codex's wait returning with the
-    // agent's state, then its subagent_notification; Claude's queued notice, then its delivery):
-    // that notice is owed to this run, and spent on it rather than ending one a message has
-    // started since. So is one for a run whose end was not known yet (its start only skimmed past
+    // agent's state, then its subagent_notification): that notice is owed to this run, and
+    // spent on it rather than ending one a message has started since. So is one for a run whose end was not known yet (its start only skimmed past
     // bytes never read); the same end said again owes nothing more.
     public void AgentRunEnded(string agentId, DateTimeOffset? at, SubagentOutcome outcome)
     {
@@ -312,12 +311,6 @@ internal sealed class BackgroundWork
 
     // When a working agent's current run started.
     public DateTimeOffset? RunSince(string agentId) => _agents.TryGetValue(agentId, out var agent) && agent.Working ? agent.Since : null;
-
-    // Deliveries of notices queued before the agent was known, each spent on a run already ended.
-    public void Owe(string agentId, int notices)
-    {
-        if (notices > 0 && _agents.TryGetValue(agentId, out var agent)) { agent.IdleOwed += notices; }
-    }
 
     // Whether a known agent is between runs, since when, and how its latest run ended (null when
     // that was never said).
