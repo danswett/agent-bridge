@@ -51,6 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: |
           az bicep install
           az bicep build -f infra/main.bicep --stdout > /dev/null
@@ -70,6 +72,8 @@ jobs:
       image: ${{ steps.push.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -98,6 +102,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -141,6 +147,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -154,9 +162,11 @@ jobs:
           IMAGE_REF: ${{ needs.build.outputs.image }}
         run: ./infra/roll-production.sh "$IMAGE_REF" "$GITHUB_SHA"
       - name: Smoke test, without a token (nothing on production is signed by CI)
+        env:
+          RELAY_URL: ${{ steps.roll.outputs.url }}
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
-            --relay "${{ steps.roll.outputs.url }}" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 180
+            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$GITHUB_SHA" --expect-push --wait 180
 
   rollback:
     if: vars.RELAY_DEPLOY == 'true' && inputs.rollback_to != ''
@@ -169,6 +179,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -186,6 +198,7 @@ jobs:
       - name: Smoke test
         env:
           SHA: ${{ inputs.rollback_to }}
+          RELAY_URL: ${{ steps.roll.outputs.url }}
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
-            --relay "${{ steps.roll.outputs.url }}" --origin "$PWA_ORIGIN" --expect-version "$SHA" --expect-push --wait 180
+            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$SHA" --expect-push --wait 180
