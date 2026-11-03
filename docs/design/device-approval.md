@@ -52,7 +52,7 @@ ECDH device key, created on the device and never exported:
 
 | Client | Signing key storage |
 |---|---|
-| Windows app | TPM via the Platform Crypto Provider (`ECDSA_P256`, more widely supported than the `ECDH_P256` S6 needs), DPAPI fallback, or a key bound to Windows Hello (§4.6) |
+| Windows app | TPM via the Platform Crypto Provider (`ECDSA_P256`, more widely supported than the `ECDH_P256` S6 needs), DPAPI fallback; user verification as in §4.6 |
 | PWA | WebCrypto `ECDSA` P-256, `extractable: false`, in the same IndexedDB as the device key |
 | iPhone, iPad, Mac app | Secure Enclave `SecureEnclave.P256.Signing`, data-protection Keychain fallback |
 
@@ -97,6 +97,7 @@ as signed commands are, so no end has to serialize JSON identically:
     "id": "<32 hex: first 16 bytes of SHA-256 of dh>",
     "dh": "<65-byte uncompressed P-256 ECDH key, base64url>",
     "sign": "<65-byte uncompressed P-256 ECDSA key, base64url; absent for a host>",
+    "signAlg": "ES256",
     "kind": "phone",
     "platform": "ios",
     "name": "Travel iPhone"
@@ -110,13 +111,14 @@ as signed commands are, so no end has to serialize JSON identically:
 | `v` | 1. A verifier refuses any other version; a new version is a deliberate protocol change |
 | `account` | The account id the relay issued. A roster entry from another account never verifies |
 | `generation` | Chosen at genesis. A reset (§5.5) is a new generation |
-| `seq`, `prev` | `seq` is 0 at genesis and one more than its parent otherwise; `prev` is the SHA-256 of the parent's **body bytes** (not of the signature, so a re-encoded ECDSA signature cannot make a second entry with the same content) |
+| `seq`, `prev` | `seq` is 0 at genesis and one more than its parent otherwise; `prev` is the parent's **entry hash** (below), not a hash of its signature, so a re-encoded ECDSA signature cannot make a second entry with the same content |
 | `op` | `genesis`, `add`, `remove`, `rename`. Grants (`set grants` in §5.4) are left for later |
 | `by` | The signer's device id. It must be an active person's device in the state the parent leaves; for `genesis`, the device the entry adds |
 | `at` | When the signer says it signed. Shown to people ("added by Desk app at 14:05"); never used to order or expire anything |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
 | `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `web`. Display only: authorization reads `kind` |
-| `device.name` | At most 64 characters, control and bidirectional-override characters removed. Proposed by the new device, editable by the approver, and signed with the rest |
+| `device.signAlg` | With `sign`, and only `ES256` (ECDSA P-256 with SHA-256) in v1. A verifier refuses any other value. It is there so that adding an algorithm later (§4.6) is an explicit, versioned change rather than a guess from the key's length |
+| `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden` and `pwa/js/needs-you.js` `HIDDEN`: format characters including bidi controls and zero-width characters, controls, default-ignorables, private-use, unassigned code points and the line and paragraph separators) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, as Needs You does, since which code points are unassigned differs between platforms' Unicode versions. Proposed by the new device, editable by the approver, and signed with the rest |
 | `approval` | How the person approved: `code`, `qr`, `grandfather` (§8.2) or `genesis`, and the enrollment transcript hash, so an entry can be traced to the exchange that produced it |
 
 Kinds: on the wire the kind is the authorization class, and it stays the set every check
@@ -127,6 +129,10 @@ implementation, not to several.
 
 `add` carries `device`; `remove` carries `device.id` only; `rename` carries `device.id` and
 `device.name`.
+
+The **entry hash** is `SHA-256` over the exact `body` bytes as received (never over re-encoded
+JSON), written as base64url without padding wherever it appears: in `prev`, in the pin (§3.4),
+in `rosterHead`, in `roster.head` and in logs.
 
 The signature is ECDSA P-256 with SHA-256 over the body bytes, encoded as DER (WebCrypto's
 raw `r‖s` is converted). A verifier checks every public key in an entry is on the curve
@@ -152,8 +158,8 @@ roster as offered, keeping what it had:
 
 ### 3.4 Versioning and rollback
 
-Each verifier keeps a **pin**: `(generation, seq, hash of that entry's body)`, the newest
-entry it has accepted, written before it acts on the new state.
+Each verifier keeps a **pin**: `(generation, seq, entry hash)` of the newest entry it has
+accepted, written before it acts on the new state.
 
 * **Extension only.** An offered roster is accepted only if it contains the pinned entry at
   the pinned `seq` and continues from it. A shorter roster, or one that does not contain the
@@ -238,9 +244,11 @@ also takes nonces in a commit-then-reveal order, the agent-ha-bridge fleet-pairi
 2. **A → N: offer.** A picks `nA` and sends it. A has not seen `nN`.
 3. **N → A: reveal.** N sends `nN`. A checks it against `C` and abandons the attempt otherwise.
 4. **Both** compute `T = SHA-256("agent-bridge enroll v1" ‖ account ‖ h ‖ nA ‖ nN)` and the
-   code `SAS = (first 4 bytes of SHA-256("sas" ‖ T) as a big-endian integer) mod 10⁶`, six
-   digits. N shows it.
-5. **The person types it at A.** A compares it with its own in fixed time. On a match, A
+   code `SAS = (first 4 bytes of SHA-256("sas" ‖ T) as a big-endian integer) mod 10⁶`. The
+   code is always the six-digit decimal string, zero-padded (`000042`), shown as two groups of
+   three (`000 042`). N shows it.
+5. **The person types it at A.** A drops spaces from what was typed, refuses anything that is
+   not exactly six ASCII digits, and compares the string with its own in fixed time. On a match, A
    signs the `add` entry (`approval.transcript = T`), appends it at the relay, and sends N the
    chain from genesis through that entry over the channel.
 6. **N verifies** the chain (§3.3), that the newest entry adds exactly its own `dh` and `sign`
@@ -310,10 +318,13 @@ never as the gate:
 Approving is the most powerful thing a device does. Where the platform offers it, signing a
 roster entry asks the person to verify (owner decision 3):
 * **Windows app**: the key itself must demand the gesture; a `UserConsentVerifier` prompt in
-  the app alone does not stop malware calling the key directly. R4 picks one of: a Windows
-  Hello (Passport) key credential, which is RSA-2048, so `device.sign` would then carry its
-  algorithm (`ES256` or `RS256`); or a TPM ECDSA key with an NCrypt UI policy. Without Hello,
-  a TPM key and a confirmation dialog;
+  the app alone does not stop malware calling the key directly. v1 stays ES256 everywhere: a
+  TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each
+  use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6
+  verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in
+  v1. Adopting it later would add `RS256` to `signAlg` and define the RSA key and signature
+  encodings, a protocol change of its own. Without a usable policy, the app uses a TPM key and
+  a confirmation dialog;
 * **Apple**: a Secure Enclave key with `.userPresence` access control (Face ID, Touch ID or
   passcode);
 * **PWA**: WebAuthn user verification is a later slice; until then the PWA's approval is a
@@ -649,8 +660,10 @@ Each slice adds its own; together they cover:
   join again.
 
 **Interop**
-* Shared vectors for entries, signatures, the chain hash, the code and the QR MAC, run by C#,
-  the PWA and Swift, as the command MAC's are.
+* Shared vectors for entries, signatures, the chain hash, the code (including one with leading
+  zeros) and the QR MAC, run by C#, the PWA and Swift, as the command MAC's are.
+* A name holding a hidden character: removed by the approver before signing; refused by a
+  verifier if it is a control; shown escaped otherwise.
 
 ## 11. Decisions for the owner
 
