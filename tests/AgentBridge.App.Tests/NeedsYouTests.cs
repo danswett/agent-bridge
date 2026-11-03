@@ -437,7 +437,7 @@ public sealed class NeedsYouTests : IAsyncLifetime
     {
         Assert.Equal("Run echo \\u202E now?", NeedsYouEntry.LineOf(Make.Form() with { Message = "Run echo \u202E now?" }));
         Assert.Equal("rm -rf build\\u200B /", NeedsYouEntry.LineOf(Make.Form() with { Message = "```\nrm -rf build\u200B /\n```" }));
-        Assert.Equal("a\\u2028b\\u{F0000}", NeedsYouEntry.Reveal("a\u2028b\U000F0000"));
+        Assert.Equal("a\\u2028b\\u{F0000}", HiddenText.Reveal("a\u2028b\U000F0000"));
     }
 
     [Fact]

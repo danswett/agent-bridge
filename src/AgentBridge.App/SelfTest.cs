@@ -66,6 +66,9 @@ static partial class SelfTest
             var approval = await Choose(window, main, "demo-approval", "Option:approve");
             Check(approval is not null && ById<Button>(approval, "Option:approve") is { IsEnabled: true } && ById<Button>(approval, "Option:deny") is not null,
                 "shows Approve once and Deny on a Copilot permission prompt");
+            // Where Approve once is pressed, the command reads in the order it runs (#220).
+            var approvalCode = approval is null ? null : Find<TextBlock>(approval).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.StartsWith("dotnet test", StringComparison.Ordinal));
+            Check(approvalCode is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection }, "draws an approval's command on its card left to right, in the order it runs");
             var form = await Choose(window, main, "02d9e5d5-6b35-49bd-b083-39572fbff648", "SendAnswer");
             Check(form is not null && ById<Button>(form, "SendAnswer") is not null && ById<TextBox>(form, "Field:notes") is not null,
                 "draws a form question with its fields and Send");

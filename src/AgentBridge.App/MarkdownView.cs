@@ -19,7 +19,6 @@ public sealed class MarkdownView : StackPanel
     // The design's monospace stack (design/tokens.json type.mono), from the app's resources.
     static FontFamily Mono => (FontFamily)Application.Current.Resources["MonoFontFamily"];
     string? markdown;
-    bool codeLeftToRight;
 
     public MarkdownView() => Spacing = 8;
 
@@ -62,20 +61,6 @@ public sealed class MarkdownView : StackPanel
             case ContentControl { Content: DependencyObject inner }:
                 Read(inner);
                 break;
-        }
-    }
-
-    // Code reads strictly left to right, in the order it runs, never a reading order detected from
-    // its letters: an approval's prompt in Needs you, whose Approve once allows all of it (#165).
-    // NeedsYouEntry refuses right-to-left text and anything drawn elsewhere, and escapes it in the line.
-    public bool CodeLeftToRight
-    {
-        get => codeLeftToRight;
-        set
-        {
-            if (value == codeLeftToRight) { return; }
-            codeLeftToRight = value;
-            Render();
         }
     }
 
@@ -180,28 +165,49 @@ public sealed class MarkdownView : StackPanel
 
     // Code wraps rather than scrolls (#296): every character of a long command is seen without
     // scrolling sideways, as in the PWA. The wrap is the text block's own and adds no line breaks,
-    // so selecting the text, or Copy, gives the command as the agent wrote it.
+    // so selecting the text, or Copy, gives the command as drawn.
+    // Every block reads strictly left to right, in the order it runs, never a reading order detected
+    // from its letters, with what is not on screen as it runs drawn as escapes (CodeCopy, #220):
+    // the conversation's, the delegate inspector's, and an approval's on its card, where Approve once
+    // allows all of it.
     UIElement Code(MdCode c)
     {
         var copy = new CodeCopy(c, text => PutText(text), new QueueDispatcher(DispatcherQueue));
         var text = new TextBlock
         {
             Style = (Style)Application.Current.Resources["AbTypeCode"],
-            Text = copy.Shown,
+            Text = copy.Text,
             IsTextSelectionEnabled = true,
             TextWrapping = TextWrapping.Wrap,
+            FlowDirection = FlowDirection.LeftToRight,
+            TextReadingOrder = TextReadingOrder.UseFlowDirection,
             Margin = new Thickness(0, 0, 6, 0),
         };
-        if (CodeLeftToRight)
+        AutomationProperties.SetAutomationId(text, "CodeText");
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        if (copy.RightToLeft)
         {
-            text.FlowDirection = FlowDirection.LeftToRight;
-            text.TextReadingOrder = TextReadingOrder.UseFlowDirection;
+            var note = new TextBlock
+            {
+                Style = (Style)Application.Current.Resources["AbTypeMeta"],
+                Foreground = Ui.Brush("AbText2"),
+                Text = CodeCopy.RightToLeftNote,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            AutomationProperties.SetAutomationId(note, "CodeRightToLeft");
+            head.Children.Add(note);
         }
+        var button = CopyButton(copy);
+        Grid.SetColumn(button, 1);
+        head.Children.Add(button);
         Grid.SetRow(text, 1);
         var grid = new Grid { RowSpacing = 2 };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.Children.Add(CopyButton(copy));
+        grid.Children.Add(head);
         grid.Children.Add(text);
         return new Border
         {

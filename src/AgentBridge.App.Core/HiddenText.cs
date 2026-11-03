@@ -1,0 +1,66 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
+
+namespace AgentBridge.App.Core;
+
+// Text that is not on screen as it runs (#165, #220): characters drawn as nothing or somewhere
+// other than where they run, and right-to-left letters, which reorder what is drawn around them.
+// The Needs you lane refuses a prompt with either; a code block draws the first as escapes and
+// reads left to right (ui.md §6.4).
+public static class HiddenText
+{
+    // Characters a reader cannot see as they run: format characters (bidi controls, zero-width
+    // spaces and joiners), controls other than a newline or a tab (a CR too: a shell runs it as part
+    // of the command), private-use and unassigned code points, unpaired surrogates, and the line and
+    // paragraph separators (pwa/js/needs-you.js HIDDEN).
+    public static bool HasHidden(string text)
+    {
+        for (var i = 0; i < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done || Hidden(r)) { return true; }
+            i += n;
+        }
+        return false;
+    }
+
+    // The right-to-left blocks: Hebrew to Arabic Extended, their presentation forms, and the
+    // supplementary planes' right-to-left ranges (pwa/js/needs-you.js RTL).
+    public static bool HasRightToLeft(string text) => text.EnumerateRunes().Any(r => r.Value is
+        (>= 0x0590 and <= 0x08FF) or (>= 0xFB1D and <= 0xFDFF) or (>= 0xFE70 and <= 0xFEFF)
+        or (>= 0x10800 and <= 0x10FFF) or (>= 0x1E800 and <= 0x1EFFF));
+
+    static bool Hidden(Rune r) => r.Value is 0x2028 or 0x2029 || Ignorable(r.Value) || Rune.GetUnicodeCategory(r) switch
+    {
+        UnicodeCategory.Format or UnicodeCategory.PrivateUse or UnicodeCategory.OtherNotAssigned or UnicodeCategory.Surrogate => true,
+        UnicodeCategory.Control => r.Value is not ('\n' or '\t'),
+        _ => false,
+    };
+
+    // Every default-ignorable code point, drawn as nothing though it is there: variation selectors
+    // (which can make one name look like another), the combining grapheme joiner, Hangul fillers,
+    // tags (Unicode's DerivedCoreProperties, Default_Ignorable_Code_Point; pwa/js/needs-you.js).
+    static bool Ignorable(int c) => c is 0x00AD or 0x034F or 0x061C or 0x115F or 0x1160 or 0x17B4 or 0x17B5 or 0x3164 or 0xFEFF or 0xFFA0
+        or (>= 0x180B and <= 0x180F) or (>= 0x200B and <= 0x200F) or (>= 0x202A and <= 0x202E) or (>= 0x2060 and <= 0x206F)
+        or (>= 0xFE00 and <= 0xFE0F) or (>= 0xFFF0 and <= 0xFFF8) or (>= 0x1BCA0 and <= 0x1BCA3) or (>= 0x1D173 and <= 0x1D17A)
+        or (>= 0xE0000 and <= 0xE0FFF);
+
+    // Any such character drawn as a visible escape (\u202E), so a line reads in the order it runs:
+    // the lane's line, and every code block (#220, #296), whose Copy takes the escapes as drawn.
+    public static string Reveal(string text)
+    {
+        var b = new StringBuilder(text.Length);
+        for (var i = 0; i < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(i), out var r, out var n) != OperationStatus.Done)
+            {
+                b.Append($"\\u{(int)text[i]:X4}");
+                i += Math.Max(n, 1);
+                continue;
+            }
+            if (Hidden(r)) { b.Append(r.Value > 0xFFFF ? $"\\u{{{r.Value:X}}}" : $"\\u{r.Value:X4}"); } else { b.Append(r.ToString()); }
+            i += n;
+        }
+        return b.ToString();
+    }
+}
