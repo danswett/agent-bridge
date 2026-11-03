@@ -1,7 +1,14 @@
 // Sign-in: GitHub's device flow, run through the relay (which holds the GitHub App's
 // secret). The page shows a code; the user enters it at github.com; the relay then issues
 // its own token for this account.
-import { sleep } from './bytes.js';
+function delay(ms, signal) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
+}
 
 const seconds = (value, max) => Number.isInteger(value) && value >= 1 && value <= max;
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
@@ -9,10 +16,11 @@ const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 const validAccount = account => nonempty(account?.token) && nonempty(account.accountId) && nonempty(account.login);
 const invalidAccount = () => new Error('The relay returned incomplete sign-in information. Start sign-in again.');
 
-export async function startDeviceFlow(base) {
-  const r = await fetch(`${base}/v1/auth/device`, { method: 'POST' });
+export async function startDeviceFlow(base, signal) {
+  const r = await fetch(`${base}/v1/auth/device`, { method: 'POST', signal });
   if (!r.ok) { throw new Error(`sign-in is unavailable (${r.status})`); }
   const s = await r.json();
+  signal?.throwIfAborted();
   const devicePage = 'https://github.com/login/device';
   if (s.verificationUri !== devicePage) { throw new Error('The relay returned an untrusted sign-in page.'); }
   if (!nonempty(s.deviceCode) || !nonempty(s.userCode) || !seconds(s.expiresIn, 3600) || !seconds(s.interval, 60)) {
@@ -24,18 +32,19 @@ export async function startDeviceFlow(base) {
     verificationUri: devicePage,
     expiresIn: s.expiresIn,
     // Polls until the code is entered, refused or expired. `signal` cancels.
-    async wait(signal) {
+    async wait(pollSignal = signal) {
       let interval = s.interval;
       while (Date.now() < deadline) {
-        await sleep(Math.min(interval * 1000, deadline - Date.now()));
+        await delay(Math.min(interval * 1000, deadline - Date.now()), pollSignal);
         if (Date.now() >= deadline) { break; }
-        if (signal?.aborted) { throw new Error('sign-in cancelled'); }
+        pollSignal?.throwIfAborted();
         const t = await fetch(`${base}/v1/auth/token`, {
-          method: 'POST',
+          method: 'POST', signal: pollSignal,
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ deviceCode: s.deviceCode }),
         });
         const j = await t.json().catch(() => ({}));
+        pollSignal?.throwIfAborted();
         if (Date.now() >= deadline) { break; }
         if (t.status === 202) {
           if (j?.pending !== true || ('interval' in j && !seconds(j.interval, 60))) {

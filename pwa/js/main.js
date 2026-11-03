@@ -461,27 +461,48 @@ function showSignIn(error) {
   setPill('Signed out');
 }
 
+let signInAttempt;
+function clearSignInAttempt() {
+  signInAttempt = null;
+  $('cancel-signin').hidden = true;
+  $('signin-button').disabled = false;
+  $('code-box').hidden = true;
+  $('code').textContent = '';
+  $('verify').removeAttribute('href');
+}
+
+$('cancel-signin').onclick = () => {
+  signInAttempt?.abort();
+  clearSignInAttempt();
+  $('signin-button').focus();
+};
+
 $('signin-button').onclick = async () => {
-  const button = $('signin-button');
-  button.disabled = true;
+  if (signInAttempt) { return; }
+  const attempt = new AbortController();
+  signInAttempt = attempt;
+  $('signin-button').disabled = true;
+  $('cancel-signin').hidden = false;
   $('signin-error').hidden = true;
   try {
-    const flow = await startDeviceFlow(BASE);
+    const flow = await startDeviceFlow(BASE, attempt.signal);
+    attempt.signal.throwIfAborted();
     $('code').textContent = flow.userCode;
     $('verify').href = flow.verificationUri;
     $('verify').textContent = flow.verificationUri.replace(/^https?:\/\//, '');
     $('code-box').hidden = false;
-    const account = await flow.wait();
+    const account = await flow.wait(attempt.signal);
+    attempt.signal.throwIfAborted();
     accountStore.save(account);
-    $('code-box').hidden = true;
     $('signin').hidden = true;
     begin(account);
   } catch (e) {
-    $('code-box').hidden = true;
+    if (attempt.signal.aborted) { return; }
     $('signin-error').hidden = false;
     $('signin-error').textContent = e.message;
   } finally {
-    button.disabled = false;
+    // An old fetch can finish after cancellation and after a new code is displayed.
+    if (signInAttempt === attempt) { clearSignInAttempt(); }
   }
 };
 

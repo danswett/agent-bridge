@@ -62,3 +62,34 @@ test('an invalid account cannot be persisted or loaded from storage', () => {
   accountStore.save(account, storage);
   assert.deepEqual(accountStore.load(storage), account);
 });
+
+test('cancelling a wait interrupts a long delay without polling', async t => {
+  const controller = new AbortController();
+  const fetch = t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.signal, controller.signal);
+    return Response.json({ ...device, interval: 60 });
+  });
+  const flow = await startDeviceFlow('', controller.signal);
+  const wait = flow.wait();
+  controller.abort();
+  await assert.rejects(wait, { name: 'AbortError' });
+  assert.equal(fetch.mock.callCount(), 1);
+});
+
+test('even a token fetch that ignores abort cannot return a late account', async t => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  t.mock.method(globalThis, 'setTimeout', fn => { queueMicrotask(fn); });
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    assert.equal(options.signal, controller.signal);
+    if (!options.body) { return Response.json(device); }
+    started.resolve();
+    return reply.promise;
+  });
+  const wait = (await startDeviceFlow('', controller.signal)).wait();
+  await started.promise;
+  controller.abort();
+  reply.resolve(Response.json({ token: 'fixture', accountId: '42', login: 'fixture' }));
+  await assert.rejects(wait, { name: 'AbortError' });
+});
