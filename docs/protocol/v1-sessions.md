@@ -83,7 +83,8 @@ with the wrong type):
 | `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
 | `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
 | `Option` | | `value`, `label` |
-| `DiscoveryHeld` | `reason` | |
+| `DiscoveryHeld` | `reason` | `agents` (whole) |
+| `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
 | `UsageReader` | `id` | |
@@ -109,7 +110,9 @@ text would be shown as the main agent's.
 
 The shared vectors ([vectors/](vectors/README.md)) work these rules through for every record a
 host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
-refused because a strict field is involved.
+refused because a strict field is involved. A `sessions.synced` or `discovery.changed` whose
+`discoveryHeld` can't be read is refused whole: read as absent, a hold the host still has would
+read as lifted.
 
 This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
 `session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as

@@ -14,6 +14,7 @@ public static class KnownDifferences
         "Question/missing-kind", "Question/missing-message", "Question/wrong-type-id", "ToolCall/missing-id", "ToolCall/wrong-type-id",
         "TrustQuestion/missing-agent", "TrustQuestion/missing-answerable", "TrustQuestion/missing-kind",
         "Question/a-choice-that-cannot-be-read", "Question/a-choice-label-that-is-not-text", "Question/a-delegate-that-is-not-an-id",
+        "DiscoveryChanged/wrong-type-discoveryHeld",
     ];
 
     // #446: a required field missing, or one of the wrong type, that both read past. C# reads it as

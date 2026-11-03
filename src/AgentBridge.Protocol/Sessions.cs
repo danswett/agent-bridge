@@ -491,20 +491,22 @@ public sealed record Option([property: Strict(Strictness.Security)] string Value
 
 // One page of sessions.list. Next is absent on the last page. DiscoveryHeld is present while
 // the host's discovery is incomplete (DiscoveryHeld below).
-public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null, DiscoveryHeld? DiscoveryHeld = null);
+public sealed record SessionList(IReadOnlyList<Session> Sessions, long Revision, string? Next = null, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
 // Why the host's last discovery pass could not account for everything, so it is holding
 // whatever it would decide from a session's absence: removing sessions of those agents,
 // offering or starting resumes of them, and reclaiming worktrees. Agents are the ones held;
 // sessions of the others are removed and resumed as usual. Reason is for a person, in words
 // ("an unrecognised copilot process (pid 4120)"), within MaxReasonBytes.
-public sealed record DiscoveryHeld([property: Strict(Strictness.Identity)] string Reason, IReadOnlyList<AgentKind> Agents)
+// Strict where it is held, and its agents whole: read as absent or as fewer agents, a hold the
+// host still has would read as lifted, and a client would take sessions of a held agent as gone.
+public sealed record DiscoveryHeld([property: Strict(Strictness.Identity)] string Reason, [property: Strict(Strictness.Security)] IReadOnlyList<AgentKind> Agents)
 {
     public const int MaxReasonBytes = 512;
 }
 
 // discovery.changed: the hold began, changed or ended (DiscoveryHeld absent).
-public sealed record DiscoveryChanged(DiscoveryHeld? DiscoveryHeld = null);
+public sealed record DiscoveryChanged([property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
 public sealed record ListRequest(string? Cursor = null);
 
@@ -513,7 +515,7 @@ public sealed record ListRequest(string? Cursor = null);
 public sealed record SubscribeResult(long Revision, int Count);
 
 // DiscoveryHeld: as on sessions.list, as of the end of the snapshot.
-public sealed record SessionsSynced(long Revision, DiscoveryHeld? DiscoveryHeld = null);
+public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
 
 public sealed record SessionRemoved([property: Strict(Strictness.Identity)] string Id);
 

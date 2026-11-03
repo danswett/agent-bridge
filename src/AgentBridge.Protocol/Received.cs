@@ -65,7 +65,7 @@ public static class Received
     static JsonNode? Clean(JsonElement e, Type type, string path, bool strict)
     {
         var t = Nullable.GetUnderlyingType(type) ?? type;
-        if (t == typeof(JsonElement)) { return JsonNode.Parse(e.GetRawText()); }
+        if (t == typeof(JsonElement)) { return Decodable(e, path); }
         if (t == typeof(string)) { return JsonValue.Create(Text(e, path)); }
         if (t == typeof(bool)) { return e.ValueKind is JsonValueKind.True or JsonValueKind.False ? JsonValue.Create(e.GetBoolean()) : throw Bad(path, "not a boolean"); }
         // An enum string the reader does not know is the converter's to read ([UnknownAs], as the
@@ -173,6 +173,32 @@ public static class Received
             catch (MalformedRecordException) when (!strict) { }
         }
         return o;
+    }
+
+    // JSON of any shape (a field's default), checked for text .NET cannot decode, which otherwise
+    // throws only when the strict read writes it out, refusing the whole message for one field.
+    static JsonNode? Decodable(JsonElement e, string path)
+    {
+        Check(e, path);
+        return JsonNode.Parse(e.GetRawText());
+
+        static void Check(JsonElement e, string path)
+        {
+            switch (e.ValueKind)
+            {
+                case JsonValueKind.String: _ = Text(e, path); break;
+                case JsonValueKind.Array:
+                    foreach (var x in e.EnumerateArray()) { Check(x, path); }
+                    break;
+                case JsonValueKind.Object:
+                    foreach (var p in e.EnumerateObject())
+                    {
+                        if (Name(p) is null) { throw Bad(path, "a key that is not text"); }
+                        Check(p.Value, path);
+                    }
+                    break;
+            }
+        }
     }
 
     static string? Name(JsonProperty p)

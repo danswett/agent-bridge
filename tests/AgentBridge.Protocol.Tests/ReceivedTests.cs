@@ -115,8 +115,34 @@ public class ReceivedTests
         node["subagents"]!.AsArray().Add("a3");
 
         Assert.Equal(["a1", "a2"], Read(node).Subagents!.Select(a => a.Id));
-        var held = Received.Read<DiscoveryHeld>(JsonSerializer.SerializeToElement(new JsonObject { ["reason"] = "busy", ["agents"] = new JsonArray("copilot", 3, null, "claude") }));
-        Assert.Equal([AgentKind.Copilot, AgentKind.Claude], held.Agents);
+    }
+
+    // Read as absent, or as fewer agents, a hold the host still has read as lifted: the snapshot
+    // ended and the app took a held agent's sessions as gone.
+    [Theory]
+    [InlineData("""{"agents":["copilot"]}""")]
+    [InlineData("""{"reason":5,"agents":["copilot"]}""")]
+    [InlineData("""{"reason":"busy","agents":"copilot"}""")]
+    [InlineData("""{"reason":"busy","agents":["copilot",3]}""")]
+    [InlineData("""{"reason":"busy","agents":["copilot",null]}""")]
+    public void A_discovery_hold_that_cannot_be_read_refuses_the_message_that_holds_it(string hold)
+    {
+        var held = JsonNode.Parse(hold)!;
+
+        Assert.Throws<MalformedRecordException>(() => Received.Read<SessionsSynced>(JsonSerializer.SerializeToElement(new JsonObject { ["revision"] = 3, ["discoveryHeld"] = held.DeepClone() })));
+        Assert.Throws<MalformedRecordException>(() => Received.Read<DiscoveryChanged>(JsonSerializer.SerializeToElement(new JsonObject { ["discoveryHeld"] = held.DeepClone() })));
+    }
+
+    [Fact]
+    public void A_default_holding_half_a_surrogate_pair_is_left_out_and_its_session_kept()
+    {
+        var node = Session();
+        node["question"]!["fields"]![0]!["default"] = "PLACEHOLDER";
+
+        var s = ReadText(node, "\"PLACEHOLDER\"", "\"yes \\uD800\"");
+
+        Assert.Equal("s1", s.Id);
+        Assert.Null(s.Question!.Fields[0].Default);
     }
 
     // An approval's id answers it, its message is what it allows, its kind and fields how it is
@@ -303,14 +329,6 @@ public class ReceivedTests
 
         Assert.Equal(["month"], r.Agents[0].Windows.Select(w => w.Key));
         Assert.Equal((AgentKind.Claude, "", UsageSource.None, DateTimeOffset.MinValue), (r.Agents[1].Agent, r.Agents[1].Label, r.Agents[1].Source, r.Agents[1].MeasuredAt));
-    }
-
-    [Fact]
-    public void A_discovery_hold_with_no_reason_reads_as_none()
-    {
-        var changed = Received.Read<DiscoveryChanged>(JsonSerializer.SerializeToElement(new JsonObject { ["discoveryHeld"] = new JsonObject { ["agents"] = new JsonArray("copilot") } }));
-
-        Assert.Null(changed.DiscoveryHeld);
     }
 
     [Theory]

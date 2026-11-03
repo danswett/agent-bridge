@@ -4094,16 +4094,17 @@
         {
           "name": "released",
           "json": {}
-        },
+        }
+      ],
+      "refused": [
         {
           "name": "wrong-type-discoveryHeld",
           "json": {
             "discoveryHeld": "wrong"
           },
-          "reads": {}
+          "refusedBy": "parse"
         }
-      ],
-      "refused": []
+      ]
     },
     "ListRequest": {
       "direction": "client",
@@ -5482,6 +5483,14 @@
     },
     {
       "vector": "Question/a-delegate-that-is-not-an-id",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "DiscoveryChanged/wrong-type-discoveryHeld",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
