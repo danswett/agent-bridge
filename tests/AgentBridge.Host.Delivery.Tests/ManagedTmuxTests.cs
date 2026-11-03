@@ -169,10 +169,10 @@ public sealed class ManagedTmuxTests
         var loaded = Assert.Single(commands.Calls, c => c[0] == "load-buffer");
         var pasted = Assert.Single(commands.Calls, c => c[0] == "paste-buffer");
         var deleted = Assert.Single(commands.Calls, c => c[0] == "delete-buffer");
-        Assert.Equal(loaded[2], pasted[4]);
+        Assert.Equal(loaded[2], pasted[3]);
         Assert.Equal(loaded[2], deleted[2]);
         Assert.Contains("-d", pasted);
-        Assert.Contains("-p", pasted);
+        Assert.DoesNotContain("-p", pasted);
     }
 
     [Theory]
@@ -196,6 +196,20 @@ public sealed class ManagedTmuxTests
         Assert.Equal(InjectionStatus.NothingTyped, result.Status);
         Assert.Empty(commands.Writes);
         Assert.Single(commands.Calls, c => c[0] == "delete-buffer");
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("y")]
+    [InlineData("n")]
+    public async Task A_checkbox_or_approval_key_is_raw_input_without_bracketed_paste_events(string key)
+    {
+        var (backend, commands, _, _) = StartedBackend();
+        Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(300, new([new(key, true, 0, 0)]))).Status);
+        Assert.Equal(key, Assert.Single(commands.Inputs));
+        Assert.Equal("paste-buffer", commands.Writes[0][0]);
+        Assert.DoesNotContain("-p", commands.Writes[0]);
+        Assert.Equal(new[] { "send-keys", "-t", "%1", "--", "Enter" }, commands.Writes[1]);
     }
 
     [Theory]
