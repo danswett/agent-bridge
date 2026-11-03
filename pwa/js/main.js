@@ -101,15 +101,26 @@ function takeLink() {
 }
 
 // Opens the session a notification was about, with its question ready to answer: on its own
-// machine, shown alone or with every other.
+// machine, shown alone or with every other. Its answers take focus only once that machine
+// takes them (#269: not while its list is still being confirmed), and only while the session
+// is still the one shown.
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
   if (!card) { return; }
-  // Taken before the session is shown: showing it closes a search that hid it, which redraws
-  // the list, which comes back here.
+  if (!linked.shown) {
+    // Taken while the session is shown: showing it closes a search that hid it, which redraws
+    // the list, which comes back here.
+    const want = { ...linked, shown: true };
+    linked = null;
+    page.showSession(card.id, card.hostId);
+    linked = want;
+  } else if (page.view.selected !== card) {
+    linked = null;
+    return;
+  }
+  if (!page.hosts.route(card.hostId)) { return; }
   linked = null;
-  page.showSession(card.id, card.hostId);
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.
   const el = card.view;
