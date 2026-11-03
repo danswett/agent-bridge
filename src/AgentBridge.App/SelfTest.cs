@@ -132,7 +132,9 @@ static partial class SelfTest
             var movable = Rows(window).Where(r => r.Card is { Row.CanMoveDown: true } c && c != main.Selected).OrderBy(Top).FirstOrDefault();
             if (movable?.Card is { } moving)
             {
-                bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving);
+                // The list's own item for the row (#410): not an item it keeps off screen after a
+                // move until it recycles it, which may by then have been given another session's row.
+                bool RowFocused() => Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot) is ListViewItem item && ReferenceEquals(item.Content, moving) && ReferenceEquals(window.Sessions.Rows.ContainerFromItem(moving), item);
                 // What was seen when a move's focus did not land, for the failure (#410: twice on
                 // Arm64, with nothing in the log to say which move, or where focus was instead).
                 var seen = new List<string>();
@@ -365,9 +367,11 @@ static partial class SelfTest
     // The design's generated resources (Design/DesignResources.xaml, tools/design-gen): every brush
     // in every theme, and every glyph and icon drawn. A key missing from one theme would fail only
     // on a machine using that theme, and a resource that fails to load shows only as 0xC000027B.
-    // The list's rows, one per listed session: a recycled row control off screen is not one.
+    // The list's rows, one per listed session: a recycled row control off screen is not one, and
+    // nor is an item the list keeps off screen after a move, still holding a session it now draws
+    // in another item, until it recycles it (#410).
     static List<SessionRow> Rows(MainWindow window) =>
-        [.. Find<SessionRow>(window.Sessions.Rows).Where(r => r.Card is { } c && window.ViewModel.Sessions.Contains(c) && r.ActualHeight > 0).DistinctBy(r => r.Card)];
+        [.. Find<SessionRow>(window.Sessions.Rows).Where(r => r.Card is { } c && window.ViewModel.Sessions.Contains(c) && r.ActualHeight > 0 && Above<ListViewItem>(r, _ => true) is { } item && ReferenceEquals(window.Sessions.Rows.ContainerFromItem(c), item)).DistinctBy(r => r.Card)];
 
     // What has keyboard focus, for a failure's message: a row's list item by its session, and
     // whether it is the list's own item for that session or one put aside for reuse.
