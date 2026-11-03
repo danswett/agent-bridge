@@ -47,6 +47,79 @@ public sealed class NeedsYouTests : IAsyncLifetime
         host.SendAsync(Events.SessionUpsert, (like ?? Make.Session(id)) with { Id = id, Status = SessionStatus.Waiting, Question = q, UpdatedAt = q.AskedAt });
 
     [Fact]
+    public async Task Only_a_session_or_question_a_host_adds_after_its_list_was_read_arrives()
+    {
+        var added = new System.Collections.Concurrent.ConcurrentQueue<(string Id, bool Arriving)>();
+        ui.Post(() =>
+        {
+            main.Sessions.CollectionChanged += (_, e) => { foreach (SessionCardViewModel c in e.NewItems ?? Array.Empty<object>()) { added.Enqueue((c.Id, main.IsArriving(c))); } };
+            main.NeedsYou.CollectionChanged += (_, e) => { foreach (NeedsYouEntry n in e.NewItems ?? Array.Empty<object>()) { added.Enqueue(($"lane:{n.Card.Id}", main.IsArriving(n))); } };
+        });
+        await SnapshotAsync();
+        // What was there on connecting is not news, whenever this test started watching.
+        Assert.DoesNotContain(added, a => a.Arriving);
+        added.Clear();
+
+        await host.SendAsync(Events.SessionUpsert, Make.Session("fresh", updated: Make.T0.AddMinutes(4)));
+        await AskAsync("idle", Make.Approval("r9#x") with { AskedAt = Make.T0.AddMinutes(5) });
+        await Wait.UntilAsync(() => added.Count >= 2, "the new row and entry");
+        Assert.Equal([("fresh", true), ("lane:idle", true)], added.ToArray());
+        Assert.False(TestUi.Read(() => main.IsArriving(Card("fresh"))));
+
+        // One question straight after another on the same session: the entry that stays in the
+        // lane is the one that arrived, not a stand-in built while the card had no question model.
+        var arrived = new List<NeedsYouEntry>();
+        ui.Post(() => main.NeedsYou.CollectionChanged += (_, e) => { foreach (NeedsYouEntry n in e.NewItems ?? Array.Empty<object>()) { if (main.IsArriving(n)) { arrived.Add(n); } } });
+        await AskAsync("idle", Make.Approval("r9#y") with { AskedAt = Make.T0.AddMinutes(6) });
+        await Wait.UntilAsync(() => TestUi.Read(() => main.NeedsYou.Any(e => e.QuestionId == "r9#y")), "the next question");
+        Assert.Same(TestUi.Read(() => main.NeedsYou.Single(e => e.Card.Id == "idle")), TestUi.Read(() => arrived.Single()));
+    }
+
+    [Fact]
+    public async Task Sessions_a_recovery_snapshot_lists_on_the_same_connection_are_not_arrivals()
+    {
+        await SnapshotAsync();
+        var added = new System.Collections.Concurrent.ConcurrentQueue<(string Id, bool Arriving)>();
+        ui.Post(() =>
+        {
+            main.Sessions.CollectionChanged += (_, e) => { foreach (SessionCardViewModel c in e.NewItems ?? Array.Empty<object>()) { added.Enqueue((c.Id, main.IsArriving(c))); } };
+            main.NeedsYou.CollectionChanged += (_, e) => { foreach (NeedsYouEntry n in e.NewItems ?? Array.Empty<object>()) { added.Enqueue(($"lane:{n.Card.Id}", main.IsArriving(n))); } };
+        });
+        // Sessions the app never heard of, which only the snapshot after a gap in the events lists.
+        lock (host.Sessions)
+        {
+            host.Sessions.Add(Make.Session("unseen", updated: Make.T0.AddMinutes(4)));
+            host.Sessions.Add(Make.Session("unseen-asking", question: Make.Approval("u1") with { AskedAt = Make.T0.AddMinutes(4) }, updated: Make.T0.AddMinutes(4)));
+        }
+        var before = host.Sent(Ops.SessionsSubscribe).Count;
+        foreach (var ch in host.Channels.OfType<AgentBridge.Local.LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+        await host.SendAsync(Events.SessionUpsert, Make.Session("idle", updated: Make.T0.AddMinutes(5)));
+
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionsSubscribe).Count > before, "the sessions to be subscribed again");
+        await Wait.UntilAsync(() => connection.Sessions.Complete && TestUi.Read(() => main.Sessions.Any(c => c.Id == "unseen") && main.NeedsYou.Any(e => e.Card.Id == "unseen-asking")), "the recovery snapshot");
+        Assert.Contains(added, a => a.Id == "unseen");
+        Assert.Contains(added, a => a.Id == "lane:unseen-asking");
+        Assert.DoesNotContain(added, a => a.Arriving);
+    }
+
+    [Fact]
+    public async Task Approve_once_shows_its_ring_only_while_its_answer_is_on_its_way()
+    {
+        using var gate = new ManualResetEventSlim();
+        host.On(Ops.SessionAnswer, _ => { gate.Wait(FakeHost.Patience); return new AnswerResult(AnswerOutcome.Delivered); });
+        await SnapshotAsync();
+        var entry = Entry("approval");
+        Assert.False(TestUi.Read(() => entry.ApproveInFlight || entry.DenyInFlight));
+
+        ui.Post(entry.Approve);
+        await Wait.UntilAsync(() => TestUi.Read(() => entry.ApproveInFlight), "the ring");
+        Assert.False(TestUi.Read(() => entry.DenyInFlight));
+
+        gate.Set();
+        await Wait.UntilAsync(() => TestUi.Read(() => !entry.ApproveInFlight), "the ring to stop with the request");
+    }
+
+    [Fact]
     public async Task The_lane_lists_every_pending_question_oldest_first_with_its_title_agent_age_and_first_line()
     {
         await SnapshotAsync();

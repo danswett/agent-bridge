@@ -109,6 +109,81 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.True(Read(l => l.ShowList && !l.ShowSession));
     }
 
+    List<PaneMove> Moves()
+    {
+        var moves = new List<PaneMove>();
+        ui.Post(() => layout.Moved += moves.Add);
+        return moves;
+    }
+
+    // Added to on the UI thread, so read and cleared there too.
+    static List<PaneMove> Seen(List<PaneMove> moves) => TestUi.Read(() => moves.ToList());
+    void Clear(List<PaneMove> moves) => ui.Post(moves.Clear);
+
+    [Fact]
+    public void One_column_pushes_a_chosen_session_and_pops_back_to_the_list_and_a_resize_moves_nothing()
+    {
+        Resize(1440);
+        var moves = Moves();
+        // Choosing a row beside the list is not navigation: it shows at once.
+        Select("quiet");
+        Resize(400);
+        Resize(1000);
+        Resize(400);
+        Assert.Empty(Seen(moves));
+
+        ui.Post(layout.Back);
+        Select("busy");
+        Select("quiet");
+        Assert.Equal([new(PaneMotion.Pop, true), new(PaneMotion.Push, true), new(PaneMotion.Push, true)], Seen(moves));
+    }
+
+    [Fact]
+    public async Task A_session_asking_a_question_is_pushed_without_sliding_and_a_question_arriving_mid_push_settles_it()
+    {
+        Resize(400);
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Approval(), updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
+        var moves = Moves();
+
+        Select("asking");
+        Assert.Equal([new PaneMove(PaneMotion.Push, false)], Seen(moves));
+
+        // A question arriving on the session being pushed stops its content travelling, so the
+        // approval's command never slides under the pointer.
+        ui.Post(layout.Back);
+        Select("quiet");
+        Clear(moves);
+        await host.SendAsync(Events.SessionUpsert, Make.Session("quiet", question: Make.Approval("q2"), updated: Make.T0.AddMinutes(3)));
+        await Wait.UntilAsync(() => TestUi.Read(() => moves.Contains(new PaneMove(PaneMotion.Settle, false))), "the settle");
+    }
+
+    [Fact]
+    public async Task Only_the_inspector_toggle_slides_the_inspector_in_and_only_a_tab_the_person_chose_fades()
+    {
+        await host.SendAsync(Events.SessionUpsert, Make.Session("asking", question: Make.Approval(), updated: Make.T0.AddMinutes(2)));
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Sessions.Any(c => c.Id == "asking")), "the question");
+        Resize(1440);
+        Select("busy");
+        var moves = Moves();
+        ui.Post(layout.ToggleInspector);
+        Assert.Empty(Seen(moves));
+        ui.Post(layout.ToggleInspector);
+        Assert.Equal([new PaneMove(PaneMotion.Inspector, true)], Seen(moves));
+
+        Clear(moves);
+        Resize(1000);
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        Assert.Equal([new PaneMove(PaneMotion.Tab, false)], Seen(moves));
+
+        // A session opened to be answered goes to its conversation at once, without a tab's fade.
+        Clear(moves);
+        ui.Post(() => main.Open("asking"));
+        Assert.True(Read(l => l.ShowConversation));
+        Assert.Empty(Seen(moves));
+    }
+
     [Fact]
     public void The_session_shown_survives_resizing_across_every_breakpoint_and_back()
     {
@@ -190,6 +265,28 @@ public sealed class PaneLayoutTests : IAsyncLifetime
         Assert.False(TestUi.Read(() => Card("busy").HistoryOpen));
         ui.Post(() => layout.OnScreen = true);
         Assert.True(TestUi.Read(() => Card("busy").HistoryOpen));
+    }
+
+    [Fact]
+    public void A_conversation_on_another_page_or_in_a_hidden_window_is_not_being_viewed()
+    {
+        Resize(1000);
+        Select("quiet");
+        Assert.True(TestUi.Read(() => layout.ViewingConversation));
+
+        // Settings, the tray or minimised: nothing scrolls it to a question, and its coming back
+        // is its question appearing again.
+        var changed = new List<string?>();
+        ui.Post(() => layout.PropertyChanged += (_, e) => changed.Add(e.PropertyName));
+        ui.Post(() => layout.OnScreen = false);
+        Assert.False(TestUi.Read(() => layout.ViewingConversation));
+        Assert.True(TestUi.Read(() => changed.Contains(nameof(PaneLayoutViewModel.ViewingConversation))));
+        ui.Post(() => layout.OnScreen = true);
+        Assert.True(TestUi.Read(() => layout.ViewingConversation));
+
+        // The Tools tab: the conversation is behind it.
+        ui.Post(() => layout.Tab = SessionTab.Tools);
+        Assert.False(TestUi.Read(() => layout.ViewingConversation));
     }
 
     [Fact]

@@ -57,6 +57,12 @@ public sealed partial class MainViewModel : Observable
     }
 
     public ObservableCollection<SessionCardViewModel> Sessions { get; } = [];
+
+    // A row or a Needs you entry being added because a host just added it (ui.md §5.3, Arriving):
+    // true only while it is being inserted, so a list's handler for the insert can tell it from
+    // an item shown again (the machine picker, a reorder, a list read after connecting).
+    public bool IsArriving(object item) => arriving.Contains(item);
+    readonly HashSet<object> arriving = [];
     public UsageViewModel Usage { get; }
     public SettingsViewModel? Settings { get; }
     public Machine Local => local;
@@ -480,23 +486,40 @@ public sealed partial class MainViewModel : Observable
     void OnUpsert(Machine m, Session s)
     {
         var key = CardKey(m.Key, s.Id);
-        if (byId.TryGetValue(key, out var card)) { card.Update(s); }
-        else
+        // A session a host adds once its machine's list has been read is news, and fades in where
+        // it lands; those of a list being read (after connecting, or again after a gap in the
+        // events, on the same connection) are what was there all along.
+        var live = Live(m);
+        var known = byId.TryGetValue(key, out var card);
+        // Only this upsert's own question is news to Needs you, wherever its entry is built (the
+        // card's update brings the lane up to date as its question model changes): entries built
+        // as a list is read, or as a machine's rows are confirmed again, are not.
+        askedNow = live && s.Question is { } q && (!known || card!.Session.Question?.Id != q.Id) ? key : null;
+        try
         {
-            card = new SessionCardViewModel(s, m.Cards);
-            byId[key] = card;
-            owner[card] = m;
-            Hook(card);
-            RefreshLabels();
+            var fresh = false;
+            if (known) { card!.Update(s); }
+            else
+            {
+                card = new SessionCardViewModel(s, m.Cards);
+                byId[key] = card;
+                owner[card] = m;
+                Hook(card);
+                RefreshLabels();
+                fresh = live;
+            }
+            if (fresh) { arriving.Add(card); }
+            try { Rearrange(); }
+            finally { arriving.Remove(card); }
+            if (m.Toasts is { } toasts)
+            {
+                // The first list after connecting is a baseline, not news.
+                if (!baselined.Contains(m)) { toasts.Baseline([s]); }
+                else { toasts.Upsert(s); }
+            }
+            SyncNeedsYou();
         }
-        Rearrange();
-        if (m.Toasts is { } toasts)
-        {
-            // The first list after connecting is a baseline, not news.
-            if (!baselined.Contains(m)) { toasts.Baseline([s]); }
-            else { toasts.Upsert(s); }
-        }
-        SyncNeedsYou();
+        finally { askedNow = null; }
         Raise(nameof(Empty));
         if (pendingOpens.Contains((m.Key, s.Id)) || launchOpens.Contains((m.Key, s.Id))) { Open(m.Key, s.Id); }
     }
@@ -515,6 +538,13 @@ public sealed partial class MainViewModel : Observable
         SyncNeedsYou();
         Raise(nameof(Empty));
     }
+
+    // A machine whose whole list has been read on this connection, and is not being read again: its
+    // upserts are live, and what they add is news (ui.md §5.3, Arriving).
+    bool Live(Machine m) => baselined.Contains(m) && m.Host.Sessions.Complete;
+
+    // The session whose upsert asked its question just now, while Needs you is brought up to date.
+    string? askedNow;
 
     // Once the snapshot after connecting has been read, later upserts are news to toast.
     public void Synced() => Synced(local);

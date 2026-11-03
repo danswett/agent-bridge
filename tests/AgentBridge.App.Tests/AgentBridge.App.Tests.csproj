@@ -16,6 +16,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The generated motion resources the app loads, read by MotionTests as the app reads them. -->
+    <None Include="..\..\src\AgentBridge.App\Design\DesignResources.xaml" Link="DesignResources.xaml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Another machine through the in-process relay the transport tests run. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\src\AgentBridge.App.Core\AgentBridge.App.Core.csproj" />

@@ -115,6 +115,9 @@ public sealed partial class QuestionViewModel : Observable
     // A tap question has no Send until Other is opened.
     public bool ShowSend => !Tap || OtherOpen;
     public bool ShowResend => !detached && current() && deliveries.Get(Key)?.State == DeliveryState.Failed;
+    // The answer is on its way (ui.md §5.3, Send and Answer): the button that sent it shows a
+    // progress ring, which stops with the request.
+    public bool InFlight => deliveries.Get(Key)?.State is DeliveryState.Sending or DeliveryState.Waiting;
 
     // The option a tap question sent, while that answer stands.
     public string? SentValue
@@ -243,6 +246,7 @@ public sealed partial class QuestionViewModel : Observable
         Raise(nameof(CanAnswer));
         Raise(nameof(ShowResend));
         Raise(nameof(SentValue));
+        Raise(nameof(InFlight));
     }
 
     public static (string Text, Tone Tone) Describe(Delivery e, string at) => e.State switch

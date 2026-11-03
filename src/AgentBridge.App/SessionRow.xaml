@@ -78,8 +78,10 @@
 
         <!-- Line 1's height is 20: the 16 px glyph sits 2 px down, on the line, not on the row's centre. -->
         <local:StatusGlyphView
+            x:Name="RowGlyph"
             Grid.Row="1"
             Margin="0,2,0,0"
+            Fades="True"
             VerticalAlignment="Top"
             AutomationProperties.AutomationId="StatusGlyph"
             Size="16"
@@ -97,13 +99,27 @@
             Text="{x:Bind Card.Title, Mode=OneWay}" />
         <!-- The same line height as the title, so the two share line 1's baseline. -->
         <Grid Grid.Row="1" Grid.Column="2" Height="20">
+            <!-- Fades in, and out where it was as a copy that is only drawn (ui.md §5.3, Activity dot), both at
+                 the trailing edge, which stays put as the age takes the cell. -->
             <Ellipse
+                x:Name="UnreadDot"
                 Width="6"
                 Height="6"
+                HorizontalAlignment="Right"
                 VerticalAlignment="Center"
                 Fill="{ThemeResource AbBridge}"
                 AutomationProperties.AutomationId="Unread"
                 Visibility="{x:Bind local:Ui.Show(Card.Unread), Mode=OneWay}" />
+            <Ellipse
+                x:Name="UnreadGone"
+                Width="6"
+                Height="6"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Fill="{ThemeResource AbBridge}"
+                IsHitTestVisible="False"
+                AutomationProperties.AccessibilityView="Raw"
+                Visibility="Collapsed" />
             <TextBlock
                 Style="{StaticResource AbTypeMeta}"
                 LineHeight="20"

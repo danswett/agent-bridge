@@ -572,6 +572,31 @@ static partial class SelfTest
         }
         else { check(false, "finds Back in one column"); }
 
+        // Motion (ui.md §5.3): timed by the generated resources, every entry of them; the list with
+        // none of its own transitions, which slide a row's neighbours; and a push that never holds
+        // the person back, so Back pressed while the session is still sliding in takes them back.
+        var timed = false;
+        try { timed = MotionCatalogue.Names.All(n => Motion.Catalogue[n].Duration > TimeSpan.Zero); }
+        catch (Exception e) when (e is KeyNotFoundException or FormatException) { AppLog.Write($"self-test: motion: {e.Message}"); }
+        check(timed, "times every motion in ui.md's catalogue by the generated AbMotion* resources");
+        check(page.Rows.ItemContainerTransitions is { Count: 0 }, "gives the session list no transitions of its own, so no row's neighbours slide");
+        if (main.Sessions.FirstOrDefault(c => c.Question is null) is { } plain)
+        {
+            main.Selected = plain;
+            await Until(() => Shows(Pane("SessionPane")), TimeSpan.FromSeconds(5));
+            var back = ById<Button>(page.SessionPaneView, "Back");
+            if (back is not null) { ((IInvokeProvider)new ButtonAutomationPeer(back).GetPattern(PatternInterface.Invoke)).Invoke(); }
+            var started = DateTime.UtcNow;
+            // Needs you's buttons take no click for a moment as the list comes back (AnswerGuard).
+            var lane = page.FindName("LaneItems") as UIElement;
+            var held = lane is { IsHitTestVisible: false };
+            var returned = back is not null && await Until(() => main.Selected is null && Shows(Pane("ListPane")), TimeSpan.FromSeconds(5));
+            check(returned, $"goes back to the list at once when Back is pressed while the session slides in ({(DateTime.UtcNow - started).TotalMilliseconds:0} ms)");
+            var released = await Until(() => lane is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3));
+            check(held && released, $"holds Needs you's buttons from the pointer for {AnswerGuard.Window.TotalMilliseconds:0} ms as the list comes back, then takes clicks again (held: {held}, released: {released})");
+        }
+        else { check(false, "finds a session without a question to push"); }
+
         // The session open survives every breakpoint, both ways.
         main.Selected = card;
         var kept = true;
@@ -580,6 +605,27 @@ static partial class SelfTest
             kept &= await At(w, 900, mode) && main.Selected == card && page.Rows.SelectedItem == card && page.SessionPaneView.Card == card && Shows(Pane("SessionPane"));
         }
         check(kept, "keeps the session open, and its row selected, through every breakpoint and back");
+
+        // Needs you is the list's header: it moves as the list scrolls to a session chosen
+        // elsewhere, and it and the question come back under a pointer as the window is activated
+        // again from behind another. Each holds their buttons from the pointer (AnswerGuard).
+        if (page.FindName("LaneItems") is UIElement laneItems && main.Sessions.FirstOrDefault(c => c != card) is { } other)
+        {
+            await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            main.Selected = other;
+            var heldOnScroll = !laneItems.IsHitTestVisible;
+            var releasedAfter = await Until(() => laneItems.IsHitTestVisible, TimeSpan.FromSeconds(3));
+            check(heldOnScroll && releasedAfter, $"holds Needs you's buttons from the pointer as the list scrolls to a session chosen elsewhere, then takes clicks again (held: {heldOnScroll}, released: {releasedAfter})");
+
+            main.Selected = card;
+            layout.Tab = SessionTab.Conversation;
+            var settled = await Until(() => page.SessionPaneView.QuestionShown is { IsHitTestVisible: true } && laneItems.IsHitTestVisible, TimeSpan.FromSeconds(5));
+            window.Reactivated();
+            var question = page.SessionPaneView.QuestionShown is { IsHitTestVisible: false };
+            var lane = !laneItems.IsHitTestVisible;
+            check(settled && question && lane, $"holds the question's and Needs you's buttons from the pointer as the window is activated again (question: {question}, Needs you: {lane})");
+        }
+        else { check(false, "finds Needs you and a second session to scroll the list to"); }
     }
     // The Windows shell (ui.md §7, #180): the 48 px title bar with the mark, the name and the search
     // box; the compact rail with every page and its 3×16 selection pill in Bridge; the pages on a

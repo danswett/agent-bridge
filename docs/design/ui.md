@@ -391,6 +391,15 @@ for travel no distance token measures, such as the sheet's own height) to 0. The
 transitions follow the setting already. The app's own animations check it and follow its changes, as the
 status glyph does, and each entry's `AbMotion*Reduced` resource says which form it takes.
 
+**In the Windows app,** the Sessions page is one page laid out by width, not `Frame` pages, so
+push and pop are the `push` tokens on the incoming content, as in the PWA, rather than a
+`SlideNavigationTransitionInfo`. Everything the app draws itself runs as a composition
+animation on the element's visual, which changes neither layout nor hit testing: a control
+works while it moves, and a second change replaces the first motion. The session list's
+`ItemContainerTransitions` is empty. The decisions (what is a push, an arrival, a question to
+scroll to) are App.Core's, tested on every platform; the durations, curves and distances are
+read from the generated `AbMotion*` resources.
+
 The clients implement this after U5 and U6 (#232, phase 2). Each tests that reduced motion
 makes every change instant or a cross-fade, that no motion runs longer than its token, and
 that a control can be used while it moves.

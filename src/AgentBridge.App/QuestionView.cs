@@ -78,7 +78,11 @@ public sealed class QuestionView : StackPanel
 
         Watch(vm, Refresh);
         Refresh();
+        drawn = true;
     }
+
+    // Past the first draw: what changes from here is news (an answer's outcome).
+    bool drawn;
 
     // The card let go of this question; the view stops following it.
     public void Detach()
@@ -96,9 +100,12 @@ public sealed class QuestionView : StackPanel
 
     void Refresh()
     {
+        // An answer's outcome fades in on the card (ui.md §5.3, Send and Answer).
+        var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
         status.Foreground = Ui.ToneBrush(vm.StatusTone);
         status.Visibility = Ui.Some(vm.StatusText);
+        if (fade) { Motion.Enter(status, "Acknowledge"); }
         error.Text = vm.Error ?? "";
         error.Visibility = Ui.Show(vm.HasError);
         resend.Visibility = Ui.Show(vm.ShowResend);
@@ -106,6 +113,8 @@ public sealed class QuestionView : StackPanel
         {
             send.Visibility = Ui.Show(vm.ShowSend);
             send.IsEnabled = vm.CanAnswer;
+            // The ring on Send, unless one of the options sent it.
+            Ring(send, vm.InFlight && !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue)));
         }
         foreach (var r in refreshers) { r(); }
     }
@@ -127,7 +136,8 @@ public sealed class QuestionView : StackPanel
         foreach (var o in f.Options)
         {
             var b = new Button { HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
-            b.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
+            var label = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
+            b.Content = WithRing(label);
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, o.Label, $"Option:{o.Value}");
@@ -136,7 +146,8 @@ public sealed class QuestionView : StackPanel
             {
                 b.IsEnabled = vm.CanAnswer;
                 var sent = vm.SentValue == o.Value;
-                ((TextBlock)b.Content).Text = sent ? $"✓ {o.Label}" : o.Label;
+                label.Text = sent ? $"✓ {o.Label}" : o.Label;
+                Ring(b, sent && vm.InFlight);
             });
             panel.Children.Add(b);
         }
@@ -262,10 +273,29 @@ public sealed class QuestionView : StackPanel
         }
     }
 
+    // A button's label with the platform's progress ring beside it, shown while the answer it sent
+    // is on its way (ui.md §5.3, Send and Answer; InFlightRing). Beside the label, never over it
+    // or fading it. A grid, not a horizontal stack: a stack measures the label at any width, and a
+    // long option would no longer wrap to the card.
+    static Grid WithRing(FrameworkElement label)
+    {
+        var ring = new InFlightRing { Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+        var grid = new Grid { ColumnDefinitions = { new ColumnDefinition { Width = GridLength.Auto }, new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) } } };
+        Grid.SetColumn(label, 1);
+        grid.Children.Add(ring);
+        grid.Children.Add(label);
+        return grid;
+    }
+
+    static void Ring(Button b, bool on)
+    {
+        if (b.Content is Grid { Children: [InFlightRing ring, ..] }) { ring.Active = on; }
+    }
+
     Button SendButton()
     {
-        var b = new Button { Content = vm.SendLabel, Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
-        AutomationId(b, "SendAnswer");
+        var b = new Button { Content = WithRing(new TextBlock { Text = vm.SendLabel }), Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
+        AutomationProperties(b, vm.SendLabel, "SendAnswer");
         b.Click += (_, _) => vm.Send();
         return b;
     }
