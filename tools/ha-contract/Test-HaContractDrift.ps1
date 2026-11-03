@@ -26,7 +26,8 @@
 param(
     [Parameter(Mandatory)][string]$Source,
     [Parameter(Mandatory)][string]$OutDir,
-    [string]$Fixtures = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures')
+    [string]$Fixtures = (Join-Path $PSScriptRoot '..\..\tests\AgentBridge.HomeAssistant.Tests\Fixtures'),
+    [switch]$Publication
 )
 
 Set-StrictMode -Version Latest
@@ -42,6 +43,14 @@ $names = [ordered]@{
     UpdateOutput    = 'ha-update.json'
     UpkeepOutput    = 'ha-upkeep.json'
 }
+if ($Publication) {
+    $names = [ordered]@{
+        Policy = 'ha-publication.json'
+        Observation = 'ha-publication-observation.json'
+        Renderer = 'ha-renderer.json'
+        Templates = 'session-templates.json'
+    }
+}
 
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 $Fixtures = (Resolve-Path -LiteralPath $Fixtures).Path
@@ -55,11 +64,31 @@ foreach ($dir in 'recorded', 'pinned', 'upstream') {
 $upstream = (& git -C $Source rev-parse HEAD).Trim()
 Set-Content -LiteralPath (Join-Path $OutDir 'upstream.txt') -Value $upstream -NoNewline
 
-$exporter = Join-Path $PSScriptRoot 'Export-HaContract.ps1'
-$arguments = @('-NoProfile', '-File', $exporter, '-Source', $Source)
-foreach ($key in $names.Keys) { $arguments += @("-$key", (Join-Path $OutDir "recorded\$($names[$key])")) }
-$log = & pwsh @arguments 2>&1 | ForEach-Object { "$_" }
-$exported = $LASTEXITCODE
+$log = @()
+$exported = 0
+if ($Publication) {
+    foreach ($pair in @(
+        @('Export-HaPublication.ps1', 'ha-publication.json'),
+        @('Export-HaPublicationObservation.ps1', 'ha-publication-observation.json'),
+        @('Export-HaRenderer.ps1', 'ha-renderer.json')
+    )) {
+        $arguments = @('-NoProfile', '-File', (Join-Path $PSScriptRoot $pair[0]), '-Source', $Source,
+            '-Output', (Join-Path $OutDir "recorded\$($pair[1])"))
+        if ($pair[0] -eq 'Export-HaRenderer.ps1') {
+            # The renderer exporter also writes templates: never let the drift
+            # guard overwrite the committed runtime asset through its default.
+            $arguments += @('-Templates', (Join-Path $OutDir 'recorded\session-templates.json'))
+        }
+        $log += & pwsh @arguments 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0) { $exported = $LASTEXITCODE; break }
+    }
+} else {
+    $exporter = Join-Path $PSScriptRoot 'Export-HaContract.ps1'
+    $arguments = @('-NoProfile', '-File', $exporter, '-Source', $Source)
+    foreach ($key in $names.Keys) { $arguments += @("-$key", (Join-Path $OutDir "recorded\$($names[$key])")) }
+    $log = & pwsh @arguments 2>&1 | ForEach-Object { "$_" }
+    $exported = $LASTEXITCODE
+}
 Set-Content -LiteralPath (Join-Path $OutDir 'export.log') -Value ($log -join "`n")
 
 # The commit a fixture was recorded from: always different upstream, never the contract.
@@ -67,13 +96,37 @@ function Get-PinnedCommit([string]$Text) {
     if ($Text -match '"commit":\s*"([0-9a-f]{40})"') { return $Matches[1] }
     ''
 }
+function ConvertTo-SortedValue($Value) {
+    if ($Value -is [Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        [string[]]$keys = @($Value.Keys)
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        foreach ($key in $keys) { $ordered[$key] = ConvertTo-SortedValue $Value[$key] }
+        return ,$ordered
+    }
+    if ($Value -is [Array]) {
+        $items = [Collections.Generic.List[object]]::new()
+        foreach ($item in $Value) { $items.Add((ConvertTo-SortedValue $item)) }
+        return ,$items.ToArray()
+    }
+    $Value
+}
 function ConvertTo-Comparable([string]$Text) {
     $Text = $Text -replace "`r`n", "`n"
     $Text = $Text -replace '"commit":\s*"[0-9a-f]{40}"', '"commit": "<commit>"'
-    $Text -replace '"dirty":\s*(true|false)', '"dirty": "<dirty>"'
+    $Text = $Text -replace '"dirty":\s*(true|false)', '"dirty": "<dirty>"'
+    # The pure publication exporters intentionally include ordinary hashtables.
+    # Their object-member order varies across processes; array order and all
+    # contract values remain significant.
+    if ($Publication) {
+        $value = ConvertFrom-Json -AsHashtable -NoEnumerate -InputObject $Text
+        return ConvertTo-Json -Depth 100 -InputObject (ConvertTo-SortedValue $value)
+    }
+    $Text
 }
 
-$pinnedCommit = Get-PinnedCommit (Get-Content -LiteralPath (Join-Path $Fixtures 'ha-contract.json') -Raw)
+$pinFixture = if ($Publication) { 'ha-publication.json' } else { 'ha-contract.json' }
+$pinnedCommit = Get-PinnedCommit (Get-Content -LiteralPath (Join-Path $Fixtures $pinFixture) -Raw)
 $summary = [Collections.Generic.List[string]]::new()
 $summary.Add("agent-ha-bridge ``$upstream`` against the fixtures pinned at ``$pinnedCommit``.")
 $summary.Add('')
@@ -92,7 +145,10 @@ if ($exported -ne 0) {
 
 $changed = [Collections.Generic.List[string]]::new()
 foreach ($name in $names.Values) {
-    $pinned = ConvertTo-Comparable (Get-Content -LiteralPath (Join-Path $Fixtures $name) -Raw)
+    $pinnedPath = if ($Publication -and $name -eq 'session-templates.json') {
+        Join-Path $PSScriptRoot '..\..\src\AgentBridge.HomeAssistant\Publication\session-templates.json'
+    } else { Join-Path $Fixtures $name }
+    $pinned = ConvertTo-Comparable (Get-Content -LiteralPath $pinnedPath -Raw)
     $recorded = ConvertTo-Comparable (Get-Content -LiteralPath (Join-Path $OutDir "recorded\$name") -Raw)
     [IO.File]::WriteAllText((Join-Path $OutDir "pinned\$name"), $pinned, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $OutDir "upstream\$name"), $recorded, [Text.UTF8Encoding]::new($false))

@@ -21,13 +21,15 @@ param(
     [Parameter(Mandatory)][string]$OutDir,
     [Parameter(Mandatory)][string]$Repository,
     [string]$RunUrl = '',
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Publication
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $title = 'HA contract drift: agent-ha-bridge main no longer matches the connector''s fixtures'
+if ($Publication) { $title = 'HA publication drift: agent-ha-bridge main no longer matches the native publisher' }
 $label = 'parity'
 # GitHub refuses an issue body over 65,536 characters; the full diff is in the run's artifact.
 $maxDiff = 50000
@@ -36,7 +38,8 @@ $upstream = (Get-Content -LiteralPath (Join-Path $OutDir 'upstream.txt') -Raw).T
 if ($upstream -cnotmatch '^[0-9a-f]{40}$') { throw "upstream.txt does not hold a commit id" }
 $summary = Get-Content -LiteralPath (Join-Path $OutDir 'summary.md') -Raw
 if ($summary.Length -gt 8000) { $summary = $summary.Substring(0, 8000) + "`n`n(cut; the whole of it is in the run's artifact)" }
-$marker = "<!-- ha-contract-drift upstream: $upstream -->"
+$kind = if ($Publication) { 'ha-publication-drift' } else { 'ha-contract-drift' }
+$marker = "<!-- $kind upstream: $upstream -->"
 
 function Invoke-Gh {
     param([string[]]$Arguments)
@@ -61,7 +64,11 @@ if ($Code -eq 0) {
 
 $body = [Collections.Generic.List[string]]::new()
 $body.Add($marker)
-$body.Add('The scheduled drift guard (`.github/workflows/ha-contract-drift.yml`) re-recorded agent-ha-bridge''s per-machine Home Assistant contract from its `main` with `tools/ha-contract/Export-HaContract.ps1`, and it no longer matches the fixtures the HA connector is tested against. Until the connector is re-pinned, a machine moved to `agent-bridge-host` may not render or drive exactly as it did.')
+if ($Publication) {
+    $body.Add('The scheduled publication drift guard (`.github/workflows/ha-contract-drift.yml`) re-recorded the policy, actual resource observation, complete renderer and templates from agent-ha-bridge main. These use their own publication pin, not the older per-machine pin. They no longer match the native publisher contract. Review and deliberately re-pin the publication fixtures together with the compatible implementation; never infer writer authority from drift.')
+} else {
+    $body.Add('The scheduled drift guard (`.github/workflows/ha-contract-drift.yml`) re-recorded agent-ha-bridge''s per-machine Home Assistant contract from its `main` with `tools/ha-contract/Export-HaContract.ps1`, and it no longer matches the fixtures the HA connector is tested against. Until the connector is re-pinned, a machine moved to `agent-bridge-host` may not render or drive exactly as it did.')
+}
 $body.Add('')
 $body.Add($summary.TrimEnd())
 $diffPath = Join-Path $OutDir 'contract.diff'

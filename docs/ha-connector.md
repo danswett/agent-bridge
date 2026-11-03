@@ -1393,6 +1393,13 @@ peers, Unicode and punctuation-sensitive identifier ordering, including Czech
 ASCII contractions. Protocol 1 preserves PowerShell's ambient-culture ordering and
 scalar/null unrolling of the input signature's `SessionNodes`; output is
 deterministic for the same fleet, artifacts and host culture.
+The publication jobs in `ha-contract-drift.yml` re-record policy, observation,
+renderer and runtime templates using their **separate publication pin** on PRs and
+upstream main on the daily guard. Comparison ignores only source metadata and
+JSON object-member ordering; array order and contract values remain significant.
+Publication drift uses its own parity issue, independent of the older per-machine
+contract. The credential-free recorder cannot write issues; a separate report job
+treats its artifacts only as bounded data. Neither job changes committed fixtures.
 `LivePublicationTests` exercises actual registration, saves, restart/readback and
 overwrite repair only on the explicitly disposable loopback HA of CI.
 
