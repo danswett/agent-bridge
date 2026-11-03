@@ -5,6 +5,13 @@
 instance between launch, answer, reply and stop, and keep its G5/read-only probe on
 all of those services. This adapter alone does not enable capabilities or hook intake.
 
+The G5 delivery check may retry an incomplete observation twice, with 25 ms between
+fresh whole-process scans. A live diagnostic run observed transient `EPERM` reading
+process identity; its cause was not established. Only a complete current scan can
+clear the gate. A seen PowerShell runtime stops retries immediately, and three
+incomplete scans still hold delivery. No PID is skipped, no clear result is cached,
+and the native file-holder candidate preflight does not use these retries.
+
 The constructor takes an absolute tmux executable and a private runtime directory.
 It creates a fresh owner-only subdirectory and Unix socket; the complete socket path
 must fit in 100 UTF-8 bytes. It never connects to the default tmux server or loads the
