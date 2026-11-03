@@ -33,8 +33,11 @@ import { QUESTION_ARRIVAL_GUARD_MS } from './session-card.js';
 // can the lane coming back on screen. For QUESTION_ARRIVAL_GUARD_MS after either, a pointer's
 // click on them is dropped before any handler sees it; a key's (detail 0) goes through. The lane
 // says so (data-arriving) while it lasts. The Windows app's lane does the same (GuardLane).
+// scroller: what the lane scrolls in. While the guard runs, its scrolling (a row brought into
+// sight, smoothly) moves the lane under the pointer too, so each step runs the wait again from
+// there; once it has run out, the person's own scrolling holds nothing back.
 const LANE_ANSWERS = '.needs-approve, .needs-deny, .needs-resend';
-function guardLane(list) {
+function guardLane(list, scroller = null) {
   const now = () => globalThis.performance?.now() ?? Date.now();
   let until = 0;
   let timer = 0;
@@ -53,9 +56,16 @@ function guardLane(list) {
     e.stopImmediatePropagation();
   };
   list.addEventListener('click', click, true);
+  const scrolled = () => { if (now() < until) { arm(); } };
+  scroller?.addEventListener('scroll', scrolled, { passive: true });
   return {
     arm,
-    stop() { changes?.disconnect(); clearTimeout(timer); list.removeEventListener('click', click, true); },
+    stop() {
+      changes?.disconnect();
+      clearTimeout(timer);
+      list.removeEventListener('click', click, true);
+      scroller?.removeEventListener('scroll', scrolled);
+    },
   };
 }
 
@@ -222,7 +232,7 @@ export class SessionsPage {
     });
     this.#unwatchNews = () => { unwatchSessions(); unwatchHosts?.(); };
     this.#unwatchLane = watchLane(this.lane.list, { fresh: (el) => news && this.view.settled(el.dataset.hostId) && !returned.has(el.dataset.hostId) });
-    this.#laneGuard = this.lane.list ? guardLane(this.lane.list) : null;
+    this.#laneGuard = this.lane.list ? guardLane(this.lane.list, $('list-pane')) : null;
     this.#sortMenu($('session-sort'));
     // A new channel to a machine: what waits to be resent to it goes now, and only to it.
     hosts.onOpen((id) => {
@@ -243,17 +253,23 @@ export class SessionsPage {
       };
       // Kept, so a page retired with its account (clear()) stops answering routes: a second
       // sign-in in the same tab would otherwise have two pages rendering into one list.
+      let was = shell.route;
       this.#unroute = shell.onRoute(({ route, rest }) => {
         this.launchPanel.setOpen(route === 'launch');
+        const back = route === 'sessions' && was !== 'sessions';
+        was = route;
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
           this.view.schedule();
           this.view.layoutChanged();
-          // A question that came while another page was shown is in sight now, where a click
-          // may already be headed: the same wait as a question arriving. So is the lane.
-          this.view.selected?.reshow();
-          this.#laneGuard?.arm();
+          // Back from another page: a question that came meanwhile is in sight now, where a
+          // click may already be headed, the same wait as a question arriving; so is the lane.
+          // Not a move within Sessions (a row chosen), which brings its own wait where it does.
+          if (back) {
+            this.view.selected?.reshow();
+            this.#laneGuard?.arm();
+          }
         }
       });
       // Back from the background (another tab, the app switcher, the back-forward cache): what
@@ -407,6 +423,9 @@ export class SessionsPage {
     }
     // Scroll to a question (ui.md §5.3): smoothly, or at once under reduced motion.
     const behavior = scrollBehavior();
+    // The list scrolling to its row slides Needs you under a pointer still on the entry clicked:
+    // the lane waits from now, and from each step of that scroll.
+    if (this.$('list-pane')?.getClientRects().length) { this.#laneGuard?.arm(); }
     card.element.scrollIntoView({ block: 'nearest', behavior });
     card.els.titleText.tabIndex = -1;
     card.els.titleText.focus({ preventScroll: true });

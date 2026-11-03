@@ -540,4 +540,31 @@ test.describe('a moment before the lane takes a click', () => {
     expect(await press(LAND, { detail: 0, change: 'sessions' })).toBe(true);
     await expect.poll(answers).toBe(before + 1);
   });
+
+  test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    await ask(page, CODEX, { id: 'q-lane-open', message: 'Which?', fields: [{ name: 'answer', type: 'choice', options: [{ value: 'a' }, { value: 'b' }] }] });
+    // The page's clock the test's, so each step lands where the test puts it, however busy the runner.
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    const held = () => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'));
+    const step = () => page.evaluate(() => document.getElementById('list-pane').dispatchEvent(new Event('scroll')));
+    // Opened from its entry: the list scrolls to its row, a step at a time over 600 ms.
+    await entryFor(page, CODEX).locator('.needs-title').evaluate((t) => t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+    expect(await held()).toBe(true);
+    for (let i = 0; i < 10; i += 1) {
+      await page.clock.runFor(60);
+      await step();
+    }
+    // 900 ms after the click, 300 after the last step: still held.
+    await page.clock.runFor(300);
+    expect(await held()).toBe(true);
+    await page.clock.runFor(300);
+    expect(await held()).toBe(false);
+    // The person's own scroll, after: nothing held.
+    await step();
+    await page.clock.runFor(10);
+    expect(await held()).toBe(false);
+  });
 });
