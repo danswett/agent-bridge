@@ -104,3 +104,12 @@ For tests on macOS, use a canonical temporary path (`TMPDIR=/private/tmp`) becau
 some existing worktree fixtures compare `/var` and `/private/var` paths literally.
 The disposable real-agent acceptance test is opt-in and separate from synthetic
 interop; successful fixture transport tests do not establish real agent delivery.
+
+The `Mac host` workflow runs the Core, Delivery and Transport suites, host session
+flow/guard tests, and a self-contained host publish on macOS. The existing product
+workflow still runs the complete solution on Windows and Linux. A full local Mac
+solution run also exposed intermittent `MigrationTests` setup timeouts while
+waiting for a hook filename observation; the same failures reproduced on unchanged
+upstream `main`. These legacy migration tests are not part of the new Mac gate.
+Their cause remains unresolved; no production watcher or timeout was changed to
+hide the failure.
