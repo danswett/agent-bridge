@@ -101,10 +101,11 @@ public sealed class QuestionView : StackPanel
     void Refresh()
     {
         // An answer's outcome fades in on the card (ui.md §5.3, Send and Answer).
-        if (drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text) { Motion.Enter(status, "Acknowledge"); }
+        var fade = drawn && vm.StatusText.Length > 0 && vm.StatusText != status.Text;
         status.Text = vm.StatusText;
         status.Foreground = Ui.ToneBrush(vm.StatusTone);
         status.Visibility = Ui.Some(vm.StatusText);
+        if (fade) { Motion.Enter(status, "Acknowledge"); }
         error.Text = vm.Error ?? "";
         error.Visibility = Ui.Show(vm.HasError);
         resend.Visibility = Ui.Show(vm.ShowResend);

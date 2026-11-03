@@ -267,9 +267,10 @@ public sealed partial class SessionRow : UserControl
     void OnDrop(object sender, DragEventArgs e)
     {
         if (dragging is not { } key || Card?.Row is not { } row || row.Key == key) { return; }
-        dragging = null;
         // Where the dropped row was let go: it settles from there into its place.
         var moved = draggingCard;
+        dragging = null;
+        draggingCard = null;
         var at = Place() is { } here && here.List.ItemsPanelRoot is { } panel ? (here.List, e.GetPosition(panel).Y - grabbedAt) : ((ListViewBase, double)?)null;
         if (!row.Drop(key, after: e.GetPosition(this).Y > ActualHeight / 2)) { return; }
         if (moved is not null) { SlideFrom(moved, at); }

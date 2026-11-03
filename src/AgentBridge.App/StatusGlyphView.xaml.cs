@@ -99,8 +99,10 @@ public sealed partial class StatusGlyphView : UserControl
 
     // The old glyph, in its old colour and at the angle it had turned to, fades out as the new
     // one fades in. The words beside it change at once.
-    void CrossFade(Style was, Brush wasBrush, double? angle)
+    void CrossFade(Style? was, Brush? wasBrush, double? angle)
     {
+        // Nothing drawn before (a style or brush not yet resolved): nothing to fade out.
+        if (was is null || wasBrush is null) { return; }
         // The glyph and its driver arrive as separate bindings, each applying: the copy keeps what
         // was drawn before the first of them, and the fade already under way carries the rest.
         if (fading) { return; }
