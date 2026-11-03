@@ -101,7 +101,9 @@ public sealed class AutoUpdater
         // A turn starting or a question arriving between ticks starts the idle wait again; so does a
         // snapshot read in full again (a reconnect, a gap), so idle seen before it does not count.
         // Nothing installs while one is being read (Due), and every reconnect ends in one.
-        host.Sessions.Upserted += s => { if (Busy(s)) { idleSince = null; } };
+        // A session read past a field breaks the idle run too, even when one read in full follows
+        // it before the next tick: the idle time before it is no evidence about the time after.
+        host.Sessions.Upserted += s => { if (Busy(s) || host.Sessions.Unsure) { idleSince = null; } };
         host.Sessions.Synced += () => idleSince = null;
         Resume();
     }
