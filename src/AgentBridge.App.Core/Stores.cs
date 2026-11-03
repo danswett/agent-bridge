@@ -69,8 +69,7 @@ public sealed class FoldStore
         if (path is null) { return; }
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(entries));
+            AtomicPreferences.Write(path, stream => JsonSerializer.Serialize(stream, entries));
         }
         // A nicety: the card still works without it.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
@@ -125,7 +124,23 @@ public sealed record AppPreferences
 
     public void Save(string path)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(this, Json));
+        AtomicPreferences.Write(path, stream => JsonSerializer.Serialize(stream, this, Json));
+    }
+}
+
+internal static class AtomicPreferences
+{
+    internal static void Write(string path, Action<Stream> write)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        Directory.CreateDirectory(directory);
+        var temporary = Path.Combine(directory, Path.GetRandomFileName());
+        using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            try { write(stream); stream.Flush(true); }
+            catch { stream.Dispose(); File.Delete(temporary); throw; }
+        }
+        try { File.Move(temporary, path, overwrite: true); }
+        finally { File.Delete(temporary); }
     }
 }
