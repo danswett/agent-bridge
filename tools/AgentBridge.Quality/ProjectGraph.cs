@@ -22,6 +22,7 @@ sealed class ProjectGraph
 
     readonly Dictionary<string, Project> projects;
     readonly Dictionary<string, List<string>> referencedBy = new(StringComparer.Ordinal);
+    readonly Dictionary<string, IReadOnlySet<string>> reachers = new(StringComparer.Ordinal);
 
     public ProjectGraph(IEnumerable<Project> projects)
     {
@@ -125,12 +126,16 @@ sealed class ProjectGraph
     /// <summary>The project and every project that reaches it through ProjectReferences.</summary>
     public IReadOnlySet<string> ReachersOf(string folder)
     {
+        // A change touches many files in few projects, so each walk is done once per run.
+        if (reachers.TryGetValue(folder, out var cached))
+            return cached;
         var seen = new HashSet<string>(StringComparer.Ordinal) { folder };
         var queue = new Queue<string>([folder]);
         while (queue.Count > 0)
             foreach (var next in referencedBy.GetValueOrDefault(queue.Dequeue()) ?? [])
                 if (seen.Add(next))
                     queue.Enqueue(next);
+        reachers[folder] = seen;
         return seen;
     }
 }

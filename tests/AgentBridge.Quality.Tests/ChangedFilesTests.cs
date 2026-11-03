@@ -3,7 +3,7 @@ namespace AgentBridge.Quality.Tests;
 public class ChangedFilesTests
 {
     [Fact]
-    public void Changes_are_the_branchs_commits_plus_uncommitted_and_untracked_files_with_moves_at_both_paths()
+    public void Changes_are_the_branch_commits_plus_uncommitted_and_untracked_files_with_moves_at_both_paths()
     {
         var root = Fixture.ScratchFolder();
         try

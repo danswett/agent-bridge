@@ -5,7 +5,7 @@ public class CatalogTests
     // The one test that reads the live repository: the selector is only as good as its ability
     // to read the real catalog, so a schema change there must fail here, not in CI's plan job.
     [Fact]
-    public void The_repositorys_catalog_loads_and_every_project_it_names_is_a_test_project()
+    public void The_repository_catalog_loads_and_every_project_it_names_is_a_test_project()
     {
         var root = AppContext.BaseDirectory;
         while (!File.Exists(Path.Combine(root, "AgentBridge.slnx")))
