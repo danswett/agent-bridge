@@ -185,30 +185,64 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
                     if (screen.Rows is not { } rows || send.Expect.Any(r => r.Row < 0 || r.Row >= rows.Count || rows[r.Row].TrimEnd(' ') != r.Text.TrimEnd(' ')))
                     { return Result("the prompt on the managed pane changed; look again before answering"); }
                 }
+                var first = true;
                 foreach (var (text, literal) in Keys(send.Text))
                 {
-                    if (!await Send(text, literal).ConfigureAwait(false)) { return Result("tmux did not confirm the key delivery; check the session before retrying"); }
+                    if (!await Send(text, literal, first ? send.Expect : null).ConfigureAwait(false)) { return Result("tmux did not confirm the key delivery; check the session before retrying"); }
+                    first = false;
                 }
                 if (send.Enter)
                 {
                     await Task.Delay(send.EnterDelayMs, cancellationToken).ConfigureAwait(false);
-                    if (!await Send("Enter", false).ConfigureAwait(false)) { return Result("tmux did not confirm Enter; check the session before retrying"); }
+                    if (!await Send("Enter", false, first ? send.Expect : null).ConfigureAwait(false)) { return Result("tmux did not confirm Enter; check the session before retrying"); }
                 }
                 await Task.Delay(send.PauseAfterMs, cancellationToken).ConfigureAwait(false);
             }
             return new(InjectionStatus.Typed, "keys delivered to the verified managed pane");
 
-            async Task<bool> Send(string text, bool literal)
+            async Task<bool> Send(string text, bool literal, IReadOnlyList<ScreenRow>? expected)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!StillTarget(entry, target)) { return false; }
-                var args = new List<string> { "send-keys", "-t", entry.Session.PaneId };
-                if (literal) { args.Add("-l"); }
-                args.AddRange(["--", text]);
-                // Once a command can have reached the server a failure is uncertain,
-                // including cancellation or a lost response. Never claim NothingTyped.
-                possible = true;
-                return (await commands.RunAsync(args, cancellationToken).ConfigureAwait(false)).ExitCode == 0;
+                string? buffer = null;
+                try
+                {
+                    if (literal)
+                    {
+                        // The words may contain secrets. They travel over stdin and the
+                        // private server socket, never a process's visible argv.
+                        buffer = "bridge-" + Guid.NewGuid().ToString("N");
+                        if ((await commands.RunAsync(["load-buffer", "-b", buffer, "--", "-"], cancellationToken, text).ConfigureAwait(false)).ExitCode != 0) { return false; }
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!StillTarget(entry, target)) { return false; }
+                    // Loading a buffer introduced another await. Recheck the held rows
+                    // at the actual delivery boundary, before the first key or paste.
+                    if (expected is { Count: > 0 })
+                    {
+                        var screen = await ScreenAsync(entry, cancellationToken).ConfigureAwait(false);
+                        if (screen.Rows is not { } rows || expected.Any(r => r.Row < 0 || r.Row >= rows.Count || rows[r.Row].TrimEnd(' ') != r.Text.TrimEnd(' '))) { return false; }
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!StillTarget(entry, target)) { return false; }
+                    IReadOnlyList<string> args = buffer is not null
+                        ? ["paste-buffer", "-d", "-p", "-b", buffer, "-t", entry.Session.PaneId]
+                        : ["send-keys", "-t", entry.Session.PaneId, "--", text];
+                    // Loading alone cannot type anything. From paste/key dispatch onward
+                    // every failure is uncertain, including a lost command response.
+                    possible = true;
+                    return (await commands.RunAsync(args, cancellationToken).ConfigureAwait(false)).ExitCode == 0;
+                }
+                finally
+                {
+                    if (buffer is not null)
+                    {
+                        // -d removes a successfully pasted buffer. This also removes one
+                        // left by cancellation, a changed prompt or an uncertain paste.
+                        try { await commands.RunAsync(["delete-buffer", "-b", buffer]).ConfigureAwait(false); }
+                        catch (Exception) { }
+                    }
+                }
             }
         }
         catch (Exception) { return Result("delivery to the managed pane was interrupted; check the session before retrying"); }

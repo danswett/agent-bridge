@@ -23,14 +23,16 @@ public sealed class ManagedTmuxTests
     sealed class Commands : ITmuxCommand
     {
         public List<string[]> Calls { get; } = [];
+        public List<string> Inputs { get; } = [];
         public string Session { get; private set; } = "";
         public int PanePid { get; set; } = 300;
         public int ServerPid { get; set; } = 200;
         public string Screen { get; set; } = "Question\nYes\nNo\n";
         public Func<string[], TmuxResult?>? OnCall { get; set; }
-        public Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default)
+        public Task<TmuxResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default, string? standardInput = null)
         {
             var args = arguments.ToArray(); Calls.Add(args);
+            if (standardInput is not null) { Inputs.Add(standardInput); }
             if (OnCall?.Invoke(args) is { } custom) { return Task.FromResult(custom); }
             if (args[0] == "new-session") { Session = args[Array.IndexOf(args, "-s") + 1]; }
             return Task.FromResult(new TmuxResult(0, args[0] switch
@@ -40,7 +42,7 @@ public sealed class ManagedTmuxTests
                 _ => "",
             }));
         }
-        public string[][] Writes => Calls.Where(c => c[0] is "send-keys" or "kill-pane").ToArray();
+        public string[][] Writes => Calls.Where(c => c[0] is "send-keys" or "paste-buffer" or "kill-pane").ToArray();
     }
 
     static (ManagedTmuxBackend Backend, Commands Commands, Probe Probe, Started Started) StartedBackend()
@@ -105,7 +107,8 @@ public sealed class ManagedTmuxTests
         probe.Identities[301] = Identity(301, 300, "/test/native-agent", 2);
         Assert.True(backend.Owns(started, 301));
         Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(301, new([new("hello", false, 0, 0)]))).Status);
-        Assert.Equal("%1", Assert.Single(commands.Writes)[2]);
+        var paste = Assert.Single(commands.Writes);
+        Assert.Equal("%1", paste[Array.IndexOf(paste, "-t") + 1]);
         probe.Identities[301] = probe.Identities[301] with { Executable = "/test/changed" };
         Assert.NotNull(backend.Refuse(301));
         probe.Identities[302] = Identity(302, 300, "/test/native-agent", -1);
@@ -132,9 +135,10 @@ public sealed class ManagedTmuxTests
         var (backend, commands, _, _) = StartedBackend();
         var plan = new KeyPlan([new(KeyPlan.Down + " ", false, 0, 0), new("Enter; $(ignored)", true, 0, 0)]);
         Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(300, plan)).Status);
-        Assert.Equal(new[] { "Down", " ", "Enter; $(ignored)", "Enter" }, commands.Writes.Select(c => c[^1]));
-        Assert.DoesNotContain("-l", commands.Writes[0]);
-        Assert.Contains("-l", commands.Writes[2]);
+        Assert.Equal(new[] { "Down", "Enter" }, commands.Writes.Where(c => c[0] == "send-keys").Select(c => c[^1]));
+        Assert.Equal(new[] { " ", "Enter; $(ignored)" }, commands.Inputs);
+        Assert.Equal(2, commands.Writes.Count(c => c[0] == "paste-buffer"));
+        Assert.DoesNotContain(commands.Calls, c => c.Contains("Enter; $(ignored)"));
         commands.Calls.Clear();
         Assert.Equal(InjectionStatus.NothingTyped, (await backend.InjectAsync(300, new([new("safe", false, 0, 0), new("bad\rinput", true, 0, 0)]))).Status);
         Assert.Empty(commands.Writes);
@@ -145,13 +149,53 @@ public sealed class ManagedTmuxTests
     {
         var (backend, commands, _, _) = StartedBackend();
         using var cancellation = new CancellationTokenSource();
-        commands.OnCall = args => { if (args[0] == "send-keys") { cancellation.Cancel(); } return null; };
+        commands.OnCall = args => { if (args[0] == "paste-buffer") { cancellation.Cancel(); } return null; };
         Assert.Equal(InjectionStatus.Interrupted, (await backend.InjectAsync(300, new([new("hello", true, 100, 0)]), cancellation.Token)).Status);
         Assert.Single(commands.Writes);
         commands.Calls.Clear();
-        commands.OnCall = args => args[0] == "send-keys" ? new(1, "") : null;
+        commands.OnCall = args => args[0] == "paste-buffer" ? new(1, "") : null;
         Assert.Equal(InjectionStatus.Interrupted, (await backend.InjectAsync(300, new([new("hello", true, 0, 0)]))).Status);
         Assert.Single(commands.Writes);
+    }
+
+    [Fact]
+    public async Task Literal_secrets_use_stdin_and_the_named_buffer_is_deleted_after_delivery()
+    {
+        var (backend, commands, _, _) = StartedBackend();
+        const string secret = "fixture-secret-not-for-argv";
+        Assert.Equal(InjectionStatus.Typed, (await backend.InjectAsync(300, new([new(secret, true, 0, 0)]))).Status);
+        Assert.Equal(secret, Assert.Single(commands.Inputs));
+        Assert.DoesNotContain(commands.Calls, c => c.Any(a => a.Contains(secret, StringComparison.Ordinal)));
+        var loaded = Assert.Single(commands.Calls, c => c[0] == "load-buffer");
+        var pasted = Assert.Single(commands.Calls, c => c[0] == "paste-buffer");
+        var deleted = Assert.Single(commands.Calls, c => c[0] == "delete-buffer");
+        Assert.Equal(loaded[2], pasted[4]);
+        Assert.Equal(loaded[2], deleted[2]);
+        Assert.Contains("-d", pasted);
+        Assert.Contains("-p", pasted);
+    }
+
+    [Theory]
+    [InlineData("screen")]
+    [InlineData("identity")]
+    [InlineData("cancel")]
+    [InlineData("load-failed")]
+    public async Task A_change_or_cancellation_after_buffer_load_types_nothing_and_removes_the_buffer(string change)
+    {
+        var (backend, commands, probe, _) = StartedBackend();
+        using var cancellation = new CancellationTokenSource();
+        commands.OnCall = args =>
+        {
+            if (args[0] != "load-buffer") { return null; }
+            if (change == "screen") { commands.Screen = "A different question\n"; }
+            if (change == "identity") { probe.Identities[300] = probe.Identities[300] with { StartedAt = At.AddMinutes(1) }; }
+            if (change == "cancel") { cancellation.Cancel(); }
+            return change == "load-failed" ? new(1, "") : null;
+        };
+        var result = await backend.InjectAsync(300, new([new("fixture secret", true, 0, 0, [new(0, "Question")])]), cancellation.Token);
+        Assert.Equal(InjectionStatus.NothingTyped, result.Status);
+        Assert.Empty(commands.Writes);
+        Assert.Single(commands.Calls, c => c[0] == "delete-buffer");
     }
 
     [Theory]
