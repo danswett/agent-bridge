@@ -12,6 +12,13 @@ fixture coverage. It does not mean an Apple build has completed an end-to-end
 operation against a real relay and .NET host. That acceptance work is listed
 separately.
 
+## Workbench previews
+
+The [iPad simulator](images/apple-workbench/ipad-simulator.png) shows the session list,
+question editor and inspector together. The [iPhone simulator](images/apple-workbench/iphone-simulator.png)
+shows a reply draft above the keyboard. Both captures use the offline demo fixture;
+live acceptance is recorded separately below.
+
 ## Implemented workflows
 
 | Area | Windows implementation | Apple implementation and limits |
