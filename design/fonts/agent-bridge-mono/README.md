@@ -10,12 +10,16 @@ platform's system face.
 
 A modified build of [Iosevka](https://github.com/be5invis/Iosevka) 34.9.1, using the
 [IoskeleyMono](https://github.com/ahatem/IoskeleyMono) configuration, which gives it a
-Berkeley Mono-like character. Two changes are ours:
+Berkeley Mono-like character. One change is ours: **a tailed lowercase `l`**, so `l`, `1`
+and `I` stay distinct in agent IDs, hashes and paths.
 
-- **A tailed lowercase `l`**, so `l`, `1` and `I` stay distinct in agent IDs, hashes and
-  paths.
-- **A 560 width,** between Iosevka's 500 and IoskeleyMono's 600, so tool lists and the
-  inspector fit a little more per line.
+**Width: 600 units,** IoskeleyMono's own and Iosevka's Extended. The first build was 560,
+between Iosevka's 500 and IoskeleyMono's 600, to fit a little more per line. Beside Segoe UI
+Variable it looked condensed and clashed with the text, so the owner had it rebuilt at a
+normal width (#295). What the eye compares is the advance over the x-height, since inline
+mono is scaled to the text's x-height (ui.md §4.2): 560 gave 1.08, narrower than Consolas
+(1.12) and Cascadia Mono (1.13); 600 gives 1.15, close to theirs. The x-height itself is
+unchanged (520), so inline mono's scale is too.
 
 Ligatures are off, because code in agent output should show the characters typed.
 
@@ -73,9 +77,18 @@ and produces `ttf/` and `woff2/`.
 
 - **Needs:** git, Node.js 18+, Python 3 with `fonttools` and `brotli`, and `ttfautohint`.
   `pip install ttfautohint-py` is enough; the script wraps it.
-- **Time:** about four minutes on four cores.
+- **On Windows,** run it from Git Bash, with `python3` on the `PATH` (a one-line script
+  that runs the Python holding `fonttools`) and, ahead of it, ttfautohint-py's package
+  folder, which holds a real `ttfautohint.exe`: Node on Windows can't start the script's
+  shell wrapper. The 600 build was made this way. Rebuilding the old 560 plan the same way
+  matched the committed 560 files in all but 7 of 3,409 glyphs: one-unit roundings and a
+  few rare symbols (ℭ ↖ ⇖ ♧).
+- **Time:** about four minutes on four cores (five on Windows).
 
 To change a glyph, edit the `variants.design` table in `private-build-plans.toml`. The
 names are listed in Iosevka's
 [custom-build.md](https://github.com/be5invis/Iosevka/blob/v34.9.1/doc/custom-build.md).
-Then rebuild, regenerate `specimen.png`, and say what changed in the PR.
+Then rebuild, regenerate `specimen.png`, and say what changed in the PR. `specimen.png` is
+`specimen.html` (beside `woff2/`) captured at 1000×625 CSS pixels and 2× scale, for example
+with the PWA's Playwright. `tools/design-gen`'s tests check that every TTF and WOFF2 is the
+build plan's width, so a stale build can't ship.

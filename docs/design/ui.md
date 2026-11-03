@@ -140,8 +140,11 @@ every colour from the generated roles (#177).
 - **Code: one monospace everywhere,** for commands, paths, agent IDs, tool calls and code
   blocks. That's where agent apps usually look generic, and it's on screen constantly.
   - **Agent Bridge Mono,** our own build of Iosevka with a Berkeley Mono-like
-    character (IoskeleyMono configuration, a tailed `l`, a 560 width), in
+    character (IoskeleyMono configuration, a tailed `l`, a normal 600 width), in
     [`/design/fonts/agent-bridge-mono`](../../design/fonts/agent-bridge-mono/README.md).
+    It was first built at 560 to fit more per line, but beside the system face that read
+    as condensed, so it was rebuilt at 600, close to Cascadia Mono's and Consolas'
+    proportions (#295).
     It is under the SIL OFL, so it ships inside every client and lives in this public
     repository. Berkeley Mono was considered and rejected: its Commercial license limits
     embedding to apps without text entry, requires the font to be unextractable, and bars
@@ -167,7 +170,9 @@ every colour from the generated roles (#177).
      the text face's x-height over Agent Bridge Mono's, per platform, from `tokens.json`
      `type.inlineMono` (generated as `--ab-inline-mono-x` and `--ab-inline-mono-scale` for the
      PWA, which uses `font-size-adjust` where the browser has it, and as `AbInlineMono*` sizes
-     per ramp role for WinUI, which hasn't). Never under 11 px.
+     per ramp role for WinUI, which hasn't). Never under 11 px. Only the x-height is matched:
+     the width stays the font's own, so a narrow mono reads as condensed beside the text
+     (#295). The 600 width (§4.1) didn't change the x-height, so the scale held.
   2. **Same baseline and line height** as the text around it. No padding, background or
      letter-spacing on an inline run, except a code span in prose (Markdown's `code`).
   3. **Same weight** as the text around it: a tool name is not bold beside regular text.
