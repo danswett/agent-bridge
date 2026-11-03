@@ -139,6 +139,8 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.Host.Tests
+    # CallerGuardTests reads the app's AssemblyName and pack-app.ps1's -e, which the graph can't see.
+    triggers: [src/AgentBridge.App/AgentBridge.App.csproj, build/pack-app.ps1]
     # The filter doesn't help here: two AgentReplyFlowTests wait 34 s and 17 s of real time (#390).
     command: dotnet test tests/AgentBridge.Host.Tests -c Release
     where: ci.yml product
@@ -188,6 +190,8 @@ suites:
     platforms: [win-x64, linux-x64]
     runner: local
     project: tests/AgentBridge.Rehearsal.Tests
+    # ChecklistTests reads both docs: every checklist command is one the tool accepts.
+    triggers: [docs/parity-checklist.md, docs/parity.md]
     command: dotnet test tests/AgentBridge.Rehearsal.Tests -c Release
     where: ci.yml product
     baseline: { tests: 72, seconds: 3 }
@@ -391,9 +395,12 @@ suites:
     select: affected
     platforms: [win-x64, win-arm64, linux-x64, macos-arm64]   # Node runs anywhere
     runner: local
-    # Every file generate.mjs writes, since --check compares each one with design/ (it isn't
-    # only design/ changing that can make them disagree), the app icon's too (lib/app-icon.mjs).
-    triggers: [design/**, tools/design-gen/**, pwa/design/**, src/AgentBridge.App/Design/**, src/AgentBridge.App.Core/DesignLayout.cs, pwa/index.html, pwa/manifest.webmanifest, pwa/icon.svg, pwa/icons/**, src/AgentBridge.App/Assets/AgentBridge.ico, src/AgentBridge.App/Assets/AgentBridge.png]
+    # Not only what generate.mjs writes (--check compares each with design/: the PWA's design/,
+    # index.html, manifest and icons, the app's Design/ and Assets icons, DesignLayout.cs), but
+    # what the tests in tools/design-gen/test read: the PWA's CSS, scripts and service worker and
+    # the app's XAML and C# (no undefined tokens or hard-coded colours), pack-app.ps1's --icon,
+    # and ui.md's motion section. So all of pwa/ and the app; the job takes under a minute.
+    triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, build/pack-app.ps1, docs/design/ui.md]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
     where: ci.yml design
     status: exists

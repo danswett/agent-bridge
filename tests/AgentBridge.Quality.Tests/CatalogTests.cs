@@ -20,16 +20,27 @@ public class CatalogTests
     }
 
     // Files a CI job checks without owning them, which neither the project graph nor a folder
-    // glob would reach: what generate.mjs writes outside design/, and what the dev stack links in
-    // from other spikes. Each once slipped past a pull request's selection (#443's review).
+    // glob would reach: what generate.mjs writes and the design tests read outside design/, what
+    // the dev stack links in from other spikes, the tests the AOT checks rerun, and repository
+    // files .NET tests read at run time. Each once slipped past a pull request's selection
+    // (#443's review).
     [Theory]
     [InlineData("src/AgentBridge.App.Core/DesignLayout.cs", "design-gen")]
     [InlineData("pwa/index.html", "design-gen")]
     [InlineData("pwa/manifest.webmanifest", "design-gen")]
     [InlineData("pwa/icons/icon-192.png", "design-gen")]
     [InlineData("src/AgentBridge.App/Assets/AgentBridge.ico", "design-gen")]
+    [InlineData("pwa/app.css", "design-gen")]
+    [InlineData("pwa/sw.js", "design-gen")]
+    [InlineData("src/AgentBridge.App/App.xaml.cs", "design-gen")]
+    [InlineData("build/pack-app.ps1", "design-gen")]
+    [InlineData("docs/design/ui.md", "design-gen")]
     [InlineData("tests/AgentBridge.Host.Delivery.Tests/InjectorIntegrationTests.cs", "injector-aot")]
     [InlineData("tests/AgentBridge.Hooks.Tests/HookProcessTests.cs", "hook-aot")]
+    [InlineData("docs/parity-checklist.md", "rehearsal-tool")]
+    [InlineData("docs/parity.md", "rehearsal-tool")]
+    [InlineData("src/AgentBridge.App/AgentBridge.App.csproj", "host")]
+    [InlineData("build/pack-app.ps1", "host")]
     [InlineData("spikes/s2-noise-interop/dotnet/Noise.cs", "pwa-e2e")]
     [InlineData("spikes/s2-noise-interop/web/noise-p256.js", "pwa-e2e")]
     [InlineData("spikes/s6-tpm-keys/src/DeviceKeys.cs", "pwa-e2e")]
