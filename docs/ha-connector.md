@@ -161,7 +161,7 @@ parses every append whole and skims a cold start for unanswered questions.
 | Machine topic root | `copilot/cli/machine/<slug>` | |
 | Session node | `agent_bridge_` + the id's letters and digits, at most 16, lowercased; an id with none gets 12 hex digits of its SHA-256 (`Get-CopilotMqttNodeId`) | `6fcbab0c-1d2e-…` → `agent_bridge_6fcbab0c1d2e4f50` |
 | Session topic root | `copilot/cli/<node>` | |
-| Session name (its device, its card title) | `Copilot: <workspace name or id[:8]>`, `Claude: <folder>`, `Codex: <folder>`; at most 120; `{{`, `{%`, `{#` broken with a zero-width space (`Get-*SessionDisplay`, `Remove-CopilotTemplateMarkup`) | `Copilot: Fix the build` |
+| Session name (its device, its card title) | `Copilot: <workspace name or id[:8]>`, `Claude: <folder>`, `Codex: <folder>`; at most 120; `{{`, `{%`, `{#` broken with a zero-width space (`Get-*SessionDisplay`, `Remove-CopilotTemplateMarkup`), after every `{` that a `{`, `%` or `#` follows. The daemon breaks each pair once, so a run of three braces kept a live `{{` there (`{{{` → `{`+ZWSP+`{{`); here no opener survives, and such a name differs from the daemon's | `Copilot: Fix the build` |
 
 `copilot/cli` and `object_id` are kept although they look odd (every agent, and an id Home
 Assistant ignores): the dashboard and the other daemons read exactly these.

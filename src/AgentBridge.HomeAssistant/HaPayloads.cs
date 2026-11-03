@@ -25,8 +25,21 @@ public static class HaPayloads
     // Remove-CopilotTemplateMarkup. A session's name comes from its task or its folder, which
     // anyone can choose, and Home Assistant renders templates in the text a dashboard shows:
     // the delimiters are broken with a zero-width space so the text reads the same but is inert.
-    public static string NeutraliseTemplates(string text) =>
-        string.IsNullOrEmpty(text) ? text : text.Replace("{{", "{\u200B{").Replace("{%", "{\u200B%").Replace("{#", "{\u200B#");
+    // After every "{" that a "{", "%" or "#" follows, not once per pair: string.Replace does not
+    // overlap, so "{{{ states('person.me') }}" came out "{\u200B{{ …" with a live "{{" in it,
+    // and a delegate's name reached a push title that way (#263's security review). The
+    // daemon's function has the same gap, so such a name differs from its output here.
+    public static string NeutraliseTemplates(string text)
+    {
+        if (string.IsNullOrEmpty(text)) { return text; }
+        var b = new System.Text.StringBuilder(text.Length + 8);
+        for (var i = 0; i < text.Length; i++)
+        {
+            b.Append(text[i]);
+            if (text[i] == '{' && i + 1 < text.Length && text[i + 1] is '{' or '%' or '#') { b.Append('\u200B'); }
+        }
+        return b.ToString();
+    }
 
     // Get-CopilotSessionDisplay, Get-ClaudeSessionDisplay and Get-CodexSessionDisplay: the
     // device name, which is also the card's title. Copilot's is its workspace name (the host's
