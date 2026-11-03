@@ -405,7 +405,7 @@ Sections, top to bottom:
    - Approvals (`kind: approval`, not `answerAtMachine`) can be answered inline: "Approve
      once" (Bridge) and "Deny" (secondary). They are the card's own buttons: the same
      request, progress and outcomes. The action is the whole prompt, drawn as the card
-     draws it with code literal, since Approve once allows all of it; one too long to show
+     draws it, exactly as written (§6.4), since Approve once allows all of it; one too long to show
      whole (an edit's diff, a long command), with a table, not shaped as a host writes a
      permission (prose, then at most one fenced block ending it, its fence naming no
      language but json or diff, no link, whose words hide where it goes, and no character
@@ -574,6 +574,36 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   checkbox and text controls, with Answer in Bridge.
 - **Now:** the tool the main agent is running, as a meta line under its reply (glyph, then the
   tool's name and arguments in mono).
+- **Code blocks** (#296): in the Code role (§4.3), wrapped to the block's width rather than
+  scrolled sideways, with Copy in the top-right corner above the code (with the copy icon in the app):
+  "Copy", then "Copied" (or "Copy failed") for 1.5 s, named "Copy code" whatever it shows, the
+  outcome said to a screen reader. Every code block reads strictly left to right, and a
+  character that is not on screen as it runs (bidi controls, zero-width and other format or
+  invisible characters, and a bare carriage return, which a shell does not take as a line break)
+  is drawn as a visible escape such as `\u2067` (#220, the owner's
+  "escape and allow" rule from #253): an agent's isolates must never draw a download as a comment.
+  Right-to-left letters are escaped too (`\u05D0`), since even in a left-to-right line the
+  punctuation between two of them joins their run and is drawn reversed: `echo א#;ב;rm -rf ~` would
+  read as commented out. This is the owner's trade-off (#253): Hebrew or Arabic in a code block is
+  harder to read, so that what is read is what runs. **A block says what its escapes stand for,**
+  beside Copy: "Contains hidden characters" when it holds any, and "Contains right-to-left text"
+  when it holds right-to-left letters, both if both. An escape can be read past while its
+  character still acts: PowerShell ends a `#` comment at a bare CR, so `# just a note\u000D Write-Output RAN`
+  drawn on one line still reads as a comment, and runs. **Copy takes exactly what is drawn,** escapes included, every space, tab and
+  line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
+  still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
+  this since #296; the PWA follows in #415.
+- **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
+  markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
+  left to right with its line breaks kept, and escaped as every code block is (hidden characters,
+  right-to-left letters and a bare carriage return), with the same notes, and Approve once still
+  offered. **It has no Copy:** the block is the whole message, prose and fence lines too, and pasted
+  into bash a line of backticks runs as a command substitution. Ordinary code blocks keep Copy. Whatever a parser decides can hide what runs: a link draws
+  `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`, `*tmp*` loses its stars, and a line
+  of three backticks, which Markdown takes as a fence, is a command substitution to bash, so a
+  fenced `echo rm -rf ~` inside `bash -c '…'` runs `rm -rf ~`. A Codex approval carries its
+  command in prose ("Codex wants to run: …"). Other questions and the conversation keep their
+  Markdown.
 
 ### 6.5 Reply box
 
@@ -734,6 +764,13 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
 - **No sentences explaining the UI,** no exclamation marks, and no emoji.
+- **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
+  letters' included, are copied as drawn, so the text pasted is never different from the text read.
+  Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
+- **An approval reads as it runs** (§6.4, #220): an approval's message is drawn exactly as
+  written, fence markers included, in the code face; nothing in it is read as Markdown.
+- **Code notes** (§6.4, #220): "Contains hidden characters" and "Contains right-to-left text",
+  exactly so, beside the block they describe. An approval's card has no Copy.
 
 ## 9. Accessibility
 

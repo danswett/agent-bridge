@@ -85,8 +85,9 @@ export class NeedsYouLane {
     const els = view.els = {};
     els.title = h('button', { type: 'button', class: 'needs-title', onclick: () => this.open(view.entry.hostId, view.entry.sessionId) });
     els.line = h('p', { class: 'needs-line' });
-    // An approval answered here shows its prompt whole: everything Approve once allows.
-    els.prompt = e.prompt !== null ? h('div', { class: 'md needs-prompt' }) : null;
+    // An approval answered here shows its prompt whole: everything Approve once allows, drawn as its
+    // card draws an approval's message (#220).
+    els.prompt = e.prompt !== null ? h('div', { class: 'md md-approval needs-prompt', dir: 'ltr' }) : null;
     els.machine = h('span', { class: 'needs-machine' });
     els.agent = h('span', { class: 'needs-agent' });
     els.delegate = h('span', { class: 'needs-delegate' });
@@ -123,7 +124,7 @@ export class NeedsYouLane {
     els.line.hidden = !e.line;
     if (els.prompt && view.prompt !== e.prompt) {
       view.prompt = e.prompt;
-      els.prompt.replaceChildren(renderMarkdown(e.prompt ?? ''));
+      els.prompt.replaceChildren(renderMarkdown(e.prompt ?? '', document, { approval: true }));
     }
     els.machine.textContent = e.machine;
     els.agent.textContent = e.agent;

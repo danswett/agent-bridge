@@ -93,8 +93,13 @@ function shell(q, idBase, answerable, asker = null) {
     class: `question${answerable ? ' answerable' : ''}`, 'aria-labelledby': `${idBase}-h`,
     dataset: { kind: q.kind, question: q.id, answerable: answerable ? 'true' : 'false' },
   }, h('h4', { class: 'question-head', id: `${idBase}-h` }, heading));
-  const message = h('div', { class: 'md question-message', id: `${idBase}-m` });
-  message.append(renderMarkdown(q.message));
+  // An approval's message, all of it, is drawn exactly as written, fence markers included, in the
+  // code face and left to right, with its hidden characters and right-to-left letters as escapes;
+  // nothing in it is read as Markdown (#220, #415, ui.md §6.4): Approve once allows what runs.
+  // Other questions draw as Markdown.
+  const approval = q.kind === 'approval';
+  const message = h('div', { class: `md question-message${approval ? ' md-approval' : ''}`, id: `${idBase}-m`, dir: approval ? 'ltr' : null });
+  message.append(renderMarkdown(q.message, document, { approval }));
   section.append(message);
   return section;
 }

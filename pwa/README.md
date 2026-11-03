@@ -59,6 +59,7 @@ Larger files come next.
 | `sw.js` | The service worker: the app shell offline, and showing pushes (`push`) and opening the app at them (`notificationclick`) |
 | `js/platform.js` | The platform layer (#168, [ui.md](../docs/design/ui.md) §7): `windows`, `macos`, `ios`, `ipados`, `android`, `chromeos`, `linux` or `unknown`, from Chromium's client hints or else the user agent (a Mac with a touch screen is an iPad), and whether the app is installed (`display-mode: standalone`, or iOS's `navigator.standalone`), set once on `<html data-platform data-standalone>`. The hints (⌘↩ and ⌘K on Apple's, Ctrl+Enter and Ctrl+K elsewhere; either modifier works everywhere), the safe areas (`viewport-fit=cover` kept only when installed on iOS or iPadOS, where the app bar, the bottom navigation or rail and the reply box keep clear of the notch and the home indicator; elsewhere the browser keeps the page out of them), no double-tap wait there, and its edge swipe back. `unknown` is Windows; nothing depends on detection being right |
 | `js/markdown.js` | Markdown to DOM without HTML (see below) |
+| `js/hidden-text.js` | Text not on screen as it runs (#165, #220): the hidden and right-to-left characters the Needs you lane refuses, and the `\uXXXX` escapes code and approvals draw them as (the app's `HiddenText`) |
 | `js/ui/needs-you-view.js` | Needs you on screen, above the list and apart from it, its entries kept in place across redraws |
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/delegates-view.js` | A session's Delegates block, in the inspector beside the conversation and in the Delegates tab where the inspector isn't a pane (ui.md §6.3): a row per delegate (glyph, name, how long or finished, its latest line), "N finished" folded, and a row opened to its task and its own latest response and reasoning (`session.get` with `agent`). Nothing in it replies to or stops a delegate |
@@ -404,10 +405,27 @@ GitHub tables and links. It is linear on hostile input (tested at 16 KiB).
 
 Code blocks wrap rather than scroll sideways (`pre-wrap`, breaking even a long base64
 token), keeping indentation, and each has a Copy button in its top-right corner that copies
-the block's text as written, whatever the wrapping. The button is made by `toDom`, never by
+exactly what the block draws, whatever the wrapping. The button is made by `toDom`, never by
 the parser, so no reply text can produce a `<button>`. It uses the Clipboard API and falls
 back to a hidden text area and `execCommand('copy')` where that API is missing or refuses
 (older WebViews, some iOS Home Screen apps). Inline code has no button.
+
+What is drawn is what runs (#415, ui.md §6.4, the app's #296): every code block and code span
+reads strictly left to right (`dir="ltr"`, `unicode-bidi: isolate`), with bidi controls,
+zero-width, format and other default-ignorable characters, and right-to-left letters drawn as
+`\uXXXX` escapes (`js/hidden-text.js`, the Needs you lane's rule). Copy takes the escapes as
+drawn. A block says what its escapes stand for, beside Copy: "Contains hidden characters",
+"Contains right-to-left text", or both. A bare carriage return (not one of a CRLF), NEL and the
+line and paragraph separators end no line: the parser keeps each in its line as the character it
+is (standing in a private-use character the text does not hold while it parses), so a block can
+tell it from an escape written as text, and prose draws them as escapes too. An approval's
+message, on its card and as its prompt in Needs you, is drawn exactly as written, fence markers
+included, in the code face; nothing in it is read as Markdown (`parseApproval`,
+`renderMarkdown`'s `approval`): a link, code span, backslash escape, emphasis or a fence's own
+backtick lines (a command substitution in bash) could otherwise hide part of what runs. It has
+the same notes, and no Copy, which would take the whole message, fence lines too. ui.md §6.4 and
+§8's wording on this is the app's (#323), copied word for word; the PWA also draws every code
+span in a sentence this way, and NEL and the separators in prose.
 
 ## Tests
 
