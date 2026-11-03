@@ -536,6 +536,12 @@ running another checkout's tests at the same time.
   case (tags, quiet replacement, unknown kinds, taps that never leave the app, a tap with
   the app open or closed), and turning notifications on and off, iOS's Home Screen rule,
   a relay key change, a turn-off racing a registration, and closing stale notices.
+* `test/unit/protocol-vectors.test.mjs`: the shared protocol vectors
+  ([docs/protocol/vectors](../docs/protocol/vectors/README.md)), which the C# records generate,
+  replayed through this app's readers, its answer, reply and launch checks, its request
+  building and its command signing. A field renamed or a limit moved in C# fails here. A
+  disagreement already known is listed in the vector file with its issue, and the test fails
+  once it no longer differs.
 
 Not covered end to end: the C# Bridge Host (it is not wired yet; the fixture host speaks
 the same contract; `tests/AgentBridge.Host.Tests` drives its notifications through the

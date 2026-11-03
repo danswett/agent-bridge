@@ -1,0 +1,538 @@
+{
+  "about": "Registering for notifications, and the notices a host sends.",
+  "spec": "v1-sessions.md#notifications",
+  "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
+  "contexts": {},
+  "records": {
+    "PushSubscribeRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "full",
+          "json": {
+            "endpoint": "https://web.push.apple.com/QGx0c0",
+            "keys": {
+              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+              "auth": "dGhpcyBpcyBhdXRo"
+            },
+            "app": "https://danswett.github.io/agent-bridge/",
+            "device": "iPhone · Agent Bridge"
+          }
+        },
+        {
+          "name": "no-device-name",
+          "json": {
+            "endpoint": "https://fcm.googleapis.com/fcm/send/abc",
+            "keys": {
+              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+              "auth": "dGhpcyBpcyBhdXRo"
+            },
+            "app": "https://danswett.github.io/agent-bridge/"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-endpoint",
+          "json": {
+            "keys": {
+              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+              "auth": "dGhpcyBpcyBhdXRo"
+            },
+            "app": "https://danswett.github.io/agent-bridge/",
+            "device": "iPhone · Agent Bridge"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-keys",
+          "json": {
+            "endpoint": "https://web.push.apple.com/QGx0c0",
+            "app": "https://danswett.github.io/agent-bridge/",
+            "device": "iPhone · Agent Bridge"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-app",
+          "json": {
+            "endpoint": "https://web.push.apple.com/QGx0c0",
+            "keys": {
+              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+              "auth": "dGhpcyBpcyBhdXRo"
+            },
+            "device": "iPhone · Agent Bridge"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-endpoint",
+          "json": {
+            "endpoint": 42,
+            "keys": {
+              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+              "auth": "dGhpcyBpcyBhdXRo"
+            },
+            "app": "https://danswett.github.io/agent-bridge/",
+            "device": "iPhone · Agent Bridge"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushKeys": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "keys",
+          "json": {
+            "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
+            "auth": "dGhpcyBpcyBhdXRo"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-p256dh",
+          "json": {
+            "p256dh": 42,
+            "auth": "dGhpcyBpcyBhdXRo"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushSubscribeResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "subscribed",
+          "json": {
+            "subscribed": true,
+            "count": 2
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-subscribed",
+          "json": {
+            "subscribed": "yes",
+            "count": 2
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushUnsubscribeRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "this-device",
+          "json": {}
+        },
+        {
+          "name": "an-endpoint",
+          "json": {
+            "endpoint": "https://web.push.apple.com/QGx0c0"
+          }
+        }
+      ],
+      "refused": []
+    },
+    "PushUnsubscribeResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "removed",
+          "json": {
+            "removed": true
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-removed",
+          "json": {
+            "removed": "yes"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushDevice": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "this-one",
+          "json": {
+            "device": "3f2a",
+            "name": "iPhone · Agent Bridge",
+            "service": "web.push.apple.com",
+            "since": "2026-10-28T04:22:43.182Z",
+            "current": true
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-device",
+          "json": {
+            "device": 42,
+            "name": "iPhone · Agent Bridge",
+            "service": "web.push.apple.com",
+            "since": "2026-10-28T04:22:43.182Z",
+            "current": true
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushListResult": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "two",
+          "json": {
+            "devices": [
+              {
+                "device": "3f2a",
+                "name": "iPhone · Agent Bridge",
+                "service": "web.push.apple.com",
+                "since": "2026-10-28T04:22:43.182Z",
+                "current": true
+              },
+              {
+                "device": "9c1d",
+                "name": "Windows · Agent Bridge",
+                "service": "wns2-par02p.notify.windows.com",
+                "since": "2026-10-28T04:22:43.182Z",
+                "current": false
+              }
+            ]
+          }
+        },
+        {
+          "name": "none",
+          "json": {
+            "devices": []
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-devices",
+          "json": {
+            "devices": "wrong"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushNoticeData": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "question",
+          "json": {
+            "v": 1,
+            "kind": "question",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "finished",
+          "json": {
+            "v": 1,
+            "kind": "finished",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "an-unknown-kind-reads-as-a-question",
+          "json": {
+            "v": 1,
+            "kind": "celebrate",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "v": 1,
+            "kind": "question",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-kind",
+          "json": {
+            "v": 1,
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-machine",
+          "json": {
+            "v": 1,
+            "kind": "question",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-session",
+          "json": {
+            "v": 1,
+            "kind": "question",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "question": "call_q1",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-at",
+          "json": {
+            "v": 1,
+            "kind": "question",
+            "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-machine",
+          "json": {
+            "v": 1,
+            "kind": "question",
+            "machine": 42,
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "question": "call_q1",
+            "at": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushNotification": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "question",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "body": "Which spike next, and why?",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        },
+        {
+          "name": "resolved",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "body": "Answered",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "silent": true,
+            "data": {
+              "v": 1,
+              "kind": "resolved",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-title",
+          "json": {
+            "body": "Which spike next, and why?",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-body",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-navigate",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "body": "Which spike next, and why?",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-tag",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "body": "Which spike next, and why?",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-data",
+          "json": {
+            "title": "DEV-VM1 · Protocol vectors",
+            "body": "Which spike next, and why?",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-title",
+          "json": {
+            "title": 42,
+            "body": "Which spike next, and why?",
+            "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+            "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "lang": "en",
+            "data": {
+              "v": 1,
+              "kind": "question",
+              "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+              "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "question": "call_q1",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "PushMessage": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "question",
+          "json": {
+            "web_push": 8030,
+            "notification": {
+              "title": "DEV-VM1 · Protocol vectors",
+              "body": "Which spike next, and why?",
+              "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+              "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "lang": "en",
+              "data": {
+                "v": 1,
+                "kind": "question",
+                "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "question": "call_q1",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-notification",
+          "json": {
+            "web_push": 8030
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-web_push",
+          "json": {
+            "web_push": "many",
+            "notification": {
+              "title": "DEV-VM1 · Protocol vectors",
+              "body": "Which spike next, and why?",
+              "navigate": "https://danswett.github.io/agent-bridge/?host=53d1997f0a1b2c3d4e5f60718293a4b5&session=4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b&question=call_q1",
+              "tag": "53d1997f0a1b2c3d4e5f60718293a4b5:4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "lang": "en",
+              "data": {
+                "v": 1,
+                "kind": "question",
+                "machine": "53d1997f0a1b2c3d4e5f60718293a4b5",
+                "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "question": "call_q1",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    }
+  },
+  "knownDifferences": []
+}

@@ -42,6 +42,15 @@ the channel go through the relay's blob store (`sessions.attach.blob`, in
 * Text is Markdown where the type says so (agent responses, questions), otherwise plain.
   Clients render Markdown without raw HTML.
 
+## Test vectors
+
+Valid and refused examples of every record in this protocol, and of the signed command, are in
+[`vectors/`](vectors/README.md), as JSON that the C# records generate. The C# tests and the PWA's
+unit tests replay the same files, so a field renamed or a limit moved in one implementation fails
+in the other. Where they disagree today, the files list it as a known difference with its issue.
+After a deliberate change, regenerate them with `UPDATE_PROTOCOL_VECTORS=1` as
+[vectors/README.md](vectors/README.md#regenerating) says, and commit them with the change.
+
 ## Channel framing
 
 Inside a channel, as in S4:

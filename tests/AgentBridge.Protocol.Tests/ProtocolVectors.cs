@@ -1,0 +1,536 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using AgentBridge.Protocol;
+
+// The shared protocol vectors (docs/protocol/vectors/README.md): what every Protocol v1 record
+// looks like when it is right, and what a reader or a host must refuse. This is the one place
+// they are written; ProtocolVectorTests fails while the committed files differ from what this
+// generates, and writes them with UPDATE_PROTOCOL_VECTORS=1.
+public static class ProtocolVectors
+{
+    public const string Generator = "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs";
+
+    // Who writes the record: a host for its clients, a client for a host, or one host for another.
+    const string Host = "host";
+    const string Client = "client";
+    const string HostToHost = "host-to-host";
+
+    static readonly DateTimeOffset T0 = new(2026, 10, 28, 4, 22, 43, 182, TimeSpan.Zero);
+    static readonly DateTimeOffset T1 = T0.AddMinutes(3);
+    const string SessionId = "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b";
+    const string MachineId = "53d1997f0a1b2c3d4e5f60718293a4b5";
+    const string OtherMachine = "00112233445566778899aabbccddeeff";
+    const string Request = "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
+    const string FileA = "6b1f0c3e-2d4a-4b5c-9e8f-0a1b2c3d4e5f";
+    const string FileB = "7c2e1d4f-3e5b-4c6d-8f90-1b2c3d4e5f60";
+    static readonly string Sha = Attachments.Base64Url(SHA256.HashData("hello"u8));
+    static readonly string BlobKey = Attachments.Base64Url([.. Enumerable.Range(0, 32).Select(i => (byte)i)]);
+
+    static string Repeat(char c, int n) => new(c, n);
+
+    public static IReadOnlyDictionary<string, System.Text.Json.Nodes.JsonObject> Files()
+    {
+        var catalog = new VectorCatalog();
+        Sessions(catalog.File("sessions.json", "v1-sessions.md", "Sessions, questions, answers, replies and stopping a session."));
+        AttachmentRecords(catalog.File("attachments.json", "v1-sessions.md#attachments", "Files sent ahead of a reply or a launch, in the channel or through the relay's blob store (blobs.md)."));
+        Push(catalog.File("push.json", "v1-sessions.md#notifications", "Registering for notifications, and the notices a host sends."));
+        Launch(catalog.File("launch.json", "v1-launch.md", "Launching and resuming sessions, and answering a launched agent's folder-trust question."));
+        Transfer(catalog.File("transfer.json", "v1-transfer.md", "Bringing a session from another machine, and the signed command that asks for it."));
+        Update(catalog.File("update.json", "v1-update.md", "A machine's updates, seen and asked for from another device."));
+        Usage(catalog.File("usage.json", "v1-usage.md", "How much of each agent's allowance is gone."));
+        foreach (var d in KnownDifferences.All) { catalog.Differs(d); }
+        return catalog.Build();
+    }
+
+    // ---- sessions ----
+
+    static readonly MachineInfo Machine = new(MachineId, "DEV-VM1", "windows", "0.1.200", Dev: true, Sessions: 3, ReadOnly: "agent-ha-bridge is running for this user", Instance: "9a8b7c6d5e4f30211203f4e5d6c7b8a9");
+
+    static readonly ToolCall Running = new() { Id = "call_7", Name = "powershell", Summary = "Run the protocol tests", Status = ToolStatus.Running, StartedAt = T1 };
+    static readonly ToolCall Finished = new() { Id = "call_6", Name = "edit", Summary = "src/AgentBridge.Protocol/Sessions.cs", Status = ToolStatus.Done, StartedAt = T0, EndedAt = T0.AddSeconds(2) };
+
+    static readonly Field Spike = new()
+    {
+        Name = "spike", Title = "Spike", Description = "Which spike to run next", Type = FieldType.Choice,
+        Options = [new("s6", "S6: TPM-backed device keys (Recommended)"), new("s7")], AllowOther = true,
+        Default = JsonSerializer.SerializeToElement("s6"), Required = true,
+    };
+    static readonly Field Parts = new() { Name = "parts", Title = "Parts", Type = FieldType.Multi, Options = [new("host"), new("relay"), new("pwa")], AllowOther = true };
+    static readonly Field Confirm = new() { Name = "confirm", Type = FieldType.Boolean };
+    static readonly Field Notes = new() { Name = "notes", Type = FieldType.Text };
+    static readonly Field Count = new() { Name = "count", Type = FieldType.Number, Default = JsonSerializer.SerializeToElement(3) };
+
+    static readonly Question Form = new() { Id = "call_q1", Kind = QuestionKind.Form, Message = "Which spike next, and **why**?", Fields = [Spike, Parts, Confirm, Notes, Count], AskedAt = T0 };
+    static readonly Question Plain = new() { Id = "call_q2", Kind = QuestionKind.Form, Message = "Which branch should I use?", AskedAt = T0 };
+    static readonly Question Approval = new()
+    {
+        Id = "req-41#3f9a", Kind = QuestionKind.Approval, Message = "Run `git push`?", AskedAt = T0,
+        Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new("approve", "Approve once"), new("deny", "Deny")] }],
+    };
+    static readonly Question ManyTexts = new()
+    {
+        Id = "call_q3", Kind = QuestionKind.Form, Message = "Notes", AskedAt = T0,
+        Fields = [.. Enumerable.Range(1, 5).Select(i => new Field { Name = $"t{i}", Type = FieldType.Text })],
+    };
+
+    static readonly Subagent Delegate = new()
+    {
+        Id = "agent-1", Kind = SubagentKind.Background, Name = "Run the suite", Task = "Run every test and report failures", Model = "claude-haiku-5.5",
+        Status = SubagentStatus.Working, StartedAt = T0, Line = "Running the protocol tests", CurrentTool = Running, Shells = 1,
+    };
+    static readonly Subagent Nested = new() { Id = "agent-2", Parent = "agent-1", Kind = SubagentKind.Task, Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Failed, StartedAt = T0, EndedAt = T1 };
+
+    static readonly Activity FullActivity = new()
+    {
+        Response = "All **47** tests pass.", ResponseTruncated = true, Reasoning = "The suite is green; summarize.", CurrentTool = Running, History = [Finished],
+        UserMessage = "Run the tests", TurnCount = 4, Compactions = 1, Background = new Background { Agents = 1, Shells = 2 },
+        Source = new ActivitySource { Reasoning = "agent-1" }, Own = new OwnActivity { Reasoning = "Waiting on the delegate.", At = T0 },
+    };
+
+    static readonly Session FullSession = new()
+    {
+        Id = SessionId, Agent = AgentKind.Copilot, Title = "Protocol vectors", Cwd = @"C:\src\agent-bridge", Repository = "danswett/agent-bridge", Branch = "quality/protocol-vectors",
+        Model = "claude-opus-5.5", Status = SessionStatus.Waiting, StatusSince = T1, StartedAt = T0, UpdatedAt = T1, ProcessId = 4120, Activity = FullActivity,
+        Question = Form, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Subagents = [Delegate, Nested], SubagentsMore = 2, WaitingOn = null,
+    };
+    static readonly Session MinimalSession = new() { Id = "b7e1c2d3-0000-4000-8000-000000000001", Agent = AgentKind.Claude, Status = SessionStatus.Idle, StatusSince = T0, UpdatedAt = T0, Activity = new Activity() };
+
+    static readonly DiscoveryHeld Held = new("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+
+    static void Sessions(VectorFileBuilder f)
+    {
+        f.Record<MachineInfo>(Host)
+            .Valid("full", Machine)
+            .Valid("minimal", new MachineInfo(MachineId, "DEV-MAC", "macos", "0.1.200"));
+        f.Record<HelloResult>(Host)
+            .Valid("full", new HelloResult(1, Machine, [Capabilities.SessionsRead, Capabilities.SessionsAnswer, Capabilities.SessionsReply, Capabilities.SessionsStop, Capabilities.Push, Capabilities.SessionsAttach, Capabilities.SessionsAttachBlob, Capabilities.SessionsApprove, LaunchProtocol.Capability, UsageProtocol.Capability, UpdateProtocol.Capability]))
+            .Valid("read-only", new HelloResult(1, new MachineInfo(MachineId, "DEV-LINUX", "linux", "0.1.200"), [Capabilities.SessionsRead]))
+            .Reads("a-capability-from-a-newer-host", $$"""{"protocol":1,"machine":{"id":"{{MachineId}}","name":"DEV-VM1","os":"windows","hostVersion":"0.2.0"},"capabilities":["sessions.read","sessions.teleport"],"region":"eu"}""");
+        f.Record<ToolCall>(Host)
+            .Valid("done", Finished)
+            .Valid("running", Running with { Summary = null })
+            .Reads("an-unknown-status-reads-as-done", """{"id":"call_8","name":"Bash","status":"queued","startedAt":"2026-10-28T04:22:43.182Z"}""");
+        f.Record<Option>(Host)
+            .Valid("labelled", new Option("approve", "Approve once"))
+            .Valid("value-only", new Option("s7"));
+        f.Record<Field>(Host)
+            .Valid("choice", Spike)
+            .Valid("text", Notes)
+            .Valid("number", Count)
+            .Reads("an-unknown-type-reads-as-text", """{"name":"when","type":"date"}""");
+        f.Record<Question>(Host)
+            .Valid("form", Form)
+            .Valid("plain", Plain)
+            .Valid("approval", Approval)
+            .Valid("truncated", Plain with { Truncated = true, Fields = [] })
+            .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
+            .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""");
+        f.Record<Background>(Host)
+            .Valid("agents-and-shells", new Background { Agents = 2, Shells = 1 })
+            .Valid("shells-only", new Background { Agents = 0, Shells = 3 });
+        f.Record<ActivitySource>(Host)
+            .Valid("both", new ActivitySource { Response = "agent-1", Reasoning = "agent-2" })
+            .Valid("reasoning-only", new ActivitySource { Reasoning = "agent-1" });
+        f.Record<OwnActivity>(Host)
+            .Valid("full", new OwnActivity { Response = "Main agent's answer", ResponseTruncated = true, Reasoning = "Main agent's thought", At = T0 })
+            .Valid("response-only", new OwnActivity { Response = "Main agent's answer", At = T0 });
+        f.Record<Activity>(Host)
+            .Valid("full", FullActivity)
+            .Valid("empty", new Activity());
+        f.Record<Subagent>(Host)
+            .Valid("working", Delegate)
+            .Valid("ended", Nested)
+            .Valid("in-full-from-session-get", Delegate with { Status = SubagentStatus.Idle, Outcome = SubagentOutcome.Done, EndedAt = T1, CurrentTool = null, Shells = 0, Response = "Two failures.", ResponseTruncated = true, Reasoning = "Summing up", History = [Finished] })
+            .Reads("unknown-kind-status-and-outcome", """{"id":"agent-9","kind":"swarm","status":"sleeping","outcome":"exploded","shells":0}""");
+        f.Record<Session>(Host)
+            .Valid("full", FullSession)
+            .Valid("minimal", MinimalSession)
+            .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
+            .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
+            .Reads("unknown-values-and-fields-from-a-newer-host", """{"id":"x","agent":"gemini","status":"thinking","driver":"robot","statusSince":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:22:43.182Z","activity":{"mood":"good"},"somethingNew":{"a":1}}""");
+        f.Record<DiscoveryHeld>(Host)
+            .Valid("one-agent", Held)
+            .Valid("every-agent", new DiscoveryHeld("the process list could not be read", [AgentKind.Copilot, AgentKind.Claude, AgentKind.Codex]));
+        f.Record<SessionList>(Host)
+            .Valid("a-page-with-more", new SessionList([FullSession.WithoutHistory(), MinimalSession], 118, Next: "c2Vzc2lvbnM6Mg", DiscoveryHeld: Held))
+            .Valid("the-last-page", new SessionList([MinimalSession], 118))
+            .Valid("no-sessions", new SessionList([], 7));
+        f.Record<DiscoveryChanged>(Host)
+            .Valid("held", new DiscoveryChanged(Held))
+            .Valid("released", new DiscoveryChanged());
+        f.Record<ListRequest>(Client)
+            .Valid("first-page", new ListRequest())
+            .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));
+        f.Record<SubscribeResult>(Host).Valid("three-sessions", new SubscribeResult(118, 3));
+        f.Record<SessionsSynced>(Host)
+            .Valid("held", new SessionsSynced(118, Held))
+            .Valid("plain", new SessionsSynced(118));
+        f.Record<SessionRemoved>(Host).Valid("gone", new SessionRemoved(SessionId));
+
+        const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields";
+        f.Context(form, new { question = Form }).Context(plain, new { question = Plain }).Context(approval, new { question = Approval }).Context(many, new { question = ManyTexts })
+            .Context("a-truncated-question", new { question = Plain with { Truncated = true } })
+            .Context("an-approval-answered-at-the-machine", new { question = Approval with { AnswerAtMachine = true } });
+        AnswerRequest Answer(Dictionary<string, object?>? fields = null, string? text = null) => new()
+        {
+            Id = SessionId, Question = "call_q1", Request = Request, Text = text,
+            Fields = fields?.ToDictionary(kv => kv.Key, kv => JsonSerializer.SerializeToElement(kv.Value, ProtocolJson.Options)),
+        };
+        var good = new Dictionary<string, object?> { ["spike"] = "s6", ["parts"] = new[] { "host", "pwa" }, ["confirm"] = true, ["notes"] = "Run it on Linux too", ["count"] = 3 };
+        Dictionary<string, object?> With(string name, object? value) => new(good) { [name] = value };
+        f.Record<AnswerRequest>(Client, VectorChecks.Answers)
+            .Valid("every-field", Answer(good), form)
+            .Valid("only-the-required-field", Answer(new() { ["spike"] = "s7" }), form)
+            .Valid("an-other-answer", Answer(With("spike", new { other = "S9: a third relay" })), form)
+            .Valid("one-other-among-choices", Answer(With("parts", new object[] { "host", new { other = "the docs" } })), form)
+            .Valid("a-text-answer", Answer(text: "main"), plain)
+            .Valid("a-text-answer-at-its-4-KiB-limit", Answer(text: Repeat('a', Limits.AnswerText)), plain)
+            .Valid("an-approval", Answer(new() { ["decision"] = "approve" }), approval)
+            .Valid("a-byte-order-mark-is-text", Answer(text: "\uFEFF"), plain)
+            .Refused("a-truncated-question", Answer(text: "main"), "a-truncated-question")
+            .Refused("a-question-answered-at-the-machine", Answer(new() { ["decision"] = "approve" }), "an-approval-answered-at-the-machine")
+            .Refused("over-16-KiB-in-all", Answer(Enumerable.Range(1, 5).ToDictionary(i => $"t{i}", _ => (object?)Repeat('a', 4000))), many)
+            .Refused("fields-for-a-text-question", Answer(new() { ["x"] = "y" }), plain)
+            .Refused("an-empty-text-answer", Answer(text: " \t "), plain)
+            .Refused("no-answer-at-all", Answer(), plain)
+            .Refused("a-text-answer-over-4-KiB", Answer(text: Repeat('a', Limits.AnswerText + 1)), plain)
+            .Refused("text-for-a-form", Answer(good, "main"), form)
+            .Refused("a-field-the-question-lacks", Answer(With("colour", "red")), form)
+            .Refused("a-required-field-left-out", Answer(new() { ["parts"] = new[] { "host" } }), form)
+            .Refused("a-required-field-sent-as-null", Answer(With("spike", null)), form)
+            .Refused("not-one-of-the-choices", Answer(With("spike", "s8")), form)
+            .Refused("an-other-answer-where-none-is-allowed", Answer(new() { ["decision"] = new { other = "maybe" } }), approval)
+            .Refused("an-empty-other-answer", Answer(With("spike", new { other = " " })), form)
+            .Refused("more-beside-other", Answer(With("spike", new { other = "s9", label = "x" })), form)
+            .Refused("an-other-answer-over-4-KiB", Answer(With("spike", new { other = Repeat('a', Limits.AnswerText + 1) })), form)
+            .Refused("two-other-answers", Answer(With("parts", new object[] { new { other = "a" }, new { other = "b" } })), form)
+            .Refused("a-multi-answer-that-is-not-a-list", Answer(With("parts", "host")), form)
+            .Refused("a-choice-that-is-a-number", Answer(With("spike", 6)), form)
+            .Refused("a-boolean-as-text", Answer(With("confirm", "yes")), form)
+            .Refused("a-number-as-text", Answer(With("count", "3")), form)
+            .Refused("text-as-a-number", Answer(With("notes", 3)), form)
+            .Refused("a-text-field-over-4-KiB", Answer(With("notes", Repeat('a', Limits.AnswerText + 1))), form)
+            .Refused("no-fields-for-a-form-without-required-ones", Answer(new()), approval);
+        f.Record<AnswerResult>(Host)
+            .Valid("delivered", new AnswerResult(AnswerOutcome.Delivered))
+            .Valid("refused", new AnswerResult(AnswerOutcome.Refused, "\"Spike\" needs an answer"))
+            .Valid("stale", new AnswerResult(AnswerOutcome.Stale, "the question is no longer pending"))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued","reason":"later"}""");
+
+        ReplyRequest Reply(string? text, params string[] attachments) => new()
+        {
+            Id = SessionId, Request = Request, Text = text,
+            Attachments = attachments.Length == 0 ? null : [.. attachments.Select(a => new AttachmentRef { Id = a })],
+        };
+        var eleven = Enumerable.Range(0, 11).Select(i => $"00000000-0000-4000-8000-{i:000000000000}").ToArray();
+        f.Record<ReplyRequest>(Client, VectorChecks.Replies)
+            .Valid("text", Reply("Run the tests again, on Linux this time"))
+            .Valid("attachments-and-no-words", Reply(null, FileA, FileB))
+            .Valid("text-at-its-16-KiB-limit", Reply(Repeat('a', Limits.ReplyText)))
+            .Valid("ten-attachments", Reply("see these", [.. eleven.Take(10)]))
+            .Valid("a-slash-after-the-first-word", Reply("use the /tmp folder"))
+            .Valid("a-no-break-space-then-words", Reply("\u00A0hello"))
+            .Refused("empty", Reply(""))
+            .Refused("only-spaces-and-controls", Reply(" \t\r\n\u0007 "))
+            .Refused("over-16-KiB", Reply(Repeat('a', Limits.ReplyText + 1)))
+            .Refused("a-slash-command", Reply("/clear"))
+            .Refused("a-shell-command-after-spaces", Reply(" \t!rm -rf build"))
+            .Refused("a-slash-command-after-a-no-break-space", Reply("\u00A0/clear"))
+            .Refused("eleven-attachments", Reply("see these", eleven))
+            .Refused("an-attachment-that-is-not-a-uuid", Reply("see this", "photo.png"))
+            .Refused("the-same-attachment-twice", Reply("see this", FileA, FileA.ToUpperInvariant()))
+            .Refused("a-null-attachment", $$"""{"id":"{{SessionId}}","request":"{{Request}}","text":"x","attachments":[null]}""");
+        f.Record<ReplyResult>(Host)
+            .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
+            .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
+
+        f.Record<StopRequest>(Client, VectorChecks.Stops)
+            .Valid("first-press", new StopRequest { Id = SessionId, Request = Request })
+            .Valid("second-press", new StopRequest { Id = SessionId, Request = Request, Confirm = "q2vU3dJ7n0x-AbC_9zYw1A" })
+            .Valid("a-token-at-64-characters", new StopRequest { Id = SessionId, Request = Request, Confirm = Repeat('A', Stops.MaxConfirmLength) })
+            .Refused("an-empty-session-id", new StopRequest { Id = "", Request = Request })
+            .Refused("a-session-id-over-256-bytes", new StopRequest { Id = Repeat('a', 257), Request = Request })
+            .Refused("an-empty-token", new StopRequest { Id = SessionId, Request = Request, Confirm = "" })
+            .Refused("a-token-over-64-characters", new StopRequest { Id = SessionId, Request = Request, Confirm = Repeat('A', Stops.MaxConfirmLength + 1) })
+            .Refused("a-token-with-other-characters", new StopRequest { Id = SessionId, Request = Request, Confirm = "q2vU3dJ7+n0x/AbC=" });
+        f.Record<StopResult>(Host)
+            .Valid("ended", new StopResult(StopOutcome.Ended))
+            .Valid("ended-by-force", new StopResult(StopOutcome.Ended) { Forced = true })
+            .Valid("confirm", new StopResult(StopOutcome.Confirm, "this session is still working; the confirmation lapses in 10 s") { Confirm = "q2vU3dJ7n0x-AbC_9zYw1A", ConfirmSeconds = 10 })
+            .Valid("refused", new StopResult(StopOutcome.Refused, "the session is elevated"))
+            .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"paused","reason":"later"}""");
+    }
+
+    // ---- attachments ----
+
+    static AttachmentStart Start(long size = 1024, string? type = "image/png") => new() { Attachment = FileA, Name = "screenshot.png", Type = type, Size = size, Sha256 = Sha };
+
+    static void AttachmentRecords(VectorFileBuilder f)
+    {
+        var blob = new BlobRef { Id = "b-2026.10.28_7f3a", Key = BlobKey };
+        const string direct = "a-direct-channel";
+        f.Context(direct, new { inChannel = AttachmentLimits.DirectBytes });
+        f.Record<AttachmentStart>(Client, VectorChecks.AttachmentStart)
+            .Valid("in-the-channel", Start())
+            .Valid("no-type", Start(type: null))
+            .Valid("at-the-channels-256-KiB-limit", Start(AttachmentLimits.Bytes))
+            .Valid("through-the-blob-store", Start(10L * 1024 * 1024) with { Blob = blob })
+            .Valid("at-the-blob-stores-100-MiB-limit", Start(AttachmentLimits.BlobBytes) with { Blob = blob })
+            .Valid("a-large-file-on-a-direct-channel", Start(AttachmentLimits.DirectBytes), direct)
+            .Valid("a-name-at-255-bytes", Start() with { Name = Repeat('n', AttachmentLimits.Name) })
+            .Refused("an-attachment-that-is-not-a-uuid", Start() with { Attachment = "screenshot" })
+            .Refused("a-blank-name", Start() with { Name = " " })
+            .Refused("a-name-over-255-bytes", Start() with { Name = Repeat('n', AttachmentLimits.Name + 1) })
+            .Refused("a-type-over-127-bytes", Start(type: Repeat('t', AttachmentLimits.Type + 1)))
+            .Refused("empty", Start(0))
+            .Refused("over-256-KiB-in-the-channel", Start(AttachmentLimits.Bytes + 1))
+            .Refused("over-100-MiB-on-a-direct-channel", Start(AttachmentLimits.DirectBytes + 1), direct)
+            .Refused("over-100-MiB-through-the-blob-store", Start(AttachmentLimits.BlobBytes + 1) with { Blob = blob })
+            .Refused("a-blob-id-with-a-slash", Start(1024) with { Blob = blob with { Id = "../other" } })
+            .Refused("a-blob-id-over-512-characters", Start(1024) with { Blob = blob with { Id = Repeat('b', AttachmentLimits.BlobId + 1) } })
+            .Refused("a-blob-key-that-is-not-32-bytes", Start(1024) with { Blob = blob with { Key = BlobKey[..42] } })
+            .Refused("a-sha256-with-padding", Start() with { Sha256 = Sha + "=" });
+        var data = Convert.ToBase64String("hello"u8);
+        f.Record<AttachmentChunk>(Client, VectorChecks.AttachmentChunk)
+            .Valid("the-first-chunk", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = data })
+            .Valid("a-full-11-KiB-chunk", new AttachmentChunk { Attachment = FileA, Offset = AttachmentLimits.Chunk, Data = Convert.ToBase64String(new byte[AttachmentLimits.Chunk]) })
+            .Refused("an-attachment-that-is-not-a-uuid", new AttachmentChunk { Attachment = "x", Offset = 0, Data = data })
+            .Refused("a-negative-offset", new AttachmentChunk { Attachment = FileA, Offset = -1, Data = data })
+            .Refused("an-offset-past-100-MiB", new AttachmentChunk { Attachment = FileA, Offset = AttachmentLimits.DirectBytes, Data = data })
+            .Refused("no-data", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = "" })
+            .Refused("data-that-is-not-base64", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = "not base64!" })
+            .Refused("over-11-KiB", new AttachmentChunk { Attachment = FileA, Offset = 0, Data = Convert.ToBase64String(new byte[AttachmentLimits.Chunk + 1]) });
+        f.Record<AttachmentDiscard>(Client).Valid("one", new AttachmentDiscard { Attachment = FileA });
+        f.Record<AttachmentState>(Host)
+            .Valid("part-way", new AttachmentState(11264, false))
+            .Valid("complete", new AttachmentState(20480, true));
+        f.Record<AttachmentDiscarded>(Host)
+            .Valid("discarded", new AttachmentDiscarded(true))
+            .Valid("nothing-to-discard", new AttachmentDiscarded(false));
+        f.Record<AttachmentRef>(Client).Valid("one", new AttachmentRef { Id = FileA });
+        f.Record<BlobRef>(Client).Valid("one", blob);
+    }
+
+    // ---- notifications ----
+
+    static void Push(VectorFileBuilder f)
+    {
+        var keys = new PushKeys("BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g", "dGhpcyBpcyBhdXRo");
+        f.Record<PushSubscribeRequest>(Client)
+            .Valid("full", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Device = "iPhone · Agent Bridge" })
+            .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" });
+        f.Record<PushKeys>(Client).Valid("keys", keys);
+        f.Record<PushSubscribeResult>(Host).Valid("subscribed", new PushSubscribeResult(true, 2));
+        f.Record<PushUnsubscribeRequest>(Client)
+            .Valid("this-device", new PushUnsubscribeRequest())
+            .Valid("an-endpoint", new PushUnsubscribeRequest("https://web.push.apple.com/QGx0c0"));
+        f.Record<PushUnsubscribeResult>(Host).Valid("removed", new PushUnsubscribeResult(true));
+        var device = new PushDevice("3f2a", "iPhone · Agent Bridge", "web.push.apple.com", T0, true);
+        f.Record<PushDevice>(Host).Valid("this-one", device);
+        f.Record<PushListResult>(Host)
+            .Valid("two", new PushListResult([device, device with { Device = "9c1d", Name = "Windows · Agent Bridge", Service = "wns2-par02p.notify.windows.com", Current = false }]))
+            .Valid("none", new PushListResult([]));
+        var data = new PushNoticeData { Kind = NoticeKind.Question, Machine = MachineId, Session = SessionId, Question = "call_q1", At = T0 };
+        f.Record<PushNoticeData>(Host)
+            .Valid("question", data)
+            .Valid("finished", data with { Kind = NoticeKind.Finished, Question = null })
+            .Reads("an-unknown-kind-reads-as-a-question", $$"""{"v":1,"kind":"celebrate","machine":"{{MachineId}}","session":"{{SessionId}}","at":"2026-10-28T04:22:43.182Z"}""");
+        var notification = new PushNotification
+        {
+            Title = "DEV-VM1 · Protocol vectors", Body = "Which spike next, and why?", Tag = PushNotice.Tag(MachineId, SessionId), Data = data,
+            Navigate = PushNotice.Navigate("https://danswett.github.io/agent-bridge/", MachineId, SessionId, "call_q1"),
+        };
+        f.Record<PushNotification>(Host)
+            .Valid("question", notification)
+            .Valid("resolved", notification with { Silent = true, Body = "Answered", Data = data with { Kind = NoticeKind.Resolved } });
+        f.Record<PushMessage>(Host).Valid("question", new PushMessage { Notification = notification });
+    }
+
+    // ---- launching ----
+
+    static readonly SignedCommand Signed = new() { Body = "eyJ2IjoxfQ", By = "BHf3a2", Mac = "_PJ9LEydaL4_cLc4dUQ-wkKfhFj1DfQi-9K7Bl_0fxs" };
+    static readonly LaunchTransfer Bring = new() { From = OtherMachine, Session = SessionId, Command = Signed };
+
+    static readonly TrustQuestion Trust = new()
+    {
+        Id = "trust-1", Agent = "codex", Kind = AgentKind.Codex, Label = "Codex", Workspace = "agent-bridge", Folder = @"C:\src\agent-bridge\pwa", Root = @"C:\src\agent-bridge",
+        RootNote = "Trusting applies to the whole repository", Warning = "Do you trust the files in this folder?", AskedAt = T0, Answerable = true,
+    };
+
+    static void Launch(VectorFileBuilder f)
+    {
+        LaunchRequest New() => new() { Request = Request, Agent = "copilot", Workspace = "agent-bridge" };
+        var eleven = Enumerable.Range(0, 11).Select(i => new AttachmentRef { Id = $"00000000-0000-4000-8000-{i:000000000000}" }).ToList();
+        f.Record<LaunchRequest>(Client, VectorChecks.Launch)
+            .Valid("the-machines-defaults", new LaunchRequest { Request = Request })
+            .Valid("every-setting", New() with { Profile = "work", Model = "claude-opus-5.5", Effort = "high", Context = "1m", Permissions = LaunchProtocol.AllowAll, Prompt = "Fix the flaky test", Attachments = [new AttachmentRef { Id = FileA }] })
+            .Valid("the-agents-own-defaults", New() with { Model = "", Effort = "", Context = "" })
+            .Valid("a-resume", new LaunchRequest { Request = Request, Agent = "claude", Resume = SessionId })
+            .Valid("a-transfer", New() with { Transfer = Bring })
+            .Valid("a-prompt-at-its-16-KiB-limit", New() with { Prompt = Repeat('a', LaunchProtocol.MaxPrompt) })
+            .Valid("a-model-with-brackets-and-colons", New() with { Model = "gpt-5.6[1m]:latest" })
+            .Valid("a-prompt-led-by-a-byte-order-mark", New() with { Prompt = "\uFEFF/clear" })
+            .Refused("an-unknown-agent", New() with { Agent = "gemini" })
+            .Refused("a-workspace-over-256-bytes", New() with { Workspace = Repeat('w', LaunchProtocol.MaxName + 1) })
+            .Refused("a-profile-with-a-control-character", New() with { Profile = "work\nrm" })
+            .Refused("a-model-with-a-space", New() with { Model = "gpt 5" })
+            .Refused("a-model-led-by-a-dash", New() with { Model = "-rf" })
+            .Refused("a-resume-and-a-workspace", New() with { Resume = SessionId })
+            .Refused("an-empty-resume", new LaunchRequest { Request = Request, Resume = "" })
+            .Refused("a-transfer-and-a-resume", new LaunchRequest { Request = Request, Resume = SessionId, Transfer = Bring })
+            .Refused("a-transfer-without-a-workspace", new LaunchRequest { Request = Request, Transfer = Bring })
+            .Refused("a-transfer-from-something-not-a-device-id", New() with { Transfer = Bring with { From = "DEV-VM2" } })
+            .Refused("a-transfer-of-something-not-a-uuid", New() with { Transfer = Bring with { Session = "latest" } })
+            .Refused("a-transfer-without-a-command", New() with { Transfer = Bring with { Command = null } })
+            .Refused("a-transfer-with-a-malformed-command", New() with { Transfer = Bring with { Command = Signed with { Mac = "not a mac!" } } })
+            .Refused("an-empty-workspace", New() with { Workspace = "" })
+            .Refused("unknown-permissions", New() with { Permissions = "yolo" })
+            .Refused("eleven-attachments", New() with { Attachments = eleven })
+            .Refused("an-attachment-that-is-not-a-uuid", New() with { Attachments = [new AttachmentRef { Id = "photo.png" }] })
+            .Refused("the-same-attachment-twice", New() with { Attachments = [new AttachmentRef { Id = FileA }, new AttachmentRef { Id = FileA.ToUpperInvariant() }] })
+            .Refused("a-prompt-over-16-KiB", New() with { Prompt = Repeat('a', LaunchProtocol.MaxPrompt + 1) })
+            .Refused("a-slash-command-prompt", New() with { Prompt = "/clear" })
+            .Refused("a-shell-command-prompt-after-a-line-break", New() with { Prompt = "\n!ls" });
+        var launched = new LaunchedWith
+        {
+            Agent = "copilot", Workspace = "agent-bridge", Cwd = @"C:\src\agent-bridge.worktrees\launch-1", Worktree = true, Profile = "work",
+            Model = "claude-opus-5.5", Effort = "high", Context = "1m", Permissions = LaunchProtocol.Ask,
+        };
+        var transferred = new LaunchedTransfer { From = OtherMachine, Session = SessionId, Bytes = 1_048_576 };
+        f.Record<LaunchedTransfer>(Host).Valid("one", transferred);
+        f.Record<LaunchedWith>(Host)
+            .Valid("a-new-session", launched)
+            .Valid("a-transfer", new LaunchedWith { Agent = "claude", Workspace = "agent-bridge", Resume = "c0ffee00-0000-4000-8000-000000000002", Permissions = LaunchProtocol.Ask, Transfer = transferred });
+        f.Record<LaunchResult>(Host)
+            .Valid("started", new LaunchResult(LaunchOutcome.Started) { Session = SessionId, Launched = launched })
+            .Valid("busy-on-a-trust-question", new LaunchResult(LaunchOutcome.Busy, "the agent is asking whether to trust its folder") { Trust = Trust })
+            .Valid("refused", new LaunchResult(LaunchOutcome.Refused, "unknown agent 'gemini'"))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"queued"}""");
+        var tuning = new LaunchTuning { Model = "claude-opus-5.5", Effort = "high", Context = "1m", Profile = "work" };
+        f.Record<LaunchTuning>(Host).Valid("full", tuning).Valid("empty", new LaunchTuning());
+        var copilot = new LaunchAgent
+        {
+            Id = "copilot", Label = "Copilot CLI", Kind = AgentKind.Copilot, Models = ["claude-opus-5.5", "gpt-5.6-sol"], Efforts = ["low", "high"], Contexts = ["1m"],
+            Profiles = ["work"], Defaults = tuning, Attachments = true,
+        };
+        var codex = new LaunchAgent { Id = "codex", Label = "Codex", Kind = AgentKind.Codex, NeedsPrompt = true };
+        f.Record<LaunchAgent>(Host).Valid("full", copilot).Valid("minimal", codex);
+        var workspace = new LaunchWorkspace { Label = "agent-bridge", Path = @"C:\src\agent-bridge", Isolate = true };
+        f.Record<LaunchWorkspace>(Host).Valid("isolated", workspace).Valid("plain", new LaunchWorkspace { Label = "notes", Path = "/home/dev/notes" });
+        var resumable = new ResumableSession { Id = SessionId, Agent = AgentKind.Copilot, Launcher = "agency", Title = "Protocol vectors", Cwd = @"C:\src\agent-bridge", Workspace = "agent-bridge", UpdatedAt = T0 };
+        f.Record<ResumableSession>(Host).Valid("full", resumable).Valid("minimal", new ResumableSession { Id = "s-2", Agent = AgentKind.Codex, Launcher = "codex", Title = "s-2" });
+        var defaults = new LaunchDefaults { Agent = "copilot", Workspace = "agent-bridge", Permissions = LaunchProtocol.Ask };
+        f.Record<LaunchDefaults>(Host).Valid("full", defaults).Valid("permissions-only", new LaunchDefaults { Permissions = LaunchProtocol.AllowAll });
+        f.Record<LaunchOptions>(Host)
+            .Valid("full", new LaunchOptions { Agents = [copilot, codex], Workspaces = [workspace], Resumable = [resumable], Defaults = defaults, Busy = "a launch is starting", Trust = [Trust] })
+            .Valid("nothing-offered", new LaunchOptions { Defaults = new LaunchDefaults { Permissions = LaunchProtocol.Ask } });
+
+        f.Record<TrustQuestion>(Host)
+            .Valid("full", Trust)
+            .Valid("answered-at-the-machine", new TrustQuestion { Id = "trust-2", Agent = "copilot", Kind = AgentKind.Copilot, Label = "Copilot CLI", Folder = "/home/dev/x", AskedAt = T0, Answerable = false, AtMachine = "launch.trust is off on this machine" });
+        f.Record<TrustAnswerRequest>(Client)
+            .Valid("trust", new TrustAnswerRequest { Question = "trust-1", Choice = TrustProtocol.Trust, Command = Signed })
+            .Valid("quit", new TrustAnswerRequest { Question = "trust-1", Choice = TrustProtocol.Quit, Command = Signed });
+        f.Record<TrustAnswerResult>(Host)
+            .Valid("started", new TrustAnswerResult(TrustAnswerOutcome.Started) { Session = SessionId })
+            .Valid("declined", new TrustAnswerResult(TrustAnswerOutcome.Declined))
+            .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"pondering"}""");
+    }
+
+    // ---- transfer ----
+
+    static void Transfer(VectorFileBuilder f)
+    {
+        f.Record<SignedCommand>(Client, VectorChecks.Transfer)
+            .Valid("well-formed", Signed)
+            .Valid("a-body-at-2048-characters", Signed with { Body = Repeat('b', TransferProtocol.MaxBody) })
+            .Refused("standard-base64", Signed with { Body = "eyJ2IjoxfQ+/" })
+            .Refused("an-empty-mac", Signed with { Mac = "" })
+            .Refused("a-body-over-2048-characters", Signed with { Body = Repeat('b', TransferProtocol.MaxBody + 1) })
+            .Refused("a-key-over-96-characters", Signed with { By = Repeat('k', TransferProtocol.MaxKey + 1) })
+            .Refused("a-mac-over-64-characters", Signed with { Mac = Repeat('m', TransferProtocol.MaxMac + 1) });
+        f.Record<LaunchTransfer>(Client, VectorChecks.Transfer)
+            .Valid("signed", Bring)
+            .Refused("from-a-name", Bring with { From = "DEV-VM2" })
+            .Refused("from-an-upper-case-device-id", Bring with { From = OtherMachine.ToUpperInvariant() })
+            .Refused("a-session-that-is-not-a-uuid", Bring with { Session = "latest" })
+            .Refused("no-command", Bring with { Command = null });
+        var principal = new CommandPrincipal { Kind = "user", Device = "8e7d6c5b4a39281706f5e4d3c2b1a090" };
+        var target = new CommandTarget { Machine = MachineId, Session = SessionId };
+        f.Record<CommandPrincipal>(Client).Valid("a-person", principal);
+        f.Record<CommandTarget>(Client).Valid("a-session", target).Valid("a-machine", new CommandTarget { Machine = MachineId });
+        f.Record<CommandBody>(Client)
+            .Valid("a-transfer", new CommandBody { V = 1, Action = TransferProtocol.Action, Request = Request, Principal = principal, Target = target, To = OtherMachine, IssuedAt = 1_793_300_000, ExpiresAt = 1_793_300_300 })
+            .Valid("a-trust-answer", new CommandBody { V = 1, Action = TrustProtocol.Action(TrustProtocol.Trust), Request = Request, Principal = principal, Target = target with { Session = "trust-1" }, To = MachineId, IssuedAt = 1_793_300_000, ExpiresAt = 1_793_300_300 });
+        f.Record<TransferRequest>(HostToHost).Valid("signed", new TransferRequest { Command = Signed });
+        var result = new TransferResult
+        {
+            Blob = new BlobRef { Id = "b-2026.10.28_9e1c", Key = BlobKey }, Size = 1_048_576, Sha256 = Sha, Agent = AgentKind.Copilot, Launcher = "agency",
+            Title = "Protocol vectors", Files = 12, AgentVersion = "1.0.40",
+        };
+        const string max = "a-machine-taking-25-MiB";
+        f.Context(max, new { maxBytes = TransferProtocol.DefaultMaxBytes });
+        f.Record<TransferResult>(HostToHost, VectorChecks.TransferResult)
+            .Valid("a-bundle", result, max)
+            .Valid("at-the-25-MiB-default", result with { Size = TransferProtocol.DefaultMaxBytes }, max)
+            .Refused("empty", result with { Size = 0 }, max)
+            .Refused("no-blob-id", result with { Blob = result.Blob with { Id = "" } }, max)
+            .Refused("over-what-the-machine-takes", result with { Size = TransferProtocol.DefaultMaxBytes + 1 }, max)
+            .Refused("a-malformed-sha256", result with { Sha256 = "abc" }, max)
+            .Refused("no-files", result with { Files = 0 }, max)
+            .Refused("over-20000-files", result with { Files = TransferLimits.MaxFiles + 1 }, max)
+            .Refused("an-unknown-launcher", result with { Launcher = "gemini" }, max)
+            .Refused("a-title-over-480-bytes", result with { Title = Repeat('t', LaunchProtocol.MaxLabel * 4 + 1) }, max);
+    }
+
+    // ---- updates ----
+
+    static void Update(VectorFileBuilder f)
+    {
+        var last = new UpdateResult { Outcome = UpdateOutcome.Updated, From = "0.1.199", To = "0.1.200", Request = Request, At = T0 };
+        f.Record<UpdateResult>(Host)
+            .Valid("updated", last)
+            .Valid("refused", new UpdateResult { Outcome = UpdateOutcome.Refused, Reason = "a session is busy", At = T0 })
+            .Reads("an-unknown-outcome-reads-as-failed", """{"outcome":"rolledBack","at":"2026-10-28T04:22:43.182Z"}""");
+        var state = new UpdateState
+        {
+            Current = "0.1.200", Installer = true, Available = "0.1.201", Notes = "Fixes the flaky reconnect.", CheckedAt = T0, Phase = UpdatePhase.Downloading, Progress = 40,
+            Request = Request, Automatic = true, Last = last,
+        };
+        f.Record<UpdateState>(Host)
+            .Valid("downloading", state)
+            .Valid("waiting", state with { Phase = UpdatePhase.Waiting, Progress = null, Waiting = "a session is busy" })
+            .Valid("no-app", new UpdateState { Unavailable = "the Windows app is not running" })
+            .Reads("an-unknown-phase-reads-as-idle", """{"current":"0.1.200","installer":true,"phase":"verifying","automatic":false}""");
+        f.Record<UpdateCommand>(Client).Valid("a-press", new UpdateCommand(Request));
+        f.Record<UpdateCommandResult>(Host)
+            .Valid("accepted", new UpdateCommandResult(UpdateAck.Accepted) { State = state with { Phase = UpdatePhase.Checking, Progress = null } })
+            .Valid("refused", new UpdateCommandResult(UpdateAck.Refused, "the machine is read-only"))
+            .Reads("an-unknown-outcome-reads-as-refused", """{"outcome":"maybe"}""");
+    }
+
+    // ---- usage ----
+
+    static void Usage(VectorFileBuilder f)
+    {
+        var window = new UsageWindow { Key = "premium", Label = "Premium requests", Percent = 42.5, Used = 127.5, Limit = 300, Unit = "requests", StartsAt = T0, ResetsAt = T0.AddDays(30) };
+        f.Record<UsageWindow>(Host)
+            .Valid("full", window)
+            .Valid("percent-only", new UsageWindow { Key = "5h", Label = "5-hour", Percent = 3 });
+        var reader = new UsageReader(OtherMachine, "DEV-VM2");
+        f.Record<UsageReader>(Host).Valid("another-machine", reader);
+        var reading = new AgentUsage { Agent = AgentKind.Copilot, Label = "Copilot", Account = "octocat", Plan = "Pro+", Source = UsageSource.Api, Windows = [window], MeasuredAt = T0 };
+        f.Record<AgentUsage>(Host)
+            .Valid("a-reading", reading)
+            .Valid("a-further-account-read-elsewhere", reading with { Account = "hubot", Slot = 2, ReadBy = reader })
+            .Valid("a-failure", new AgentUsage { Agent = AgentKind.Claude, Label = "Claude", AccountKey = "a1b2c3d4", Source = UsageSource.None, Error = "the usage endpoint answered 401", MeasuredAt = T0 })
+            .Reads("an-unknown-agent-and-source", """{"agent":"gemini","label":"Gemini","source":"scrape","windows":[],"measuredAt":"2026-10-28T04:22:43.182Z"}""");
+        f.Record<UsageRequest>(Client)
+            .Valid("own", new UsageRequest())
+            .Valid("shared", new UsageRequest { Shared = true });
+        f.Record<UsageReport>(Host)
+            .Valid("two-agents", new UsageReport([reading, new AgentUsage { Agent = AgentKind.Codex, Label = "Codex", Source = UsageSource.Transcript, Windows = [new UsageWindow { Key = "weekly", Label = "Weekly", Percent = 90 }], MeasuredAt = T0 }]))
+            .Valid("none", UsageReport.Empty);
+    }
+}

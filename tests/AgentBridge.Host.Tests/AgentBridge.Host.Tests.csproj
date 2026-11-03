@@ -22,6 +22,8 @@
     <ProjectReference Include="..\..\src\AgentBridge.Host\AgentBridge.Host.csproj" />
     <ProjectReference Include="..\AgentBridge.Transport.Tests\AgentBridge.Transport.Tests.csproj" />
     <Compile Include="..\AgentBridge.Host.Core.Tests\Fixture.cs" Link="Fixture.cs" />
+    <!-- The shared protocol vectors' files (docs/protocol/vectors): this project writes the signed-command ones. -->
+    <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
   </ItemGroup>
 
 </Project>

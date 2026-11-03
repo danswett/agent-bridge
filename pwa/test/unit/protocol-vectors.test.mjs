@@ -1,0 +1,406 @@
+// The shared protocol vectors (docs/protocol/vectors, README.md there), replayed through this
+// app's own reading, checks and request building. The C# records generate them, and
+// tests/AgentBridge.Protocol.Tests replays the same files, so a field renamed or a limit moved
+// on one side fails here until this side follows. Where the two disagree today the vector file
+// lists a known difference with its issue; each is checked to still differ, so fixing one fails
+// here until its entry goes (tests/AgentBridge.Protocol.Tests/KnownDifferences.cs).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import {
+  readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
+} from '../../js/protocol.js';
+import { checkAnswer } from '../../js/answers.js';
+import { checkReply } from '../../js/replies.js';
+import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, readTrustResult } from '../../js/launch.js';
+import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
+import { readUsage } from '../../js/usage.js';
+import { HostClient } from '../../js/host-client.js';
+import { SessionsStore } from '../../js/sessions-store.js';
+import { AnswerService } from '../../js/answer-service.js';
+import { ReplyService } from '../../js/reply-service.js';
+import { StopService } from '../../js/stop-service.js';
+import { uploadAttachment } from '../../js/attachments.js';
+import { P256KeyPair } from '../../js/noise-p256.js';
+import { deviceIdOf } from '../../js/identity.js';
+import { fromBase64url, toBase64url } from '../../js/blobs.js';
+import { fromUtf8 } from '../../js/bytes.js';
+import { signCommand } from '../../js/transfer.js';
+
+const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const folder = path.join(pwa, '..', 'docs', 'protocol', 'vectors');
+const load = (name) => JSON.parse(readFileSync(path.join(folder, name), 'utf8'));
+const SIGNED = 'signed-command.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED).sort().map((f) => [f, load(f)]);
+const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
+const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
+
+// ---- harness ----
+
+// A transport the test plays the host on, as test/unit/host-client.test.mjs does.
+function fakeTransport() {
+  return {
+    sent: [],
+    onmessage: null,
+    onclose: null,
+    send(m) { this.sent.push(m); return Promise.resolve(); },
+    close() {},
+    host(m) { this.onmessage(JSON.parse(JSON.stringify(m))); },
+    lastRequest(op) { return [...this.sent].reverse().find((m) => m.op === op); },
+  };
+}
+const flush = () => new Promise((r) => setImmediate(r));
+async function respond(t, op, result) {
+  await flush();
+  t.host({ re: t.lastRequest(op).id, ok: true, result });
+}
+async function subscribed() {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  const client = new HostClient(t, { store, timeoutMs: 1000 });
+  const p = client.subscribe();
+  await respond(t, 'sessions.subscribe', { revision: 1, count: 0 });
+  await p;
+  return { t, client, store };
+}
+
+// The service worker, against a stubbed scope (as test/unit/sw.test.mjs runs it), showing one push.
+const SCOPE = 'https://danswett.github.io/agent-bridge/';
+async function shown(message) {
+  const handlers = {};
+  const list = [];
+  const self = {
+    registration: { scope: SCOPE, showNotification: async (title, options) => { list.push({ title, ...options }); } },
+    clients: { matchAll: async () => [], openWindow: async () => {}, claim() {} },
+    addEventListener: (type, fn) => { handlers[type] = fn; },
+    skipWaiting() {},
+  };
+  vm.runInNewContext(readFileSync(path.join(pwa, 'sw.js'), 'utf8'), { self, location: new URL(SCOPE), URL, caches: {}, fetch });
+  let done;
+  handlers.push({ data: { json: () => JSON.parse(JSON.stringify(message)) }, waitUntil: (p) => { done = p; } });
+  await done;
+  const n = JSON.parse(JSON.stringify(list[0]));
+  // Back into the payload's own names, to hold against the vector.
+  return {
+    notification: {
+      title: n.title, body: n.body, tag: n.tag, lang: n.lang, silent: n.silent, navigate: n.data.url,
+      data: { kind: n.data.kind, machine: n.data.machine, session: n.data.session, question: n.data.question },
+    },
+  };
+}
+
+// What one service sends for one press, with request as the vector's.
+async function sentBy(Service, op, request, submit) {
+  let data;
+  const client = {
+    closed: false,
+    [op]: async (d) => { data = JSON.parse(JSON.stringify(d)); return { outcome: 'delivered' }; },
+    attachmentStart: async (d) => ({ received: d.size, complete: true }),
+  };
+  submit(new Service({ current: () => ({ client, hostId: 'h' }), uuid: () => request, retryMs: 60000 }));
+  for (let i = 0; i < 20 && data === undefined; i++) { await flush(); }
+  return data;
+}
+
+// Every part of the vector's JSON appears, as it is, in what the PWA read, but for the parts it
+// does not read (unread, by path, with [] for any element of a list).
+function holds(read, wire, unread = [], at = '') {
+  if (unread.includes(at)) { return; }
+  const where = at || 'the record';
+  if (Array.isArray(wire)) {
+    assert.ok(Array.isArray(read), `${where}: read as ${JSON.stringify(read)}, not a list`);
+    assert.equal(read.length, wire.length, `${where}: ${read.length} entries read of ${wire.length}`);
+    wire.forEach((w, i) => holds(read[i], w, unread, `${at}[]`));
+  } else if (wire !== null && typeof wire === 'object') {
+    assert.ok(read !== null && typeof read === 'object', `${where}: read as ${JSON.stringify(read)}`);
+    for (const [k, w] of Object.entries(wire)) { holds(read[k], w, unread, at ? `${at}.${k}` : k); }
+  } else {
+    assert.equal(read, wire, `${where}: read as ${JSON.stringify(read)}, sent as ${JSON.stringify(wire)}`);
+  }
+}
+
+// ---- what the PWA does with each record ----
+
+// Records a host sends, by how the PWA reads them: read returns what the views get, or null when
+// it drops the record. unread: the parts it has no use for. refuses: false, with why, when it
+// cannot drop one it fails to read.
+const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
+const READS = {
+  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine, unread: ['instance'] },
+  HelloResult: { read: readHello, unread: ['machine.instance'] },
+  ToolCall: { read: readTool },
+  Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
+  Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
+  Question: { read: readQuestion },
+  Background: { read: readBackground },
+  ActivitySource: { read: readSource },
+  OwnActivity: { read: readOwn },
+  Activity: { read: (j) => readSession({ id: 'x', activity: j }).activity },
+  Subagent: { read: readSubagent },
+  Session: { read: readSession },
+  DiscoveryHeld: { read: readDiscoveryHeld },
+  // As listAll pages through it: the cursor it reads is the one it sends for the next page.
+  SessionList: {
+    read: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).listAll({ maxPages: 2 });
+      await respond(t, 'sessions.list', j);
+      await flush();
+      const next = t.sent[1]?.data?.cursor;
+      if (t.sent.length > 1) { t.host({ re: t.sent[1].id, ok: true, result: { sessions: [], revision: j.revision } }); }
+      const { sessions, revision } = await p;
+      return { sessions, revision, ...(next === undefined ? {} : { next }) };
+    },
+    // The live view takes the hold from sessions.synced instead.
+    unread: ['discoveryHeld'],
+  },
+  SessionsSynced: {
+    read: async (j) => {
+      const { t, store } = await subscribed();
+      t.host({ ev: 'sessions.synced', seq: 1, data: j });
+      return { revision: store.revision, discoveryHeld: store.held };
+    },
+  },
+  DiscoveryChanged: {
+    read: async (j) => {
+      const { t, store } = await subscribed();
+      t.host({ ev: 'discovery.changed', seq: 1, data: j });
+      return { discoveryHeld: store.held };
+    },
+  },
+  SessionRemoved: {
+    read: async (j) => {
+      const { t, store } = await subscribed();
+      store.upsert({ id: SESSION_ID, agent: 'copilot', status: 'idle', activity: {} });
+      let removed = null;
+      store.onChange((c) => { if (c.type === 'remove') { removed = c.id; } });
+      t.host({ ev: 'session.remove', seq: 1, data: j });
+      return removed === null ? null : { id: removed };
+    },
+  },
+  AnswerResult: { read: readAnswerResult },
+  ReplyResult: { read: readAnswerResult },
+  StopResult: { read: readStopResult },
+  AttachmentState: { read: readAttachmentState },
+  AttachmentDiscarded: {
+    read: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).attachmentDiscard('x');
+      await respond(t, 'attachment.discard', j);
+      return { discarded: await p };
+    },
+  },
+  LaunchOptions: { read: readLaunchOptions },
+  LaunchAgent: { read: (j) => readLaunchOptions({ agents: [j] }).agents[0] ?? null },
+  LaunchTuning: { read: (j) => readLaunchOptions({ agents: [{ id: 'copilot', label: 'Copilot', kind: 'copilot', defaults: j }] }).agents[0].defaults },
+  LaunchWorkspace: { read: (j) => readLaunchOptions({ workspaces: [j] }).workspaces[0] ?? null },
+  ResumableSession: { read: (j) => readLaunchOptions({ resumable: [j] }).resumable[0] ?? null },
+  // The form shows where a launch went, not what it was started with.
+  LaunchResult: { read: readLaunchResult, unread: ['launched.profile', 'launched.model', 'launched.effort', 'launched.context'] },
+  LaunchedWith: { read: (j) => readLaunchResult({ launched: j }).launched, unread: ['profile', 'model', 'effort', 'context'] },
+  LaunchedTransfer: { read: (j) => readLaunchResult({ launched: { agent: 'claude', transfer: j } }).launched.transfer },
+  TrustQuestion: { read: readTrustQuestion },
+  TrustAnswerResult: { read: readTrustResult },
+  UpdateState: { read: readUpdateState },
+  UpdateResult: { read: (j) => readUpdateState({ last: j }).last },
+  UpdateCommandResult: { read: readUpdateCommandResult },
+  UsageReport: { read: readUsage },
+  AgentUsage: { read: (j) => readUsage({ agents: [j] }).agents[0] ?? null },
+  UsageWindow: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', windows: [j] }] }).agents[0].windows[0] ?? null },
+  UsageReader: { read: (j) => readUsage({ agents: [{ agent: 'copilot', label: 'Copilot', readBy: j }] }).agents[0].readBy },
+  // Every push must show something, or iOS revokes the app's notifications (sw.js): the worker
+  // shows a generic notice for whatever it cannot read, and never drops one.
+  PushMessage: { read: shown, unread: ['web_push', 'notification.data.v', 'notification.data.at'], refuses: 'a push is always shown' },
+  PushNotification: { read: async (j) => (await shown({ notification: j })).notification, unread: ['data.v', 'data.at'], refuses: 'a push is always shown' },
+  PushNoticeData: { read: async (j) => (await shown({ notification: { data: j } })).notification.data, unread: ['v', 'at'], refuses: 'a push is always shown' },
+};
+
+// Records the PWA sends that it checks first, mirroring the host's check word for word.
+const CHECKS = {
+  AnswerRequest: (j, context) => checkAnswer(readQuestion(context.question), j),
+  ReplyRequest: (j) => checkReply(j),
+  LaunchRequest: (j) => checkLaunch(j),
+};
+
+// Records the PWA sends, as it builds them: each valid vector built from its own parts must be
+// that vector. only: the vectors this way of sending can make.
+const UUID_FILE = (id, size = 1) => ({ id, name: 'f', type: '', size, sha256: 'x', bytes: new Uint8Array(size) });
+const BUILDS = {
+  AnswerRequest: { build: (j) => sentBy(AnswerService, 'answer', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, questionId: j.question, answer: j.text !== undefined ? { text: j.text } : { fields: j.fields } })) },
+  ReplyRequest: { build: (j) => sentBy(ReplyService, 'reply', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, text: j.text, attachments: (j.attachments ?? []).map((a) => UUID_FILE(a.id)) })) },
+  StopRequest: { build: (j) => sentBy(StopService, 'stop', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, confirm: j.confirm ?? null })) },
+  ListRequest: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).listAll({ maxPages: 2 });
+      await respond(t, 'sessions.list', { sessions: [], revision: 1, ...(j.cursor ? { next: j.cursor } : {}) });
+      await flush();
+      const sent = t.sent.at(-1).data;
+      t.host({ re: t.sent.at(-1).id, ok: true, result: { sessions: [], revision: 1 } });
+      await p;
+      return sent;
+    },
+  },
+  AttachmentStart: {
+    only: ['in-the-channel', 'no-type', 'at-the-channels-256-KiB-limit', 'a-name-at-255-bytes'],
+    build: async (j) => {
+      let sent;
+      const client = { attachmentStart: async (d) => { sent = d; return { received: j.size, complete: true }; } };
+      await uploadAttachment(client, { id: j.attachment, name: j.name, type: j.type ?? '', size: j.size, sha256: j.sha256, bytes: new Uint8Array(j.size) });
+      return sent;
+    },
+  },
+  AttachmentChunk: {
+    build: async (j) => {
+      const data = Uint8Array.from(Buffer.from(j.data, 'base64'));
+      const bytes = new Uint8Array(j.offset + data.length);
+      bytes.set(data, j.offset);
+      let sent;
+      const client = {
+        attachmentStart: async () => ({ received: j.offset, complete: false }),
+        attachmentChunk: async (d) => { sent = d; return { received: bytes.length, complete: true }; },
+      };
+      await uploadAttachment(client, { id: j.attachment, name: 'f', type: '', size: bytes.length, sha256: 'x', bytes });
+      return sent;
+    },
+  },
+  AttachmentDiscard: {
+    build: async (j) => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).attachmentDiscard(j.attachment);
+      await respond(t, 'attachment.discard', { discarded: true });
+      await p;
+      return t.lastRequest('attachment.discard').data;
+    },
+  },
+  // Without shared the PWA sends {}, which a host reads as shared: false.
+  UsageRequest: {
+    only: ['shared'],
+    build: async () => {
+      const t = fakeTransport();
+      const p = new HostClient(t, { timeoutMs: 1000 }).usage({ shared: true });
+      await respond(t, 'usage.get', { agents: [] });
+      await p;
+      return t.lastRequest('usage.get').data;
+    },
+  },
+};
+
+// Records the PWA neither reads nor builds through a function these tests can call, and why.
+const NOT_REPLAYED = {
+  SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
+  PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
+  PushKeys: 'part of PushSubscribeRequest',
+  PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
+  PushSubscribeResult: 'the PWA does not read push.subscribe\'s result',
+  PushUnsubscribeResult: 'the PWA does not read push.unsubscribe\'s result',
+  PushListResult: 'the PWA does not call push.list',
+  PushDevice: 'the PWA does not call push.list',
+  AttachmentRef: 'written as ReplyRequest\'s attachments, replayed there',
+  BlobRef: 'written by the blob-store path of uploadAttachment, which needs a relay',
+  LaunchDefaults: 'read only within LaunchOptions, where it must name an agent and a workspace offered',
+  TrustAnswerRequest: 'built in ui/launch-view.js; its command is replayed in signed-command.json',
+  LaunchTransfer: 'built in ui/launch-view.js; its command is replayed in signed-command.json',
+  SignedCommand: 'replayed by signing signed-command.json\'s commands again',
+  CommandBody: 'replayed by signing signed-command.json\'s commands again',
+  CommandPrincipal: 'replayed by signing signed-command.json\'s commands again',
+  CommandTarget: 'replayed by signing signed-command.json\'s commands again',
+  TransferRequest: 'host to host: no client sends it',
+  TransferResult: 'host to host: no client reads it',
+  UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
+};
+
+// ---- the replay ----
+
+// Known differences are asserted to still differ: a fix fails here until its entry goes.
+async function agrees(key, step, check) {
+  const d = known.get(`${key}:${step}`);
+  if (!d) { await check(); return; }
+  await assert.rejects(async () => check(), assert.AssertionError,
+    `${key} no longer differs when the PWA ${step}s it: remove its known difference (#${d.issue}) from tests/AgentBridge.Protocol.Tests/KnownDifferences.cs and regenerate`);
+}
+
+test('every record in the vectors is replayed here, or says why not', () => {
+  const ways = [READS, CHECKS, BUILDS, NOT_REPLAYED].flatMap(Object.keys);
+  assert.deepEqual([...records.keys()].filter((r) => !ways.includes(r)), []);
+  assert.deepEqual(ways.filter((r) => !records.has(r)), [], 'a table names a record the vectors do not have');
+});
+
+test('every known difference names a vector there is', () => {
+  for (const { vector: key } of known.values()) {
+    const [record, name] = key.split('/');
+    const r = records.get(record);
+    assert.ok(r && [...r.valid, ...r.refused].some((v) => v.name === name), key);
+  }
+});
+
+for (const [record, r] of records) {
+  const reads = READS[record];
+  if (reads) {
+    for (const v of r.valid) {
+      test(`a ${record} "${v.name}" reads with every part the PWA uses intact`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
+        holds(await reads.read(JSON.parse(JSON.stringify(v.json))), v.reads ?? v.json, reads.unread);
+      }));
+    }
+    for (const v of r.refused) {
+      if (reads.refuses) { continue; }
+      test(`a ${record} "${v.name}" is dropped, as the host's reader refuses it`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
+        const read = await reads.read(JSON.parse(JSON.stringify(v.json)));
+        assert.equal(read, null, `read as ${JSON.stringify(read)}`);
+      }));
+    }
+  }
+  const check = CHECKS[record];
+  if (check) {
+    const context = (v) => (v.context ? r.contexts[v.context] : undefined);
+    for (const v of r.valid) {
+      test(`a ${record} "${v.name}" passes the PWA's check`,       () => agrees(`${record}/${v.name}`, 'check', () => {
+        assert.equal(check(v.json, context(v)), null);
+      }));
+    }
+    // A record that cannot be read at all is the host's to refuse: the PWA never writes one.
+    for (const v of r.refused.filter((x) => x.refusedBy !== 'parse')) {
+      test(`a ${record} "${v.name}" is refused by the PWA's check in the host's words`,       () => agrees(`${record}/${v.name}`, 'check', () => {
+        assert.equal(check(v.json, context(v)), v.reason);
+      }));
+    }
+  }
+  const builds = BUILDS[record];
+  if (builds) {
+    for (const v of r.valid.filter((x) => !builds.only || builds.only.includes(x.name))) {
+      test(`the PWA sends a ${record} "${v.name}" exactly as the vector has it`, () => agrees(`${record}/${v.name}`, 'build', async () => {
+        assert.deepEqual(await builds.build(v.json), v.json);
+      }));
+    }
+  }
+}
+
+// ---- signed commands ----
+
+const signed = load(SIGNED);
+const hex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
+const pair = (k) => P256KeyPair.fromParameters(hex(k.d), hex(k.x), hex(k.y));
+
+test('the signed-command keys are the device ids and public keys the vectors say', async () => {
+  for (const k of Object.values(signed.keys)) {
+    const key = await pair(k);
+    assert.equal(toBase64url(key.public), k.public);
+    assert.equal(await deviceIdOf(key.public), k.device);
+  }
+});
+
+for (const v of signed.valid) {
+  test(`the PWA signs the "${v.name}" command to the same bytes and MAC`, () => agrees(`signed-command/${v.name}`, 'sign', async () => {
+    const [signer, machine] = await Promise.all([pair(signed.keys.signer), pair(signed.keys.machine)]);
+    const command = await signCommand({
+      key: signer, deviceId: signed.keys.signer.device, machinePublic: machine.public,
+      action: v.body.action, session: v.body.target.session, to: v.body.to, now: v.body.issuedAt * 1000, request: v.body.request,
+    });
+    assert.deepEqual(JSON.parse(fromUtf8.decode(fromBase64url(command.body))), v.body);
+    assert.deepEqual(command, v.command);
+  }));
+}
