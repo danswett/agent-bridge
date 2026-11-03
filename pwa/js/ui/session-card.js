@@ -389,8 +389,9 @@ export class SessionCard {
     this.strip.update(s, now, this.#delegate);
     this.delegates.update(s, now, this.#delegate);
     const listed = !this.delegates.element.hidden;
-    // A host that lists none (Claude, Codex, one before sub-agents) says only how many (rule 8).
-    const counts = !listed && !Array.isArray(s.subagents) ? backgroundCounts(s) : null;
+    // With none listed, a host says only how many (rule 8): Claude, Codex, one before sub-agents,
+    // or one whose list is empty, as status rule 8 and the app take it.
+    const counts = listed ? null : backgroundCounts(s);
     e.delegateCounts.textContent = counts ?? '';
     e.delegateCounts.hidden = !counts;
     e.delegates.hidden = !listed && !counts;

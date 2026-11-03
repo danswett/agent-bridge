@@ -112,8 +112,10 @@ export class DelegatesBlock {
   }
 
   // selected: the delegate open now, whose row says so; one that finishes moves into the fold,
-  // which opens so it stays in view.
+  // which opens so it stays in view. So does one opened finished, from the strip, a chip or the
+  // conversation's events: its row is where focus goes back to, and a closed fold hides it.
   update(session, now = Date.now(), selected = this.#selected) {
+    const was = this.#selected;
     this.#selected = selected;
     const d = delegateList(session);
     const e = this.els;
@@ -122,7 +124,7 @@ export class DelegatesBlock {
     keepFocus(this.element, () => {
       if (d) {
         const finished = new Set(d.finished.map((r) => r.id));
-        if (selected && finished.has(selected) && !this.#finishedIds.has(selected)) { e.finished.open = true; }
+        if (selected && finished.has(selected) && (!this.#finishedIds.has(selected) || selected !== was)) { e.finished.open = true; }
         this.#finishedIds = finished;
         const make = (id) => new DelegateRow(id, (x) => this.onOpen(x));
         place(d.active, e.active, this.#rows, live, make, now, selected);
@@ -371,8 +373,10 @@ export class DelegateDetail {
     this.#drawTools(now);
     this.#drawNested(list, now);
     e.ask.hidden = a.status === 'ended' || !this.canAsk() || !askToStopText(a);
-    // Followed as it changes: fetched again (at most every 2 s).
-    const key = JSON.stringify([a.status, a.outcome, a.line, a.endedAt]);
+    // Followed as it changes: fetched again (at most every 2 s). A fetched model and tool history
+    // stand over the list's, so a change to either in the list fetches them again too: an idle
+    // delegate isn't polled, and would show the old ones for good.
+    const key = JSON.stringify([a.status, a.outcome, a.line, a.endedAt, a.model, a.currentTool?.id, a.currentTool?.status]);
     if (!first && key !== this.#state.key) { this.#schedule(CHANGE_MS); }
     this.#state.key = key;
     return true;
@@ -430,18 +434,27 @@ export class DelegateDetail {
   #drawTools(now) {
     const e = this.els;
     const calls = this.#fetched?.history?.length ? [...this.#fetched.history].reverse() : this.#a.currentTool ? [this.#a.currentTool] : [];
-    const rows = calls.slice(0, 50).map((t) => h('li', { class: `tool ${t.status}`, dataset: { status: t.status } },
-      h('span', { class: 'tool-mark' }, glyph(TOOL_GLYPH[t.status] ?? 'idle', { size: 12 })),
-      h('span', { class: 'sr-only' }, `${t.status}: `),
-      h('span', { class: 'tool-name' }, t.name),
-      t.summary ? h('span', { class: 'tool-summary', title: t.summary }, t.summary) : h('span'),
-      t.startedAt ? h('time', { class: 'tool-time', datetime: t.startedAt, title: localTime(t.startedAt) }, clock(t.startedAt, t.endedAt, now)) : null));
-    const key = JSON.stringify(calls.slice(0, 50).map((t) => [t.id, t.status, t.name, t.summary, t.startedAt, t.endedAt, t.endedAt ? '' : clock(t.startedAt, null, now)]));
+    const shown = calls.slice(0, 50);
+    // Drawn again only when the calls change. A running call's clock moves on in its own text,
+    // so a tick leaves the list, and whatever has focus or a screen reader's place in it, as it is.
+    const key = JSON.stringify(shown.map((t) => [t.id, t.status, t.name, t.summary, t.startedAt, t.endedAt]));
     if (e.tools.dataset.key !== key) {
       e.tools.dataset.key = key;
-      e.tools.replaceChildren(...rows);
+      e.tools.replaceChildren(...shown.map((t) => h('li', { class: `tool ${t.status}`, dataset: { status: t.status } },
+        h('span', { class: 'tool-mark' }, glyph(TOOL_GLYPH[t.status] ?? 'idle', { size: 12 })),
+        h('span', { class: 'sr-only' }, `${t.status}: `),
+        h('span', { class: 'tool-name' }, t.name),
+        t.summary ? h('span', { class: 'tool-summary', title: t.summary }, t.summary) : h('span'),
+        t.startedAt ? h('time', { class: 'tool-time', datetime: t.startedAt, title: localTime(t.startedAt) }, clock(t.startedAt, t.endedAt, now)) : null)));
+    } else {
+      shown.forEach((t, i) => {
+        if (!t.startedAt || t.endedAt) { return; }
+        const time = e.tools.children[i]?.querySelector('.tool-time');
+        const text = clock(t.startedAt, null, now);
+        if (time && time.textContent !== text) { time.textContent = text; }
+      });
     }
-    e.toolsBlock.hidden = rows.length === 0;
+    e.toolsBlock.hidden = shown.length === 0;
   }
 
   // The delegates it started, at any depth, each indented under its own parent; pressed, opened.

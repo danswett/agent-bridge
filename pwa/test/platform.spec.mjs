@@ -339,6 +339,21 @@ test.describe('the system\'s Back on a phone', () => {
     await expect(page.locator('#list-pane')).toBeVisible();
   });
 
+  test('Back from a delegate opened from its row puts focus back on that row, not on the page', async ({ page }) => {
+    await page.goto('icon.svg');
+    await on(page, AS.androidInstalled, '&delegates=1');
+    const v = await open(page, DELEGATING);
+    await v.getByRole('tab', { name: 'Delegates' }).click();
+    const row = v.locator('.delegates .delegate[data-id="demo-agent-suite"] .delegate-summary');
+    await row.click();
+    await paneShows(page, 'Run full test suite');
+    await expect(pane(page).locator('.delegate-title')).toBeFocused();
+    await stepTaken(page);
+    await page.goBack();
+    await expect(pane(page)).toHaveCount(0);
+    await expect(row).toBeFocused();
+  });
+
   test('opening another delegate over one replaces it and its step, so Back from there is its session', async ({ page }) => {
     const v = await openDelegate(page, AS.androidInstalled);
     // From the conversation's events, the witness opens in the suite's place.

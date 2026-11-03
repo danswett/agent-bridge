@@ -330,10 +330,11 @@ test.describe('where the inspector is not a pane of its own', () => {
     await openDemo(page);
     const c = card(page);
     await c.getByRole('tab', { name: 'Delegates' }).click();
+    // Gone from the list and from the host's count: with a count still there, the tab says it.
     await page.evaluate(({ id, at }) => {
       const d = window.agentBridgeDemo;
       const s = d.host.get(id);
-      d.upsert({ ...s, updatedAt: at, subagents: [] });
+      d.upsert({ ...s, updatedAt: at, subagents: [], activity: { ...s.activity, background: { agents: 0, shells: 0 } } });
     }, { id: SESSION, at: later() });
     await expect(c.getByRole('tab', { name: 'Delegates' })).toBeHidden();
     await expect(c.getByRole('tab', { name: 'Conversation' })).toHaveAttribute('aria-selected', 'true');
@@ -357,6 +358,17 @@ test.describe('where the inspector is not a pane of its own', () => {
     await expect(delegate(page, 'demo-agent-witness').locator('.delegate-summary')).toBeFocused();
   });
 
+  test('a finished delegate opened from the conversation\'s events has its row in view to go back to, its fold opened for it', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.delegate-events').getByRole('button', { name: 'Lint the PWA' }).click();
+    await expect(pane(page)).toBeVisible();
+    await pane(page).getByRole('button', { name: 'All delegates' }).click();
+    const row = delegate(page, 'demo-agent-lint').locator('.delegate-summary');
+    await expect(row).toBeVisible();
+    await expect(row).toBeFocused();
+  });
+
   test('a host that counts its background agents but lists none says how many in the Delegates tab', async ({ page }) => {
     await openDemo(page, '', DELEGATING);
     const c = card(page, DELEGATING);
@@ -365,6 +377,13 @@ test.describe('where the inspector is not a pane of its own', () => {
     await expect(c.locator('.delegate-counts')).toHaveText(/^2 background agents( · \d+ background commands?)?$/);
     await expect(c.locator('.delegates')).toBeHidden();
     await expect(c.locator('.delegate-strip')).toBeHidden();
+    // An empty list is none listed too, as status rule 8 and the app take it.
+    await page.evaluate(({ id, at }) => {
+      const d = window.agentBridgeDemo;
+      d.upsert({ ...d.host.get(id), updatedAt: at, subagents: [] });
+    }, { id: DELEGATING, at: later() });
+    await expect(c.locator('.delegate-counts')).toHaveText(/^2 background agents( · \d+ background commands?)?$/);
+    await expect(c.getByRole('tab', { name: 'Delegates' })).toBeVisible();
   });
 });
 
@@ -491,6 +510,31 @@ test.describe('at three panes', () => {
     await nested.first().locator('.delegate-summary').click();
     await expect(p).toHaveAttribute('data-id', 'demo-agent-grep');
     await expect(fact(page, 'under')).toHaveText('Read witness shell logic');
+  });
+
+  test('a finished delegate whose model the list changes is fetched again, so its inspector shows the new one', async ({ page }) => {
+    await openDemo(page);
+    const c = card(page);
+    await c.locator('.strip-fold').click();
+    await c.locator('.strip-item[data-id="demo-agent-lint"]').click();
+    await expect.poll(() => fetches(page, 'demo-agent-lint')).toBeGreaterThan(0);
+    await expect(fact(page, 'model')).not.toHaveText('gpt-9-test');
+    await change(page, 'demo-agent-lint', { model: 'gpt-9-test' });
+    await expect(fact(page, 'model')).toHaveText('gpt-9-test');
+  });
+
+  test('a delegate\'s running tool keeps its row as its clock moves on, so nothing in the list is drawn again', async ({ page }) => {
+    await openDemo(page);
+    await card(page).locator('.strip-item[data-id="demo-agent-witness"]').click();
+    // Its calls fetched, the running one first.
+    await expect(pane(page).locator('.delegate-tools .tool')).toHaveCount(3);
+    const running = pane(page).locator('.delegate-tools .tool').first();
+    await expect(running).toHaveAttribute('data-status', 'running');
+    const was = await running.locator('.tool-time').textContent();
+    await running.evaluate((el) => { el.dataset.kept = 'yes'; });
+    // The cards' clocks tick every 15 s.
+    await expect.poll(() => running.locator('.tool-time').textContent(), { timeout: 20000 }).not.toBe(was);
+    await expect(pane(page).locator('.delegate-tools .tool').first()).toHaveAttribute('data-kept', 'yes');
   });
 
   test('the conversation says when the main agent\'s delegates started and reported back, and each name opens its delegate', async ({ page }) => {

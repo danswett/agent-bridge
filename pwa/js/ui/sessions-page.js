@@ -175,6 +175,9 @@ export class SessionsPage {
   #shown = null;
   #laneGuard = null;
   #stepping = false;
+  // While a popstate brings the delegates in line with the entry gone to: their own open and close
+  // would otherwise step the history from inside the browser's own step.
+  #syncing = false;
 
   // $: getElementById. hosts: a HostSession. connection: presence, known and ready.
   // blobs(): the relay's blob store, or null; relayMax(): the largest blob it takes.
@@ -354,11 +357,18 @@ export class SessionsPage {
       // Every session's, not only the selected one's: going back from a delegate to the list (the
       // header's Back) has deselected its session by now, and a delegate left open there would be
       // open without its step when the session is opened again or gone forward to.
-      for (const card of this.view.cards) {
-        if (card.openDelegateId && (card !== selected || card.openDelegateId !== want)) { card.closeDelegate(); }
+      this.#syncing = true;
+      try {
+        for (const card of this.view.cards) {
+          // Focus in the pane going goes back to its row, as the pane's own All delegates does;
+          // left there, it would fall to the page. Another card's or tab's focus is left be.
+          if (card.openDelegateId && (card !== selected || card.openDelegateId !== want)) { card.closeDelegate({ focus: card === selected && card.detail.element.contains(document.activeElement) }); }
+        }
+        // Forward again: the delegate it was on, finished since or not, where it is still listed.
+        if (want && selected && shownDelegate(selected) !== want) { selected.openDelegate(want); }
+      } finally {
+        this.#syncing = false;
       }
-      // Forward again: the delegate it was on, finished since or not, where it is still listed.
-      if (want && selected && shownDelegate(selected) !== want) { selected.openDelegate(want); }
       // Forward to a delegate its machine has stopped listing shows nothing: no step.
       this.#delegateStep();
     }, { signal });
@@ -375,7 +385,7 @@ export class SessionsPage {
   // invisible step or skip a visible one.
   #delegateStep() {
     const win = globalThis.window;
-    if (!this.#listening || this.#stepping || !win) { return; }
+    if (!this.#listening || this.#stepping || this.#syncing || !win) { return; }
     const level = this.#delegateLevel();
     if (!this.phone.matches) {
       if (level) { this.#stepBack(); }
