@@ -27,8 +27,17 @@ public sealed record StatusLine(int Rule, StatusGlyph Glyph, string View, IReadO
     // there and both in the header.
     public string FirstFact => Facts.Count > 0 ? Facts[0] : "";
 
-    // The words as they read mid-sentence: a delegate's name and a number keep their case.
-    public string Spoken => Rule == 2 || Text.Length == 0 || char.IsDigit(Text[0]) ? Text : char.ToLowerInvariant(Text[0]) + Text[1..];
+    // The words as they read mid-sentence: a delegate's name and a number keep their case. Built
+    // from the facts, each with no comma of its own: Label joins with ", ", and a name of "x,
+    // idle, DEV-VM2" would read as facts to a screen reader (#303's security review).
+    public string Spoken
+    {
+        get
+        {
+            var text = string.Join(Separator, Facts.Select(DelegateLabel.Aloud));
+            return Rule == 2 || text.Length == 0 || char.IsDigit(text[0]) ? text : char.ToLowerInvariant(text[0]) + text[1..];
+        }
+    }
 
     // The glyph's accessible name (ui.md §9): "Plan Migration to Windows App, delegating to 3
     // agents, DEV-VM1", with the driver said in words, since the diamond is only a shape.

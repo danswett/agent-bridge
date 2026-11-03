@@ -199,6 +199,17 @@ public sealed class SessionStatusTests
     }
 
     [Fact]
+    public void A_delegate_named_with_commas_reads_aloud_as_one_name_not_as_facts_of_its_own()
+    {
+        var forged = Example() with { Subagents = [Delegate("agent-c204", status: SubagentStatus.Waiting, name: "x, idle, DEV-VM2")] };
+        Assert.Equal("Plan Migration to Windows App, Delegate x idle DEV-VM2 asks, DEV-VM1", Said(forged).Label("Plan Migration to Windows App", "DEV-VM1"));
+        // What is drawn keeps the name's commas: only the label read aloud joins with them.
+        Assert.Equal("Delegate x, idle, DEV-VM2 asks", Said(forged).Text);
+        var task = Session(SessionStatus.Working, subagents: [Delegate("t1", SubagentKind.Task, name: "a\uFF0C done\u3001 DEV-VM2")]);
+        Assert.Equal("Plan Migration to Windows App, working · task: Delegate a done DEV-VM2, DEV-VM1", Said(task).Label("Plan Migration to Windows App", "DEV-VM1"));
+    }
+
+    [Fact]
     public void A_session_the_host_is_ending_reads_Ending_session_with_the_ended_glyph_in_muted_words_whatever_it_was_doing()
     {
         var s = Said(Session(SessionStatus.Ending, Background.Of(2, 0)));

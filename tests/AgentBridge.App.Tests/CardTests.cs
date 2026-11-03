@@ -462,6 +462,8 @@ public sealed class CardTests : IAsyncLifetime
     [InlineData("Idle \u2022 Read logs")]
     [InlineData("Idle \uFF65 Read logs")]
     [InlineData("Idle \u0387 Read logs")]
+    [InlineData("Idle \u1427 Read logs")]
+    [InlineData("Idle \U00010101 Read logs")]
     public void A_delegate_named_with_a_middle_dot_or_a_dot_drawn_like_it_still_asks_on_its_row_and_status_line(string name)
     {
         var asking = Make.Session(question: Make.Approval() with { Agent = "agent-7", AnswerAtMachine = true }) with

@@ -59,10 +59,11 @@ public sealed class DelegateItem : Observable
     // Who started it, shown where the indent can't say it: a parent in the other group, or deeper
     // than the indent goes.
     public string UnderText => parentName is not null && (depth == 0 || depth > 3) ? $"under {parentName}" : "";
-    // Read aloud (ui.md §9): what the glyph, the indent and the facts show.
+    // Read aloud (ui.md §9): what the glyph, the indent and the facts show. The names with no
+    // comma of their own, which would read as facts of their own (DelegateLabel.Aloud).
     public string Label => IsFold
         ? $"{name}, {(open ? "shown" : "hidden")}"
-        : string.Join(", ", new[] { name, words.ToLowerInvariant(), time, NestedText, parentName is null ? null : $"under {parentName}", selected ? "selected" : null }.Where(s => !string.IsNullOrEmpty(s)));
+        : string.Join(", ", new[] { DelegateLabel.Aloud(name), words.ToLowerInvariant(), time, NestedText, parentName is null ? null : $"under {DelegateLabel.Aloud(parentName)}", selected ? "selected" : null }.Where(s => !string.IsNullOrEmpty(s)));
 
     void Changed()
     {

@@ -97,6 +97,17 @@ public sealed class DelegatesTests : IAsyncLifetime
     IReadOnlyList<JsonElement> Gets() => host.Sent(Ops.SessionGet);
 
     [Fact]
+    public void A_strip_item_reads_a_name_with_commas_aloud_as_one_name_not_as_facts_of_its_own()
+    {
+        var item = DelegateItem.For("a1");
+        item.Name = "x, done, finished 1m ago";
+        item.Words = "Working";
+        item.ParentName = "y\uFF0C selected";
+        Assert.Equal("x done finished 1m ago, working, under y selected", item.Label);
+        Assert.Equal("x, done, finished 1m ago", item.Name);
+    }
+
+    [Fact]
     public void The_strip_shows_the_main_agents_delegates_with_their_nested_count_and_folds_the_finished_into_one_item()
     {
         Resize(1440);

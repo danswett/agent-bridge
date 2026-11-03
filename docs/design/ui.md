@@ -474,12 +474,16 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   Every surface shows the same safe label (the app's `DelegateLabel`): bidi controls,
   zero-width, format, control and other default-ignorable characters are removed, any
   whitespace (line and paragraph separators too) becomes one space, and the result is cut to
-  60 characters with "…". A middle dot, and the dots drawn like it (U+00B7, U+0387, U+16EB,
-  U+2022, U+2027, U+2219, U+22C5, U+2E31, U+30FB, U+A78F, U+FF65), becomes "-": "·" separates
+  60 characters with "…". A middle dot, and the dots drawn like it (U+00B7, U+0387, U+1427,
+  U+16EB, U+2022, U+2027, U+2219, U+22C5, U+2E31, U+2E33, U+30FB, U+318D, U+A78F, U+FF65,
+  U+10101), becomes "-": "·" separates
   a status's facts, and a name with one would add a fact of its own ("Delegate Idle · Read logs
   asks", #286). With nothing left, it is "Delegate" and the first 8 characters of
   its id. A name that reads as the main agent's shows as `Delegate “<name>”`, any quote of
-  its own (" “ ” „ ‟ « » ″ ‹ › ＂) made a plain apostrophe so it can't close them. To decide
+  its own made a plain apostrophe so it can't close them: every character Unicode files as an
+  opening or closing quote (Pi, Pf) or marks Quotation_Mark (" ' „ ‚ ⹂ 「 」 『 』 〝 〞 〟 ＂ ＇
+  and their kind), and those drawn like one: primes (′ ″ ‴ ‵ ‶ ‷ ⁗), the Hebrew geresh and
+  gershayim (׳ ״), ʹ ʺ ʻ ʼ ˝ ˮ, and the ornament quotes ❛ ❜ ❝ ❞ 🙶 🙷 🙸. To decide
   whether it reads so, the name is
   NFKD-folded, with marks and case dropped by code point (so a combining mark outside the BMP
   goes too), and Cyrillic, Greek, Armenian and Latin IPA letters drawn like those of "main
@@ -653,9 +657,9 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - "Main agent" (never "parent").
   - "Delegate" in the UI ("sub-agent" in code and specs).
   - A delegate's name is always its safe label (§6.3), never the text the host sent, and
-    never reads as "Main agent" nor adds a fact to a line (no "·" of its own). Wherever a line
-    says who asks or works ("asks", "task:"), the
-    label follows the word "Delegate", which the main agent's own lines never have.
+    never reads as "Main agent" nor adds a fact to a line (no "·" of its own, and read aloud,
+    no comma, §9). Wherever a line says who asks or works ("asks", "task:"), the label
+    follows the word "Delegate", which the main agent's own lines never have.
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
 - **Numbers before nouns:** "3 delegates", "1 background command".
@@ -667,7 +671,12 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   contrast.
 - **Touch targets:** at least 44×44 on touch platforms, 32×32 on desktop.
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
-  Windows App, delegating to 3 agents, DEV-VM1".
+  Windows App, delegating to 3 agents, DEV-VM1". Facts are joined with commas there, so a
+  delegate's name read aloud has none of its own: "," and the commas drawn like it (U+055D,
+  U+060C, U+066B, U+07F8, U+1363, U+1802, U+1808, U+201A, U+2E41, U+2E4C, U+3001, U+A4FE,
+  U+A60D, U+A6F5, U+FE10, U+FE11, U+FE50, U+FE51, U+FF0C, U+FF64) become a space, and a run of
+  spaces one. A name of "x, idle, DEV-VM2" reads "Delegate x idle DEV-VM2 asks", never as
+  facts of its own; what is drawn keeps them.
 - **Reduced motion** stops all glyph animation, and turns every other motion into an
   instant change or a short cross-fade (§5.3). Nothing relies on motion alone.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
