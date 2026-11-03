@@ -18,7 +18,9 @@ Implemented client workflows include:
   canonical machine selection, offline roster and confirmed Forget.
 - Needs You, global search, persistent pins/order/unread state, ended sessions,
   Markdown, attributed main-agent text, recent tools, selectable delegate details,
-  nested/finished groups and draft-only requests to stop a delegate.
+  nested/finished groups, latest-run outcome glyphs for idle background delegates,
+  and draft-only requests to stop a delegate. Unknown outcomes follow the protocol's
+  `done` fallback; absent outcomes remain unknown.
 - Capability-gated questions, replies, two-step stop, attachments and photos;
   launch/resume, signed folder trust and cross-machine copy/resume.
 - Usage across machines with a 14-day account-scoped cache, remote machine
