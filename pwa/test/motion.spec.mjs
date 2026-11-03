@@ -388,7 +388,7 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.innerHTML = '<use href="design/sprite.svg#glyph-idle"></use><use href="https://example.com/x.svg#a"></use><foreignObject><p>hidden</p></foreignObject><a href="https://example.com/"><path d="M0 0"/></a>';
     el.append(svg);
-    Object.assign(el.style, { position: 'fixed', top: '100px', left: '100px', width: '200px', height: '80px' });
+    Object.assign(el.style, { position: 'fixed', top: '100px', left: '100px', width: '200px', height: '80px', backgroundImage: 'url("ghost-fetch.png")', cursor: 'url("ghost-cursor.png"), auto' });
     document.body.append(el);
     const from = window.__shadows.length;
     const a = leave(el, 'listItem');
@@ -404,6 +404,7 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
       attrs: [...new Set(all.flatMap((n) => [...n.attributes].map((x) => x.name)))].sort(),
       refs: all.filter((n) => n.localName === 'use').map((n) => n.getAttribute('href')),
       found: document.querySelectorAll('#leaving, #link, #b, .session[data-id="x"]').length,
+      urls: all.filter((n) => (n.getAttribute('style') ?? '').includes('url(')).length,
     };
     await new Promise((r) => setTimeout(r, 300));
     out.ran = window.__ran ?? null;
@@ -420,6 +421,8 @@ test('what leaves is a copy with nothing in it to find, use or run: text stays t
   expect(copy.attrs.filter((a) => !['style', 'href', 'd', 'width', 'height'].includes(a))).toEqual([]);
   expect(copy.refs).toEqual(['design/sprite.svg#glyph-idle']);
   expect(copy.found).toBe(0);
+  // Nothing in it names a resource to fetch.
+  expect(copy.urls).toBe(0);
   expect(copy.ran).toBe(null);
   expect(copy.gone).toBe(true);
 });
@@ -858,4 +861,18 @@ test('bringing a question already in sight into view starts no wait for a later 
   }, CODEX);
   expect(arriving).toBe(false);
   await expect.poll(answers).toBe(before + 1);
+});
+test('a session that goes while its machine is still sending its list leaves at once, with no copy fading', async ({ page }) => {
+  await openDemo(page);
+  await upsert(page, 'demo-unsettled', { agent: 'copilot', title: 'Goes while unsettled', status: 'idle', startedAt: later(), updatedAt: later() });
+  await expect(row(page, 'demo-unsettled')).toHaveCount(1);
+  const before = (await motions(page)).filter((m) => m.id === 'ab-motion-listItem').length;
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    d.client.synced = false;
+    d.remove('demo-unsettled');
+  });
+  await expect(row(page, 'demo-unsettled')).toHaveCount(0);
+  expect((await motions(page)).filter((m) => m.id === 'ab-motion-listItem')).toHaveLength(before);
+  await page.evaluate(() => { window.agentBridgeDemo.client.synced = true; });
 });

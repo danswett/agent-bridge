@@ -118,10 +118,11 @@ export class SessionListView {
     let shown = 0;
     // Arriving and leaving (ui.md §5.3): a session that came or went after its machine's list was
     // placed fades, where it is; its neighbours take their places at once. A machine's first list,
-    // a machine no longer shown, and search are none of that.
+    // a machine still sending its list, a machine no longer shown, and search (which only hides a
+    // card) are none of that.
     const arrived = [];
     for (const [key, card] of this.#cards) {
-      if (!live.has(key) && this.#drawn && this.shows(card.hostId)) { leave(card.element, 'listItem'); }
+      if (!live.has(key) && this.#drawn && this.shows(card.hostId) && this.settled(card.hostId)) { leave(card.element, 'listItem'); }
     }
     const cards = (list, isPinned) => {
       for (const entry of list) {

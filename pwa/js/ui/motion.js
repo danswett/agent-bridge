@@ -244,17 +244,20 @@ export function leave(el, entry) {
 
 // The part of r (el's box) that shows: inside the viewport and every ancestor that clips el, or
 // null when none of it does. An ancestor clips only what it contains: a positioned descendant
-// escapes the static ones between, and a fixed one all of them.
+// escapes the static ones between, and a fixed one all of them. So the walk goes by containing
+// blocks: `escapes` is how the box walked from is positioned, el's own at first and then each
+// containing block's in turn, since that, not el's, decides what the next ancestors clip. A
+// fixed one's own overflow still clips, and nothing beyond it does.
 function shown(el, r) {
   const doc = el.ownerDocument;
   const win = doc.defaultView;
   let box = { left: Math.max(r.left, 0), top: Math.max(r.top, 0), right: Math.min(r.right, win.innerWidth), bottom: Math.min(r.bottom, win.innerHeight) };
-  let position = getComputedStyle(el).position;
-  for (let a = el.parentElement; a && a !== doc.documentElement && position !== 'fixed'; a = a.parentElement) {
+  let escapes = getComputedStyle(el).position;
+  for (let a = el.parentElement; a && a !== doc.documentElement && escapes !== 'fixed'; a = a.parentElement) {
     const cs = getComputedStyle(a);
     const contains = cs.position !== 'static' || cs.transform !== 'none';
-    if (position === 'absolute' && !contains) { continue; }
-    position = cs.position;
+    if (escapes === 'absolute' && !contains) { continue; }
+    escapes = cs.position;
     if (cs.overflowX === 'visible' && cs.overflowY === 'visible' && !/paint|content|strict/.test(cs.contain)) { continue; }
     const b = a.getBoundingClientRect();
     const left = b.left + a.clientLeft;
@@ -305,8 +308,12 @@ function inlineCopy(el) {
     }
     for (let i = 0; i < cs.length; i += 1) {
       const p = cs[i];
-      if (p.startsWith('--') || p.startsWith('animation') || p.startsWith('transition')) { continue; }
-      c.style.setProperty(p, cs.getPropertyValue(p));
+      if (p.startsWith('--') || p.startsWith('animation') || p.startsWith('transition') || p === 'cursor') { continue; }
+      // Nothing that names a resource (a background or mask image, a list marker): a copy fetches
+      // nothing, and app.css draws none of what a row shows with one.
+      const value = cs.getPropertyValue(p);
+      if (value.includes('url(')) { continue; }
+      c.style.setProperty(p, value);
     }
     if (node.namespaceURI === HTML && OPAQUE.has(node.localName)) { return c; }
     for (const child of node.childNodes) { const k = copy(child); if (k) { c.append(k); } }
