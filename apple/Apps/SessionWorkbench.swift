@@ -11,6 +11,7 @@ struct SessionWorkbench: View {
     @State private var needsOnly = false
     @FocusState private var searchFocused: Bool
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selected: SessionEntry? {
         store.sessionEntry(id: store.selectedSessionID)
@@ -264,7 +265,16 @@ struct SessionWorkbench: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge", systemImage: "terminal")
+            VStack(spacing: 12) {
+                if store.isConnecting, !reduceMotion {
+                    ProgressView().controlSize(.large)
+                } else {
+                    Image(systemName: store.isConnecting ? "network" : store.isLive ? "tray" : "person.crop.circle.badge.questionmark")
+                        .font(.largeTitle)
+                        .accessibilityHidden(true)
+                }
+                Text(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge")
+            }
         } description: {
             if store.account == nil, !store.isSample, let status = store.signInStatus {
                 Text(status)
