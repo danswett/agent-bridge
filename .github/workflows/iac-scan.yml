@@ -34,6 +34,11 @@ jobs:
       PSRULE_SHA256: 222554e3a04047fdb580720c9275486ca2ec0dd1982fcc1e75c2f6345fd8fa5f
       PSRULE_AZURE_VERSION: 1.47.0
       PSRULE_AZURE_SHA256: 4a202b36126c7dfec21906e0cfc5ada67e64eb0c4a2dad3e3a7415f01c8e13c1
+      # The Bicep CLI that expands the templates, pinned the same way (the hash is the release
+      # asset's digest as GitHub reports it). PSRule found neither `az bicep install`'s copy nor
+      # one through `az`, so it gets this one by path.
+      BICEP_VERSION: 0.48.1
+      BICEP_SHA256: b09ec25a9d376c1f8e33ede6ed22b587f915ad68488d5db77a6f9541748c7f6e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,22 +47,25 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # The Bicep CLI expands the templates; the same one relay.yml's infra job builds them with.
-          az bicep install
+          function Get-Pinned([string] $uri, [string] $file, [string] $sha) {
+            Invoke-WebRequest $uri -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5
+            $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $sha) { throw "$uri hashes to $actual, not the pinned $sha" }
+          }
+          $bicep = Join-Path $env:RUNNER_TEMP 'bicep'
+          Get-Pinned "https://github.com/Azure/bicep/releases/download/v${env:BICEP_VERSION}/bicep-linux-x64" $bicep $env:BICEP_SHA256
+          chmod +x $bicep
+          & $bicep --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          az bicep version
           $modules = Join-Path $env:RUNNER_TEMP 'psrule-modules'
           foreach ($m in @(@('PSRule', $env:PSRULE_VERSION, $env:PSRULE_SHA256), @('PSRule.Rules.Azure', $env:PSRULE_AZURE_VERSION, $env:PSRULE_AZURE_SHA256))) {
             $id, $version, $sha = $m
             $file = Join-Path $env:RUNNER_TEMP "$id.$version.zip"
-            Invoke-WebRequest "https://www.powershellgallery.com/api/v2/package/$id/$version" -OutFile $file -MaximumRetryCount 3 -RetryIntervalSec 5
-            $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $sha) { throw "$id $version hashes to $actual, not the pinned $sha" }
+            Get-Pinned "https://www.powershellgallery.com/api/v2/package/$id/$version" $file $sha
             Expand-Archive $file -DestinationPath (Join-Path $modules $id $version)
           }
           Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_MODULES=$modules"
-          # Expand through `az bicep`, the Bicep just installed, wherever az keeps it.
-          Add-Content -Path $env:GITHUB_ENV -Value 'PSRULE_AZURE_BICEP_USE_AZURE_CLI=true'
+          Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_AZURE_BICEP_PATH=$bicep"
       - name: PSRule for Azure (advisory)
         shell: pwsh
         env:
