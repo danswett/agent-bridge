@@ -409,6 +409,10 @@ public class DiscoveryHoldTests
     [InlineData("node --require /work/preload.cjs /usr/local/bin/codex exec \"Review /usr/local/lib/node_modules/@openai/codex/bin/codex.js\"", false)]
     [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js exec list", false)]
     [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js", true)]
+    // Found in review: npx's package option named the package, not the command it runs.
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js --package @openai/codex codex app-server", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -p @openai/codex codex exec task", false)]
+    [InlineData("node /usr/lib/node_modules/npm/bin/npx-cli.js -p @openai/codex codex", true)]
     public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
     {
         using var f = new Fixture();

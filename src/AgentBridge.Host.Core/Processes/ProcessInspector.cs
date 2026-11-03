@@ -561,7 +561,7 @@ public static partial class CommandLine
     // (`node --require /work/codex.cjs .../codex.js exec`) is not Codex, and nor is a loader's
     // path in a prompt after it. Otherwise the first later argument named codex (npx's
     // @openai/codex), else the first whose name starts with codex, else the first; never an
-    // option, whose value may name anything.
+    // option or a wrapper's option's value, which may name anything.
     internal static int CodexProgram(IReadOnlyList<string> arguments)
     {
         static string File(string path)
@@ -585,16 +585,28 @@ public static partial class CommandLine
                 return from;
             }
         }
+        // A wrapper's own options and their values: npx's `--package @openai/codex codex exec` runs
+        // the command after them, which says what kind of run it is.
+        var positions = new List<int>();
         for (var i = from; i < arguments.Count; i++)
         {
-            if (!arguments[i].StartsWith('-') && string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            if (!arguments[i].StartsWith('-')) { positions.Add(i); }
+            else if (WrapperValueOptions.Contains(arguments[i])) { i++; }
         }
-        for (var i = from; i < arguments.Count; i++)
+        foreach (var i in positions)
         {
-            if (!arguments[i].StartsWith('-') && File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            if (string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+        }
+        foreach (var i in positions)
+        {
+            if (File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
         }
         return 0;
     }
+
+    // npx's, pnpm dlx's and bunx's options that take the next argument as their value: the
+    // package to run, which is not the command.
+    static readonly HashSet<string> WrapperValueOptions = new(StringComparer.Ordinal) { "-p", "--package" };
 
     // node's and bun's options that take the next argument as their value: a module to load
     // before the script, whose name may be anything.

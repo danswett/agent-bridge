@@ -699,6 +699,7 @@ public class DiscoveryTests
         var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
         const string Native = @"C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe";
         const string Loader = @"""C:\Program Files\nodejs\node.exe"" C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex\bin\codex.js";
+        const string Unix = "/home/u/.npm/_npx/0a1b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex";
         const string Npx = @"""C:\Program Files\nodejs\node.exe"" ""C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js"" -y @openai/codex@latest";
         var listing = new SystemProcessInspector.ListedProcess[]
         {
@@ -725,12 +726,30 @@ public class DiscoveryTests
             // an interactive Codex that started another through its shell tool is still a session
             new("codex", 700, t.AddSeconds(2), Native, Parent: 701, Ancestors: [701, 702]),
             new("codex", 702, t, Native, Parent: 9, Ancestors: [9]),
+            // shims and npx elsewhere; a Homebrew install is Codex itself, and a wrapper not
+            // known as one, or one whose command line cannot be read, may be the session
+            new("codex", 800, t.AddSeconds(2), Unix, Parent: 801, Ancestors: [801]),
+            new("codex", 801, t, "/home/u/.volta/bin/codex"),
+            new("codex", 810, t.AddSeconds(2), Unix, Parent: 811, Ancestors: [811]),
+            new("codex", 811, t, "/home/u/.asdf/shims/codex"),
+            new("codex", 820, t.AddSeconds(2), Unix, Parent: 821, Ancestors: [821]),
+            new("codex", 821, t, "/home/u/.local/share/mise/shims/codex"),
+            new("codex", 830, t.AddSeconds(2), Native, Parent: 831, Ancestors: [831]),
+            new("codex", 831, t, @"C:\Users\u\scoop\shims\codex.exe"),
+            new("codex", 840, t.AddSeconds(2), Unix, Parent: 841, Ancestors: [841]),
+            new("codex", 841, t, "/opt/homebrew/bin/codex"),
+            new("codex", 850, t.AddSeconds(2), Unix, Parent: 851, Ancestors: [851]),
+            new("codex", 851, t, "/home/u/tools/codex-wrapper"),
+            new("codex", 860, t.AddSeconds(2), Unix, Parent: 861, Ancestors: [861]),
+            new("codex", 861, t, null),
+            new("codex", 870, t.AddSeconds(2), Unix, Parent: 871, Ancestors: [871, 872]),
+            new("node", 871, t, "node /usr/local/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex"),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702], observation.Processes.Select(p => p.Id).Order());
-        Assert.Equal([103, 201, 302], observation.Launchers.Order());
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702, 800, 801, 810, 811, 820, 821, 830, 831, 840, 841, 850, 851, 860, 861, 870, 871], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([103, 201, 302, 801, 811, 821, 831, 871], observation.Launchers.Order());
     }
 
     // Found in review (#437): on Windows a parent's pid outlives it. Another waiting Codex's child
