@@ -383,8 +383,15 @@ public sealed class HomeAssistantClient : IHomeAssistant
         if (completion == HttpCompletionOption.ResponseHeadersRead) { return response; }
         // The body as ResponseContentRead would have read it: within what is left of the one timeout
         // the headers began, not a second one of its own.
-        var left = http.Timeout == Timeout.InfiniteTimeSpan ? Timeout.InfiniteTimeSpan : http.Timeout - time.GetElapsedTime(started);
-        using var expiry = new CancellationTokenSource(left == Timeout.InfiniteTimeSpan || left > TimeSpan.Zero ? left : TimeSpan.Zero, time);
+        // Clamp before choosing, not after: headers exactly 1 ms past the timeout leave -1 ms, which
+        // is also Timeout.InfiniteTimeSpan, and would have given the body no deadline at all.
+        var left = Timeout.InfiniteTimeSpan;
+        if (http.Timeout != Timeout.InfiniteTimeSpan)
+        {
+            left = http.Timeout - time.GetElapsedTime(started);
+            if (left < TimeSpan.Zero) { left = TimeSpan.Zero; }
+        }
+        using var expiry = new CancellationTokenSource(left, time);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, expiry.Token);
         try
         {

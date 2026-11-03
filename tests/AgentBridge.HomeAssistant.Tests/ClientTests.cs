@@ -317,6 +317,21 @@ public class ClientTests
         await client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true);
     }
 
+    // Headers exactly 1 ms past the timeout leave -1 ms for the body, the same value as
+    // Timeout.InfiniteTimeSpan: the body must still be held to the deadline, not given none.
+    [Fact]
+    public async Task A_publish_whose_headers_arrive_a_millisecond_past_the_timeout_still_times_out()
+    {
+        var clock = new FakeTimeProvider();
+        var handler = new Late(clock, TimeSpan.FromMilliseconds(1001),
+            () => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new Stalling(clock, TimeSpan.FromMilliseconds(1))) });
+        var client = new HomeAssistantClient(new Uri("http://ha.test:8123"), Token, new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) }, time: clock);
+
+        var e = await Record.ExceptionAsync(() => client.PublishAsync("copilot/cli/agent_bridge_x/status/state", "idle", true));
+
+        Assert.True(e is TimeoutException or OperationCanceledException, $"expected a timeout, got {e?.GetType().Name ?? "success"}");
+    }
+
     sealed class Late(TimeSpan delay, Func<HttpResponseMessage> respond) : HttpMessageHandler
     {
         readonly FakeTimeProvider? clock;
