@@ -18,14 +18,9 @@ public sealed class Identity
 
     Identity(string folder, P256KeyPair key, KeyStorage storage, SignInResult? account) { Folder = folder; Key = key; Storage = storage; Account = account; }
 
-    public static string DefaultRoot => OperatingSystem.IsWindows()
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge")
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-bridge");
+    public static string DefaultRoot => ProfileFolders.DefaultRoot;
 
-    // A profile is a folder name, never a path: "../x" must not reach outside the root.
-    public static bool IsValidProfile(string? profile) =>
-        profile is { Length: > 0 and <= 64 } && profile is not ("." or "..")
-        && profile.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
+    public static bool IsValidProfile(string? profile) => ProfileFolders.IsValidProfile(profile);
 
     public static Identity Load(string profile, KeyStorage? prefer = null, string? root = null)
     {

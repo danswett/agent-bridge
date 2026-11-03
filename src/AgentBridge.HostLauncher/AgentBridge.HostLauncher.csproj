@@ -18,6 +18,8 @@
     <!-- The exit code and variable it shares with the host, as source, so the launcher stays one
          small assembly. -->
     <Compile Include="..\AgentBridge.Local\HostLauncherContract.cs" Link="HostLauncherContract.cs" />
+    <!-- And the host's rule for where a profile's folder is, so both look in the same one. -->
+    <Compile Include="..\AgentBridge.Transport\ProfileFolders.cs" Link="ProfileFolders.cs" />
   </ItemGroup>
 
 </Project>

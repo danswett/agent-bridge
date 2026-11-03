@@ -46,16 +46,27 @@ public interface IProcesses
 
 public sealed class SystemProcesses : IProcesses
 {
+    // The processes this started, by handle: whether one runs, and ending it, are asked of the
+    // process itself, never of whatever has its pid by then (a launcher long gone, its pid reused).
+    readonly System.Collections.Concurrent.ConcurrentDictionary<int, Process> started = new();
+
     public int Start(string path, IReadOnlyList<string> arguments)
     {
         var start = new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetDirectoryName(path)! };
         foreach (var a in arguments) { start.ArgumentList.Add(a); }
-        using var p = Process.Start(start) ?? throw new InvalidOperationException($"{path} did not start");
+        var p = Process.Start(start) ?? throw new InvalidOperationException($"{path} did not start");
+        started[p.Id] = p;
         return p.Id;
     }
 
     public bool IsRunning(int pid)
     {
+        if (started.TryGetValue(pid, out var mine))
+        {
+            if (!mine.HasExited) { return true; }
+            if (started.TryRemove(pid, out _)) { mine.Dispose(); }
+            return false;
+        }
         try { using var p = Process.GetProcessById(pid); return !p.HasExited; }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
@@ -63,6 +74,12 @@ public sealed class SystemProcesses : IProcesses
 
     public void Kill(int pid)
     {
+        if (started.TryGetValue(pid, out var mine))
+        {
+            try { if (!mine.HasExited) { mine.Kill(entireProcessTree: false); } }
+            catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            return;
+        }
         try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: false); }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
     }
@@ -363,10 +380,20 @@ public sealed class HostManager
     // The 2026-10-29 review found an agent could run this through the app's uninstall hook.
     public async Task StopAsync(CancellationToken ct = default)
     {
-        await StopHostAsync(ct);
-        // A stop on purpose: the launcher must not start the host again after it (#106).
+        // A stop on purpose: the launcher must not start the host again after it (#106). Before
+        // the stop itself, so a host that crashes while stopping is not started again either.
         MarkStopped();
-        await EndLauncherAsync(ct);
+        try
+        {
+            await StopHostAsync(ct);
+            await EndLauncherAsync(ct);
+        }
+        catch (HostRefusedException)
+        {
+            // Not stopped: it runs on, and is still to be started again should it crash.
+            ClearStopped();
+            throw;
+        }
     }
 
     // Through the host's pipe, as above.

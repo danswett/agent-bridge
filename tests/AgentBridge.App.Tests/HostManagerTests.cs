@@ -284,6 +284,19 @@ public sealed class HostManagerTests : IAsyncLifetime
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_host_is_asked_to_stop_only_once_the_stop_marker_is_there_so_a_crash_while_stopping_is_not_restarted()
+    {
+        var markedFirst = false;
+        host.On(HostOps.Stop, d => { markedFirst = File.Exists(StopMarker); _ = Task.Run(host.StopAsync); return new { stopping = true }; });
+        host.Start();
+
+        await manager.StopAsync();
+
+        Assert.True(markedFirst);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Starting_after_a_stop_clears_the_stop_marker_and_the_host_runs()
     {
         manager.SetStartAtSignIn(true);

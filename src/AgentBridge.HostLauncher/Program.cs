@@ -54,20 +54,16 @@ var supervisor = new HostSupervisor
 return await supervisor.RunAsync();
 
 // The host's own log (<profile>\logs\host.log), which the app shows, appended a line at a time
-// as the host appends it; written only while no host runs. Its folder is the host's rule
-// (Identity.DefaultRoot), repeated here so the launcher stays a few kilobytes.
+// as the host appends it; written only while no host runs. Its folder by the host's own rule
+// (ProfileFolders, compiled in).
 static class LauncherLog
 {
-    // The profile's folder, or null for a name the host would refuse.
+    // The profile's folder, or null for a name the host would refuse: the host's own rule.
     public static string? ProfileFolder(string[] args)
     {
         var i = Array.IndexOf(args, "--profile");
         var profile = i >= 0 && i + 1 < args.Length ? args[i + 1] : "default";
-        if (profile.Length is 0 or > 64 || profile is "." or ".." || !profile.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')) { return null; }
-        var root = OperatingSystem.IsWindows()
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentBridge")
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-bridge");
-        return Path.Combine(root, profile);
+        return AgentBridge.Transport.ProfileFolders.IsValidProfile(profile) ? Path.Combine(AgentBridge.Transport.ProfileFolders.DefaultRoot, profile) : null;
     }
 
     public static Action<string> For(string? profileFolder)
