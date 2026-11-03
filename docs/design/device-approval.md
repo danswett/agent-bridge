@@ -43,7 +43,7 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host the remover has never had an attestation from until the roster is imported there (§3.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
 | **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs. Hosts in `enforce` hold to this from the start; the relay does once the account's relay mode is `enforce` (§4.5), which the owner switches on after the cutover (§8.2) |
-| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4). Its removals of devices junior to it are not held, and apply at once |
+| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4); touch a device senior to it in any way. Its removals of devices junior to it are not held, and apply at once. It **can** make devices that are not senior to it inactive by copying their keys, a denial of service that names it and is undone by removing it (§3.3) |
 | **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host the remover has never had an attestation from, where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
 | **The local pipe and the HA connector** | Unchanged: same-OS-user trust, and Home Assistant credentials respectively | Out of scope for the roster; see §9.5 |
@@ -237,17 +237,27 @@ history state. It is valid only if:
   adds X's public key on its own branch, neither A nor H is senior to the other's add of X, and X
   is conflicted. No public check can tell the copy from the real enrollment, since `dh` cannot
   sign. What bounds it is that the conflict names H: removing H with the full cascade voids H's
-  copy (§3.5), X is no longer conflicted, and it is active again with no new enrollment. So a
-  hostile approver can make a device enrolled on a concurrent branch inactive until the person
-  removes that approver, and it is attributed to it. It does not need a dishonest relay: an honest
-  relay appends a fork whose parent is at most 8 entries behind its head (§3.5, rule 3), so a
-  hostile approver H can sign, on a parent from before a device's add, a copy of that device's key,
-  and so conflict a device added in the last 8 entries (one junior to H it could remove outright
-  anyway). A device added earlier than that cannot be conflicted without a dishonest relay or a
-  partition: a copy signed further back is quarantined, extending an old open head counts as
-  forking from it, and neither H's own merge nor one by a device junior to H adopts the copy
-  (§3.5, rule 3). The effect is bounded by the 8 entries and H's budget of 64 adds, announced, and
-  reversed by removing H with the cascade. Decision 9 states it. Otherwise the person enrolls a
+  copy (§3.5), X is no longer conflicted, and it is active again with no new enrollment.
+
+  **What a hostile approver can do with copies, and what bounds it.** No window or merge rule
+  bounds this, and the design does not rely on one: a copy signed on an old parent is quarantined
+  at first, but H can adopt it with a merge of its own, which only needs to name the copy's branch
+  and need not include the genuine enrollment. So any approver H, with or without a dishonest
+  relay, can conflict any device that is **not senior to it**. What does bound it is structural:
+  * H can never copy a device **senior** to it. H's copy must be signed in a state where H is
+    active, so its parents descend from H's own add, whose ancestors include every senior device's
+    add; and an id is never added twice in one history (above);
+  * every copy names H, and is announced;
+  * a removal of H voids the copies: one by a device senior to H carries `voidGrants`, and any
+    removal signed on a parent from before the copies (as the remover's client signs, below) makes
+    them concurrent with it and void (§3.5). The conflicted devices are then active again, with no
+    new enrollment. Only when neither is possible, because no device senior to H is left and the
+    honest line was built on top of a copy, does a conflicted device stay inactive after H's
+    removal, and the person enrolls it again with a new key.
+
+  So the damage is a denial of service, attributed and reversible, never a gain of trust. It
+  needs a reset only when no device senior to H is left and the conflicted devices include the two
+  cosigners a removal of H would need. Decision 9 states it. Otherwise the person enrolls a
   conflicted device again with a new key. An honest enrollment makes one add, so without a hostile
   approver a conflict needs a dishonest relay or a device enrolled twice while partitioned. A void
   add (§3.5), such as
@@ -349,7 +359,10 @@ history state. It is valid only if:
       of those hosts, with all its ancestors;
     * among the entries under all of them, it picks the **newest** (highest `seq`, then lowest entry hash) that has, among itself and its
       ancestors, the target's add, the signers' adds and, for a cosigned removal, their `confirm`s,
-      and, when the person unticked devices to keep in the cascade, the adds of those devices;
+      and, when the person unticked devices to keep in the cascade, the adds of those devices, and
+      that has **none of the target's copies** (adds of a key it signed where another add of that
+      key exists, §3.3) among its ancestors, so that they are concurrent with the removal and void
+      even when the removal cannot carry `voidGrants`;
     * it signs the removal with that entry as `prev`. Rule 3 of §3.5 accepts a removal however far
       back it forks, every ancestor is already held at each of those hosts, so none needs evidence,
       and anything the target signed after that point is concurrent with the removal and void
@@ -507,8 +520,8 @@ lacks entries the verifier has is simply no news. A verifier accepts an offered 
    approver during this verifier's own enrollment (§4.2), or, on a host, through the write-only
    `roster.submit` of §7.1 from a device the host does not know yet;
 2. every parent of `e` is already in `S`, and `e` is valid in their state (§3.3);
-3. if a parent of `e` already has a child in `S`, `e` starts a **fork**. What happens then
-   depends on the entry:
+3. if a parent of `e` already has a child in `S`, `e` starts a **fork**, and if it extends a head
+   it may still be far behind. What happens then depends on the entry:
    * a `remove` is accepted however far back it forks, together with the ancestors it needs. The
      only exception is the evidence rule of §3.3, for ancestors over a budget. A removal only ever
      takes trust away, so taking it in can never be the attack, and refusing it would let delivery
@@ -522,24 +535,24 @@ lacks entries the verifier has is simply no news. A verifier accepts an offered 
      once it applies nothing un-applies it;
    * a `merge` signed with presence is always accepted. That is how a person adopts a branch. A
      merge whose signer was itself added by a quarantined entry adopts nothing until a merge by a
-     signer outside the quarantine adopts its branch, so quarantine cannot adopt itself. Nor does a
-     merge adopt a quarantined **copy**, an `add` of an id that already has another add among the
-     merge's ancestors, when the merge's signer signed that copy or is junior to its signer: an
-     approver cannot adopt its own copy, directly or through a device it added. The copy stays
-     quarantined until a merge by a device that is neither adopts it, and an honest client offers
-     that only with a warning naming the device it would conflict;
-   * anything else is accepted only if the parent is at most **8 entries** behind one of the
-     verifier's heads and `S` would then have at most 4 heads. An entry beyond that is
+     signer outside the quarantine adopts its branch, so quarantine cannot adopt itself. A merge can
+     adopt a copy of a device's key; what bounds that is §3.3's rule on copies, not the merge;
+   * anything else is accepted only if its parent is **within the window** and `S` would then have
+     at most 4 heads. An entry outside it is
      **quarantined**: it is kept as evidence and reported as relay misbehavior, and its effect is
      not applied, but it is gossiped. It is how a removed device would bring back an add it signed
      on an old head. Quarantined entries count toward the caps and budgets of §3.3 like any
      others, which bounds them, and nothing is dropped.
 
-   The limit applies to an entry that extends a head **without** forking, too, when that head's
-   `seq` is more than 8 below another of the verifier's heads: such an entry is treated as a fork
-   from that old head. A branch left open therefore does not stay open for appends, and a hostile
-   approver cannot reach an arbitrarily old point by extending a sibling head that no one merged.
-   An honest client merges every head it knows before it appends, so this never touches it.
+   **The window.** A parent `P` is within it when at most **8** unquarantined entries of `S` are
+   neither `P` nor its ancestors: the entries the signer had not seen. The test applies to every
+   entry other than a removal or a merge, whether or not it forks, so extending an open head no one
+   merged is judged the same way as forking from it. It is anchored on what the verifier already
+   applies, and only grows: a new entry, quarantined or a far-forking removal, never shrinks
+   another parent's count, so no entry can refresh the window for an old parent. An honest client
+   merges every head it knows before it appends, so its entries are within it. The window is
+   defense in depth against a relay that replays old branches; no security property in this note
+   depends on it alone (§3.3, copies).
 4. **Quarantine is inherited.** An entry with a quarantined ancestor is quarantined too, whether
    or not it starts a fork, until a merge adopts that branch. Otherwise the first child of a
    quarantined entry would bypass rule 3: an established signer's quarantined rename followed by
@@ -555,7 +568,8 @@ them first applies them, and the other
 quarantines them. That lasts until a person signs a `merge`, which every verifier accepts and
 which makes them converge. Every device shows "the device list forked" until then, since an
 honest relay never causes a fork. A verifier that quarantines is the stricter of the two about
-grants: it never makes a device active that the other has not. It also waits to apply a removal
+grants: it never makes a device active that the other has not, apart from a device that a copy
+the other applied has conflicted there (§3.3). It also waits to apply a removal
 signed by a device only that branch added, so the device such a removal targets stays active there
 until the merge. That device was approved without the quarantined branch, so waiting gives nobody
 trust they were not already given.
@@ -1684,22 +1698,27 @@ Each slice adds its own. Together they cover:
   set, refuses it, shows as not having confirmed it, and admits it after `devices sync` there.
 * T removes its own juniors with evidence until a host's 1,024 evidence entries are used: a later
   removal of T, signed on the common parent, needs none and applies there.
-* With an honest relay, H (approved by G) signs on a parent 5 entries back a copy of the key of X,
-  added 3 entries back by a device H is not senior to: the relay appends it, X is conflicted and
-  the conflict names H. The same against a device added 10 entries back, signed on a parent 12
-  entries back: every verifier quarantines the copy, and X stays active. H then signs a
-  presence-proven merge adopting its copy, and so does J, a device H added: the copy stays
-  quarantined and X active. A merge by G, which is neither, adopts it, and G's client warns that
-  it conflicts X before G confirms.
-* An open head left 12 entries behind the newest head (a fork no one merged): H extends it,
-  without forking, with a copy of the key of a device added 10 entries back. The entry is
-  quarantined, as a fork from that head would be, and X stays active. An honest client holding
-  both heads merges them before appending, and its entries are not quarantined.
+* **Copies.** With an honest relay, H (approved by G) signs on a parent 5 entries back a copy of
+  the key of X, added 3 entries back by A, a device H is not senior to: the relay appends it, X is
+  conflicted and the conflict names H. The same against a device added 20 entries back, signed on
+  a parent 22 entries back: every verifier quarantines the copy. H then puts two sibling renames
+  above it and signs a merge of only those heads, leaving out the branch with X's genuine add: the
+  merge adopts the copy, and X is conflicted at every verifier holding both, in every delivery
+  order. In each case G removes H with `voidGrants`: the copy is void and X active again, with no
+  new enrollment. A cosigned removal of H by two confirmed devices, signed on a parent from before
+  the copy, does the same. H's attempt to copy G's key, or that of any device senior to it, is
+  refused as a re-added id.
+* **The window cannot be refreshed.** H submits a removal signed on a parent `P` 30 entries back,
+  which is accepted, and then a copy-add on `P`: the copy is outside the window (30 unseen
+  entries) and quarantined, though the removal's head is one entry away. The same with a
+  quarantined grant on `P` first instead of the removal. An open head left 12 entries behind (a
+  fork no one merged), extended without forking: outside the window, quarantined. An honest client
+  holding both heads merges them before appending, and its entries are within it.
 * A far fork holding `add(X)` and then `remove(Y)` by an established device: the removal applies,
   `add(X)` stays quarantined and X is not active. A far removal signed by X itself is held until a
   merge adopts that branch.
-* A removal forking from beyond 8 entries is accepted and applied, whichever order the branches
-  arrive in. A non-removal entry from beyond 8 entries, or one making a fifth head, is quarantined:
+* A removal forking from outside the window is accepted and applied, whichever order the branches
+  arrive in. A non-removal entry from outside the window, or one making a fifth head, is quarantined:
   kept, gossiped, not applied, and adopted only by a presence-signed `merge`. Two verifiers fed the
   same branches in opposite orders converge after that merge.
 * An entry offered by an unrostered channel peer through anything but `roster.submit`: refused.
@@ -1883,10 +1902,12 @@ Each slice adds its own. Together they cover:
      announced on every device;
    * a hostile device, even on probation, removing at once devices junior to it (added after it),
      each removal announced;
-   * a hostile approver making a device inactive by adding a copy of its key on a fork (a
-     conflict, §3.3): with an honest relay only a device added in the last 8 entries, with a
-     dishonest relay or a partition one enrolled on any concurrent branch. The conflict names it,
-     and removing it with the full cascade makes the device active again;
+   * a hostile approver making any device that is not senior to it inactive, by adding a copy of
+     its key on a fork and, if that is quarantined, adopting it with its own merge (a conflict,
+     §3.3). It needs no dishonest relay, but never reaches a device senior to it. The conflict
+     names it, and removing it (with the full cascade, or signed on a parent from before the
+     copies) makes the devices active again. Only if no device senior to it is left and the
+     copies have conflicted the cosigners its removal would need does it take a reset;
    * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
      revoke devices that were active and junior to it there. A confirmed pair approved independently
      can also revoke one device senior to both. They never gain trust, a revoked senior device comes
