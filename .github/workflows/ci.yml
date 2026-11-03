@@ -541,14 +541,18 @@ jobs:
     # group, cancelling the older pending one when another arrives, so a slow build of an older
     # merge reaching the group could evict a newer one waiting there, then find itself superseded,
     # leaving the newest merge unpublished. Turned away here, before the group, it never gets there.
-    # product and app must each have run and passed. On main their if: lets every push through
-    # whatever the plan selected; if the plan itself failed they were skipped, and a skipped job's
-    # result is 'skipped', not 'success', so nothing publishes. Said outright, rather than left to
-    # the default success() an if: without a status function gets.
-    needs: [product, app]
+    # Every check must have passed or not been needed, not only product and app: a release is
+    # what installed copies take within the half hour, so a red PWA, Home Assistant or spike
+    # suite on the same commit stops it too. product and app must each have run and passed. On
+    # main every job's if: lets each push through whatever the plan selected; if the plan itself
+    # failed they were skipped, and a skipped job's result is 'skipped', not 'success', so nothing
+    # publishes. !cancelled() replaces the default success(), which would treat any skipped need
+    # as a reason to skip; the results are checked one by one instead.
+    needs: [plan, product, ha-integration, spikes, spikes-linux, app, light, pwa-ui, pwa-e2e]
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
-      && needs.product.result == 'success' && needs.app.result == 'success'
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'danswett/agent-bridge'
+      && needs.plan.result == 'success' && needs.product.result == 'success' && needs.app.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     outputs:
       newest: ${{ steps.head.outputs.newest }}
