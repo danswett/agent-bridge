@@ -415,7 +415,7 @@ function playedHost(transports, { subscribeOk = () => true } = {}) {
 
 const asking = (id) => ({ id, agent: 'copilot', status: 'waiting', updatedAt: '2026-11-03T09:00:00.000Z', activity: {}, question: { id: 'q1', kind: 'form', message: 'Which?', fields: [] } });
 
-async function playedMachine(options) {
+async function playedMachine(options = {}) {
   const connection = fakeConnection(hosts('a'));
   const transports = [];
   const s = new HostSession({ connection, storage: null, makeClient: playedHost(transports, options), reopenMs: 5 });
@@ -427,7 +427,9 @@ async function playedMachine(options) {
   for (let i = 0; i < 4; i++) { await flush(); }
   const t = transports[0];
   t.host({ ev: 'session.upsert', seq: 1, data: asking('s1') });
-  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 1 } });
+  t.host({ ev: 'session.upsert', seq: 2, data: asking('s2') });
+  // whole: false leaves the first snapshot under way.
+  if (options.whole !== false) { t.host({ ev: 'sessions.synced', seq: 3, data: { revision: 1 } }); }
   return { connection, transports, s, opened, t };
 }
 
@@ -456,6 +458,44 @@ test('after a gap in a machine\'s events nothing is sent to it, an answer includ
   assert.equal(answers.submit({ hostId: 'a', sessionId: 's1', questionId: 'q1', answer: { text: 'yes' } }).state, 'sending');
   await until(() => answers.get('a', 's1', 'q1')?.state === 'done', 'the answer');
   assert.equal(t.ops('session.answer').length, 1);
+});
+
+test('a recovery snapshot that loses an event before its sessions.synced confirms nothing, resends nothing, drops nothing, and is asked for again', async () => {
+  const { s, opened, t } = await playedMachine();
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  await flush();
+  await flush();
+  t.host({ ev: 'session.upsert', seq: 6, data: asking('s1') });
+  // seq 7, s2's upsert, is lost.
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.deepEqual([s.route('a'), s.staleOf('a')?.reason, opened], [null, 'confirming', ['a']], 'held, and nothing waiting resent');
+  assert.ok(s.sessions.get('a', 's2'), 'not taken for ended by half a snapshot');
+  await flush();
+  await flush();
+  assert.equal(t.ops('sessions.subscribe').length, 3, 'asked for again');
+  t.host({ ev: 'session.upsert', seq: 9, data: asking('s1') });
+  t.host({ ev: 'session.upsert', seq: 10, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 11, data: { revision: 3 } });
+  assert.ok(s.route('a'));
+  assert.deepEqual(opened, ['a', 'a']);
+});
+
+test('a sessions.synced from the subscription before, still on its way when a gap asked again, does not end the new snapshot', async () => {
+  const { s, opened, t } = await playedMachine({ whole: false });
+  t.host({ ev: 'session.upsert', seq: 4, data: asking('s2') });
+  // The first snapshot's end, sent before the host had the new subscribe: it answers that only
+  // after stopping the first.
+  t.host({ ev: 'sessions.synced', seq: 5, data: { revision: 1 } });
+  assert.deepEqual([s.route('a'), opened], [null, []]);
+  await flush();
+  await flush();
+  t.host({ ev: 'session.upsert', seq: 6, data: asking('s1') });
+  assert.equal(s.route('a'), null, 'the new snapshot is under way');
+  t.host({ ev: 'session.upsert', seq: 7, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.ok(s.route('a'));
+  assert.deepEqual(opened, ['a']);
+  assert.deepEqual(s.sessions.list().map((e) => e.session.id).sort(), ['s1', 's2']);
 });
 
 test('a gap whose resubscription the machine refuses closes the channel and opens a new one, rather than holding the machine for good', async () => {

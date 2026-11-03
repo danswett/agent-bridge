@@ -98,9 +98,18 @@ public static class LocalClient
     }
 
     // Sends a request and returns its result, or throws HostError with the host's reason.
-    public static async Task<JsonElement> CallAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public static async Task<JsonElement> CallAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
+        Result(await channel.RequestAsync(op, data ?? new { }, timeout, ct));
+
+    // The same, with where the response came among the events (IClientChannel.RequestOrderedAsync).
+    public static async Task<(JsonElement Result, long EventsBefore)> CallOrderedAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        var response = await channel.RequestAsync(op, data ?? new { }, timeout, ct);
+        var (response, before) = await channel.RequestOrderedAsync(op, data ?? new { }, timeout, ct);
+        return (Result(response), before);
+    }
+
+    static JsonElement Result(JsonElement response)
+    {
         if (response.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True)
         {
             return response.TryGetProperty("result", out var result) ? result : default;

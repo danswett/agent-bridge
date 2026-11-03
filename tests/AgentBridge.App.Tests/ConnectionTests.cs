@@ -267,6 +267,78 @@ public sealed class ConnectionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_snapshot_whose_sessions_synced_comes_after_lost_events_is_not_taken_as_whole_and_is_asked_for_again()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.Sessions.Add(Make.Session("b"));
+        other.Start();
+        await using var conn = other.Connect(start: false);
+        var synced = 0;
+        conn.Sessions.Synced += () => Interlocked.Increment(ref synced);
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+
+        // A gap asks for the sessions again, and events are lost before that snapshot's end.
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var third = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.OnSubscribe = n => other.HoldSynced = n switch { 2 => second, 3 => third, _ => null };
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 2, "the sessions asked for again");
+        Skip(other, 1);
+        second.SetResult();
+
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 3, "the sessions asked for a third time");
+        Assert.Equal(1, Volatile.Read(ref synced));
+        Assert.False(conn.Sessions.Complete);
+        third.SetResult();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the third snapshot whole");
+        Assert.Equal(2, Volatile.Read(ref synced));
+    }
+
+    [Fact]
+    public async Task A_sessions_synced_the_subscription_before_still_had_on_its_way_does_not_end_the_snapshot_a_gap_asked_for()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.Sessions.Add(Make.Session("b"));
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.OnSubscribe = n =>
+        {
+            other.HoldSynced = n == 1 ? first : null;
+            // Asked again before the first snapshot ended: its end goes out ahead of this answer,
+            // as a host's does when it stops one subscription to answer the next.
+            if (n == 2)
+            {
+                first.SetResult();
+                SpinWait.SpinUntil(() => other.SyncedSent == 1, FakeHost.Patience);
+            }
+        };
+        other.Start();
+        await using var conn = other.Connect(start: false);
+        var synced = 0;
+        var removed = new List<string>();
+        conn.Sessions.Synced += () => Interlocked.Increment(ref synced);
+        conn.Sessions.Removed += id => { lock (removed) { removed.Add(id); } };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Get("a") is not null && conn.Sessions.Get("b") is not null, "the first snapshot's sessions");
+
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+
+        await Wait.UntilAsync(() => other.SyncedSent == 2 && conn.Sessions.Complete, "the second snapshot whole");
+        lock (removed) { Assert.Empty(removed); }
+        Assert.Equal(1, Volatile.Read(ref synced));
+        Assert.NotNull(conn.Sessions.Get("b"));
+    }
+
+    static void Skip(FakeHost h, long count)
+    {
+        foreach (var ch in h.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(count); }
+    }
+
+    [Fact]
     public async Task Events_lost_before_the_first_one_arrives_are_noticed_too()
     {
         await using var fresh = new FakeHost();

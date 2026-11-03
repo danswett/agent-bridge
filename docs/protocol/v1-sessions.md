@@ -242,6 +242,14 @@ the snapshot. Until its `sessions.synced` the client's list may be missing chang
 PWA sends that machine nothing meanwhile, and the Windows app no answer, reply or stop for
 another machine's sessions, as with a new channel's first snapshot (#427).
 
+Which `sessions.synced` ends a snapshot (#427): only one received after the response to the
+latest `sessions.subscribe`, with no gap in `seq` since that response. The host stops the old
+subscription before it answers, so a `sessions.synced` received before the response is the old
+subscription's (its snapshot may still have been under way when the gap was seen), and taking
+it would end the new snapshot with only some of its sessions. A gap after the response,
+including one that `sessions.synced` itself reveals, means that snapshot can't be whole: the
+client subscribes again rather than taking it.
+
 ### Discovery held
 
 ```json
