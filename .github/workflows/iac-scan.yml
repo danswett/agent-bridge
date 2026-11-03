@@ -45,6 +45,7 @@ jobs:
           # The Bicep CLI expands the templates; the same one relay.yml's infra job builds them with.
           az bicep install
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          az bicep version
           $modules = Join-Path $env:RUNNER_TEMP 'psrule-modules'
           foreach ($m in @(@('PSRule', $env:PSRULE_VERSION, $env:PSRULE_SHA256), @('PSRule.Rules.Azure', $env:PSRULE_AZURE_VERSION, $env:PSRULE_AZURE_SHA256))) {
             $id, $version, $sha = $m
@@ -55,7 +56,8 @@ jobs:
             Expand-Archive $file -DestinationPath (Join-Path $modules $id $version)
           }
           Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_MODULES=$modules"
-          Add-Content -Path $env:GITHUB_ENV -Value "PSRULE_AZURE_BICEP_PATH=$(Join-Path $HOME '.azure/bin/bicep')"
+          # Expand through `az bicep`, the Bicep just installed, wherever az keeps it.
+          Add-Content -Path $env:GITHUB_ENV -Value 'PSRULE_AZURE_BICEP_USE_AZURE_CLI=true'
       - name: PSRule for Azure (advisory)
         shell: pwsh
         env:
