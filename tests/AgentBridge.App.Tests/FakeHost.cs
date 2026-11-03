@@ -187,8 +187,12 @@ sealed class TestUi : SynchronizationContext
     static readonly TestUi shared = new();
 
     readonly object gate = new();
-    readonly ConcurrentQueue<(SendOrPostCallback Run, object? State, ExecutionContext? Context)> queue = new();
-    int draining;
+    readonly BlockingCollection<(SendOrPostCallback Run, object? State, ExecutionContext? Context)> queue = new();
+
+    // A thread of its own, as the app's UI thread is, rather than the thread pool's: the fakes
+    // block pool threads (a host held mid-request, a dispatcher waiting for its turn), and under
+    // load a test's steps then waited for the pool to grow before they could take theirs.
+    TestUi() => new Thread(() => { foreach (var item in queue.GetConsumingEnumerable()) { Run(item); } }) { IsBackground = true, Name = "test UI" }.Start();
 
     // The UI thread of the test this runs for.
     public static TestUi ForTest => ambient.Value ?? shared;
@@ -209,9 +213,12 @@ sealed class TestUi : SynchronizationContext
             ambient.Value = ui;
             Task<T> task;
             try { task = run(); }
-            catch (Exception e) { done.SetException(e); return; }
+            catch (Exception e) { ui.queue.CompleteAdding(); done.SetException(e); return; }
             task.ContinueWith(t =>
             {
+                // Its thread goes once what is queued has run; anything still posting after the
+                // test (a connection being let go) takes its turns on the pool.
+                ui.queue.CompleteAdding();
                 if (t.IsFaulted) { done.SetException(t.Exception!.InnerExceptions); }
                 else if (t.IsCanceled) { done.SetCanceled(); }
                 else { done.SetResult(t.Result); }
@@ -236,30 +243,27 @@ sealed class TestUi : SynchronizationContext
         }
     }
 
-    // In order, as a dispatcher's queue: one drain at a time takes them, each under the gate, so a
-    // dispatcher's action from another thread can come between two but never into one.
+    // In order, as a dispatcher's queue: its thread takes them one at a time, each under the gate,
+    // so a dispatcher's action from another thread can come between two but never into one.
     public override void Post(SendOrPostCallback d, object? state)
     {
-        queue.Enqueue((d, state, ExecutionContext.Capture()));
-        if (Interlocked.Exchange(ref draining, 1) == 0) { ThreadPool.UnsafeQueueUserWorkItem(_ => Drain(), null); }
+        var item = (d, state, ExecutionContext.Capture());
+        if (!queue.IsAddingCompleted)
+        {
+            try { queue.Add(item); return; }
+            catch (InvalidOperationException) { }
+        }
+        ThreadPool.UnsafeQueueUserWorkItem(_ => Run(item), null);
     }
 
     public override void Send(SendOrPostCallback d, object? state) => Invoke(() => d(state));
 
     public override SynchronizationContext CreateCopy() => this;
 
-    void Drain()
+    void Run((SendOrPostCallback Run, object? State, ExecutionContext? Context) item)
     {
-        while (true)
-        {
-            while (queue.TryDequeue(out var item))
-            {
-                if (item.Context is { } ec) { ExecutionContext.Run(ec, s => Invoke(() => item.Run(s)), item.State); }
-                else { Invoke(() => item.Run(item.State)); }
-            }
-            Volatile.Write(ref draining, 0);
-            if (queue.IsEmpty || Interlocked.Exchange(ref draining, 1) != 0) { return; }
-        }
+        if (item.Context is { } ec) { ExecutionContext.Run(ec, s => Invoke(() => item.Run(s)), item.State); }
+        else { Invoke(() => item.Run(item.State)); }
     }
 }
 

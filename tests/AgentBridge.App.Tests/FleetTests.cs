@@ -95,6 +95,10 @@ public sealed class FleetTests : IAsyncLifetime
         await Wait.UntilAsync(() => Card("here") is not null && Card("there") is not null, "both machines' cards");
         // Its rows are acted on only once its snapshot has confirmed them (#269).
         await Wait.UntilAsync(() => main.MachineOf("remote-id")?.Current == true, "the other machine's sessions confirmed");
+        // And each connection all the way in: a card arrives before its machine's list is complete
+        // (which drops a toast's open for a session not on it) and before its connection says
+        // Connected (the machines page's "Online"), and under load a test could get between (#101).
+        await Wait.UntilAsync(() => main.AllMachines.Count == 2 && main.AllMachines.All(m => m.Host.State == LinkState.Connected && m.Host.Sessions.Complete), "both machines' lists");
     }
 
     Machine Remote() => TestUi.Read(() => main.MachineOf("remote-id")!);

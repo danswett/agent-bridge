@@ -328,7 +328,9 @@ public sealed class DelegatesTests : IAsyncLifetime
         Select("del");
         var detail = Card("del").Delegates.Detail;
         ui.Post(() => layout.OpenDelegate("suite"));
-        Assert.True(fetching.Wait(FakeHost.Patience), "the fetch");
+        // Waited for, not blocked on: the test runs on the UI thread, and the fetch's write
+        // continues there, as it does in the app.
+        await Wait.UntilAsync(() => fetching.IsSet, "the fetch");
         var before = TestUi.Read(() => detail.Properties.ToList());
         Assert.Equal(["Status", "Kind", "ID"], before.Select(p => p.Label));
 
@@ -489,7 +491,7 @@ public sealed class DelegatesTests : IAsyncLifetime
         Select("del");
         var card = Card("del");
         ui.Post(() => layout.OpenDelegate("suite"));
-        Assert.True(fetched.Wait(FakeHost.Patience), "the fetch");
+        await Wait.UntilAsync(() => fetched.IsSet, "the fetch");
 
         var next = Delegating() with
         {
