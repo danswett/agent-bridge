@@ -143,6 +143,26 @@ public sealed class MacAgentHaBridgeProbeTests
     }
 
     [Fact]
+    public void Codex_discovery_reuses_complete_owner_checks_without_changing_the_G5_name_policy()
+    {
+        var native = new Native
+        {
+            Pids = [100, 101, 102, 103, 104, 105],
+            Path = pid => pid switch
+            {
+                100 => "/test/codex", 101 => "/test/node", 102 => "/test/bun", 103 => "/test/codex.exe",
+                104 => "/test/codex-app-server", _ => "/test/pwsh",
+            },
+        };
+        Assert.Equal(new[] { 100, 101, 102, 103, 104 }, ManagedSessionProcessInspector.NativeCandidates(native));
+        Assert.Equal(105, Assert.Single(MacAgentHaBridgeProbe.Observe(native).Processes).ProcessId);
+        native.Path = _ => null;
+        Assert.Null(ManagedSessionProcessInspector.NativeCandidates(native));
+        native.Owner = pid => new(new(pid, 502, 502, 502));
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<int>>(ManagedSessionProcessInspector.NativeCandidates(native)));
+    }
+
+    [Fact]
     public void A_full_PID_buffer_is_retried_until_a_complete_snapshot_is_obtained()
     {
         var calls = 0;
