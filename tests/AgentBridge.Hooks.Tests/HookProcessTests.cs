@@ -9,6 +9,7 @@ using Xunit.Abstractions;
 // stdout. AGENT_BRIDGE_HOOK points at a published (NativeAOT) one, as CI does; otherwise the
 // build's own. Each test runs a copy in a folder of its own, beside a pointer to a runtime
 // folder of its own, so nothing reaches any real installation.
+[Trait("Category", "Process")]
 public sealed class HookProcessTests(ITestOutputHelper output) : IDisposable
 {
     readonly string _root = Directory.CreateTempSubdirectory("abhookp-").FullName;

@@ -13,6 +13,7 @@ using Xunit;
 // the agent: it exits on /exit, or not, and can be terminated. Nothing here touches a real
 // process; the real worker and the real process control against a console of the tests' own
 // are in InjectorIntegrationTests.
+[Trait("Category", "Network")]
 public sealed class StopFlowTests : IAsyncLifetime
 {
     const string Id = "77777777-7777-4777-8777-777777777777";

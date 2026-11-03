@@ -54,6 +54,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     });
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_profile_too_deep_for_a_socket_address_listens_in_the_users_runtime_folder()
     {
         // Pipe names have no such limit.
@@ -81,6 +82,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_request_gets_its_response_and_the_host_sees_a_local_peer()
     {
         Serve(Echo);
@@ -93,6 +95,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Unknown_ops_and_failures_come_back_as_errors_and_the_connection_carries_on()
     {
         Serve(Echo);
@@ -111,6 +114,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Events_that_follow_a_response_arrive_after_it_numbered_from_one()
     {
         Serve(Echo);
@@ -127,6 +131,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Many_requests_can_be_outstanding_at_once()
     {
         Serve(async (ch, op, data) =>
@@ -143,6 +148,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_message_over_the_limit_is_refused_before_it_is_written_and_the_connection_survives()
     {
         Serve(Echo);
@@ -155,6 +161,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_frame_claiming_more_than_the_limit_ends_the_connection()
     {
         var accepted = new TaskCompletionSource<LocalChannel>();
@@ -172,6 +179,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_frame_that_is_not_json_ends_the_connection()
     {
         var accepted = new TaskCompletionSource<LocalChannel>();
@@ -197,6 +205,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public void A_second_server_for_the_same_profile_is_refused()
     {
         Serve(Echo);
@@ -205,12 +214,14 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Connecting_where_no_host_listens_says_the_host_is_not_running()
     {
         await Assert.ThrowsAsync<HostNotRunningException>(() => LocalClient.ConnectAsync(Endpoint, TimeSpan.FromMilliseconds(300)));
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_client_told_to_wait_without_limit_connects_to_a_host_that_starts_later()
     {
         // A pipe client waits for its pipe; a Unix socket client finds no socket and is told at once.
@@ -227,6 +238,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_refused_process_is_told_why_when_it_says_hello()
     {
         var server = Serve(Echo);
@@ -240,6 +252,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_server_started_while_the_last_one_on_its_endpoint_is_still_stopping_can_be_reached()
     {
         // A pipe name has no file to remove: it goes with its last instance.
@@ -258,6 +271,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public void A_closed_listener_leaves_whatever_is_at_its_path_by_then_alone()
     {
         // The runtime deletes a UnixDomainSocketEndPoint's path when its socket is disposed, after
@@ -273,6 +287,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Closing_the_server_ends_its_connections_and_fails_what_is_outstanding()
     {
         var release = new TaskCompletionSource();
@@ -300,6 +315,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_host_sees_the_connecting_process_and_what_it_runs_inside_nearest_first()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -327,6 +343,7 @@ public sealed class LocalPipeTests : IAsyncDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_process_that_has_gone_has_no_chain()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) { return; }

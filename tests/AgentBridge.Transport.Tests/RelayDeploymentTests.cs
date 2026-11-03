@@ -15,6 +15,7 @@ namespace AgentBridge.Transport.Tests;
 public class RelayDeploymentTests
 {
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_smoke_test_passes_against_a_working_relay_with_two_devices_talking_and_a_file_through_its_blob_store()
     {
         var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -29,6 +30,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_smoke_test_fails_when_a_blob_store_is_expected_and_the_relay_has_none()
     {
         var key = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
@@ -42,6 +44,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_smoke_test_fails_when_the_expected_build_is_not_the_one_serving()
     {
         await using var relay = await TestRelay.StartAsync(o => o.Version = "old");
@@ -54,6 +57,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_smoke_test_fails_against_a_relay_signing_with_another_key()
     {
         await using var relay = await TestRelay.StartAsync(o => o.TokenKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
@@ -66,6 +70,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_stopping_relay_reports_not_ready_and_refuses_new_sockets_while_it_drains()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -85,6 +90,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Relay_logs_name_no_account_login_device_or_device_name()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -116,6 +122,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Relay_metrics_carry_only_allowlisted_low_cardinality_tags()
     {
         var seen = new List<(string Instrument, string Tag)>();
@@ -153,6 +160,7 @@ public class RelayDeploymentTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Relay_metrics_can_be_collected_while_a_relay_shuts_down()
     {
         using var listener = new MeterListener();

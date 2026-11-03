@@ -6,6 +6,7 @@ namespace AgentBridge.Transport.Tests;
 
 // Host-pushed events, {"ev", "seq", "data"}, alongside requests and responses on one channel
 // (docs/protocol/v1-sessions.md, "Channel framing").
+[Trait("Category", "Network")]
 public class EventTests
 {
     // A host and a client with one open channel, and the host's end of it.

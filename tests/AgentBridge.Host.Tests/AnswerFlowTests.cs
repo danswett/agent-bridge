@@ -11,6 +11,7 @@ using Xunit;
 // SessionSource, answered by a client through the in-process relay, delivered by the real
 // AnswerService into a fake injector that plays the CLI: it writes what the session would
 // record into the transcript. Real keys into a real console are InjectorIntegrationTests.
+[Trait("Category", "Network")]
 public sealed class AnswerFlowTests : IAsyncLifetime
 {
     const string Id = "88888888-8888-4888-8888-888888888888";

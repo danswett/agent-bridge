@@ -80,6 +80,7 @@ public sealed class SessionBundleTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_link_inside_a_session_is_never_followed_into_the_bundle()
     {
         var dir = CopilotSession();
@@ -101,6 +102,7 @@ public sealed class SessionBundleTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_folder_swapped_for_a_link_after_the_walk_is_caught_when_its_file_is_opened()
     {
         var dir = CopilotSession();

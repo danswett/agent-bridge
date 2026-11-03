@@ -255,6 +255,7 @@ public sealed class AttachmentStoreTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void The_sweep_deletes_only_old_files_it_staged_and_nothing_through_a_linked_folder()
     {
         var old = (time.GetUtcNow() - TimeSpan.FromHours(25)).UtcDateTime;

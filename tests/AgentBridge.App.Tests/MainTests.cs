@@ -5,6 +5,7 @@ using Xunit;
 
 // The window's list of cards, over a host on a real pipe: its order, holding still while
 // someone types, toasts only for news, and a toast's session opened once it arrives.
+[Trait("Category", "Network")]
 public sealed class MainTests : IAsyncLifetime
 {
     readonly FakeHost host = new();

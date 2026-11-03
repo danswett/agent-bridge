@@ -106,6 +106,7 @@ public sealed class HostSettingsTests : IDisposable
     string Said = "";
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_workspace_is_approved_at_the_machine_with_the_cli_and_removed_the_same_way()
     {
         var app = Directory.CreateDirectory(Path.Combine(folder, "app")).FullName;

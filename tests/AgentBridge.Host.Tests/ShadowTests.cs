@@ -551,6 +551,7 @@ public sealed class ShadowTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_running_host_is_read_through_its_own_pipe_and_a_host_that_is_not_running_says_so()
     {
         Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("do it", 1), Copilot.TurnStart(2));

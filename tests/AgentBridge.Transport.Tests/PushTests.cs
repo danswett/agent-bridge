@@ -27,6 +27,7 @@ public class PushTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_relays_VAPID_header_verifies_against_its_published_key_for_the_endpoints_origin_and_expires_within_the_hour()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -52,6 +53,7 @@ public class PushTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_push_crosses_the_relay_as_ciphertext_with_its_headers()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -75,6 +77,7 @@ public class PushTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_relay_refuses_push_endpoints_off_its_allowlist_without_making_a_request()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -94,6 +97,7 @@ public class PushTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_push_topic_Apple_would_refuse_is_dropped_and_the_push_still_goes()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -111,6 +115,7 @@ public class PushTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Pushes_are_rate_limited_per_account_and_a_gone_subscription_is_reported_as_410()
     {
         await using var relay = await TestRelay.StartAsync();

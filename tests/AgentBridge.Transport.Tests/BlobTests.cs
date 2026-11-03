@@ -198,6 +198,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_multi_megabyte_file_reaches_another_device_of_the_account_and_storage_only_ever_holds_ciphertext()
     {
         await using var relay = await StartAsync();
@@ -230,6 +231,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Another_account_or_another_device_can_neither_read_nor_delete_a_blob_but_the_sender_can_withdraw_it()
     {
         await using var relay = await StartAsync();
@@ -254,6 +256,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_ticket_altered_to_name_another_device_or_moved_to_another_account_is_refused()
     {
         await using var relay = await StartAsync();
@@ -275,6 +278,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task URLs_last_minutes_and_tickets_a_day_after_which_a_blob_can_no_longer_be_read()
     {
         var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
@@ -298,6 +302,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Sizes_are_capped_padded_and_checked_against_what_was_actually_uploaded()
     {
         await using var relay = await StartAsync(o => o.Blobs.MaxBytes = 8 * Mib);
@@ -319,6 +324,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_write_URL_creates_its_blob_once_and_cannot_read_and_a_read_URL_cannot_write()
     {
         await using var relay = await StartAsync();
@@ -335,6 +341,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_accounts_bytes_per_day_are_limited_and_other_accounts_are_unaffected()
     {
         await using var relay = await StartAsync(o => o.Blobs.MaxBytesPerAccountPerDay = 3 * 4096);
@@ -348,6 +355,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_accounts_puts_per_minute_are_limited()
     {
         await using var relay = await StartAsync(o => o.Blobs.MaxPutsPerMinute = 2);
@@ -360,6 +368,7 @@ public class BlobStoreTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_relay_without_a_blob_store_says_so_at_admission_and_refuses_blob_requests()
     {
         await using var relay = await TestRelay.StartAsync();

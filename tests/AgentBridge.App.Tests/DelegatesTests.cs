@@ -8,6 +8,7 @@ using Xunit;
 // three panes, the Delegates tab below that, the inspector loaded with session.get { id, agent },
 // the conversation's one-line events, and "Ask main agent to stop it", which only ever pre-fills a
 // reply to the main agent.
+[Trait("Category", "Network")]
 public sealed class DelegatesTests : IAsyncLifetime
 {
     static readonly DateTimeOffset Now = Make.T0;

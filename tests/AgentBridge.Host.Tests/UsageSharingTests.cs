@@ -11,6 +11,7 @@ using Xunit;
 // Usage shared between the account's hosts (#172): one host asks another for its readings over a
 // channel through the in-process relay, keeps them, and serves them with usage.shared once the
 // machine that read them is gone, and after a restart of its own.
+[Trait("Category", "Network")]
 public sealed class UsageSharingTests : IAsyncLifetime
 {
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(10);

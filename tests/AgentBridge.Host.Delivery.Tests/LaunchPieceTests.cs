@@ -73,6 +73,7 @@ public sealed class LaunchPieceTests : IDisposable
     ];
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public void An_executable_reads_back_exactly_the_arguments_it_was_given()
     {
         var line = WindowsCommandLine.For(Echo, ["--args", Out("exe.json"), .. Nasty], out var problem);
@@ -81,6 +82,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public void A_batch_shim_passes_every_argument_on_through_cmd_exe_without_running_or_expanding_any_of_it()
     {
         // As npm's shims are: the script hands %* to the real program.
@@ -96,6 +98,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public async Task Agency_installed_as_a_batch_shim_still_lists_its_profiles_from_a_folder_cmd_exe_would_misread_unquoted()
     {
         // Program Files (x86): an unquoted ( or & is where cmd.exe goes wrong.
@@ -120,6 +123,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public void The_starter_opens_a_console_of_the_agents_own_in_the_working_directory_and_can_tell_when_it_has_gone()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -136,6 +140,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public void A_started_agent_gets_the_session_variable_on_top_of_the_hosts_own_environment()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -156,6 +161,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [WindowsFact]
+    [Trait("Category", "Process")]
     public void A_process_is_the_launchs_own_only_if_it_runs_under_the_process_started_for_it()
     {
         if (!OperatingSystem.IsWindows()) { return; }
@@ -280,6 +286,7 @@ public sealed class LaunchPieceTests : IDisposable
     LaunchConfig WorktreeConfig(int limit = 10) => LaunchConfig.Default with { WorktreeRoot = Path.Combine(root, "wt"), WorktreeLimit = limit };
 
     [Fact]
+    [Trait("Category", "Process")]
     public void An_isolated_launch_gets_a_detached_worktree_at_the_fetched_base_named_by_time_and_marked_as_this_hosts()
     {
         var work = Repo();
@@ -300,6 +307,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_workspace_in_a_subfolder_of_its_repository_launches_in_the_same_subfolder_of_the_worktree_and_resumes_there()
     {
         var svc = Repo(subfolder: true);
@@ -316,6 +324,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_session_in_one_of_agent_ha_bridges_worktrees_is_resumable_there_but_the_worktree_is_never_this_hosts_to_lock()
     {
         var work = Repo();
@@ -333,6 +342,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void The_cap_counts_only_this_hosts_worktrees_and_refuses_rather_than_falling_back()
     {
         var work = Repo();
@@ -349,6 +359,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_workspace_folder_that_the_fetched_base_turns_into_a_link_out_of_the_worktree_is_never_launched_in()
     {
         var work = Repo();
@@ -369,6 +380,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_folder_outside_git_fails_closed()
     {
         var plain = Directory.CreateDirectory(Path.Combine(root, "plain")).FullName;
@@ -379,6 +391,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void A_worktree_is_locked_while_its_session_starts_and_only_this_launchs_lock_is_lifted()
     {
         var work = Repo();

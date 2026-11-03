@@ -1521,6 +1521,7 @@ public sealed class MigrationTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task Stopping_takes_only_this_installations_own_processes_and_honours_their_receipts()
     {
         if (!OperatingSystem.IsWindows()) { return; }

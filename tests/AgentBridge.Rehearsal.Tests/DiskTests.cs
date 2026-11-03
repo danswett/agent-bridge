@@ -22,6 +22,7 @@ public class DiskTests
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public void Worktrees_are_counted_by_the_marker_each_bridge_writes_in_their_git_folder()
     {
         using var s = new Scratch();
