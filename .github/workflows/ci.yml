@@ -42,6 +42,16 @@ jobs:
       # and killed, and the run fails naming the test in progress, instead of stalling the job.
       - run: dotnet test AgentBridge.slnx -c Release --nologo --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type mini --results-directory TestResults
         timeout-minutes: 20
+      - name: TEMPORARY (#354) the Category filter on this OS
+        shell: pwsh
+        run: |
+          foreach ($f in 'Category!=Process&Category!=Network', 'Category=Process|Category=Network', 'Category=Process', 'Category=Network') {
+            Write-Host "::group::filter $f"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            dotnet test AgentBridge.slnx -c Release --no-build --nologo --filter $f
+            Write-Host "filter '$f' exit $LASTEXITCODE wall $($sw.Elapsed)"
+            Write-Host "::endgroup::"
+          }
       - name: Keep the hang dumps
         if: failure()
         uses: actions/upload-artifact@v4
