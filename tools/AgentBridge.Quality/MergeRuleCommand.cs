@@ -65,10 +65,11 @@ static class MergeRuleCommand
     internal const string Usage = """
           merge-rule (--pr N | --sha SHA | --all) [--slug OWNER/REPO] [--config FILE]
                      [--post] [--target-url URL] [--summary FILE]
-              Judges open pull requests into main against quality/merge-rule.yml: the one numbered,
-              those whose head is SHA, or all of them. Prints each verdict; with --post, also sets
-              the head's merge-rule status (unless it already says the same), and with --summary,
-              appends a Markdown table to FILE. A dry run (no --post) changes nothing.
+              Judges open pull requests into main against quality/merge-rule.yml: those on the
+              numbered one's head, those whose head is SHA, or all of them. Prints each verdict;
+              with --post, also sets each head's merge-rule status to the worst verdict on it
+              (unless the workflow already posted the same), and with --summary, appends a
+              Markdown table to FILE. A dry run (no --post) changes nothing.
         """;
 
     const string PullRequestFields = """
@@ -84,20 +85,20 @@ static class MergeRuleCommand
               app { slug }
               workflowRun { databaseId event workflow { name } }
               status conclusion
-              checkRuns(last: 10, filterBy: { checkName: $check }) { nodes { databaseId status conclusion } }
+              checkRuns(last: 60) { nodes { databaseId name status conclusion } }
             } }
           } } }
         }
         """;
 
     static readonly string OneQuery = PullRequestFields + """
-        query($owner: String!, $name: String!, $number: Int!, $check: String!) {
+        query($owner: String!, $name: String!, $number: Int!) {
           repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...pr } }
         }
         """;
 
     static readonly string OpenQuery = PullRequestFields + """
-        query($owner: String!, $name: String!, $base: String!, $check: String!, $cursor: String) {
+        query($owner: String!, $name: String!, $base: String!, $cursor: String) {
           repository(owner: $owner, name: $name) {
             pullRequests(states: OPEN, baseRefName: $base, first: 25, after: $cursor, orderBy: { field: CREATED_AT, direction: ASC }) {
               pageInfo { hasNextPage endCursor }
@@ -119,72 +120,83 @@ static class MergeRuleCommand
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
 
+        // The status belongs to a commit, not a pull request, and two open pull requests can share
+        // a head: so every mode judges all open pull requests on the head it's about, and posts the
+        // worst of their verdicts. A held or unreviewed one then can't ride on another's success.
         List<PullRequestFacts> prs;
         if (options.TryGetValue("pr", out var number))
         {
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
-            prs = [FetchOne(github, config, slug, n)];
+            var one = FetchOne(github, config, slug, n);
+            if (MergeRule.Evaluate(config, one) is null)
+            {
+                output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
+                prs = [];
+            }
+            else
+                prs = FetchOpen(github, config, slug).Where(p => SameSha(p.HeadSha, one.HeadSha)).ToList();
         }
         else
         {
             prs = FetchOpen(github, config, slug);
             if (options.TryGetValue("sha", out var sha))
-                prs = prs.Where(p => string.Equals(p.HeadSha, sha, StringComparison.OrdinalIgnoreCase)).ToList();
+                prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
 
         var rows = new List<string>();
         var failedPosts = 0;
-        var bulk = !options.ContainsKey("pr");
-        foreach (var listedPr in prs)
+        foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
         {
-            var pr = listedPr;
-            var verdict = MergeRule.Evaluate(config, pr);
-            if (verdict is null)
-            {
-                output.WriteLine($"#{pr.Number}: not judged ({pr.State.ToLowerInvariant()}, into {pr.BaseRef}).");
+            var members = head.ToList();
+            var judged = Judge(config, members);
+            if (judged.Count == 0)
                 continue;
-            }
-            if (post && bulk && !Unchanged(pr, verdict))
+            var combined = MergeRule.Combine(judged);
+            if (post && !Unchanged(members[0], combined))
             {
-                // A sweep read every pull request up front; a hold label or a failed receipt may have
-                // landed since, and an event's run may already have posted on it. So read this one
-                // again just before posting, rather than overwrite a newer verdict with a stale one.
-                pr = FetchOne(github, config, slug, pr.Number);
-                verdict = MergeRule.Evaluate(config, pr);
-                if (verdict is null)
-                {
-                    output.WriteLine($"#{pr.Number}: not judged ({pr.State.ToLowerInvariant()}, into {pr.BaseRef}).");
+                // The facts were read up front; a hold label, a failed receipt or a red check may
+                // have landed since. So read each pull request again just before posting, rather
+                // than overwrite a newer verdict with a stale one. One that has moved to another
+                // head is that head's business: its push starts a run of its own.
+                members = members.Select(p => FetchOne(github, config, slug, p.Number)).Where(p => SameSha(p.HeadSha, head.Key)).ToList();
+                judged = Judge(config, members);
+                if (judged.Count == 0)
                     continue;
-                }
+                combined = MergeRule.Combine(judged);
             }
-            var unchanged = Unchanged(pr, verdict);
+            var unchanged = Unchanged(members[0], combined);
             var action = !post ? "dry run, not posted" : unchanged ? "unchanged, not posted again" : "posted";
             if (post && !unchanged)
             {
                 try
                 {
-                    github.PostStatus(slug, pr.HeadSha, verdict.State, MergeRule.StatusContext, verdict.Description, options.GetValueOrDefault("target-url"));
+                    github.PostStatus(slug, members[0].HeadSha, combined.State, MergeRule.StatusContext, combined.Description, options.GetValueOrDefault("target-url"));
                 }
                 catch (InvalidOperationException e)
                 {
-                    // One pull request's failed post mustn't stop the others being judged.
+                    // One head's failed post mustn't stop the others being judged.
                     failedPosts++;
                     action = "NOT posted: " + e.Message;
                 }
             }
-            output.WriteLine($"#{pr.Number} {MergeRule.Short(pr.HeadSha)} {verdict.State}: {verdict.Description} ({action})");
-            foreach (var file in verdict.SensitiveFiles)
-                output.WriteLine($"    sensitive: {file}");
-            rows.Add($"| #{pr.Number} | `{MergeRule.Short(pr.HeadSha)}` | {verdict.State} | {MergeRule.Cell(verdict.Description)} | {MergeRule.Cell(action)} |");
+            foreach (var (pr, verdict) in judged)
+            {
+                output.WriteLine($"#{pr.Number} {MergeRule.Short(pr.HeadSha)} {verdict.State}: {verdict.Description} ({action})");
+                foreach (var file in verdict.SensitiveFiles)
+                    output.WriteLine($"    sensitive: {file}");
+                rows.Add($"| #{pr.Number} | `{MergeRule.Short(pr.HeadSha)}` | {verdict.State} | {MergeRule.Cell(verdict.Description)} | {MergeRule.Cell(action)} |");
+            }
+            if (judged.Count > 1)
+                output.WriteLine($"    {judged.Count} pull requests share {MergeRule.Short(head.Key)}; its status is the worst verdict, {combined.State}: {combined.Description}");
         }
-        if (prs.Count == 0)
+        if (prs.Count == 0 && !options.ContainsKey("pr"))
             output.WriteLine(options.TryGetValue("sha", out var s) ? $"No open pull request into {config.Base} has head {s}." : $"No open pull requests into {config.Base}.");
 
         if (options.TryGetValue("summary", out var summary) && summary.Length > 0)
         {
             var md = new StringBuilder();
-            md.AppendLine($"### merge-rule: {prs.Count} pull request(s) judged by main's quality/merge-rule.yml");
+            md.AppendLine($"### merge-rule: {rows.Count} pull request(s) judged by main's quality/merge-rule.yml");
             md.AppendLine();
             if (rows.Count > 0)
             {
@@ -198,14 +210,31 @@ static class MergeRuleCommand
         return failedPosts == 0 ? 0 : 1;
     }
 
+    // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.
+    static string? Login(JsonElement actor) =>
+        actor.ValueKind == JsonValueKind.Object && actor.GetProperty("login").GetString() is { } login
+            ? (login.EndsWith("[bot]", StringComparison.Ordinal) ? login[..^5] : login)
+            : null;
+
+    static bool SameSha(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    static List<(PullRequestFacts Pr, Verdict Verdict)> Judge(MergeRuleConfig config, IEnumerable<PullRequestFacts> prs) =>
+        prs.Select(p => (Pr: p, Verdict: MergeRule.Evaluate(config, p)))
+            .Where(j => j.Verdict is not null)
+            .Select(j => (j.Pr, j.Verdict!))
+            .ToList();
+
+    // Only the workflow's own post counts as already said: the ruleset requires merge-rule from
+    // GitHub Actions, so the same words posted by a person (a local --post) don't satisfy it.
     static bool Unchanged(PullRequestFacts pr, Verdict verdict) =>
         pr.Statuses.Where(s => s.Context == MergeRule.StatusContext).OrderByDescending(s => s.CreatedAt).FirstOrDefault() is { } current
+        && current.Creator == MergeRule.Poster
         && current.State == verdict.State && current.Description == verdict.Description;
 
     static PullRequestFacts FetchOne(IGitHub github, MergeRuleConfig config, string slug, int number)
     {
         var (owner, name) = Split(slug);
-        using var doc = github.GraphQL(OneQuery, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number, ["check"] = config.Codeql.Check });
+        using var doc = github.GraphQL(OneQuery, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
         var node = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
         if (node.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException($"{slug} has no pull request #{number}.");
@@ -219,7 +248,7 @@ static class MergeRuleCommand
         string? cursor = null;
         do
         {
-            var variables = new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["base"] = config.Base, ["check"] = config.Codeql.Check };
+            var variables = new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["base"] = config.Base };
             if (cursor is not null)
                 variables["cursor"] = cursor;
             using var doc = github.GraphQL(OpenQuery, variables);
@@ -264,7 +293,7 @@ static class MergeRuleCommand
                     receipts.Context,
                     s.GetProperty("state").GetString() ?? "",
                     s.GetProperty("description").GetString(),
-                    s.GetProperty("creator") is { ValueKind: JsonValueKind.Object } who ? who.GetProperty("login").GetString() : null,
+                    Login(s.GetProperty("creator")),
                     DateTimeOffset.Parse(s.GetProperty("created_at").GetString()!, CultureInfo.InvariantCulture)))
                 .ToList();
             facts = facts with { Statuses = facts.Statuses.Where(s => s.Context != receipts.Context).Concat(history).ToList() };
@@ -305,11 +334,12 @@ static class MergeRuleCommand
             .ToList();
 
         var statuses = new List<StatusFact>();
-        RunFact? run = null, check = null;
+        var checks = new List<CheckFact>();
+        RunFact? run = null, codeScanning = null;
         var commits = pr.GetProperty("commits").GetProperty("nodes").EnumerateArray().ToList();
         // The last commit is the head, unless the head moved between GraphQL's reads; then judge
         // nothing on it rather than another commit's statuses and checks.
-        if (commits.Count == 1 && commits[0].GetProperty("commit") is var commit && string.Equals(commit.GetProperty("oid").GetString(), head, StringComparison.OrdinalIgnoreCase))
+        if (commits.Count == 1 && commits[0].GetProperty("commit") is var commit && SameSha(commit.GetProperty("oid").GetString() ?? "", head))
         {
             if (commit.GetProperty("status") is { ValueKind: JsonValueKind.Object } status)
                 statuses = status.GetProperty("contexts").EnumerateArray()
@@ -317,32 +347,15 @@ static class MergeRuleCommand
                         s.GetProperty("context").GetString() ?? "",
                         (s.GetProperty("state").GetString() ?? "").ToLowerInvariant(),
                         s.GetProperty("description").GetString(),
-                        s.GetProperty("creator") is { ValueKind: JsonValueKind.Object } who ? who.GetProperty("login").GetString() : null,
+                        Login(s.GetProperty("creator")),
                         DateTimeOffset.Parse(s.GetProperty("createdAt").GetString()!, CultureInfo.InvariantCulture)))
                     .ToList();
-            long runId = -1, checkId = -1;
-            foreach (var suite in commit.GetProperty("checkSuites").GetProperty("nodes").EnumerateArray())
-            {
-                // The latest run of the CodeQL workflow for this pull request: a ready-for-review
-                // rerun supersedes the draft's, which skipped everything.
-                if (suite.GetProperty("workflowRun") is { ValueKind: JsonValueKind.Object } wr
-                    && wr.GetProperty("event").GetString() == "pull_request"
-                    && wr.GetProperty("workflow").GetProperty("name").GetString() == config.Codeql.Workflow
-                    && wr.GetProperty("databaseId").GetInt64() > runId)
-                {
-                    runId = wr.GetProperty("databaseId").GetInt64();
-                    run = new RunFact(suite.GetProperty("status").GetString() ?? "", suite.GetProperty("conclusion").GetString());
-                }
-                // Code scanning's check comes from its own app, not from a workflow, so a
-                // workflow job can't stand in for it by taking its name.
-                if (suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } app && app.GetProperty("slug").GetString() == "github-advanced-security")
-                    foreach (var cr in suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray())
-                        if (cr.GetProperty("databaseId").GetInt64() > checkId)
-                        {
-                            checkId = cr.GetProperty("databaseId").GetInt64();
-                            check = new RunFact(cr.GetProperty("status").GetString() ?? "", cr.GetProperty("conclusion").GetString());
-                        }
-            }
+            (run, codeScanning, checks) = ReadChecks(commit.GetProperty("checkSuites").GetProperty("nodes"), config);
+            // Every other status counts like a check; merge-rule is this verdict, and the receipt
+            // is judged on its own terms above.
+            checks.AddRange(statuses
+                .Where(s => s.Context != MergeRule.StatusContext && s.Context != config.IndependentReview.Context)
+                .Select(s => new CheckFact(s.Context, s.State switch { "success" => "success", "pending" or "expected" => "pending", _ => "failure" }, s.State)));
         }
 
         var facts = new PullRequestFacts(
@@ -357,8 +370,104 @@ static class MergeRuleCommand
             reviews,
             statuses,
             run,
-            check);
+            codeScanning)
+        { Checks = checks };
         return (facts, needsRest, changed);
+    }
+
+    /// <summary>
+    /// The head's check runs, as the verdict reads them. A workflow that ran more than once on the
+    /// head (a draft's run, then ready for review's; a cancelled run, then its replacement) counts
+    /// by its latest run only, and a job retried within a run by its latest attempt. The merge
+    /// rule's own workflows are left out (they're running while it judges), and CodeQL's workflow
+    /// and code scanning's check are read apart, for their own messages.
+    /// </summary>
+    static (RunFact? CodeQlRun, RunFact? CodeQlCheck, List<CheckFact> Checks) ReadChecks(JsonElement suites, MergeRuleConfig config)
+    {
+        RunFact? codeqlRun = null, codeqlCheck = null;
+        long codeqlRunId = -1, codeqlCheckId = -1;
+        var latestRun = new Dictionary<string, (long Id, JsonElement Suite)>(StringComparer.Ordinal);
+        var otherApps = new Dictionary<string, (long Id, CheckFact Check)>(StringComparer.Ordinal);
+        foreach (var suite in suites.EnumerateArray())
+        {
+            var slug = suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } app ? app.GetProperty("slug").GetString() ?? "" : "";
+            if (suite.GetProperty("workflowRun") is { ValueKind: JsonValueKind.Object } wr)
+            {
+                var workflow = wr.GetProperty("workflow").GetProperty("name").GetString() ?? "";
+                var id = wr.GetProperty("databaseId").GetInt64();
+                if (workflow == config.Codeql.Workflow)
+                {
+                    // The latest pull_request run: a ready-for-review rerun supersedes the draft's,
+                    // which skipped everything.
+                    if (wr.GetProperty("event").GetString() == "pull_request" && id > codeqlRunId)
+                    {
+                        codeqlRunId = id;
+                        codeqlRun = new RunFact(suite.GetProperty("status").GetString() ?? "", suite.GetProperty("conclusion").GetString());
+                    }
+                    continue;
+                }
+                if (config.IgnoreWorkflows.Contains(workflow, StringComparer.Ordinal))
+                    continue;
+                if (!latestRun.TryGetValue(workflow, out var current) || id > current.Id)
+                    latestRun[workflow] = (id, suite);
+                continue;
+            }
+            foreach (var cr in suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray())
+            {
+                var id = cr.GetProperty("databaseId").GetInt64();
+                var name = cr.GetProperty("name").GetString() ?? "";
+                // Code scanning's check comes from its own app, not from a workflow, so a workflow
+                // job can't stand in for it by taking its name.
+                if (slug == "github-advanced-security" && name == config.Codeql.Check)
+                {
+                    if (id > codeqlCheckId)
+                    {
+                        codeqlCheckId = id;
+                        codeqlCheck = new RunFact(cr.GetProperty("status").GetString() ?? "", cr.GetProperty("conclusion").GetString());
+                    }
+                    continue;
+                }
+                var key = slug + "/" + name;
+                if (!otherApps.TryGetValue(key, out var current) || id > current.Id)
+                    otherApps[key] = (id, Classify(name, cr));
+            }
+        }
+        var checks = new List<CheckFact>();
+        foreach (var (_, suite) in latestRun.Values)
+        {
+            var runs = suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray().ToList();
+            if (runs.Count > 0)
+            {
+                checks.AddRange(runs
+                    .GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
+                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
+                continue;
+            }
+            // A run with no jobs yet is still to come; one that ended before any job (a workflow
+            // file that doesn't parse: startup_failure) failed. Not action_required: a run waiting
+            // for approval, as the review relay's do when Copilot's review starts them.
+            var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
+            var status = suite.GetProperty("status").GetString();
+            var conclusion = suite.GetProperty("conclusion").GetString();
+            if (status != "COMPLETED")
+                checks.Add(new CheckFact(workflow, "pending", status?.ToLowerInvariant()));
+            else if (conclusion is "STARTUP_FAILURE" or "FAILURE" or "TIMED_OUT" or "CANCELLED")
+                checks.Add(new CheckFact(workflow, "failure", conclusion.ToLowerInvariant()));
+        }
+        checks.AddRange(otherApps.Values.Select(v => v.Check));
+        return (codeqlRun, codeqlCheck, checks);
+    }
+
+    // GitHub's own rule: success, skipped and neutral pass; anything still to finish is pending;
+    // every other end (failure, cancelled, timed out, action required, stale...) fails.
+    static CheckFact Classify(string name, JsonElement checkRun)
+    {
+        var status = checkRun.GetProperty("status").GetString();
+        var conclusion = checkRun.GetProperty("conclusion").GetString();
+        var state = status != "COMPLETED" ? "pending"
+            : conclusion is "SUCCESS" or "SKIPPED" or "NEUTRAL" ? "success"
+            : "failure";
+        return new CheckFact(name, state, (status != "COMPLETED" ? status : conclusion)?.ToLowerInvariant());
     }
 
     static (string Owner, string Name) Split(string slug)

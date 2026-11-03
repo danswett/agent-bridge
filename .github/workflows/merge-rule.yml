@@ -3,8 +3,9 @@ name: Merge rule
 # Posts the commit status `merge-rule` on each open pull request into main (AGENTS.md, "Pull
 # requests"; quality/README.md §4.9). Main's ruleset requires it beside quality-gate, so with
 # auto-merge on, GitHub merges a pull request only when this says success: not a draft, no hold
-# label, a Copilot review of the exact head, CodeQL green, and, when the change touches a
-# sensitive path, an independent review's receipt on the exact head.
+# label, a Copilot review of the exact head, CodeQL green, every other check and status on the head
+# passed, and, when the change touches a sensitive path, an independent review's receipt on the
+# exact head.
 #
 # The pull request under judgement must not be able to loosen its own gate (#487, Finding 1). So
 # every trigger here runs main's copy of this workflow, the job checks out main and builds main's
@@ -12,14 +13,18 @@ name: Merge rule
 # through the API: its code is never checked out, built or run.
 #  - pull_request_target: opened, pushed to, reopened, ready or back to draft, retargeted (edited),
 #    labelled or unlabelled.
-#  - status: an `independent-review` receipt posted on a head (statuses this workflow posts with
-#    its own token start no workflow, so it can't loop).
-#  - workflow_run: a review was submitted or dismissed (the relay in merge-rule-review.yml, since
-#    pull_request_review runs the pull request's copy of a workflow, which mustn't post statuses),
-#    or CodeQL finished on a pull request.
-#  - schedule and workflow_dispatch: every open pull request, as a backstop for anything the
-#    events missed. That includes Dependabot's: runs it triggers may get a read-only token, so
-#    their posts can fail (allowed below), and the next scheduled run posts instead.
+#  - status: a receipt or any other status posted on a head (statuses this workflow posts with its
+#    own token start no workflow, so it can't loop).
+#  - workflow_run: any other workflow finished on a pull request, so a late red flips the verdict
+#    (a test keeps the list complete). That includes the review relay in merge-rule-review.yml:
+#    pull_request_review runs the pull request's copy of a workflow, which mustn't post statuses.
+#  - check_suite: a check from an app other than GitHub Actions finished (code scanning's
+#    CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run above.
+#  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
+#    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
+#    below), and the next scheduled run posts instead.
+# Whatever the trigger, a run judges every open pull request into main (one GraphQL query): the
+# event only says when, and a run that queued behind another loses nothing.
 
 on:
   # Safe as a pull_request_target and workflow_run workflow because it never checks out, builds or
@@ -29,7 +34,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
-    workflows: [Merge rule review relay, CodeQL]
+    workflows: [CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Pages, Perf, Relay deploy, Workflow lint]
+    types: [completed]
+  check_suite:
     types: [completed]
   schedule:
     # Every 10 minutes. GitHub may run it later under load; the events above do the prompt work.
@@ -39,25 +46,29 @@ on:
 permissions: {}
 
 concurrency:
-  # One evaluation per head at a time; a newer one waits rather than cancelling, so the last to
-  # post read the newest state. The sweeps share one group of their own.
-  group: merge-rule-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.event.sha || 'all' }}
+  # One run at a time, all triggers together, so no two runs read and post on the same head at
+  # once, and an older read can't land after a newer one. A newer run waits rather than cancelling;
+  # GitHub keeps one waiting run and cancels any older waiting one, which is safe because every run
+  # judges every pull request.
+  group: merge-rule
   cancel-in-progress: false
 
 jobs:
   # Named evaluate, not merge-rule: GitHub requires every check and status of a required name to
   # pass, so a job of that name would be one more thing for each pull request to wait on.
   evaluate:
+    # Main's own runs and check suites (pushes, the weekly CodeQL) start no evaluation: no pull
+    # request's head is on main.
     if: >-
-      (github.event_name != 'status' || github.event.context == 'independent-review')
-      && (github.event_name != 'workflow_run' || contains(fromJSON('["pull_request", "pull_request_review"]'), github.event.workflow_run.event))
+      (github.event_name != 'workflow_run' || contains(fromJSON('["pull_request", "pull_request_review"]'), github.event.workflow_run.event))
+      && (github.event_name != 'check_suite' || github.event.check_suite.head_branch != 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read # check out main
       pull-requests: read # the pull requests, their files, labels and reviews
-      checks: read # code scanning's check on the head
-      actions: read # which workflow each of the head's check suites is (CodeQL's run)
+      checks: read # every check run on the head
+      actions: read # which workflow each of the head's check suites belongs to
       statuses: write # read the receipts, post merge-rule
     # A Dependabot-triggered run's token may be read-only (see above); its post failing mustn't
     # turn the run red when the schedule will post in its place.
@@ -76,15 +87,7 @@ jobs:
       - name: Judge and post merge-rule
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          PR: ${{ github.event.pull_request.number }}
-          SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
           TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          tool=(dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule
-            --slug "$GITHUB_REPOSITORY" --post --target-url "$TARGET_URL" --summary "$GITHUB_STEP_SUMMARY")
-          case "$EVENT" in
-            pull_request_target) "${tool[@]}" --pr "$PR" ;;
-            status|workflow_run) "${tool[@]}" --sha "$SHA" ;;
-            *) "${tool[@]}" --all ;;
-          esac
+          dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule --all \
+            --slug "$GITHUB_REPOSITORY" --post --target-url "$TARGET_URL" --summary "$GITHUB_STEP_SUMMARY"

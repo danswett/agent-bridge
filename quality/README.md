@@ -327,14 +327,20 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
      the rules in [`merge-rule.yml`](merge-rule.yml): not a draft; no `hold` or `do-not-merge`
      label; a Copilot review whose commit is the head; CodeQL's latest run on the head green and
-     code scanning's `CodeQL` check not failed; and, when a changed path is in `sensitive_paths`,
-     an `independent-review` status on the head whose latest from a listed poster is success.
-     Pending while Copilot or CodeQL is on its way, failure otherwise, with the missing piece
-     named in its description and the run's summary.
+     code scanning's `CodeQL` check not failed; every other check run and status on the head
+     passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
+     `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each
+     workflow counting by its latest run on the head; and, when a changed path is in
+     `sensitive_paths`, an `independent-review` status on the head whose latest from a listed
+     poster is success. Pending while Copilot, CodeQL or a check is on its way, failure otherwise,
+     with the missing piece named in its description and the run's summary. Pull requests that
+     share a head get the worst of their verdicts, since a status belongs to the commit.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
-     (`pull_request_target`, `status`, `workflow_run`, a 10-minute `schedule`, `workflow_dispatch`)
-     runs main's copy of the workflow, which checks out and builds main and reads the pull request
-     only through the API. Changing the rule means changing `quality/`, `.github/` or the tool,
+     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
+     10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
+     and builds main and reads the pull request only through the API. Each run judges every open
+     pull request, one run at a time, so a late red flips the verdict and no stale read lands last.
+     Changing the rule means changing `quality/`, `.github/` or the tool,
      all sensitive, so it takes an independent review and only applies once merged. Reviews reach
      it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
      pull request's copy. The schedule is the backstop, Dependabot's pull requests included.

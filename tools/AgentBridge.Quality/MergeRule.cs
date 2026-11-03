@@ -15,6 +15,7 @@ sealed class MergeRuleConfig
     public List<string> HoldLabels { get; set; } = [];
     public IndependentReviewConfig IndependentReview { get; set; } = new();
     public CodeQlConfig Codeql { get; set; } = new();
+    public List<string> IgnoreWorkflows { get; set; } = [];
     public List<string> SensitivePaths { get; set; } = [];
 
     public static MergeRuleConfig Parse(string yaml)
@@ -26,6 +27,7 @@ sealed class MergeRuleConfig
             .Build();
         var config = deserializer.Deserialize<MergeRuleConfig?>(yaml) ?? throw new FormatException("quality/merge-rule.yml is empty.");
         config.HoldLabels ??= [];
+        config.IgnoreWorkflows ??= [];
         config.SensitivePaths ??= [];
         config.IndependentReview ??= new();
         config.IndependentReview.Posters ??= [];
@@ -67,6 +69,9 @@ sealed record ReviewFact(string Author, bool IsBot, string State, string? Commit
 /// <summary>A workflow run's or check run's progress, in GraphQL's words (COMPLETED, SUCCESS...).</summary>
 sealed record RunFact(string Status, string? Conclusion);
 
+/// <summary>A check run or status on the head: success, pending or failure, and GitHub's word for it.</summary>
+sealed record CheckFact(string Name, string State, string? Detail);
+
 sealed record PullRequestFacts(
     int Number,
     string State,
@@ -79,7 +84,11 @@ sealed record PullRequestFacts(
     IReadOnlyList<ReviewFact> Reviews,
     IReadOnlyList<StatusFact> Statuses,
     RunFact? CodeQlRun,
-    RunFact? CodeQlCheck);
+    RunFact? CodeQlCheck)
+{
+    /// <summary>Every other check run and status on the head (MergeRuleCommand.ReadChecks says which count).</summary>
+    public IReadOnlyList<CheckFact> Checks { get; init; } = [];
+}
 
 /// <summary>The `merge-rule` status to post: success, pending or failure, and why.</summary>
 sealed record Verdict(string State, string Description, IReadOnlyList<string> Reasons, IReadOnlyList<string> SensitiveFiles);
@@ -87,8 +96,22 @@ sealed record Verdict(string State, string Description, IReadOnlyList<string> Re
 static class MergeRule
 {
     public const string StatusContext = "merge-rule";
+    // Who posts merge-rule: the workflow's GITHUB_TOKEN, the GitHub Actions app the ruleset pins.
+    // Logins are read without REST's "[bot]" suffix, as GraphQL gives them.
+    public const string Poster = "github-actions";
     // GitHub truncates nothing: it refuses a longer description.
     const int MaxDescription = 140;
+
+    /// <summary>
+    /// One status for pull requests that share a head: the worst verdict, failure before pending
+    /// before success, naming its pull request when there's more than one.
+    /// </summary>
+    public static Verdict Combine(IReadOnlyList<(PullRequestFacts Pr, Verdict Verdict)> judged)
+    {
+        static int Rank(string state) => state switch { "failure" => 2, "pending" => 1, _ => 0 };
+        var (pr, worst) = judged.OrderByDescending(j => Rank(j.Verdict.State)).ThenBy(j => j.Pr.Number).First();
+        return judged.Count == 1 ? worst : worst with { Description = Truncate($"#{pr.Number}: {worst.Description}") };
+    }
 
     /// <summary>
     /// The verdict on one pull request, or null when the rule doesn't apply (closed, or into
@@ -151,15 +174,27 @@ static class MergeRule
                 failures.Add($"code scanning's {config.Codeql.Check} check is {check.Conclusion?.ToLowerInvariant()}: new alerts?");
         }
 
+        // Every other check and status on the head too, not only quality-gate: CodeQL's jobs,
+        // Dependencies, Workflow lint, Relay deploy, Perf and the native clients sit outside it,
+        // and only quality-gate and merge-rule are required.
+        var red = pr.Checks.Where(c => c.State == "failure").ToList();
+        if (red.Count > 0)
+            failures.Add($"check {red[0].Name} ended {red[0].Detail ?? "badly"} on {sha}{More(red.Count)}");
+        var running = pr.Checks.Where(c => c.State == "pending").ToList();
+        if (running.Count > 0)
+            pending.Add($"waiting for {running[0].Name}{More(running.Count)}");
+
         var reasons = failures.Concat(pending).ToList();
         var state = failures.Count > 0 ? "failure" : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"Copilot reviewed {sha}; CodeQL passed{(sensitive.Count > 0 || !pr.FilesComplete ? "; independent review on file" : "")}"
+            ? $"Copilot reviewed {sha}; every check passed{(sensitive.Count > 0 || !pr.FilesComplete ? "; independent review on file" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new Verdict(state, Truncate(description), reasons, sensitive);
     }
 
     public static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
+
+    static string More(int count) => count > 1 ? $" (+{count - 1} more)" : "";
 
     static string Capitalize(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 

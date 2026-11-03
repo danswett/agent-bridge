@@ -1,3 +1,4 @@
+using YamlDotNet.RepresentationModel;
 using System.Text.Json;
 
 namespace AgentBridge.Quality.Tests;
@@ -17,6 +18,7 @@ public class MergeRuleTests
         codeql:
           workflow: CodeQL
           check: CodeQL
+        ignore_workflows: [Merge rule]
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
@@ -48,7 +50,7 @@ public class MergeRuleTests
         var verdict = MergeRule.Evaluate(Config, Pr())!;
 
         Assert.Equal("success", verdict.State);
-        Assert.Equal("Copilot reviewed abcdef0; CodeQL passed", verdict.Description);
+        Assert.Equal("Copilot reviewed abcdef0; every check passed", verdict.Description);
     }
 
     [Fact]
@@ -75,7 +77,7 @@ public class MergeRuleTests
         Assert.Equal("Needs an independent review of abcdef0: it touches src/AgentBridge.Host/Pairing/Codes.cs", none.Description);
         Assert.Equal(["src/AgentBridge.Host/Pairing/Codes.cs"], none.SensitiveFiles);
         Assert.Equal("failure", byWorkflow.State);
-        Assert.Equal(("success", "Copilot reviewed abcdef0; CodeQL passed; independent review on file"), (byReviewer.State, byReviewer.Description));
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), (byReviewer.State, byReviewer.Description));
     }
 
     [Fact]
@@ -112,7 +114,7 @@ public class MergeRuleTests
     [InlineData("IN_PROGRESS", null, null, null, "pending", "CodeQL is running on abcdef0")]
     [InlineData("COMPLETED", "FAILURE", null, null, "failure", "CodeQL ended failure on abcdef0")]
     [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "FAILURE", "failure", "Code scanning's CodeQL check is failure: new alerts?")]
-    [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "NEUTRAL", "success", "Copilot reviewed abcdef0; CodeQL passed")]
+    [InlineData("COMPLETED", "SUCCESS", "COMPLETED", "NEUTRAL", "success", "Copilot reviewed abcdef0; every check passed")]
     [InlineData("COMPLETED", "SUCCESS", "QUEUED", null, "pending", "Code scanning is still comparing abcdef0's CodeQL results")]
     public void CodeQL_must_have_run_green_on_the_head_and_code_scanning_must_not_have_failed(
         string? runStatus, string? runConclusion, string? checkStatus, string? checkConclusion, string state, string description)
@@ -182,7 +184,7 @@ public class MergeRuleTests
     [Fact]
     public void A_dry_run_posts_nothing_a_post_skips_a_status_that_already_says_the_same_and_a_renamed_files_old_path_counts()
     {
-        var github = new FakeGitHub(GraphQLPullRequest(Head, mergeRule: ("success", "Copilot reviewed abcdef0; CodeQL passed; independent review on file")));
+        var github = new FakeGitHub(GraphQLPullRequest(Head, mergeRule: ("success", "Copilot reviewed abcdef0; every check passed; independent review on file")));
         var config = WriteConfig();
         try
         {
@@ -196,7 +198,7 @@ public class MergeRuleTests
             // GraphQL lists the renamed file only by its new path; REST adds the old one.
             Assert.Contains("sensitive: docs/old.md", dry.ToString(), StringComparison.Ordinal);
             Assert.Empty(github.Posted);
-            Assert.Equal([$"{Head} success merge-rule Copilot reviewed abcdef0; CodeQL passed; independent review on file https://run"], changed.Posted);
+            Assert.Equal([$"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file https://run"], changed.Posted);
         }
         finally
         {
@@ -232,7 +234,7 @@ public class MergeRuleTests
     [Fact]
     public void A_sweep_reads_a_pull_request_again_before_posting_so_a_label_added_since_isnt_overwritten()
     {
-        var github = new FakeGitHub(one: GraphQLPullRequest(Head, labels: ["hold"]), listed: GraphQLPullRequest(Head));
+        var github = new FakeGitHub(one: GraphQLPullRequest(Head, labels: ["hold"]), listed: [GraphQLPullRequest(Head)]);
         var config = WriteConfig();
         try
         {
@@ -244,6 +246,124 @@ public class MergeRuleTests
         {
             File.Delete(config);
         }
+    }
+
+    [Fact]
+    public void Pull_requests_sharing_a_head_get_the_worst_verdict_so_a_held_one_cant_ride_on_anothers_success()
+    {
+        var held = GraphQLPullRequest(Head, labels: ["hold"], number: 7);
+        var github = new FakeGitHub(GraphQLPullRequest(Head), listed: [GraphQLPullRequest(Head), held],
+            byNumber: new Dictionary<int, string> { [42] = GraphQLPullRequest(Head), [7] = held });
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github);
+
+            Assert.Equal([$"{Head} failure merge-rule #7: Held by the label 'hold' "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void The_same_verdict_posted_by_a_person_is_posted_again_by_the_workflow()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head, mergeRule: ("success", "Copilot reviewed abcdef0; every check passed; independent review on file"), mergeRuleCreator: "danswett"));
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+
+            Assert.Single(github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // The live list: what rule 5 means by a sensitive change, against paths that aren't one.
+    [Theory]
+    [InlineData("src/AgentBridge.Host/CallerGuard.cs", true)]
+    [InlineData("src/AgentBridge.Host.Delivery/KeyPlan.cs", true)]
+    [InlineData("src/AgentBridge.Host/AgentBridge.Host.csproj", true)]
+    [InlineData("AgentBridge.slnx", true)]
+    [InlineData("src/AgentBridge.Transport/SecureChannel.cs", true)]
+    [InlineData("src/AgentBridge.Host/TrustedPeerStore.cs", true)]
+    [InlineData("pwa/js/host-client.js", true)]
+    [InlineData(".github/workflows/ci.yml", true)]
+    [InlineData("docs/status.md", false)]
+    [InlineData("src/AgentBridge.App/Design/DesignKeys.cs", false)]
+    [InlineData("pwa/js/markdown.js", false)]
+    public void The_repositorys_sensitive_paths_take_in_authorization_delivery_and_the_build_but_not_docs_or_design(string path, bool sensitive)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        Assert.Equal(sensitive, MergeRule.Evaluate(config, Pr([path]))!.SensitiveFiles.Count > 0);
+    }
+
+    [Fact]
+    public void Any_red_check_on_the_head_fails_it_and_any_unfinished_one_keeps_it_waiting()
+    {
+        var red = MergeRule.Evaluate(Config, Pr() with { Checks = [new("lint", "success", "success"), new("analyze (csharp)", "failure", "failure"), new("native-clients", "failure", "cancelled")] })!;
+        var running = MergeRule.Evaluate(Config, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("native-clients", "pending", "in_progress")] })!;
+        var green = MergeRule.Evaluate(Config, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("CodeQL", "success", "neutral")] })!;
+
+        Assert.Equal(("failure", "Check analyze (csharp) ended failure on abcdef0 (+1 more)"), (red.State, red.Description));
+        Assert.Equal(("pending", "Waiting for native-clients"), (running.State, running.Description));
+        Assert.Equal("success", green.State);
+    }
+
+    [Fact]
+    public void Each_workflow_counts_by_its_latest_run_each_job_by_its_latest_attempt_a_run_without_jobs_by_its_own_state_and_the_merge_rules_own_not_at_all()
+    {
+        using var doc = JsonDocument.Parse(GraphQLPullRequest(Head,
+            extraSuites:
+            [
+                // A draft's run that ready for review cancelled, then the run that replaced it.
+                Suite("github-actions", Workflow(10, "CI"), "COMPLETED", "CANCELLED", Job(100, "product", "COMPLETED", "CANCELLED")),
+                Suite("github-actions", Workflow(11, "CI"), "COMPLETED", "SUCCESS",
+                    Job(110, "product", "COMPLETED", "FAILURE"), Job(111, "product", "COMPLETED", "SUCCESS"), Job(112, "pwa-ui", "COMPLETED", "SKIPPED")),
+                Suite("github-actions", Workflow(12, "Apple"), "IN_PROGRESS", null, Job(120, "native-clients", "IN_PROGRESS")),
+                Suite("github-actions", Workflow(13, "Merge rule"), "IN_PROGRESS", null, Job(130, "evaluate", "IN_PROGRESS")),
+                Suite("another-app", null, "COMPLETED", "FAILURE", Job(140, "external", "COMPLETED", "FAILURE")),
+                // No jobs: a workflow file that doesn't parse, a run not started, a run awaiting approval.
+                Suite("github-actions", Workflow(15, "Workflow lint"), "COMPLETED", "STARTUP_FAILURE"),
+                Suite("github-actions", Workflow(16, "Dependencies"), "QUEUED", null),
+                Suite("github-actions", Workflow(17, "Merge rule review relay"), "COMPLETED", "ACTION_REQUIRED"),
+            ],
+            extraStatuses: [new { context = "ci/legacy", state = "ERROR", description = "broke", createdAt = "2026-11-03T20:02:00Z", creator = new { login = "someone" } }]));
+
+        var (facts, _, _) = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
+
+        Assert.Equal(
+            ["CodeQL success", "Dependencies pending", "Workflow lint failure", "ci/legacy failure", "external failure", "native-clients pending", "product success", "pwa-ui success"],
+            facts.Checks.Select(c => $"{c.Name} {c.State}").Order(StringComparer.Ordinal));
+    }
+
+    // A workflow left out of merge-rule.yml's workflow_run list could still fail after the last
+    // evaluation, and its red would never reach merge-rule until the schedule came round.
+    [Fact]
+    public void A_finished_run_of_every_other_workflow_has_the_merge_rule_judge_again()
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        static YamlMappingNode Load(string file)
+        {
+            var stream = new YamlStream();
+            stream.Load(new StringReader(File.ReadAllText(file)));
+            return (YamlMappingNode)stream.Documents[0].RootNode;
+        }
+        var names = Directory.EnumerateFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+            .Select(f => Load(f).Children[new YamlScalarNode("name")].ToString())
+            .Where(n => n != "Merge rule")
+            .Order(StringComparer.Ordinal);
+        var on = (YamlMappingNode)Load(Path.Combine(root, ".github", "workflows", "merge-rule.yml")).Children[new YamlScalarNode("on")];
+        var listed = ((YamlSequenceNode)((YamlMappingNode)on.Children[new YamlScalarNode("workflow_run")])
+            .Children[new YamlScalarNode("workflows")]).Children.Select(n => n.ToString()).Order(StringComparer.Ordinal);
+
+        Assert.Equal(names, listed);
     }
 
     // Reads the live repository, like CatalogTests: the ruleset must require only what something
@@ -285,19 +405,25 @@ public class MergeRuleTests
         return path;
     }
 
-    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett")
+    static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
+        new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
+
+    static object Workflow(long id, string name) => new { databaseId = id, @event = "pull_request", workflow = new { name } };
+
+    static object Job(long id, string name, string status, string? conclusion = null) => new { databaseId = id, name, status, conclusion };
+
+    static string GraphQLPullRequest(string head, string? commitOid = null, (string State, string Description)? mergeRule = null, string[]? labels = null, string receiptCreator = "danswett", string mergeRuleCreator = "github-actions", int number = 42, object[]? extraSuites = null, object[]? extraStatuses = null)
     {
         var statuses = new List<object>
         {
             new { context = "independent-review", state = "SUCCESS", description = "sec-42 CLEAN", createdAt = "2026-11-03T20:00:00Z", creator = new { login = receiptCreator } },
         };
         if (mergeRule is { } m)
-            statuses.Add(new { context = "merge-rule", state = m.State.ToUpperInvariant(), description = m.Description, createdAt = "2026-11-03T20:01:00Z", creator = new { login = "github-actions[bot]" } });
-        object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
-            new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
+            statuses.Add(new { context = "merge-rule", state = m.State.ToUpperInvariant(), description = m.Description, createdAt = "2026-11-03T20:01:00Z", creator = new { login = mergeRuleCreator } });
+        statuses.AddRange(extraStatuses ?? []);
         var pr = new
         {
-            number = 42,
+            number,
             state = "OPEN",
             isDraft = false,
             baseRefName = "main",
@@ -331,10 +457,10 @@ public class MergeRuleTests
                                     Suite("github-actions", new { databaseId = 3, @event = "pull_request", workflow = new { name = "CodeQL" } }, "COMPLETED", "SUCCESS"),
                                     Suite("github-actions", new { databaseId = 4, @event = "push", workflow = new { name = "CodeQL" } }, "COMPLETED", "FAILURE"),
                                     Suite("github-actions", new { databaseId = 5, @event = "pull_request", workflow = new { name = "Imposter" } }, "COMPLETED", "SUCCESS",
-                                        new { databaseId = 99, status = "COMPLETED", conclusion = "FAILURE" }),
+                                        new { databaseId = 99, name = "CodeQL", status = "COMPLETED", conclusion = "SUCCESS" }),
                                     Suite("github-advanced-security", null, "COMPLETED", "NEUTRAL",
-                                        new { databaseId = 7, status = "COMPLETED", conclusion = "NEUTRAL" }),
-                                },
+                                        new { databaseId = 7, name = "CodeQL", status = "COMPLETED", conclusion = "NEUTRAL" }),
+                                }.Concat(extraSuites ?? []).ToArray(),
                             },
                         },
                     },
@@ -349,17 +475,20 @@ public class MergeRuleTests
     /// <paramref name="listed"/> (or <paramref name="one"/>) the open list's, and
     /// <paramref name="statuses"/> REST's status history.
     /// </summary>
-    sealed class FakeGitHub(string one, string? listed = null, string statuses = "[]") : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
         public JsonDocument GraphQL(string query, IReadOnlyDictionary<string, object> variables)
         {
-            if (variables.ContainsKey("number"))
-                return JsonDocument.Parse(one);
-            using var pr = JsonDocument.Parse(listed ?? one);
-            var node = pr.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
-            return JsonDocument.Parse("""{"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [""" + node.GetRawText() + "]}}}}");
+            if (variables.TryGetValue("number", out var number))
+                return JsonDocument.Parse(byNumber?.GetValueOrDefault((int)number) ?? one);
+            var nodes = (listed ?? [one]).Select(json =>
+            {
+                using var pr = JsonDocument.Parse(json);
+                return pr.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest").GetRawText();
+            });
+            return JsonDocument.Parse("""{"data": {"repository": {"pullRequests": {"pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": [""" + string.Join(",", nodes) + "]}}}}");
         }
 
         public JsonDocument Rest(string path) => JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

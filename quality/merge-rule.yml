@@ -33,6 +33,12 @@ codeql:
   workflow: CodeQL
   check: CodeQL
 
+# Every check run and status on the head must pass too (success, skipped or neutral), not only
+# quality-gate: CodeQL's jobs, Dependencies, Workflow lint, Relay deploy, Perf and the native
+# clients sit outside it. A workflow counts by its latest run on the head. These workflows are
+# left out: the merge rule's own, which are running while it judges.
+ignore_workflows: [Merge rule]
+
 # A pull request that changes any of these paths also needs the independent review. Globs as in
 # quality/catalog.yml (src/**trust** is any path below src/ with "trust" in it, folders included),
 # matched case-insensitively against each changed path and each renamed file's old path. The list
@@ -49,6 +55,11 @@ sensitive_paths:
   - '**/Directory.*.props'
   - '**/Directory.*.targets'
   - '**/Directory.Build.rsp'
+  # Every MSBuild input decides what's compiled and which packages come in, not just build/.
+  - '**/*.csproj'
+  - '**/*.props'
+  - '**/*.targets'
+  - '*.slnx'
   - nuget.config
   - global.json
   - .config/dotnet-tools.json
@@ -59,7 +70,13 @@ sensitive_paths:
   - src/AgentBridge.Relay/**
   - src/AgentBridge.Local/**
   - src/AgentBridge.Injector/**
+  # Who may call the host, and what it does for a remote device: typing, answering, launching.
+  - src/AgentBridge.Host/CallerGuard.cs
+  - src/AgentBridge.Host/LocalApi.cs
+  - src/AgentBridge.Host/SessionService.cs
+  - src/AgentBridge.Host.Delivery/**
   - tools/AgentBridge.RelaySmoke/**
+  - pwa/js/host-client.js
   - pwa/js/protocol.js
   - pwa/js/relay.js
   - pwa/js/channels.js
