@@ -499,7 +499,9 @@ internal sealed class BackgroundWork
             Id = a.Id,
             Parent = a.Parent,
             Kind = a.Background ? SubagentKind.Background : SubagentKind.Task,
-            Name = a.Name,
+            // Cleaned when kept (Entry); again here, which changes nothing for a cleaned name, so
+            // no path that sets it some other way can send a raw or oversized one (#263).
+            Name = DelegateName.Clean(a.Name),
             Task = Limits.KeepStart(a.Task, Limits.SubagentTask),
             Model = a.Model,
             Status = status,

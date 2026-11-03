@@ -35,19 +35,28 @@ public static class DelegateName
         if (text.Length == 0) { return null; }
         var cut = Cut(text, MaxLength, Limits.SubagentName);
         if (!PosesAsMainAgent(cut) || IsLabelled(cut)) { return cut; }
-        var inner = Cut(Unquoted(text), MaxLength - Opening.Length - Closing.Length,
+        // From the capped text, not the whole: it is a prefix of it, so the shorter cut is the same.
+        var inner = Cut(Unquoted(cut), MaxLength - Opening.Length - Closing.Length,
             Limits.SubagentName - Encoding.UTF8.GetByteCount(Opening + Closing));
         return Opening + inner + Closing;
     }
 
+    static bool IsQuote(char c) => c is '"' or '“' or '”' or '„' or '‟' or '«' or '»' or '＂';
+
     // Inside the quotes, a quote of its own could close them and carry on as other words.
-    static string Unquoted(string s) => string.Concat(s.Select(c => c is '"' or '“' or '”' or '„' or '‟' or '«' or '»' or '＂' ? '\'' : c));
+    static string Unquoted(string s)
+    {
+        if (s.AsSpan().IndexOfAny("\"“”„‟«»＂") < 0) { return s; }
+        var chars = s.ToCharArray();
+        for (var i = 0; i < chars.Length; i++) { if (IsQuote(chars[i])) { chars[i] = '\''; } }
+        return new string(chars);
+    }
 
     // Already in the form rule 4 gives: "Delegate", then the name in quotes with none of its own.
     // A client that labels names itself (the app's DelegateLabel) leaves this as it is too.
     public static bool IsLabelled(string s) =>
         s.Length > Opening.Length + Closing.Length && s.StartsWith(Opening, StringComparison.Ordinal) && s.EndsWith(Closing, StringComparison.Ordinal)
-        && Unquoted(s[Opening.Length..^Closing.Length]) == s[Opening.Length..^Closing.Length];
+        && s.AsSpan(Opening.Length, s.Length - Opening.Length - Closing.Length).IndexOfAny("\"“”„‟«»＂") < 0;
 
     // The delegate as a line that says it asks or works names it ("<this> asks · …"): the cleaned
     // name after the word "Delegate", unless it starts with that already, or "A delegate" with no
