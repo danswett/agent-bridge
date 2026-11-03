@@ -52,6 +52,7 @@ public sealed class HostControlOptions
     // just before it stops the host for an install a device asked for.
     public Func<string?> ReadOnly { get; init; } = () => null;
     public Func<string?>? ReadOnlyNow { get; init; }
+    public AgentReadinessService? Agents { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -78,6 +79,7 @@ public sealed class HostControl
         startedAt = options.Time.GetUtcNow();
         running = options.Running;
         if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
+        if (options.Agents is { } agents) { agents.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -108,6 +110,8 @@ public sealed class HostControl
         lock (gate) { return StatusLocked(fresh); }
     }
 
+    public bool HasAgentReadiness => options.Agents is not null;
+
     HostStatus StatusLocked(bool fresh = false)
     {
         var running = Volatile.Read(ref this.running);
@@ -133,6 +137,7 @@ public sealed class HostControl
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
             DevBox = options.DevBox(),
+            Agents = options.Agents?.Snapshot,
         };
     }
 
@@ -164,6 +169,8 @@ public sealed class HostControl
                 return Status(fresh: true);
             case HostOps.Subscribe:
                 return Subscribe(channel);
+            case HostOps.AgentsRefresh when options.Agents is not null:
+                return await options.Agents.RefreshAsync();
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:

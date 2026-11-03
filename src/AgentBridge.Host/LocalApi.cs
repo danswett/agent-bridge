@@ -49,7 +49,7 @@ public static class LocalApi
         if (result is not HelloResult hello) { return result; }
         return callers.Classify(channel).Kind switch
         {
-            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability] },
+            CallerKind.App => hello with { Capabilities = [.. hello.Capabilities, HostOps.Capability, .. control.HasAgentReadiness ? new[] { HostOps.AgentReadinessCapability } : []] },
             CallerKind.Agent => hello with { Capabilities = [.. hello.Capabilities.Where(AgentCapabilities.Contains)] },
             _ => hello,
         };

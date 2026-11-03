@@ -8,6 +8,8 @@ public static class HostOps
 {
     // In hello's capabilities on the pipe, beside the sessions ones.
     public const string Capability = "host.manage";
+    public const string AgentReadinessCapability = "host.agents";
+    public const string AgentsRefresh = "host.agents.refresh";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -120,6 +122,8 @@ public sealed record HostStatus
     public string? ReadOnly { get; init; }
     // The Dev Box keep-awake, absent when this machine is not a Dev Box.
     public DevBoxStatus? DevBox { get; init; }
+    // Read-only setup evidence; absent on older hosts and until the first scan completes.
+    public AgentReadinessReport? Agents { get; init; }
 }
 
 // host.signIn: start GitHub's device flow through this relay (or the one the profile used).

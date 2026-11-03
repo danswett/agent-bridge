@@ -19,6 +19,7 @@ public sealed class SettingsTests : IAsyncLifetime
     AppPreferences prefs = new();
     HostConnection connection = null!;
     SettingsViewModel settings = null!;
+    HostManager manager = null!;
 
     sealed class Updater : IUpdater
     {
@@ -60,7 +61,7 @@ public sealed class SettingsTests : IAsyncLifetime
         });
         host.Start();
         connection = host.Connect(ui);
-        var manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
+        manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
             ct => LocalClient.ConnectAsync(host.Endpoint, TimeSpan.FromMilliseconds(300), ct), userId: @"PC\dana", userSid: "S-1-5-21-1-2-3-1001")
         {
             StartTimeout = TimeSpan.FromSeconds(5),
@@ -99,6 +100,77 @@ public sealed class SettingsTests : IAsyncLifetime
         host.Status = host.Status with { Settings = saved };
         return new SettingsResult(saved, false);
     });
+
+    static AgentReadinessReport Readiness(string version) => new(DateTimeOffset.UtcNow,
+    [
+        new("claude", "Claude", "fixture-home", "claude.exe", version,
+            new(ReadinessState.Working, "Executable found."),
+            new(ReadinessState.Working, $"Version {version}"),
+            new(ReadinessState.NeedsAction, "Explicit hook setup is required."),
+            new(ReadinessState.Unknown, "Sign-in has not been verified."),
+            new(ReadinessState.Unknown, "Trust and a new session have not been verified.")),
+    ]);
+
+    [Fact]
+    public async Task Settings_shows_host_readiness_without_claiming_an_installed_CLI_is_signed_in_or_ready()
+    {
+        await Connected();
+        Assert.Contains("Checking", settings.AgentsState);
+        host.Status = host.Status with { Agents = Readiness("1.2.3") };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+
+        var row = Assert.Single(settings.Agents);
+        Assert.Equal("Installed, version 1.2.3", row.Installation);
+        Assert.Contains("Explicit hook setup", row.Checks);
+        Assert.Contains("Sign-in has not been verified", row.Checks);
+        Assert.Contains("No hook observed", row.HookActivity);
+
+        host.On(HostOps.AgentsRefresh, _ =>
+        {
+            host.Status = host.Status with { Agents = Readiness("2.3.4") };
+            host.SendAsync(HostOps.StatusEvent, host.Status).GetAwaiter().GetResult();
+            return host.Status.Agents;
+        });
+        await settings.CheckAgentsAsync();
+        await Wait.UntilAsync(() => settings.Agents.Single().Installation.Contains("2.3.4"), "the refreshed version");
+        Assert.Single(host.Sent(HostOps.AgentsRefresh));
+        Assert.False(settings.HasError);
+
+        await host.StopAsync();
+        await Wait.UntilAsync(() => !settings.HostRunning, "the host disconnected");
+        Assert.Empty(settings.Agents);
+        Assert.False(settings.CanCheckAgents);
+    }
+
+    [Fact]
+    public async Task An_older_host_is_explained_and_never_sent_a_readiness_request()
+    {
+        await using var older = new FakeHost();
+        older.Capabilities.Remove(HostOps.AgentReadinessCapability);
+        older.Start();
+        await using var olderConnection = older.Connect(ui);
+        var page = new SettingsViewModel(olderConnection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        await Wait.UntilAsync(() => page.HostRunning, "the older host");
+
+        Assert.Contains("does not report agent readiness", page.AgentsState);
+        Assert.False(page.CanCheckAgents);
+        await page.CheckAgentsAsync();
+        Assert.True(page.HasError);
+        Assert.Empty(older.Sent(HostOps.AgentsRefresh));
+    }
+
+    [Fact]
+    public async Task A_readiness_probe_failure_is_shown_instead_of_reporting_success()
+    {
+        host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("readiness scan refused"));
+        await Connected();
+
+        await settings.CheckAgentsAsync();
+
+        Assert.Equal("readiness scan refused", settings.Error);
+        Assert.False(settings.Busy);
+    }
 
     [Fact]
     public async Task Signing_in_asks_the_host_through_the_relay_named_and_shows_the_code_it_reports()
