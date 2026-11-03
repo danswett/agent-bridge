@@ -18,8 +18,9 @@ const DELEGATES = 'demo-delegates';
 // The elements the catalogue animates in the PWA today, each of which the walk shows on screen:
 // the moving part of a working and a delegating glyph, the in-flight progress ring, a usage bar, a
 // delegate's chevron (Disclosure), a session row (Arriving and leaving, Press), the pushed session
-// (Push and pop), a tab (on a phone; a desktop has none), the row menu (Menu and flyout), and the
-// inspector (Pane and inspector; on a phone it holds the Tools tab).
+// (Push and pop), a tab (on a phone; a desktop has none), the row menu (Menu and flyout), the
+// inspector (Pane and inspector; on a phone it holds the Tools tab), a Needs you entry (Arriving
+// and leaving), and Show reasoning (Disclosure).
 const ANIMATED = [
   '.glyph .glyph-spin', '.glyph .glyph-orbit', '.answer-status.progress', '.usage-fill', '.delegate-chevron',
   '.session .row-main', '.session-view', '.view-tab', '.row-menu', '.inspector', '.needs-you-list > li', 'details.reasoning > summary',
