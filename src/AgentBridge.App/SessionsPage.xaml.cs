@@ -371,10 +371,10 @@ public sealed partial class SessionsPage : UserControl
     void SyncMachineTab() => QueueArrange();
 
     // The list pane's width, not the bar's: a bar whose tabs outgrow it is laid out at their width
-    // and clipped, so its own width would let them stay too wide.
+    // and clipped, so its own width would let them stay too wide. Once per tick while a divider drags.
     void OnListPaneSized(object sender, SizeChangedEventArgs e)
     {
-        if (e.NewSize.Width != e.PreviousSize.Width) { ArrangeMachineTabs(); }
+        if (e.NewSize.Width != e.PreviousSize.Width) { QueueArrange(); }
     }
 
     // Later, so a change never lands inside the bar's own selection change.
@@ -382,7 +382,7 @@ public sealed partial class SessionsPage : UserControl
     {
         if (arrangeQueued) { return; }
         arrangeQueued = true;
-        DispatcherQueue.TryEnqueue(() => { arrangeQueued = false; ArrangeMachineTabs(); });
+        if (!DispatcherQueue.TryEnqueue(() => { arrangeQueued = false; ArrangeMachineTabs(); })) { arrangeQueued = false; }
     }
 
     // Which tabs the bar holds, from their names' widths and the bar's own, and which it selects.
@@ -392,6 +392,9 @@ public sealed partial class SessionsPage : UserControl
         var choices = viewModel.Machines.Where(tabs.ContainsKey).ToList();
         var chosen = Math.Max(0, choices.IndexOf(viewModel.SelectedMachine!));
         var room = ListPane.ActualWidth - ListPane.BorderThickness.Left - ListPane.BorderThickness.Right - MachineBar.Padding.Left - MachineBar.Padding.Right;
+        // No width while the pane isn't drawn (not laid out yet, or collapsed behind a pushed
+        // session): every tab stays in the bar, out of sight, until its SizeChanged arranges them.
+        // Returning instead left the bar empty or stale for whatever reads it meanwhile.
         MachineTabSplit split;
         if (room <= 0 || choices.Count == 0) { split = new([.. Enumerable.Range(0, choices.Count)], []); }
         else
