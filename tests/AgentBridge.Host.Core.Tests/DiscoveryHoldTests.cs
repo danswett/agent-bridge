@@ -708,4 +708,174 @@ public class DiscoveryHoldTests
         public bool Equals(DiscoveryHeld? x, DiscoveryHeld? y) => x is null ? y is null : y is not null && x.Reason == y.Reason && x.Agents.SequenceEqual(y.Agents);
         public int GetHashCode(DiscoveryHeld? obj) => obj?.Reason.GetHashCode(StringComparison.Ordinal) ?? 0;
     }
+
+    // #147, as rehearsal run 2 met it: Codex sessions listed, then kept only by a hold that did not
+    // clear (here a Codex process that cannot be dated, and each session's registration caught half
+    // written), when the host restarted. Returns where the host keeps what it listed.
+    static async Task<string> ListedThenKeptOnlyByAHold(Fixture f, params (string Id, int Pid)[] codex)
+    {
+        if (codex.Length == 0) { codex = [(C, 950)]; }
+        var state = Path.Combine(f.Root, "profile", "sessions-listed.json");
+        foreach (var (id, pid) in codex)
+        {
+            var rollout = f.CodexTranscript(id);
+            Fixture.Append(rollout,
+                Codex.Line("session_meta", new { id, timestamp = Copilot.At(0), cwd = "/work/codex" }, 0),
+                Codex.Event(new { type = "user_message", message = "still running" }, 1));
+            f.CodexRegistration(id, pid, rollout);
+            f.Processes.Run(AgentKind.Codex, pid, "codex.exe");
+        }
+        await using var before = f.Source(stateFile: state);
+        await before.RefreshAsync();
+        Assert.Equal(codex.Length, before.Snapshot().Count);
+
+        f.Processes.RunUndated(AgentKind.Codex, 960, "codex.exe");
+        foreach (var (id, _) in codex) { File.WriteAllText(Path.Combine(f.CodexRegistrations, id + ".json"), "{\"SessionId\": \"" + id); }
+        await before.RefreshAsync();
+        Assert.Equal(codex.Length, before.Snapshot().Count);
+        Assert.Equal([AgentKind.Codex], before.Held!.Agents);
+        return state;
+    }
+
+    [Fact]
+    public async Task A_restart_under_a_hold_keeps_a_live_codex_session_listed_that_only_the_hold_was_keeping()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+
+        var log = new List<string>();
+        await using var after = f.Source(log: log.Add, stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal([AgentKind.Codex], after.Held!.Agents);
+        var session = Assert.Single(after.Snapshot());
+        Assert.Equal(C, session.Id);
+        Assert.Equal(950, session.ProcessId);
+        Assert.Equal("still running", after.Get(C)!.Activity.UserMessage);
+        Assert.Contains("kept 1 session(s) listed across the restart while discovery is held: codex 33333333 (pid 950)", log);
+
+        // Found again on its own once its registration reads whole, and still listed with nothing held.
+        f.CodexRegistration(C, 950, f.CodexTranscript(C));
+        f.Processes.Exit(AgentKind.Codex, 960);
+        await after.RefreshAsync();
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+        Assert.Null(after.Held);
+    }
+
+    [Fact]
+    public async Task A_session_kept_across_a_restart_that_ends_during_the_hold_is_removed_only_once_the_hold_clears()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+
+        f.Processes.Exit(AgentKind.Codex, 950);
+        await after.RefreshAsync();
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+        Assert.NotNull(after.Held);
+
+        // Nothing holds any more, and nothing finds it: it has ended.
+        f.Processes.Exit(AgentKind.Codex, 960);
+        File.Delete(Path.Combine(f.CodexRegistrations, C + ".json"));
+        await after.RefreshAsync();
+        Assert.Empty(after.Snapshot());
+        Assert.Null(after.Held);
+    }
+
+    [Fact]
+    public async Task A_restart_brings_back_only_the_sessions_whose_own_process_still_runs_not_one_whose_pid_another_process_now_has()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f, (C, 950), (B, 951));
+
+        // B's codex exited while the host was down, and a later one was given its pid.
+        f.Processes.Run(AgentKind.Codex, 951, "codex.exe", Fixture.T0.AddMinutes(30));
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+    }
+
+    // Found in review: only a session's identity is kept across a restart, and its files are found
+    // again as discovery finds them, whatever the file says.
+    [Fact]
+    public async Task A_restart_reads_a_kept_session_from_where_discovery_finds_it_not_from_a_path_in_the_file()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+        var decoy = Path.Combine(f.Root, "elsewhere", "decoy.jsonl");
+        Fixture.Append(decoy, Codex.Event(new { type = "user_message", message = "not this one" }, 1));
+        var kept = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(state))!;
+        kept["sessions"]![0]!["transcript"] = decoy;
+        File.WriteAllText(state, kept.ToJsonString());
+
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal("still running", after.Get(C)!.Activity.UserMessage);
+        Assert.DoesNotContain("elsewhere", File.ReadAllText(state), StringComparison.Ordinal);
+    }
+
+    // Found in review: a host that has just started knew no session's process, so the runtime of a
+    // resumed Copilot session (no lock) whose command line could not be read held nothing.
+    [Fact]
+    public async Task A_restart_keeps_a_session_whose_runtime_cannot_be_read_on_the_first_pass()
+    {
+        using var f = new Fixture();
+        var state = Path.Combine(f.Root, "profile", "sessions-listed.json");
+        var events = f.CopilotSession(A, lockPid: null);
+        Fixture.Append(events, Copilot.User("resumed", 1));
+        f.Processes.Run(AgentKind.Copilot, 300, $"node C:/npm/node_modules/@github/copilot/index.js --session-id {A}");
+        await using (var before = f.Source(stateFile: state))
+        {
+            await before.RefreshAsync();
+            Assert.Single(before.Snapshot());
+        }
+
+        f.Processes.Unidentify(AgentKind.Copilot, 300);
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.Equal(A, Assert.Single(after.Snapshot()).Id);
+        Assert.Equal("a copilot process that could not be read (pid 300)", after.Held?.Reason);
+    }
+
+    [Fact]
+    public async Task A_restart_does_not_bring_back_a_session_whose_registration_says_it_ended_though_its_runtime_cannot_be_read()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), status: "ended", ended: true, updated: Fixture.T0.AddMinutes(5));
+        f.Processes.Unidentify(AgentKind.Codex, 950);
+        await using var after = f.Source(stateFile: state);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+        Assert.Empty(after.Snapshot());
+    }
+
+    // Found in review: only the current registration says a session ended, not an older copy of it
+    // in agent-ha-bridge's other (legacy temp) root.
+    [Fact]
+    public async Task An_older_ended_registration_in_another_root_does_not_keep_a_restart_from_bringing_back_a_live_session()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+        var legacy = Path.Combine(f.Root, "temp", "agent-bridge-codex");
+        Directory.CreateDirectory(legacy);
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), status: "ended", ended: true, updated: Fixture.T0.AddMinutes(5));
+        File.Move(Path.Combine(f.CodexRegistrations, C + ".json"), Path.Combine(legacy, C + ".json"));
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), updated: Fixture.T0.AddMinutes(10));
+        f.Processes.Unidentify(AgentKind.Codex, 950);
+
+        await using var after = f.Source(stateFile: state, codexRoots: [f.CodexRegistrations, legacy]);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+    }
 }

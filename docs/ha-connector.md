@@ -968,8 +968,19 @@ availability topic, then an empty retained payload on all 19 discovery topics an
 topics, so no entity and no retained value is left behind. A session that comes back before it
 is retired leaves the queue.
 
+**Nothing is retired while the host's session discovery is held** ([v1-sessions.md](protocol/v1-sessions.md#discovery-held)),
+whichever agent the hold is for: a session missing from a held pass may be one discovery could
+not see. A host restarted under a hold once retired the entities of a Codex session that ran on
+(#147). The queue waits, logged once ("retires nothing while session discovery is held"), and
+carries on once a complete pass has removed what really ended. A session the host lists is never
+retired, even before this connector has published it again. Both are checked again just before
+each session's entities go, since a hold can begin, or the session be found again, while the
+dashboard is read.
+
 **A host restart** re-runs the start: live sessions are republished onto their existing,
-pinned entities (no new ones), and the remembered queue is carried over. **A Home Assistant
+pinned entities (no new ones), and the remembered queue is carried over. A session the host's
+discovery was keeping only because it was held is still listed after the restart, so it is
+republished rather than queued (#147). **A Home Assistant
 restart** loses nothing retained; the 300 s re-assert of the session list covers a broker that
 lost retained state. The reply boxes and selectors come back with no value, and the session
 check puts them back, a waiting question armed again. A liveness sensor Home Assistant has

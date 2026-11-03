@@ -231,7 +231,6 @@ ui.md §2.2 rule 7 becomes an overlay after rules 1–6 while rule 8 refines rul
   - #122: the Launch page's busy banner;
   - #123: Codex's cached plugin on a migrated machine;
   - #146: no reason given for a missing Other;
-  - #147: a host restart under a held discovery drops a Codex session;
   - #157 and #158: folder-trust follow-ups;
   - #161: remote-update follow-ups;
   - #163: shadow episodes.
@@ -267,7 +266,7 @@ All merged PRs, by area. Each PR describes what it verified.
 - **Discovery and safety:**
   - #59, #62, #66 (discovery holds);
   - #67 (management refused from agent sessions);
-  - #103, #141, #144, #155.
+  - #103, #141, #144, #155, #330.
 - **Hooks and migration:**
   - #65, #68, #116, #117.
 - **HA connector:**
