@@ -28,6 +28,7 @@ public sealed class VersionCommandRunner : ICommandRunner
         if (!CreatePipe(out var errorRead, out var errorWrite, ref security, 0)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
         using var stderrRead = errorRead;
         using var stderrWrite = errorWrite;
+        if (!SetHandleInformation(stdoutRead, 1, 0) || !SetHandleInformation(stderrRead, 1, 0)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
         if (!CreatePipe(out var inputRead, out var inputWrite, ref security, 0)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
         using var stdinRead = inputRead;
         inputWrite.Dispose();
@@ -181,6 +182,9 @@ public sealed class VersionCommandRunner : ICommandRunner
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, ref SecurityAttributes attributes, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool SetHandleInformation(SafeFileHandle handle, uint mask, uint flags);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool InitializeProcThreadAttributeList(nint list, int count, uint flags, ref nuint size);
