@@ -55,9 +55,10 @@ independent security review before it merges.
   - the Now line gives way while the session waits;
   - Tools and the delegate inspector link to the question.
 - **U10b, Windows app:** the same in `App.Core` and the XAML. `NeedsYouEntry`'s checks move to
-  an approval-prompt helper the question view model uses. **Toasts change too:** an approval's
-  toast has Open only, with no Approve once or Deny (`ToastXml.Question`), while other questions
-  keep their buttons. The tray and the Sessions badge read the model's count.
+  an approval-prompt helper the question view model uses. The toasts already follow the rule:
+  #377 (#372) gave an approval's toast Open only, with no Approve once or Deny
+  (`ToastXml.Question`), while other questions keep their buttons. The
+  tray and the Sessions badge read the model's count.
 - **U10c, Apple (#260, @welshofer):** in #260 if it is still open, else a follow-up PR:
   - the "Needs you · N" `Section` goes, and the `needsOnly` toggle becomes the sidebar item on
     macOS and the filter menu's first item on iOS;

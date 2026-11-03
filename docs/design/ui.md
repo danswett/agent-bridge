@@ -687,12 +687,15 @@ machine, online ones first, then the account's offline machines (#213):
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
 once, and an answer anywhere withdraws its notification (`docs/protocol/v1-sessions.md`,
 Notifications). Opening one opens the session at its question, as choosing its row does.
-- **An approval's notification only opens its question.** It has no Approve once or Deny,
-  since the OS draws and cuts its text and can't promise the whole command is on screen, drawn
-  as it runs (§6.4).
-- **Other questions keep their buttons** where the platform has them: the options of a single
-  choice, or a text box and Send. Each still checks, before sending, that the question is the
-  one shown.
+- **An approval's notification only opens its question** (#253 decision 7, #372). It never
+  offers Approve once or Deny: the OS draws its body as plain text and cuts it short, so it
+  can show neither the whole command nor the escapes and refusals that hidden, bidi and
+  right-to-left characters get in the app (§6.4, #165, #220). Windows toasts, Web Push and the
+  Apple notifications (#260) follow this, and a button on a toast an older build left in
+  Notification Center only opens.
+- **Other questions keep their buttons** where the platform has them and they fit: the options
+  of a single choice, or a text box and Send. Each still checks, before sending, that the
+  question is the one shown.
 - The count each platform shows is Needs you's N (§6.1).
 
 **Windows (WinUI 3):**
@@ -785,13 +788,6 @@ Notifications). Opening one opens the session at its question, as choosing its r
     because its machine no longer lists it, even on Forward to it), and there again when the
     window narrows to a phone's with one open. Forward to it shows the delegate again, opening
     the finished fold if it has finished meanwhile.
-
-**Notifications (every platform, #253 decision 7, #372):** a notification for an approval
-only opens its question; it never offers Approve once or Deny. The OS draws its body as plain
-text and cuts it short, so it can show neither the whole command nor the escapes and refusals
-that hidden, bidi and right-to-left characters get in the app (#165, #220). Other questions
-keep their buttons where they fit. Windows toasts, Web Push and the Apple notifications (#260)
-follow this, and a button on a toast an older build left in Notification Center only opens.
 
 **App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
 (`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
