@@ -21,8 +21,10 @@ public sealed class ProbeLauncher : IProbeLauncher
         if (OperatingSystem.IsWindows() && WindowsCommandLine.IsBatch(command.Program))
         {
             if (WindowsCommandLine.For(command.Program, command.Arguments, out _) is not { } line) { return null; }
-            // .NET writes the program back in quotes ahead of Arguments, as the line begins.
+            // .NET writes the program back in quotes ahead of Arguments, as the line begins (For
+            // builds it so); a line that did not would be cut in the wrong place, so it is not run.
             var prefix = $"\"{line.Application}\" ";
+            if (!line.CommandLine.StartsWith(prefix, StringComparison.Ordinal)) { return null; }
             start = new ProcessStartInfo(line.Application) { Arguments = line.CommandLine[prefix.Length..] };
         }
         else
