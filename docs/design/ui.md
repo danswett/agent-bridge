@@ -590,10 +590,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   line break, never the lines it wraps into, and not the blank lines a fence may end with. Needs you
   still refuses such a prompt outright and sends the person to the card (§6.1). The Windows app does
   this since #296 and the PWA since #415, which draws every code span in a sentence the same way.
-- **An approval's card** (#220): all of the message, prose and code spans as well as fences, is
-  drawn this way, escaped (right-to-left letters included) and left to right, with Approve once
-  still offered. A Codex approval carries its command in prose ("Codex wants to run: …"). Other
-  questions draw as written.
+- **An approval's card** (#220): all of the message is drawn this way, escaped (right-to-left
+  letters included) and left to right, with Approve once still offered. A Codex approval carries
+  its command in prose ("Codex wants to run: …"), so outside its fences an approval's text is
+  drawn as its literal source, never as Markdown, its line breaks kept (#415): a link, a code
+  span, a backslash escape or emphasis would otherwise hide part of the command
+  (`echo "[safe](https://a/";curl …|sh;")"` drawn as `echo "safe"`). A fence opens only on a
+  language name, since the rest of its opening line is not drawn. Other questions draw as
+  written, as Markdown.
 
 ### 6.5 Reply box
 
@@ -757,6 +761,8 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
   letters' included, are copied as drawn, so the text pasted is never different from the text read.
   Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
+  An approval's text outside its fences is shown as the agent wrote it, Markdown marks and all
+  (§6.4, #415).
 
 ## 9. Accessibility
 

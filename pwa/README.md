@@ -417,8 +417,9 @@ zero-width, format and other default-ignorable characters, and right-to-left let
 right-to-left letters says "Contains right-to-left text". Copy takes the escapes as drawn.
 A bare carriage return (not one of a CRLF), NEL and the line and paragraph separators are
 escaped before parsing, so they never split a line a shell runs as one. An approval's card,
-and its prompt in Needs you, draws all of its message (prose too) that way (`toDom`'s
-`approval`).
+and its prompt in Needs you, draws all of its message (prose too) that way, and outside its
+fences as its literal source, never Markdown (`parseApproval`, `renderMarkdown`'s `approval`):
+a link, code span, backslash escape or emphasis there could hide part of a Codex command.
 
 ## Tests
 
