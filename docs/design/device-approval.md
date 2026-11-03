@@ -317,8 +317,13 @@ history state. It is valid only if:
   irrevocability exists to avoid;
 * **Capacity.** Counted over every entry a verifier holds, on every branch, void or not, so that
   storage itself is bounded:
-  * per generation, at most **512 adds** and **4,096 entries other than removals**, and 64 active
-    devices;
+  * per generation, at most **512 adds** and **4,096 entries other than removals**, and no `add`
+    in a parents' state that already has **64 active devices**. The 64 is a validity rule on adds,
+    not a bound on the state: voiding a copy restores the genuine enrollments it disabled (§3.3),
+    and a restoration is never refused, so the state can briefly hold more than 64, as when H
+    disables ten of 64 devices, ten replacements are approved, and removing H restores the ten
+    (73 active once H is gone). Every add is then refused until removals bring the count below 64.
+    Storage stays bounded by the 512 adds;
   * per signer (the add that made `by` active, above), at most **64 adds, 64 confirms, 64 merges
     and 64 removals** per generation, a cascade counting as one removal (§3.4); and each add may be
     renamed at most 8 times.
@@ -500,14 +505,21 @@ there before it. So:
     * a grant that is not an ancestor of the removal (§3.5), because the device acted
       concurrently with being removed;
     * every add and rename it signed, when the removal carries `voidGrants`. The remover's device
-      sets it whenever the target is still on probation by its own clock. This covers the case where
+      sets it whenever the target is still on probation by its own clock, **unless the person kept
+      some of the target's devices** in the cascade: `voidGrants` voids every grant, so it would
+      revoke the kept ones too. A partial cascade therefore carries no flag; the parent choice of
+      §3.3 still leaves every grant that is not kept, or needed by a kept one, concurrent and void,
+      and the confirmation says so, and that the kept devices take effect only when the target's
+      hold would have ended. This covers the case where
       the remover had already synced the held add before removing: the add is then an ancestor of
       the removal, but it is void all the same. The flag needs the target to be junior to the
       remover, which a probationary device almost always is; a cosigned removal of a probationary
       device not junior to either signer gets only the first case.
   * Anything the voided entries added is void too, transitively. What removal during probation
     guarantees is therefore this: every add by that device, held or not, never takes effect, when
-    the remover is senior to it; otherwise every add concurrent with the removal. The one exception
+    the remover is senior to it and the person kept none of them; otherwise every add concurrent
+    with the removal, which the parent choice of §3.3 makes every add the person did not keep,
+    except ones the honest line was built on (§3.3 lists them for removal). The one exception
     is the cutoff of §3.5: if the remover was itself removed by a removal that the probationary
     device did not sign, and is so a removed signer acting from an old head, the probationary
     device's grants that descend from that removal are not voided by it.
@@ -1112,8 +1124,10 @@ the genesis fingerprint. **Remove** takes two presses (the first arms it for 5 s
 again to remove", as Forget does), then the presence check. It offers the cascade (§3.4), signs
 the `remove` entries, appends them, and sends them to every connected host and device directly
 as well as through the relay. Each `remove` names the target's active add, and carries
-`voidGrants` when the target is still on probation by this device's clock, or when the person
-left every device in the cascade ticked (§3.4). A more senior device
+`voidGrants` when the target is junior to this device and the person kept none of the target's
+devices: for the full cascade, and always while the target is still on probation by this device's
+clock. It never does when the person kept any of them, since the flag would revoke those as well
+(§3.4). A more senior device
 asks for a second device's cosignature: the
 other device shows "*Desk app* asks to remove *Old laptop*, which is senior to it" and needs its
 own presence check. Both must be confirmed (§3.4); an unconfirmed device does not offer or accept
@@ -1333,9 +1347,13 @@ A host acts only if:
   failure of its own: a wall clock that once ran far ahead pushes it into the future, and every
   person command is refused as expired until real time catches up. The host says so, and offers a
   **local reset** at the machine (in the app or `agent-bridge-host devices reset-clock`, refused
-  inside agent sessions, #67). The reset sets the mark to the current time and records a floor: a
-  command issued before the reset is refused, so the records the far-ahead mark pruned early
-  cannot be replayed;
+  inside agent sessions, #67). The host also persists the **highest `issuedAt` it has ever
+  accepted**. The reset sets the mark to the current time and a floor at the later of the reset
+  time and that highest `issuedAt`: a command issued at or before the floor is refused. Every
+  command the host ever executed is issued at or before it, including one dated up to 2 minutes
+  ahead whose record the far-ahead mark pruned early, so none can run twice. If the floor is in
+  the future, because the host once accepted a command dated ahead, new commands wait until then,
+  and the host shows when;
 * where the command arrives on a channel from `by` itself (folder trust, update), `nonce` is one
   the host gave that channel in `hello`;
 * the host is fresh (§6.3) and holds every head the command names, syncing first if not. The one
@@ -1846,6 +1864,18 @@ Each slice adds its own. Together they cover:
   the adopting merge and the entries leading to it, and confirms its removal. Without the merge
   (the host adopted the branch only locally), it stays at "not confirmed" and the host still
   refuses it; after a person's device signs the adopting merge, the proof confirms it.
+* **Replay across a reset.** A host whose clock is correct accepts a transfer dated 60 seconds
+  ahead and runs it; its clock then jumps a day forward, pruning the record, and is corrected; the
+  reset 30 seconds after the transfer ran sets the floor at that transfer's `issuedAt`, and the
+  asking host's replay is refused. A new command issued after the floor is accepted.
+* **Restoring past the active-device cap.** 64 active; H disables ten by copies; G approves ten
+  replacements; G removes H with `voidGrants`: the ten genuine enrollments are restored and 73
+  devices are active, in every delivery order. The next add is refused until removals bring the
+  count below 64; removals are accepted throughout.
+* **Partial cascade.** The person removes probationary B but keeps C, which B added: the removal
+  carries no `voidGrants`, its parent holds C's add but none of B's other grants, C stays (taking
+  effect when B's hold would have ended), and B's other adds are void.
+  With everything ticked, the removal carries `voidGrants` and C is void too.
 * **Durable replay.** A transfer person command used once; the source host restarts, becomes fresh
   again, and the asking host replays the same command within its lifetime: refused. The same after
   the source's wall clock is moved back 30 minutes. A host whose replay record cannot be written
