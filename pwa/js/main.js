@@ -469,7 +469,29 @@ function clearSignInAttempt() {
   $('code-box').hidden = true;
   $('code').textContent = '';
   $('verify').removeAttribute('href');
+  $('copy-open').removeAttribute('href');
+  $('copy-status').textContent = '';
 }
+
+// The anchor opens GitHub during the click, even when the clipboard permission
+// prompt is asynchronous. Keep the ordinary link available for a manual retry.
+$('copy-open').onclick = async () => {
+  const attempt = signInAttempt;
+  if (!attempt) { return; }
+  const code = $('code');
+  try {
+    await navigator.clipboard.writeText(code.textContent);
+    if (signInAttempt === attempt) { $('copy-status').textContent = 'Code copied. Paste it on GitHub.'; }
+  } catch {
+    if (signInAttempt !== attempt) { return; }
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    $('copy-status').textContent = 'Could not copy. Copy the selected code, then enter it on GitHub.';
+  }
+};
 
 $('cancel-signin').onclick = () => {
   signInAttempt?.abort();
@@ -489,6 +511,7 @@ $('signin-button').onclick = async () => {
     attempt.signal.throwIfAborted();
     $('code').textContent = flow.userCode;
     $('verify').href = flow.verificationUri;
+    $('copy-open').href = flow.verificationUri;
     $('verify').textContent = flow.verificationUri.replace(/^https?:\/\//, '');
     $('code-box').hidden = false;
     const account = await flow.wait(attempt.signal);

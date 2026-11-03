@@ -8,6 +8,8 @@ and network access to the relay only.
 Published at <https://danswett.github.io/agent-bridge/app/> by `.github/workflows/pages.yml`.
 Try it without a machine: [`?demo=1`](https://danswett.github.io/agent-bridge/app/?demo=1).
 
+Sign-in shows the GitHub device page and a code. **Copy code and open GitHub** opens that page in a new tab; if the clipboard is unavailable, copy the selected code manually. Cancel a pending sign-in to discard its code and start again.
+
 It shows sessions, their activity and their pending questions, answers those questions
 (`session.answer`), replies to sessions (`session.reply`) with files and images
 (`attachment.*`), ends them (`session.stop`), starts and resumes them (`session.launch`),
