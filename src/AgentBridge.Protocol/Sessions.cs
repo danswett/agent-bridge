@@ -344,7 +344,9 @@ public sealed record Activity
     public Background? Background { get; init; }
     // Which sub-agent wrote the top-level response and reasoning, each on its own: they stay
     // last-writer-wins for older clients, and a main agent's reply can sit beside a
-    // delegate's reasoning. Absent while both are the main agent's own.
+    // delegate's reasoning. Absent while both are the main agent's own. Strict: read as absent,
+    // a delegate's text would be shown as the main agent's.
+    [Strict(Strictness.Security)]
     public ActivitySource? Source { get; init; }
     // The main agent's own text for each field Source attributes to a sub-agent, so a newer
     // client never loses the main agent's answer. Sent only with Source.
@@ -354,7 +356,9 @@ public sealed record Activity
 // The sub-agent ids that wrote the top-level text; a field left out is the main agent's.
 public sealed record ActivitySource
 {
+    [Strict(Strictness.Security)]
     public string? Response { get; init; }
+    [Strict(Strictness.Security)]
     public string? Reasoning { get; init; }
 }
 

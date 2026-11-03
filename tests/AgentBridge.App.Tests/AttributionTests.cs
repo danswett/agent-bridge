@@ -6,7 +6,7 @@ using Xunit;
 // Who said what: the main agent's own words and its delegates (Attribution), read from what a host
 // sends (docs/protocol/v1-sessions.md, Activity and Subagent). The PWA's cases, one for one
 // (pwa/test/unit/attribution.test.mjs), so both clients show the same voices. The PWA's case for a
-// source or own of the wrong shape is its reader's: the app's typed reader refuses such a session.
+// source or own of the wrong shape is its reader's; the app's is below (Received, #446).
 public sealed class AttributionTests
 {
     static Session Session(Activity? activity = null, IReadOnlyList<Subagent>? subagents = null, int? more = null) =>
@@ -60,6 +60,22 @@ public sealed class AttributionTests
         // An empty top-level field is absent too, as the PWA reads it.
         var empty = Voice(new Activity { Response = "Top.", Reasoning = "", Own = new OwnActivity { Reasoning = "Skimmed." } });
         Assert.Equal("Skimmed.", empty.Reasoning);
+    }
+
+    // Read as absent, a source the app could not read made the delegate's text the main agent's:
+    // "Main agent" on a delegate's words. The activity is not shown instead.
+    [Theory]
+    [InlineData("""{"response":7}""")]
+    [InlineData("""{"reasoning":["agent-c204"]}""")]
+    [InlineData("\"agent-3a91\"")]
+    public void A_source_the_app_cannot_read_never_makes_a_delegates_text_the_main_agents(string source)
+    {
+        var node = JsonSerializer.SerializeToNode(Make.Session(), ProtocolJson.Options)!;
+        node["activity"] = System.Text.Json.Nodes.JsonNode.Parse($$"""{"response":"Bisect over the last 10 commits.","reasoning":"A delegate's plan.","source":{{source}}}""");
+
+        var v = Attribution.MainVoiceOf(Received.Read<Session>(JsonSerializer.SerializeToElement(node)));
+
+        Assert.Equal(((string?)null, (string?)null), (v.Response, v.Reasoning));
     }
 
     [Fact]

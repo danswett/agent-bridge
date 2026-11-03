@@ -379,7 +379,9 @@ public sealed class HostConnection : IAsyncDisposable
                 }
             case Events.SessionsSynced:
                 {
-                    var held = ev.Data.ValueKind == JsonValueKind.Object ? Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld : null;
+                    // Read like any other record: one the app cannot read ends no snapshot, so it
+                    // removes no session and lifts no discovery hold.
+                    var held = Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld;
                     ui.Post(() => Sessions.EndSnapshot(held));
                     break;
                 }

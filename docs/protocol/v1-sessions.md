@@ -76,6 +76,8 @@ with the wrong type):
 | `Session` | `id` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
+| `Activity` | | `source` |
+| `ActivitySource` | | `response`, `reasoning` |
 | `Question` | | `id`, `kind`, `message`, `fields` (whole), `agent`, `answerAtMachine`, `truncated` |
 | `Field` | `name` | `type`, `title`, `description`, `options` (whole), `allowOther` |
 | `Option` | | `value`, `label` |
@@ -99,7 +101,9 @@ all, while its session is: a choice is never shown without the words it was aske
 its bare value instead. A field or option with no `title`, `description` or `label` at all is
 read as usual. Launch
 options whose `defaults.permissions` can't be read are refused whole, so nothing is launched with
-a permission mode the client guessed.
+a permission mode the client guessed. A session whose `activity.source` can't be read keeps an
+empty `activity` (rule 4: the required field takes its default): read as absent, a delegate's
+text would be shown as the main agent's.
 
 This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
 `session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as

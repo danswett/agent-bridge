@@ -135,6 +135,31 @@ public sealed class ConnectionTests : IAsyncLifetime
         Assert.DoesNotContain(logged, l => l.Contains("4242", StringComparison.Ordinal));
     }
 
+    // A sessions.synced read as anything (null, a list) ended the snapshot: the sessions it had not
+    // sent were removed and the discovery hold lifted, on a record the app could not read.
+    [Fact]
+    public async Task A_snapshot_end_the_app_cannot_read_ends_nothing_and_the_real_one_still_does()
+    {
+        await using var slow = new FakeHost();
+        slow.Sessions.Add(Make.Session("s1"));
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        slow.HoldSynced = hold;
+        slow.Start();
+        var logged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(slow.Endpoint, TimeSpan.FromSeconds(1), ct), new LockedDispatcher(), logged.Enqueue) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Get("s1") is not null, "the snapshot's session");
+
+        await slow.SendAsync(Events.SessionsSynced, new System.Text.Json.Nodes.JsonArray());
+        await slow.SendAsync(Events.SessionUpsert, Make.Session("s2"));
+        await Wait.UntilAsync(() => conn.Sessions.Get("s2") is not null, "the event after it");
+
+        Assert.False(conn.Sessions.Complete);
+        Assert.Single(logged, l => l.StartsWith($"refused a {Events.SessionsSynced} ", StringComparison.Ordinal));
+        hold.SetResult();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the snapshot's own end");
+    }
+
     // Usage and update state are read on connecting, before the sessions are subscribed. One the
     // app could not read ended the connection there, and every connection after read the same
     // thing: it reconnected for good and never showed a session.
