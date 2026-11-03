@@ -195,25 +195,36 @@ internal sealed class FakeProcesses : IProcessInspector
     readonly Dictionary<AgentKind, List<AgentProcess>> _live = [];
     readonly Dictionary<AgentKind, List<AgentProcess>> _unidentified = [];
     readonly HashSet<AgentKind> _unreadable = [];
+    // The host's discovery reads these while a test's fake agent starts or exits on another thread.
+    readonly object _gate = new();
 
     public void Run(AgentKind agent, int pid, string? commandLine = null, DateTimeOffset? startedAt = null)
     {
-        if (!_live.TryGetValue(agent, out var list)) { _live[agent] = list = []; }
-        list.RemoveAll(p => p.Id == pid);
-        list.Add(new AgentProcess(pid, startedAt ?? Fixture.T0.AddHours(-1), commandLine));
+        lock (_gate)
+        {
+            if (!_live.TryGetValue(agent, out var list)) { _live[agent] = list = []; }
+            list.RemoveAll(p => p.Id == pid);
+            list.Add(new AgentProcess(pid, startedAt ?? Fixture.T0.AddHours(-1), commandLine));
+        }
     }
 
     // A process whose start time the OS would not give.
     public void RunUndated(AgentKind agent, int pid, string? commandLine = null)
     {
-        Run(agent, pid, commandLine);
-        _live[agent][^1] = new AgentProcess(pid, null, commandLine);
+        lock (_gate)
+        {
+            Run(agent, pid, commandLine);
+            _live[agent][^1] = new AgentProcess(pid, null, commandLine);
+        }
     }
 
     public void Exit(AgentKind agent, int pid)
     {
-        if (_live.TryGetValue(agent, out var list)) { list.RemoveAll(p => p.Id == pid); }
-        if (_unidentified.TryGetValue(agent, out var unread)) { unread.RemoveAll(p => p.Id == pid); }
+        lock (_gate)
+        {
+            if (_live.TryGetValue(agent, out var list)) { list.RemoveAll(p => p.Id == pid); }
+            if (_unidentified.TryGetValue(agent, out var unread)) { unread.RemoveAll(p => p.Id == pid); }
+        }
     }
 
     // The agent's processes cannot all be listed: a denied or failed read.
@@ -227,10 +238,13 @@ internal sealed class FakeProcesses : IProcessInspector
     // startedAt makes it another process that reused the pid.
     public void Unidentify(AgentKind agent, int pid, DateTimeOffset? startedAt = null)
     {
-        var p = GetAgentProcesses(agent).SingleOrDefault(x => x.Id == pid) ?? _unidentified[agent].Single(x => x.Id == pid);
-        Exit(agent, pid);
-        if (!_unidentified.TryGetValue(agent, out var list)) { _unidentified[agent] = list = []; }
-        list.Add(p with { CommandLine = null, StartedAt = startedAt ?? p.StartedAt });
+        lock (_gate)
+        {
+            var p = GetAgentProcesses(agent).SingleOrDefault(x => x.Id == pid) ?? _unidentified[agent].Single(x => x.Id == pid);
+            Exit(agent, pid);
+            if (!_unidentified.TryGetValue(agent, out var list)) { _unidentified[agent] = list = []; }
+            list.Add(p with { CommandLine = null, StartedAt = startedAt ?? p.StartedAt });
+        }
     }
 
     // Called as each list is asked for: something that happens while a handler runs.
@@ -239,7 +253,7 @@ internal sealed class FakeProcesses : IProcessInspector
     public IReadOnlyList<AgentProcess> GetAgentProcesses(AgentKind agent)
     {
         Queried?.Invoke(agent);
-        return _live.TryGetValue(agent, out var list) ? [.. list] : [];
+        lock (_gate) { return _live.TryGetValue(agent, out var list) ? [.. list] : []; }
     }
 
     // Who has each file open, by full path, and how often the OS was asked.
@@ -255,7 +269,8 @@ internal sealed class FakeProcesses : IProcessInspector
     // An unidentified runtime makes the observation not Known, as the real one does off Windows.
     public AgentProcessObservation Observe(AgentKind agent)
     {
-        var unidentified = _unidentified.TryGetValue(agent, out var u) ? u.ToList() : [];
+        List<AgentProcess> unidentified;
+        lock (_gate) { unidentified = _unidentified.TryGetValue(agent, out var u) ? u.ToList() : []; }
         return new(GetAgentProcesses(agent), !_unreadable.Contains(agent) && unidentified.Count == 0)
         {
             Listed = !_unreadable.Contains(agent),

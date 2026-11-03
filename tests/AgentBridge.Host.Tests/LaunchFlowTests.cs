@@ -27,6 +27,8 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
     private protected readonly FakeStarter starter;
     private protected readonly FakeLocator locator = new();
     private protected readonly FakeRunner agency = new();
+    // What the launch service logged, as the host's log would have it.
+    private protected readonly System.Collections.Concurrent.ConcurrentQueue<string> logged = new();
     private protected TestRelay relay = null!;
     private protected SessionSource source = null!;
     private protected Device host = null!;
@@ -102,7 +104,7 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         LocalNow = now ?? (() => DateTime.Now),
         Transfers = fetcher ?? transfers,
         TransferStaging = transfers?.Staging ?? Path.Combine(f.Root, "profile", "transfers"),
-    }, attachments: attachments);
+    }, log: logged.Enqueue, attachments: attachments);
 
     private protected void Serve(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, TimeSpan? readyWait = null) =>
         host.Hub.Handler = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), launcher: Launcher(config, wait, usage, now, readyWait: readyWait)).HandleAsync;
@@ -815,12 +817,18 @@ public abstract partial class LaunchFlowFixture
         // A window that cannot be read: one whose process has gone.
         public Func<int, bool>? Unreadable;
 
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        public async Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref Reads);
             if (Unreadable?.Invoke(processId) == true) { throw new IOException($"no console for pid {processId}"); }
-            return Task.FromResult(new ConsoleScreen(Rows ?? [], null));
+            // The window as it is when the read begins, returned once the read is done.
+            var rows = Rows ?? [];
+            if (Reading is { } reading) { await reading(); }
+            return new ConsoleScreen(rows, null);
         }
+
+        // Awaited while a read is on its way: where a test holds one.
+        public Func<Task>? Reading;
     }
 
     private protected sealed class FakeLocator : IAgentLocator
@@ -875,8 +883,13 @@ public abstract partial class LaunchFlowFixture
 
         public bool Running(Started started)
         {
+            Looking?.Invoke();
             lock (Specs) { return running.Contains(started.ProcessId); }
         }
+
+        // Runs as the host asks whether a process still runs: where a test holds the host's
+        // following of a launch between two of its looks.
+        public Action? Looking;
 
         // As the process tree does: the process started, or one under it.
         public bool? Owns(Started started, int processId)
@@ -888,9 +901,14 @@ public abstract partial class LaunchFlowFixture
             }
         }
 
+        // As the process goes: for the host's discovery too, which lists the agent's processes. It
+        // was only forgotten here, so discovery still listed the "closed" agent's process: the
+        // host took the launcher to have handed its session on, read the question again from that
+        // session's window, and was busy once more after a Quit had closed the agent (#416).
         public void Exit(int pid)
         {
             lock (Specs) { running.Remove(pid); }
+            foreach (var agent in Enum.GetValues<AgentKind>()) { f.Processes.Exit(agent, pid); }
         }
 
         public void Register(StartSpec spec) => Register(spec, 9000 + Specs.IndexOf(spec));
