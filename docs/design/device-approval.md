@@ -205,18 +205,28 @@ only if:
   `presence: webauthn` with that signer's own `uv` (§3.2, §4.6). That includes a `merge`, since
   it can adopt a branch (§3.5). Under decision 3(a) a signer with `presence: none` cannot make
   entries at all;
-* `add`: `device.id` matches `dh`; the id was never added in this generation (a removed key is
+* `add`: `device.id` matches `dh`; the id was never added in the parents' history (a removed key is
   never re-added, and a re-approved device makes a new key pair); a person's device has `sign`,
-  `signAlg` and `presence`, and a host has none of them;
+  `signAlg` and `presence`, and a host has none of them. **Conflicting adds**: if the state's
+  history holds two distinct `add` entries for one id (on concurrent branches, so neither saw the
+  other), that id is **conflicted**. It is inactive in every state that holds both, whichever
+  arrived first, and so has no rank, lineage or signing key there. Both adds are announced, and the
+  person enrolls that device again with a new key. An honest enrollment makes one add, so this
+  needs a dishonest relay or a device enrolled twice while partitioned;
 * `remove`: the target is active in the parents' state, and the seniority rule of §3.4 holds.
   Whether removals leave a person's device is a property of the state, not of one entry (§3.5);
 * `rename`: the target is active and is `by` itself or junior to it. Each device may be renamed
   at most 8 times in a generation;
 * `merge`: its parents are two to four distinct heads, quarantined ones included, in head order;
 * **Capacity.** At most 4,096 entries other than removals, and 64 active devices. **Removals are
-  never refused for capacity.** There can be at most one valid removal per device ever added, so
-  removals are bounded by the adds, and a full roster can always still revoke. Otherwise a hostile
-  approver could fill the roster (with renames, say) and so block its own removal. Compaction by a
+  never refused for capacity**, so a full roster can always still revoke; otherwise a hostile
+  approver could fill it (with renames, say) and block its own removal. Removals are bounded
+  instead by **redundancy**: a verifier keeps at most **2 removals per target**. A further removal
+  of a target that is already removed in its state, which may differ only in `at` and so have a
+  new hash, is not stored. It is kept only when it is the parent of another entry being offered
+  in the same delivery, and then only while that entry is. Its effect, the target being removed,
+  is already in the state, so dropping it changes nothing. A signer making body-distinct copies of
+  one removal therefore cannot grow anyone's storage, gossip or recomputation. Compaction by a
   signed checkpoint is left for when an account comes near the limit.
 
 ### 3.4 Seniority and probation
@@ -241,10 +251,15 @@ there before it. So:
   is a person whose surviving devices were all approved through one device below the target.
   Decision 5 says this.
 * **What that leaves.** One hostile device cannot remove anything above it, alone or with any
-  devices it enrolled, however long it waits. To take over the devices above it, an attacker needs
-  two devices whose approvals came, independently, from the person's own devices, both past
-  probation. That means two separate approval mistakes, each announced on every device (§6.4),
-  each with 72 hours to notice. Decision 9 states this path.
+  devices it enrolled, however long it waits. Two devices whose approvals came independently from
+  the person's own devices can, which takes two separate approval mistakes, each announced on every
+  device (§6.4). What the 72 hours of notice buys is different on each side of probation:
+  * **during** probation, removing both stops a **takeover**: their adds are void, they never
+    become approvers, and they gain nothing. But a cosigned removal they signed during probation
+    still applies when its hold ends (§3.5), so they can still cost the person one senior device,
+    which comes back junior;
+  * **after** probation, unnoticed, they can remove the devices above them and keep going.
+  Decision 9 states both.
 * **Probation.** A device added in the last **72 hours** can remove only itself. It cannot add,
   remove others, rename others, cosign or merge. The 72 hours run on each verifier's own clock
   from when *it* first accepted the `add`; `at` is never used.
@@ -336,12 +351,16 @@ entries:
   additions therefore never survive, while its concurrent removals, valid where it signed them,
   stand.
 * **What that leaves.** A removed device that still holds its keys can sign a removal on a head
-  from before its own removal, and that removal stands. It can only remove devices that were active
-  in that old state and junior to it, and only once each, since the person's re-added devices have
-  new keys it never saw. So it can revoke, once, devices added after it but before its removal. It
-  can never add trust, the fork and every removal are announced, and the person re-adds what it
-  removed. This revocation-only denial of service is accepted rather than voiding removals by
-  delivery order, which would let a revoked key come back.
+  from before its own removal, and that removal stands. Alone, it can only remove devices that
+  were active in that old state and junior to it. With a second, independently approved removed
+  device (§3.4), the pair can also cosign the removal of a device senior to both. That holds even
+  if the person removed both during their probation: a held removal still applies when its hold
+  ends, because removals never un-apply. Either way each target falls once, since the person's
+  re-added devices have new keys the removed devices never saw. A senior device re-added this way
+  comes back junior. Removed devices can never add trust, every fork and removal is announced, and
+  the person re-adds what was removed. This revocation-only denial of service is accepted rather
+  than voiding removals by delivery order or by clock, which would let a revoked key come back.
+  Decision 9 states it.
 * Probation holds (§3.4) are applied last. They delay effects, and never decide validity or voiding.
 
 A `merge` joins heads into one, and may name a quarantined head to adopt it. Its state is that
@@ -624,6 +643,15 @@ A token alone never replaces a stored roster or changes admission:
 * A squatted first genesis (one made with a stolen token before the owner's) never reaches a
   machine (§5.2). The owner operates the relay, so it is removed with a relay administration
   action ([relay-deploy.md](../relay-deploy.md) will document it in R2), which no verifier relies on.
+* **A veto from a compromised device.** A stolen, unlocked senior device stays an active signer, so
+  it can veto every reset, and through the relay alone the replacement generation is never admitted.
+  The recovery is the same **administration override**, authenticated out of band: the relay
+  operator ends the veto and admits the new generation. For this deployment that is the owner; on
+  a shared relay it would be the operator's support process, with the account holder proving who
+  they are outside the relay. The override changes only the relay's storage and admission. Each
+  machine still moves to the new generation only by the person's local action there (§5.5), so the
+  override cannot hand a machine to anyone. Without the override, reset cannot recover through the
+  relay while a compromised device keeps vetoing.
 
 This binds an honest relay. A dishonest one can store anything, and no verifier holding a roster
 follows it.
@@ -697,6 +725,7 @@ confirm the removal, and look unreachable from the person's other devices. The p
 such a machine: the app there, or `agent-bridge-host devices sync`, imports the current roster
 from a file exported by any of the person's devices. This needs a dishonest relay **and** the
 removed device's keys.
+
 ### 6.4 Every change is announced
 
 Every `add`, `remove`, `rename` and open fork is shown on every person's device ("*Kitchen
@@ -709,17 +738,29 @@ it cannot remove the devices that would notice.
 The relay's `removed` close code and a host's refusal in `hello` are **advisory**. The relay is
 untrusted, and a refusal can be forged by it or by a host. So a device acts on them only after it
 holds a **verified removal of itself**: a `remove` entry targeting its id that applies under §3.5
-in the generation it holds. It asks for one (`roster.sync` from the relay or any peer that will
-answer) and verifies it. Until then, it keeps its keys and its roster, says "The relay says this
+in the generation it holds. Until then, it keeps its keys and its roster, says "The relay says this
 device was removed; not confirmed", and keeps trying its other peers. A relay that merely claims a
 removal therefore causes at most a denial of service, never the loss of a device's trust state.
 
+A removed device can no longer fetch a roster (it is refused admission and `roster.sync`), so the
+proof comes with the refusal. It is narrowly scoped:
+* the device sends its heads in `hello`, as every device does;
+* the relay, refusing it with `removed`, or a host, refusing it in `hello`, attaches a **removal
+  proof**: the removal entry and every entry between the device's heads and it, and nothing else;
+* the device verifies it from the roster it already holds.
+
+The proof can include devices added since the device last synced, which it would have seen had it
+been online while still approved. It never goes to a device that was never approved, because such
+a device has no heads in a generation the relay holds, and the relay and hosts send a proof only to
+a key whose own `add` is in it. A relay that withholds the proof leaves the device at "not
+confirmed", which is denial of service, not loss of trust.
 With the removal verified, it says "This device was removed from *login*'s devices by *Desk app*
 on Nov 2.". It deletes what it kept about the account (sessions, usage, notifications, its roster
 copy) and its push subscriptions, and offers "Sign in again", which makes a **new key** and starts
 enrollment again. A host does the same: with its own removal verified, it stops serving relay
 devices, says so in the app and the host log, and keeps serving its own machine's apps over the
 pipe.
+
 ## 7. Enforcement
 
 ### 7.1 Hosts: who gets a channel's ops
@@ -824,17 +865,21 @@ over the pipe (`host.relay.account`, [local-pipe.md](../protocol/local-pipe.md))
 **its own** device key (`RelayFleetLink`). A host-bound token would refuse it. So binding comes with
 a way for an app to get its own token, and is enforced last:
 
-1. **Exchange.** The relay gains `token-exchange`. A device admitted with a valid account token
-   asks for a token bound to another key. The other device proves that key as admission does: an
-   HMAC over a relay nonce from ECDH with the relay's ephemeral. The relay issues a token for the
-   same account, bound to that key. The app asks its host to do this over the pipe (a new
-   `host.relay.token` op, limited to the app as `host.manage` is), or does it itself with the host's
-   token, and keeps the result.
+1. **Exchange.** The relay gains `token-exchange`, a control message accepted only **on an
+   already-admitted socket**: the requester has just proven the key its token is bound to, so a
+   token alone, without that key, can never mint another. On its socket, the host forwards the app's
+   public key and the app's proof of it, an HMAC over a relay nonce from ECDH with the relay's
+   ephemeral, as admission does, which the app makes over the pipe. The relay issues a token for the
+   same account bound to the app's key, and the host returns it over the pipe through a new
+   `host.relay.token` op, limited to the app as `host.manage` is. The app never presents the host's
+   token itself. A compromised host can mint tokens for keys of its choosing, but those keys are
+   still only pending in the roster.
 2. **Issue bound, accept both.** The relay issues bound tokens from then on, and still accepts
    unbound ones until they expire. Old apps keep working, and an updated app uses the exchange.
 3. **Enforce.** Once every client the owner runs has updated (apps update within 30 minutes; the
    PWA and Apple clients sign in with their own key anyway), the relay refuses unbound tokens.
    Production steps are the owner's to approve.
+
 ## 8. Migration and rollout
 
 ### 8.1 Modes
@@ -1031,7 +1076,14 @@ Each slice adds its own. Together they cover:
   * the last two person's devices removing themselves concurrently: no person's device is left,
     and every host refuses relay devices until a reset;
   * a removed device's removal signed on an old head, of a device junior to it that was active
-    there: it applies, and it cannot touch a device added later.
+    there: it applies, and it cannot touch a device added later;
+  * two independently approved devices cosign a senior device's removal during probation, and
+    the person removes both before the hold ends: their adds are void, and the senior device's
+    removal still applies when the hold ends (the stated residual);
+  * two sibling adds of one id with different signing keys: the id is conflicted and inactive,
+    whichever arrived first;
+  * many body-distinct removals of one target (differing only in `at`): at most two are kept,
+    and the state is the same.
 * A roster at its 4,096-entry limit (filled with renames by one device) still accepts a removal of
   that device. The ninth rename of one device is refused.
 * A removal forking from beyond 8 entries is accepted and applied, whichever order the branches
@@ -1062,11 +1114,17 @@ Each slice adds its own. Together they cover:
   simulated partition never confirms, and a roster imported at the machine ends the partition.
 * A removed device is told so, wipes its data and push subscriptions, and makes a new key to join
   again, but only after verifying a removal of itself. A relay `removed` close code or a host's
-  refusal without one changes nothing it holds.
+  refusal without one changes nothing it holds. An offline device that was removed gets the
+  removal proof with the refusal (the entries from its heads to the removal), completes the wipe,
+  and a key that was never approved gets no proof.
 
 **Relay**
-* A token presented with another key is refused. An app gets its own bound token by `token-exchange`
-  with proof of its key, and keeps working through the stage where both kinds of token are accepted. A reset genesis is held 72 hours, announced, and
+* A token presented with another key is refused. `token-exchange` is refused on a fresh socket
+  with only a token, and works only on an admitted socket that proved the token's key. The app gets
+  its own bound token through its host and keeps working through the stage where both kinds of token
+  are accepted.
+* A reset vetoed by a current-generation device stays held; the administration override admits it;
+  no machine moves without its local action. A reset genesis is held 72 hours, announced, and
   ended by a veto. A pending device receives no roster and no heads.
 * Presence declarations: a WebAuthn registration with a valid attestation from a pinned root is recorded `attested: true`; one without is `attested: false`, and the approver says so.
 
@@ -1111,6 +1169,8 @@ Each slice adds its own. Together they cover:
    **Recommended: (a).**
 5. **Recovery when every approved person's device is lost.**
    (a) Reset to a new generation, held 72 hours at the relay with veto, and confirmed at each machine.
+   A stolen senior device can veto every reset, so recovery from that needs the relay operator's
+   out-of-band override (the owner, for this relay); machines still move only by local action.
    (b) As (a), plus an optional offline recovery key made at genesis.
    **Recommended: (a).** A recovery key is one more secret that, with the GitHub account, takes the
    account. Total loss is unlikely if the person keeps at least three approving devices, two of them
@@ -1140,9 +1200,12 @@ Each slice adds its own. Together they cover:
    Removals are monotone and never undone. Removing a device offers to remove the devices it added.
    What (a) still allows:
    * a delayed takeover, by two hostile devices that the person's own devices approved
-     independently, both past probation, which can then remove the devices above them. That takes
-     two approval mistakes, each announced on every device, each with 72 hours to notice;
-   * a one-time revocation of its juniors by a removed device, signed on an old head (§3.5);
+     independently, both past probation and not noticed, which can then remove the devices above
+     them. That takes two approval mistakes, each announced on every device;
+   * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
+     revoke devices junior to it. A pair approved independently can also revoke one device senior
+     to both, even when the person removed both during probation, because removals never un-apply.
+     They never gain trust, and a revoked senior device comes back junior;
    * a reset when a senior device is lost without two independently approved survivors.
    (b) Seniority without the two-signature removal: a lost senior device then always means a reset.
    (c) Neither: any approver removes any device, and one hostile device can remove all the others
@@ -1160,6 +1223,7 @@ Each slice adds its own. Together they cover:
     person sees it as machines that never confirm the removal (§6.3).
     **Recommended: (a).** Other hosts every 5 minutes, and the app on the same machine, keep a host
     fresh in normal use.
+
 ## 12. Slices
 
 Each is one PR, security-reviewed independently before merge.
