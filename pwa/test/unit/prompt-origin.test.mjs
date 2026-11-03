@@ -104,14 +104,26 @@ test('a schedule\'s prompt with new words, another schedule\'s, or the person\'s
   assert.equal(m.observe(session({ from: 'schedule', label: '5', status: 'working', turns: 6, text: MONITOR })).repeat, true);
 });
 
-test('a host saying idle a moment before it counts the turn done is not a new prompt', () => {
+test('turns that end before a new prompt has settled are not put down to it, even with an earlier prompt\'s end missed', () => {
   const m = new PromptMemory();
-  m.observe(session({ from: 'schedule', label: '4', turns: 3 }));
-  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, text: 'Other words', since: '2026-11-03T19:01:00Z' }));
-  assert.equal(m.observe(session({ from: 'schedule', label: '4', turns: 3, text: 'Other words' })).fresh, false);
-  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4, text: 'Other words' })), { repeat: false, at: '2026-11-03T19:01:00Z', fresh: false });
+  m.observe(session({ from: 'schedule', label: '4', turns: 3, text: 'A' }));
+  // A's words sent again and running; B arrives before this view sees A's turn end.
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, text: 'A' }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 4, text: 'B' }));
+  // Two more turns done, one of them A's: B was sent once.
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 5, text: 'B' })), { repeat: false, at: '2026-11-03T19:00:00Z', fresh: false });
 });
 
+test('a repeat is dated by when its turn began, not by a question answered within it', () => {
+  const m = new PromptMemory();
+  m.observe(session({ from: 'schedule', label: '4', turns: 3 }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, since: '2026-11-03T19:01:00Z' }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'waiting', turns: 3, since: '2026-11-03T19:02:00Z' }));
+  m.observe(session({ from: 'schedule', label: '4', status: 'working', turns: 3, since: '2026-11-03T19:03:00Z' }));
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 4 })), { repeat: true, at: '2026-11-03T19:01:00Z', fresh: true });
+  // Its words sent again and seen only once done: no age, not the last one's.
+  assert.deepEqual(m.observe(session({ from: 'schedule', label: '4', turns: 5 })), { repeat: true, at: null, fresh: true });
+});
 test('a host that doesn\'t count turns never has a repeat folded', () => {
   const m = new PromptMemory();
   m.observe(session({ from: 'schedule', label: '4', turns: null }));

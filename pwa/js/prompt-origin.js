@@ -84,18 +84,21 @@ function idleTurns(s) {
 // What a session's view remembers of its prompts, to fold a schedule's repeats and date them.
 // A session carries only its latest prompt, so "the same as last time" is what this view saw.
 // A new prompt is one whose words or sender changed, or, with the same words, a finished turn more
-// than this view has seen idle and can put down to the prompts it knows: a schedule sending the
-// same text again shows once its turn is done, since a turn of the same prompt (an agent's reply to
-// a delegate reporting back) looks the same while it runs. It repeats when its schedule's previous
-// prompt, seen here, had the same text. Seen for the first time, nothing is folded: a wrong "same
-// as last time" would hide a prompt that changed. Its age is when its turn began (statusSince, seen
-// while it ran); a prompt first seen after its turn has no age to show.
+// than this view saw once that prompt had settled (been seen idle, its own turn counted). So a
+// schedule sending the same text again shows once its turn is done, since a turn of the same
+// prompt (an agent's reply to a delegate reporting back) looks the same while it runs; and turns
+// that end before a prompt has settled are never put down to it, since they can be its own or an
+// earlier prompt's whose end this view missed. It repeats when its schedule's previous prompt,
+// seen here, had the same text. Seen for the first time, nothing is folded: a wrong "same as last
+// time" would hide a prompt that changed. Its age is when its turn began (statusSince when it
+// started running, seen here); a prompt first seen after its turn has no age to show.
 export class PromptMemory {
+  // The prompt shown: { key, repeat, at, settled }.
   #current = null;
-  // The most turns seen finished, while idle; the prompts seen arrive whose turns it doesn't hold
-  // yet; and when the latest turn seen running began.
+  // The most turns seen finished, while idle; whether the session ran when last seen; and when the
+  // turn seen running began, until a turn's end is accounted for.
   #idle = null;
-  #owed = 0;
+  #running = false;
   #ran = null;
   #bySchedule = new Map();
 
@@ -106,28 +109,32 @@ export class PromptMemory {
     const text = a.userMessage ?? null;
     const key = text === null ? null : `${from}\n${a.userMessageLabel ?? ''}\n${text}`;
     const running = s?.status === 'working' || s?.status === 'waiting';
-    if (running) { this.#ran = s.statusSince ?? null; }
+    // From when it began, not from a question answered or a resume within it.
+    if (running && !this.#running) { this.#ran = s.statusSince ?? null; }
+    this.#running = running;
     const turns = idleTurns(s);
-    // More than ever seen idle here: a host can say idle a moment before it counts the turn done.
     let more = 0;
     if (turns !== null) {
-      if (this.#idle === null) { this.#owed = 0; } else { more = Math.max(0, turns - this.#idle); }
+      if (this.#idle !== null) { more = Math.max(0, turns - this.#idle); }
       this.#idle = Math.max(this.#idle ?? -1, turns);
     }
+    const ran = this.#ran;
+    if (turns !== null) { this.#ran = null; }
     const cur = this.#current;
     let at;
+    let settled;
     if (!cur || cur.key !== key) {
-      // New words: a turn it starts is still to be counted, or is among those just counted.
-      if (running) { this.#owed += 1; } else { more = Math.max(0, more - 1); }
-      this.#owed = Math.max(0, this.#owed - more);
       at = running ? s.statusSince ?? null : null;
+      // Seen idle, its own turn is among those counted.
+      settled = turns !== null;
     } else {
-      const unexplained = more - this.#owed;
-      this.#owed = Math.max(0, this.#owed - more);
-      if (unexplained <= 0) { return { repeat: cur.repeat, at: cur.at, fresh: false }; }
-      // The same words sent again, its turn over now: dated by the turn seen running before.
-      at = this.#ran;
-      this.#ran = null;
+      if (!cur.settled || more === 0) {
+        if (turns !== null) { cur.settled = true; }
+        return { repeat: cur.repeat, at: cur.at, fresh: false };
+      }
+      // The same words sent again, its turn over now: dated by when that turn began.
+      at = ran;
+      settled = true;
     }
     let repeat = false;
     if (from === 'schedule' && text !== null) {
@@ -135,7 +142,7 @@ export class PromptMemory {
       repeat = this.#bySchedule.get(label) === text;
       this.#bySchedule.set(label, text);
     }
-    this.#current = { key, repeat, at };
+    this.#current = { key, repeat, at, settled };
     return { repeat, at, fresh: cur !== null };
   }
 }

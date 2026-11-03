@@ -632,8 +632,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     quotes); the
     `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
     secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
-    age in meta style: when its turn began (`statusSince`, seen while it ran). The protocol doesn't
-    date a prompt, so one first seen after its turn has no age.
+    age in meta style: when its turn began (`statusSince` when it started running, seen here). The
+    protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
     Disclosure motion (§5.3): the chevron turns and the text settles in, nothing below slides, and
     it is instant under reduced motion. Open, it reads "Hide prompt" and shows all of it in reading
@@ -642,9 +642,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - **Repeats fold.** When a schedule's prompt has the same words as that schedule's previous one,
     the line says "Scheduled prompt · #4 · same as last time" and has no preview; Show prompt still
     opens it. A session carries only its latest prompt, so the previous one is the one this view
-    saw: a new prompt is one whose words or sender changed, or, with the same words, one more
-    finished turn (`turnCount` while idle) than this view can put down to the prompts it saw
-    arrive. So a schedule's repeat folds once its turn is done: while it runs it looks like a turn
+    saw: a new prompt is one whose words or sender changed, or, with the same words, a finished
+    turn more (`turnCount` while idle) than this view saw once that prompt had settled (been seen
+    idle, its own turn counted); turns that end before then are never put down to it. So a
+    schedule's repeat folds once its turn is done: while it runs it looks like a turn
     no prompt started (Claude's for a delegate reporting back). A prompt seen for the first time
     never folds, since a wrong "same as last time" would hide words that changed.
   - **Its words are an agent's.** The label is cleaned as a delegate's name is (§6.3: nothing hidden
