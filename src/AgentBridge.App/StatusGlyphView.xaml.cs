@@ -105,7 +105,7 @@ public sealed partial class StatusGlyphView : UserControl
         // was drawn before the first of them, and the fade already under way carries the rest.
         if (fading) { return; }
         fading = true;
-        DispatcherQueue.TryEnqueue(() => fading = false);
+        if (!DispatcherQueue.TryEnqueue(() => fading = false)) { fading = false; }
         Old.Width = Old.Height = size;
         Old.Style = was;
         Old.Foreground = wasBrush;

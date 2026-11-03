@@ -113,7 +113,7 @@ public sealed class QuestionView : StackPanel
             send.Visibility = Ui.Show(vm.ShowSend);
             send.IsEnabled = vm.CanAnswer;
             // The ring on Send, unless one of the options sent it.
-            Ring(send, vm.InFlight && !(vm.Tap && vm.Fields[0].Options.Any(o => o.Value == vm.SentValue)));
+            Ring(send, vm.InFlight && !(vm.Tap && vm.Fields is [var tapped, ..] && tapped.Options.Any(o => o.Value == vm.SentValue)));
         }
         foreach (var r in refreshers) { r(); }
     }
