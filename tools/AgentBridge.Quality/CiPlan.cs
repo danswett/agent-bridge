@@ -23,12 +23,23 @@ static partial class CiPlan
     private static partial Regex GatedOn();
     [GeneratedRegex(@"contains\(\s*fromJSON\(\s*env\.SUITES\s*\)\s*,\s*'([^']*)'\s*\)")]
     private static partial Regex SuiteTest();
-    // On main every gated job and step runs whatever the plan says, so a selection that misses
-    // something is caught before a release publishes.
-    [GeneratedRegex(@"github\.event_name\s*!=\s*'pull_request'\s*\|\|")]
-    private static partial Regex MainAlways();
-    [GeneratedRegex(@"needs\.quality-gate\.result\s*==\s*'success'")]
+    [GeneratedRegex(@"^needs\.quality-gate\.result == 'success'$")]
     private static partial Regex GatePassed();
+    // The only shape a suite-gated step's if: may take: guards that hold on main too (the runner's
+    // OS, not cancelled), then a disjunction of exactly the main and whole-ring bypasses and the
+    // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which main
+    // would skip whenever the second suite wasn't selected (#523's review).
+    [GeneratedRegex(@"^(?:runner\.os == '[A-Za-z]+'|!cancelled\(\)) && ")]
+    private static partial Regex Guard();
+    [GeneratedRegex(@"^contains\(fromJSON\(env\.SUITES\), '[^']*'\)$")]
+    private static partial Regex SuiteTerm();
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex Spaces();
+
+    const string MainBypass = "github.event_name != 'pull_request'";
+    const string WholeRingBypass = "env.WHOLE_RING == 'true'";
+    static string GatedJobIf(string id) =>
+        $"github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.{id} == 'true'";
 
     public static IReadOnlyList<Problem> Check(Catalog catalog, string yaml)
     {
@@ -52,24 +63,23 @@ static partial class CiPlan
             return problems;
         }
 
-        // Jobs gated on the plan: an if: that reads the plan's true or false for this job.
+        // Jobs gated on the plan: an if: that reads the plan's true or false for a job. Exactly one
+        // shape, so main and the whole ring run it whatever the plan says, and quality-gate can tell
+        // from the job's own output whether it had to run.
         var gated = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var (id, job) in jobs)
         {
-            var condition = Scalar(job, "if") ?? "";
-            var outputs = GatedOn().Matches(condition).Select(m => m.Groups[1].Value).Where(o => o != WholeRing).Distinct().ToList();
-            if (outputs.Count == 0)
+            var condition = Expression(Scalar(job, "if") ?? "");
+            if (!GatedOn().Matches(condition).Any(m => m.Groups[1].Value != WholeRing))
                 continue;
             gated.Add(id);
-            foreach (var other in outputs.Where(o => o != id))
-                Add($"ci.yml job {id} is gated on the plan's {other} output, not its own, so quality-gate can't tell whether it had to run");
-            if (!outputs.Contains(id))
-                continue;
-            if (!MainAlways().IsMatch(condition))
-                Add($"ci.yml job {id} runs only when the plan selects it, even on main: its if: must start with github.event_name != 'pull_request' ||");
+            if (condition != GatedJobIf(id))
+                Add($"ci.yml job {id} is gated on the plan, but its if: isn't exactly: {GatedJobIf(id)}");
         }
 
-        // The list the plan step gives a true or false to, and the plan job's outputs for each.
+        // The list the plan step gives a true or false to, and the plan job's outputs for each,
+        // bound to the step that computes them: a typo in a binding exports an empty value, which
+        // the job and quality-gate would both read as not selected.
         var select = Steps(plan).FirstOrDefault(s => Scalar(s, "id") == "select");
         var listed = (select is null ? null : Child(select, "env") is YamlMappingNode env ? Scalar(env, "JOBS") : null)
             ?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
@@ -82,9 +92,19 @@ static partial class CiPlan
             foreach (var id in listed.Where(l => !gated.Contains(l)).Order(StringComparer.Ordinal))
                 Add($"ci.yml plan's JOBS lists {id}, but no job of that name is gated on it");
         }
+        if (!Steps(plan).Any(s => Scalar(s, "id") == WholeRing))
+            Add($"ci.yml plan has no step with id {WholeRing}, which decides the whole ring apart from the selector");
         var planOutputs = Child(plan, "outputs") as YamlMappingNode;
-        foreach (var id in gated.Append(WholeRing).Where(o => planOutputs is null || Child(planOutputs, o) is null))
-            Add($"ci.yml plan has no output {id}");
+        var bindings = gated.Select(id => (Output: id, Binding: $"${{{{ steps.select.outputs.{id} }}}}"))
+            .Append((WholeRing, $"${{{{ steps.{WholeRing}.outputs.{WholeRing} }}}}"));
+        foreach (var (output, binding) in bindings)
+        {
+            var actual = planOutputs is null ? null : Scalar(planOutputs, output);
+            if (actual is null)
+                Add($"ci.yml plan has no output {output}");
+            else if (Normalize(actual) != binding)
+                Add($"ci.yml plan's output {output} is {actual.Trim()}, not {binding}");
+        }
 
         // quality-gate: every job that needs the plan, so none can fail, or be skipped when it had
         // to run, without failing the gate.
@@ -106,20 +126,27 @@ static partial class CiPlan
         {
             if (!Needs(publishGate).Contains(Gate))
                 Add($"ci.yml {PublishGate} doesn't need {Gate}, so a release could publish past a failed check");
-            if (!GatePassed().IsMatch(Scalar(publishGate, "if") ?? ""))
-                Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success'");
+            // One of the conditions joined by &&, with no || that could route around it.
+            var publishIf = Expression(Scalar(publishGate, "if") ?? "");
+            if (publishIf.Contains("||", StringComparison.Ordinal)
+                || !publishIf.Split("&&").Any(t => GatePassed().IsMatch(t.Trim())))
+                Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success' (as one of its && conditions, with no ||)");
         }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,
-        // and the step must run on main whatever the plan selected.
+        // and the step must run on main and in the whole ring whatever the plan selected, so its
+        // job must hand it the plan's whole-ring output.
         var suites = catalog.Suites.ToDictionary(s => s.Id, StringComparer.Ordinal);
         foreach (var (id, job) in jobs)
+        {
+            var stepsTestingSuites = false;
             foreach (var step in Steps(job))
             {
                 var condition = Scalar(step, "if") ?? "";
                 var ids = SuiteTest().Matches(condition).Select(m => m.Groups[1].Value).Distinct().ToList();
                 if (ids.Count == 0)
                     continue;
+                stepsTestingSuites = true;
                 var name = Scalar(step, "name") ?? Scalar(step, "id") ?? Scalar(step, "uses") ?? "(unnamed)";
                 foreach (var suiteId in ids)
                 {
@@ -128,11 +155,51 @@ static partial class CiPlan
                     else if (!RunsIn(suite, id))
                         Add($"ci.yml job {id} step \"{name}\" runs when suite {suiteId} is selected, but that suite's where: doesn't name ci.yml {id}");
                 }
-                if (!MainAlways().IsMatch(condition))
-                    Add($"ci.yml job {id} step \"{name}\" runs only when its suites are selected, even on main: its if: must include github.event_name != 'pull_request' ||");
+                if (!BypassesSelection(condition))
+                    Add($"ci.yml job {id} step \"{name}\" must run on main and in the whole ring whatever the plan selected: " +
+                        $"its if: must be [runner.os == '...' && | !cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)");
             }
+            var wholeRingEnv = Child(job, "env") is YamlMappingNode jobEnv ? Scalar(jobEnv, "WHOLE_RING") : null;
+            if (stepsTestingSuites && Normalize(wholeRingEnv ?? "") != $"${{{{ needs.plan.outputs.{WholeRing} }}}}")
+                Add($"ci.yml job {id} has steps that run when a suite is selected, but its env WHOLE_RING isn't ${{{{ needs.plan.outputs.{WholeRing} }}}}");
+        }
 
         return problems;
+    }
+
+    /// <summary>
+    /// Whether a suite-gated step's if: is guards that hold on main too, then a disjunction of
+    /// exactly the main bypass, the whole-ring bypass and suite tests. Nothing else may sit
+    /// between them: a substring check passed `(main || contains(a)) && contains(b)`, which main
+    /// would skip whenever b wasn't selected (#523's review).
+    /// </summary>
+    static bool BypassesSelection(string condition)
+    {
+        var expression = Expression(condition);
+        var guarded = false;
+        for (var guard = Guard().Match(expression); guard.Success; guard = Guard().Match(expression))
+        {
+            expression = expression[guard.Length..];
+            guarded = true;
+        }
+        if (expression.StartsWith('(') && expression.EndsWith(')'))
+            expression = expression[1..^1];
+        else if (guarded)
+            return false;
+        var terms = expression.Split("||").Select(t => t.Trim()).ToList();
+        return terms.Contains(MainBypass) && terms.Contains(WholeRingBypass) && terms.Any(t => SuiteTerm().IsMatch(t))
+            && terms.All(t => t is MainBypass or WholeRingBypass || SuiteTerm().IsMatch(t));
+    }
+
+    /// <summary>A value as written in YAML, with runs of whitespace collapsed.</summary>
+    static string Normalize(string value) =>
+        Spaces().Replace(value, " ").Trim().Replace("( ", "(", StringComparison.Ordinal).Replace(" )", ")", StringComparison.Ordinal);
+
+    /// <summary>An if: as an expression: normalized, and without the optional ${{ }} around it.</summary>
+    static string Expression(string condition)
+    {
+        var text = Normalize(condition);
+        return text.StartsWith("${{", StringComparison.Ordinal) && text.EndsWith("}}", StringComparison.Ordinal) ? text[3..^2].Trim() : text;
     }
 
     static bool RunsIn(Suite suite, string job) =>

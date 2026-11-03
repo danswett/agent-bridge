@@ -11,12 +11,15 @@ public class CiPlanTests
               product: ${{ steps.select.outputs.product }}
               ha-integration: ${{ steps.select.outputs.ha-integration }}
             steps:
+              - id: whole-ring
               - id: select
                 env:
                   JOBS: product ha-integration
           product:
             needs: plan
             if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
+            env:
+              WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
             steps:
               - name: The NativeAOT transport
                 if: runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))
@@ -31,8 +34,13 @@ public class CiPlanTests
           publish-gate:
             needs: [quality-gate]
             if: >-
-              !cancelled() && github.event_name == 'push' && needs.quality-gate.result == 'success'
+              !cancelled() && github.event_name == 'push'
+              && needs.quality-gate.result == 'success'
         """;
+
+    const string StepIf = "runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))";
+    const string StepProblem = "ci.yml job product step \"The NativeAOT transport\" must run on main and in the whole ring whatever the plan selected: " +
+        "its if: must be [runner.os == '...' && | !cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
 
     static IEnumerable<string> Check(string yaml) => CiPlan.Check(Fixture.Catalog(), yaml).Select(p => p.Message);
 
@@ -40,6 +48,7 @@ public class CiPlanTests
     public void The_wired_fixture_has_no_problems_so_each_test_below_shows_one_drift()
     {
         Assert.Empty(Check(Wired));
+        Assert.Empty(Check(Wired.Replace(StepIf, "${{ !cancelled() && ( github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'protocol') || contains(fromJSON(env.SUITES), 'transport') ) }}")));
     }
 
     [Fact]
@@ -58,12 +67,23 @@ public class CiPlanTests
         Assert.Equal(["ci.yml job product step \"The NativeAOT transport\" runs when suite ha-integration is selected, but that suite's where: doesn't name ci.yml product"], problems);
     }
 
-    [Fact]
-    public void A_suite_gated_step_that_main_would_skip_is_reported()
+    [Theory]
+    [InlineData("runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'transport')")]
+    // A bypass that's there but can't bypass: main would still skip it unless protocol is selected.
+    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')) && contains(fromJSON(env.SUITES), 'protocol')")]
+    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || contains(fromJSON(env.SUITES), 'transport'))")]
+    [InlineData("runner.os == 'Windows' && github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')")]
+    public void A_suite_gated_step_that_main_or_the_whole_ring_could_skip_is_reported(string condition)
     {
-        var problems = Check(Wired.Replace("(github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))", "contains(fromJSON(env.SUITES), 'transport')"));
+        Assert.Equal([StepProblem], Check(Wired.Replace(StepIf, condition)));
+    }
 
-        Assert.Equal(["ci.yml job product step \"The NativeAOT transport\" runs only when its suites are selected, even on main: its if: must include github.event_name != 'pull_request' ||"], problems);
+    [Fact]
+    public void A_job_with_suite_gated_steps_must_be_handed_the_plans_whole_ring_output()
+    {
+        var problems = Check(Wired.Replace("WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}", "WHOLE_RING: ${{ needs.plan.outputs.whole_ring }}"));
+
+        Assert.Equal(["ci.yml job product has steps that run when a suite is selected, but its env WHOLE_RING isn't ${{ needs.plan.outputs.whole-ring }}"], problems);
     }
 
     [Fact]
@@ -78,22 +98,28 @@ public class CiPlanTests
     }
 
     [Fact]
-    public void A_gated_job_the_plan_has_no_output_for_is_reported()
+    public void A_gated_output_that_is_missing_or_bound_to_another_value_is_reported()
     {
-        var problems = Check(Wired.Replace("ha-integration: ${{ steps.select.outputs.ha-integration }}", ""));
-
-        Assert.Equal(["ci.yml plan has no output ha-integration"], problems);
+        Assert.Equal(["ci.yml plan has no output ha-integration"],
+            Check(Wired.Replace("ha-integration: ${{ steps.select.outputs.ha-integration }}", "")));
+        // A typo exports an empty value, which the job and quality-gate would both read as not selected.
+        Assert.Equal(["ci.yml plan's output ha-integration is ${{ steps.select.outputs.ha-integraton }}, not ${{ steps.select.outputs.ha-integration }}"],
+            Check(Wired.Replace("${{ steps.select.outputs.ha-integration }}", "${{ steps.select.outputs.ha-integraton }}")));
+        Assert.Equal(["ci.yml plan's output whole-ring is ${{ steps.select.outputs.whole-ring }}, not ${{ steps.whole-ring.outputs.whole-ring }}"],
+            Check(Wired.Replace("${{ steps.whole-ring.outputs.whole-ring }}", "${{ steps.select.outputs.whole-ring }}")));
     }
 
-    [Fact]
-    public void A_job_gated_on_another_jobs_output_or_skipped_on_main_is_reported()
+    [Theory]
+    // Gated on another job's output: quality-gate couldn't tell whether it had to run.
+    [InlineData("needs.plan.outputs.ha-integration == 'true'", "needs.plan.outputs.product == 'true'")]
+    // Skipped on main, or on a whole-ring pull request.
+    [InlineData("github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "needs.plan.outputs.ha-integration")]
+    [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration == 'true' && needs.plan.outputs.product == 'true'")]
+    public void A_gated_job_whose_if_isnt_exactly_the_gate_shape_is_reported(string from, string to)
     {
-        Assert.Equal(
-            ["ci.yml job ha-integration is gated on the plan's product output, not its own, so quality-gate can't tell whether it had to run"],
-            Check(Wired.Replace("needs.plan.outputs.ha-integration == 'true'", "needs.plan.outputs.product == 'true'")));
-        Assert.Equal(
-            ["ci.yml job ha-integration runs only when the plan selects it, even on main: its if: must start with github.event_name != 'pull_request' ||"],
-            Check(Wired.Replace("if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "if: needs.plan.outputs.ha-integration")));
+        var problems = Check(Wired.Replace(from, to));
+
+        Assert.Equal(["ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'"], problems);
     }
 
     [Fact]
@@ -104,17 +130,13 @@ public class CiPlanTests
         Assert.Equal(["ci.yml job ha-integration needs the plan but isn't in quality-gate's needs, so its result wouldn't count"], problems);
     }
 
-    [Fact]
-    public void A_publish_gate_that_doesnt_stand_on_quality_gate_is_reported()
+    [Theory]
+    [InlineData("needs: [quality-gate]", "needs: [plan, product, ha-integration]", "ci.yml publish-gate doesn't need quality-gate, so a release could publish past a failed check")]
+    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.product.result == 'success'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its && conditions, with no ||)")]
+    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.quality-gate.result == 'success' || always()", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its && conditions, with no ||)")]
+    public void A_publish_gate_that_doesnt_stand_on_quality_gate_is_reported(string from, string to, string problem)
     {
-        var problems = Check(Wired
-            .Replace("needs: [quality-gate]", "needs: [plan, product, ha-integration]")
-            .Replace("needs.quality-gate.result == 'success'", "needs.product.result == 'success'"));
-
-        Assert.Equal([
-            "ci.yml publish-gate doesn't need quality-gate, so a release could publish past a failed check",
-            "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success'",
-        ], problems);
+        Assert.Equal([problem], Check(Wired.Replace(from, to)));
     }
 
     // Reads the live ci.yml and catalog: the wiring the plan depends on must hold there, not only
