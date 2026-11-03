@@ -162,6 +162,33 @@ public class DriverTests
         Assert.Equal(("mine now", (UserMessageFrom?)null), (source.Get(Id)!.Activity.UserMessage, source.Get(Id)!.Activity.UserMessageFrom));
     }
 
+    // Context Copilot gives the agent mid-turn (a skill, a memory, a shell's notice) is no new turn:
+    // counted as a prompt, it spent the agent's turn and its prompt read as the person's.
+    [Fact]
+    public async Task Context_given_in_the_middle_of_an_agents_turn_leaves_its_prompt_and_its_edge_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11));
+        await source.RefreshAsync();
+        Fixture.Append(events,
+            Copilot.Event("user.message", new { content = "<skill-context name=\"docx\">...</skill-context>", interactionId = "i12", source = "skill-docx" }, 12),
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i13", source = "system", delivery = "steering" }, 13));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal(("the agent's words", UserMessageFrom.Agent, DriverKind.Agent, 1), (s.Activity.UserMessage, s.Activity.UserMessageFrom, s.Driver, s.Activity.TurnCount));
+    }
+
     [Fact]
     public async Task A_persons_prompt_an_agent_then_answered_a_question_in_stays_the_persons()
     {

@@ -83,7 +83,21 @@ internal abstract class TranscriptParser(SessionState state, TimeProvider time) 
     // given rather than a prompt anybody sent, which starts the turn but leaves userMessage alone.
     protected void UserPrompt(string text, DateTimeOffset? at, bool countsAsTurn = true, UserMessageFrom? from = null, string? label = null, bool injected = false)
     {
-        if (!injected) { Prompted(text, from, label); }
+        if (injected)
+        {
+            // No prompt: counted, it moved the turn a driver keys on, and an agent's reply lost its
+            // edge to a skill loaded in the middle of its turn. Arriving while idle (a shell's
+            // notice), it starts a turn that is no prompt's, as Claude's notices do.
+            if (S.Status != SessionStatus.Working)
+            {
+                S.UncountedTurn = true;
+                S.ForgetReasoning();
+            }
+            S.SetStatus(SessionStatus.Working);
+            S.Activity(at);
+            return;
+        }
+        Prompted(text, from, label);
         if (countsAsTurn) { S.Prompts++; }
         S.UncountedTurn = !countsAsTurn;
         // A new message starts a new turn: last turn's reasoning would otherwise sit under

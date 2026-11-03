@@ -102,7 +102,8 @@ internal sealed class CopilotParser(SessionState state, TimeProvider time, bool 
                 if (Text.NonBlank(Json.Str(data, "content")) is { } text)
                 {
                     var (from, label, injected) = Source(Json.Str(data, "source"));
-                    if (!injected) { Prompted(text, from, label); }
+                    if (injected) { break; }
+                    Prompted(text, from, label);
                     S.Prompts++;
                     S.OwnReasoning = null;
                 }
