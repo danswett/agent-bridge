@@ -137,7 +137,10 @@ public static class UsageShare
     // One allowance: an agent and its account. A reading that names no account at all (Codex's from
     // its transcripts, or from a probe that could not be sure whose it was) cannot be told from
     // another user's, so it stays apart, an allowance of the machine that read it (#200): grouped by
-    // agent alone, the newest would stand in for every other user's.
+    // agent alone, the newest would stand in for every other user's. Only the host's own readings
+    // have no readBy (v1-usage.md), so on a host an empty id is that host; every other reading names
+    // the machine that took it, and clients stamp each host's own with that host before merging
+    // (UsageMerge.ReadOn, UsageBook in usage.js), so there an empty id does not occur.
     public static string Key(AgentUsage a) => Keyless(a)
         ? $"{a.Agent}\0\0{a.ReadBy?.Id}"
         : $"{a.Agent}\0{a.AccountKey ?? (a.Account ?? "").ToLowerInvariant()}";

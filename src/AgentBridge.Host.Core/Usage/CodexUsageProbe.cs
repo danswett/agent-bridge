@@ -521,6 +521,8 @@ internal sealed class JsonLinesLink(Stream input, Stream output) : IRpcLink
     const int MaxLine = 4 * 1024 * 1024;
     readonly StreamWriter writer = new(input, new UTF8Encoding(false)) { NewLine = "\n", AutoFlush = false };
     readonly StreamReader reader = new(output, Encoding.UTF8);
+    readonly char[] buffer = new char[8 * 1024];
+    int start, end;
 
     public async Task SendAsync(string message)
     {
@@ -529,17 +531,25 @@ internal sealed class JsonLinesLink(Stream input, Stream output) : IRpcLink
         await writer.FlushAsync();
     }
 
-    // A line too long to be any answer here ends the conversation rather than filling memory.
+    // A line too long to be any answer here ends the conversation rather than filling memory. What
+    // follows a line's end in the same read is kept for the next.
     public async Task<string?> ReceiveAsync()
     {
         var line = new StringBuilder();
-        var one = new char[1];
         while (true)
         {
-            if (await reader.ReadAsync(one.AsMemory()) == 0) { return line.Length > 0 ? line.ToString() : null; }
-            if (one[0] == '\n') { return line.ToString().TrimEnd('\r'); }
-            if (line.Length >= MaxLine) { throw new InvalidDataException("a line from codex app-server was too long"); }
-            line.Append(one[0]);
+            if (start == end)
+            {
+                start = 0;
+                end = await reader.ReadAsync(buffer.AsMemory());
+                if (end == 0) { return line.Length > 0 ? line.ToString() : null; }
+            }
+            var newline = Array.IndexOf(buffer, '\n', start, end - start);
+            var stop = newline < 0 ? end : newline;
+            if (line.Length + (stop - start) > MaxLine) { throw new InvalidDataException("a line from codex app-server was too long"); }
+            line.Append(buffer, start, stop - start);
+            start = newline < 0 ? end : newline + 1;
+            if (newline >= 0) { return line.ToString().TrimEnd('\r'); }
         }
     }
 

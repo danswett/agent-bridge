@@ -96,6 +96,22 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task Codex_answers_arriving_together_are_read_one_line_each_and_a_line_too_long_ends_the_conversation()
+    {
+        var link = new JsonLinesLink(new MemoryStream(), new MemoryStream(Encoding.UTF8.GetBytes("{\"id\":1}\r\n\n{\"id\":2}\n{\"id\":3}")));
+        Assert.Equal("{\"id\":1}", await link.ReceiveAsync());
+        Assert.Equal("", await link.ReceiveAsync());
+        Assert.Equal("{\"id\":2}", await link.ReceiveAsync());
+        Assert.Equal("{\"id\":3}", await link.ReceiveAsync());
+        Assert.Null(await link.ReceiveAsync());
+
+        var longest = new string('x', 4 * 1024 * 1024);
+        var atLimit = new JsonLinesLink(new MemoryStream(), new MemoryStream(Encoding.UTF8.GetBytes(longest + "\n" + longest + "x\n")));
+        Assert.Equal(longest.Length, (await atLimit.ReceiveAsync())!.Length);
+        await Assert.ThrowsAsync<InvalidDataException>(atLimit.ReceiveAsync);
+    }
+
+    [Fact]
     public async Task A_stale_Claude_reading_starts_exactly_one_probe_and_a_pass_while_it_runs_starts_no_second()
     {
         ClaudeSaved(Now.AddMinutes(-20));

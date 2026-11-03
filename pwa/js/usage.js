@@ -121,7 +121,9 @@ export function latestUsage(reports) {
 // Which allowance a reading is of: its agent and account. One that names no account at all (Codex's
 // from its transcripts, or from a probe that could not be sure whose it was) could be anyone's, so
 // it stays a row of its own for the machine that read it: grouped by agent alone, the newest would
-// stand in for every other user's (#200). Mirrors UsageShare.Key.
+// stand in for every other user's (#200). Mirrors UsageShare.Key. readBy is always there by now:
+// UsageBook stamps each host's own readings with that host, and a reading passed on already names
+// the machine that took it, so keyless readings of two machines never share a key.
 export function usageKey(a) {
   if (!a.accountKey && !a.account) { return `${a.agent}\u0000\u0000${a.readBy?.id ?? ''}`; }
   return `${a.agent}\u0000${a.accountKey ?? (a.account ?? '').toLowerCase()}`;
