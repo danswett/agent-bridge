@@ -648,6 +648,7 @@ LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, Sess
         CodexHome = options.CodexHome,
         Config = settings.Launch,
         PlatformSupported = OperatingSystem.IsWindows() || mac is not null,
+        MacCompatibility = mac is null ? null : new MacLaunchCompatibility(),
         WorktreeUsage = new AgentWorktreeUsage(processes, options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
