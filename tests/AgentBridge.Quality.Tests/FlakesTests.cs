@@ -12,11 +12,13 @@ public sealed class FlakesTests : IDisposable
 
     public void Dispose() => Directory.Delete(root, recursive: true);
 
-    // One project's TRX in one run, as dotnet test writes it into the run's folder, and the run's
-    // exit code: each test name with Passed, Failed or NotExecuted.
-    void Run(string os, string project, int run, int exit, params (string Test, string Outcome)[] results)
+    // One project's TRX in one run, as dotnet test writes it into the run's folder (named for the
+    // time, not the project), and the run's exit code: each test name with Passed, Failed or
+    // NotExecuted. Returns the TRX's path.
+    string Run(string os, string project, int run, int exit, params (string Test, string Outcome)[] results)
     {
         var dir = Directory.CreateDirectory(Path.Combine(root, os, $"run-{run}")).FullName;
+        var trx = Path.Combine(dir, $"runneradmin_runnervm_{Guid.NewGuid():N}_net10.0.trx");
         var ids = results.Select(_ => Guid.NewGuid().ToString()).ToList();
         new XDocument(new XElement(Ns + "TestRun",
             new XElement(Ns + "TestDefinitions", ids.Select(id => new XElement(Ns + "UnitTest", new XAttribute("id", id), new XAttribute("storage", $"/x/bin/{project.ToLowerInvariant()}.dll"),
@@ -26,8 +28,9 @@ public sealed class FlakesTests : IDisposable
                     r.Outcome == "Failed"
                         ? new XElement(Ns + "Output", new XElement(Ns + "ErrorInfo", new XElement(Ns + "Message", $"run {run} failed ```here```"), new XElement(Ns + "StackTrace", "at T.M()")))
                         : null)))))
-            .Save(Path.Combine(dir, $"{project}.trx"));
+            .Save(trx);
         File.WriteAllText(Path.Combine(dir, "exit"), exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return trx;
     }
 
     [Fact]
@@ -60,9 +63,11 @@ public sealed class FlakesTests : IDisposable
             Run("windows-11-arm", "AgentBridge.App.Tests", i, i,
                 ("ConnectionTests.With_no_host_running_the_app_says_so", i == 1 ? "Passed" : "Failed"),
                 ("Ns.TrustTests.Known(x: 1)", i == 1 ? "Failed" : "Passed"),
+                // Another case of a test whose first case has an issue of its own.
+                ("Ns.TrustTests.Known(x: 2)", i == 1 ? "Passed" : "Failed"),
                 ("FleetTests.New", i == 1 ? "Failed" : "Passed"));
         var verdicts = FlakeHunt.Load(root).Classify();
-        var known = verdicts.Single(v => v.Test.StartsWith("Ns.TrustTests", StringComparison.Ordinal));
+        var known = verdicts.Single(v => v.Test == "Ns.TrustTests.Known(x: 1)");
         var open = new List<OpenIssue>
         {
             new(465, "Flaky: App ConnectionTests.With_no_host_running_the_app_says_so times out", "", []),
@@ -80,8 +85,10 @@ public sealed class FlakesTests : IDisposable
         Assert.Contains("2026-11-04 02:30 PST", byHand.Body);
         var marked = plan.Single(a => a.Issue == 600);
         Assert.Empty(marked.Labels);
-        var created = plan.Single(a => a.Action == "create");
+        var created = plan.Single(a => a.Action == "create" && a.Key.Contains("FleetTests.New", StringComparison.Ordinal));
         Assert.Equal("Flaky on windows-11-arm: App.Tests FleetTests.New", created.Title);
+        // The hunt's own issue is for its own case only, so the second case gets one of its own.
+        Assert.Contains(plan, a => a.Action == "create" && a.Key.Contains("Known(x: 2)", StringComparison.Ordinal));
         Assert.Equal(new[] { "flaky", "area:testing" }, created.Labels);
         Assert.StartsWith(FlakeReport.Marker(verdicts.Single(v => v.Test == "FleetTests.New"), Verdict.Flaky), created.Body);
         // The error's own backticks can't close the fence around it.
@@ -118,6 +125,37 @@ public sealed class FlakesTests : IDisposable
         Assert.Equal(FlakeReport.MaxNewIssues, plan.Count);
         Assert.All(plan, a => Assert.Equal(new[] { "bug", "area:testing" }, a.Labels));
         Assert.Contains("3 more not filed", FlakeReport.Summary(hunt, verdicts, plan, dryRun: false));
+    }
+
+    [Fact]
+    public void A_damaged_TRX_an_aborted_test_run_or_a_run_cut_short_is_broken_and_the_rest_is_still_classified()
+    {
+        for (var i = 1; i <= 2; i++)
+            Run("windows-latest", "AgentBridge.Host.Tests", i, 1, ("T.Racy", i == 1 ? "Passed" : "Failed"));
+        // Run 2's App.Tests host aborted after one pass and one fail.
+        Abort(Run("windows-latest", "AgentBridge.App.Tests", 2, 1, ("A.Pass", "Passed"), ("A.Fail", "Failed")));
+        // And Hooks.Tests' host before its first test, so its TRX names no test, nor its project.
+        var hooks = Run("windows-latest", "AgentBridge.Hooks.Tests", 2, 1);
+        Abort(hooks);
+        File.WriteAllText(Path.Combine(root, "windows-latest", "run-1", "broken.trx"), "<TestRun><Results>");
+        Run("windows-latest", "AgentBridge.Host.Tests", 3, 0, ("T.Racy", "Passed"));
+        File.Delete(Path.Combine(root, "windows-latest", "run-3", "exit"));
+
+        var hunt = FlakeHunt.Load(root);
+
+        Assert.Equal(new[] { Verdict.Flaky }, hunt.Classify().Single(v => v.Test == "T.Racy").Kinds);
+        Assert.Contains(hunt.Broken, b => b.Run == 1 && b.Why.StartsWith("broken.trx could not be read", StringComparison.Ordinal));
+        Assert.Contains(hunt.Broken, b => b.Run == 2 && b.Project == "AgentBridge.App.Tests" && b.Why.StartsWith("the test run was aborted", StringComparison.Ordinal));
+        Assert.Contains(hunt.Broken, b => b.Run == 3 && b.Why == "no exit code recorded: the run was cut short");
+        Assert.Contains(hunt.Broken, b => b.Run == 2 && b.Project == FlakeHunt.WholeRun && b.Why.StartsWith($"{Path.GetFileName(hooks)}, before any test: the test run was aborted", StringComparison.Ordinal));
+    }
+
+    static void Abort(string trx)
+    {
+        var doc = XDocument.Load(trx);
+        doc.Root!.Add(new XElement(Ns + "ResultSummary", new XAttribute("outcome", "Failed"),
+            new XElement(Ns + "RunInfos", new XElement(Ns + "RunInfo", new XAttribute("outcome", "Error"), new XElement(Ns + "Text", "The active test run was aborted. Reason: Test host process crashed")))));
+        doc.Save(trx);
     }
 
     [Fact]

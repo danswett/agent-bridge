@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace AgentBridge.Quality;
@@ -50,14 +51,31 @@ sealed class FlakeHunt
         foreach (var (dir, os, run) in folders)
         {
             var projects = seen[(os, run)] = new HashSet<string>(StringComparer.Ordinal);
-            var these = Directory.EnumerateFiles(dir, "*.trx", SearchOption.AllDirectories).Order(StringComparer.Ordinal)
-                .SelectMany(Trx.Read)
-                .Select(r => new TestRun(os, r.Project, r.Test, run, r.Passed, r.Message, r.Stack))
-                .ToList();
+            var these = new List<TestRun>();
+            foreach (var file in Directory.EnumerateFiles(dir, "*.trx", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            {
+                TrxFile trx;
+                try { trx = Trx.Read(file); }
+                catch (Exception e) when (e is XmlException or IOException)
+                {
+                    // One damaged file must not hide the rest of the night's results.
+                    broken.Add((os, WholeRun, run, $"{Path.GetFileName(file)} could not be read ({e.Message})"));
+                    continue;
+                }
+                these.AddRange(trx.Results.Select(r => new TestRun(os, trx.Project ?? "?", r.Test, run, r.Passed, r.Message, r.Stack)));
+                // A test host that aborted can leave a pass and a fail behind, which reads as an
+                // ordinary run unless the TRX's own verdict on the run is heard.
+                if (trx.Aborted is { } why)
+                    broken.Add(trx.Project is { } project ? (os, project, run, why) : (os, WholeRun, run, $"{Path.GetFileName(file)}, before any test: {why}"));
+            }
             all.AddRange(these);
             projects.UnionWith(these.Select(t => t.Project));
             var exit = Path.Combine(dir, "exit");
             var code = File.Exists(exit) && int.TryParse(File.ReadAllText(exit).Trim(), CultureInfo.InvariantCulture, out var c) ? c : (int?)null;
+            // The exit code is written once dotnet test returns, so a run without one was cut
+            // short, and what it left may be partial.
+            if (code is null)
+                broken.Add((os, WholeRun, run, "no exit code recorded: the run was cut short"));
             if (these.Count == 0)
                 broken.Add((os, WholeRun, run, $"no results at all (dotnet test exit {code?.ToString(CultureInfo.InvariantCulture) ?? "unknown"})"));
             else if (code is not (null or 0) && these.All(t => t.Passed))
@@ -139,26 +157,44 @@ static class Trx
 
     /// <summary>
     /// Passed and failed results only: a skipped or not-run test says nothing about flakiness.
-    /// The project is the test assembly's name, from its definition's codeBase (storage is lowercased).
+    /// The project is the test assembly's name, from its definitions' codeBase (storage is
+    /// lowercased): dotnet test writes one TRX per test project, named for the time, not the project. Aborted says why the run there
+    /// ended early, from the TRX's own summary: an outcome other than Completed or Failed, or a
+    /// message that the run was aborted (a crash, or --blame-hang ending a hang).
     /// </summary>
-    public static IEnumerable<(string Project, string Test, bool Passed, string? Message, string? Stack)> Read(string path)
+    // VSTest's own words ("The active test run was aborted", "Test Run Aborted"), not any text that
+    // says aborted: a failing test's name is quoted in these messages too.
+    static readonly Regex AbortText = new(@"(?i)\btest run (was )?aborted\b", RegexOptions.CultureInvariant);
+
+    public static TrxFile Read(string path)
     {
         var doc = XDocument.Load(path);
-        var assemblies = doc.Descendants(Ns + "UnitTest").ToDictionary(
-            u => (string?)u.Attribute("id") ?? "",
-            u => Path.GetFileNameWithoutExtension(((string?)u.Element(Ns + "TestMethod")?.Attribute("codeBase") ?? (string?)u.Attribute("storage") ?? "?").Replace('\\', '/').Split('/')[^1]),
-            StringComparer.OrdinalIgnoreCase);
+        var project = doc.Descendants(Ns + "UnitTest")
+            .Select(u => (string?)u.Element(Ns + "TestMethod")?.Attribute("codeBase") ?? (string?)u.Attribute("storage"))
+            .Where(p => p is not null)
+            .Select(p => Path.GetFileNameWithoutExtension(p!.Replace('\\', '/').Split('/')[^1]))
+            .FirstOrDefault();
+        var results = new List<(string, bool, string?, string?)>();
         foreach (var result in doc.Descendants(Ns + "UnitTestResult"))
         {
             var outcome = (string?)result.Attribute("outcome");
             if (outcome is not ("Passed" or "Failed"))
                 continue;
             var error = result.Element(Ns + "Output")?.Element(Ns + "ErrorInfo");
-            yield return (assemblies.GetValueOrDefault((string?)result.Attribute("testId") ?? "", "?"), (string?)result.Attribute("testName") ?? "?", outcome == "Passed",
-                error?.Element(Ns + "Message")?.Value, error?.Element(Ns + "StackTrace")?.Value);
+            results.Add(((string?)result.Attribute("testName") ?? "?", outcome == "Passed", error?.Element(Ns + "Message")?.Value, error?.Element(Ns + "StackTrace")?.Value));
         }
+        var summary = doc.Descendants(Ns + "ResultSummary").FirstOrDefault();
+        var verdict = (string?)summary?.Attribute("outcome");
+        var abort = summary?.Descendants(Ns + "Text").Select(t => t.Value.Trim()).FirstOrDefault(t => AbortText.IsMatch(t));
+        string? aborted = abort is not null ? $"the test run was aborted: {(abort.Length > 300 ? abort[..300] + "..." : abort)}"
+            : verdict is not (null or "Completed" or "Failed") ? $"the test run ended {verdict}"
+            : null;
+        return new TrxFile(project, results, aborted);
     }
 }
+
+// Project is null for a TRX with no test in it, such as a test host that crashed before its first.
+sealed record TrxFile(string? Project, IReadOnlyList<(string Test, bool Passed, string? Message, string? Stack)> Results, string? Aborted);
 
 /// <summary>An open issue, as <c>gh issue list --json number,title,body,labels</c> gives it.</summary>
 sealed record OpenIssue(int Number, string Title, string Body, IReadOnlyList<string> Labels)
@@ -204,7 +240,9 @@ static class FlakeReport
             var labels = kind == Verdict.Flaky ? new[] { FlakyLabel, "area:testing" } : ["bug", "area:testing"];
             var existing = open.Where(i => i.Body.Contains(marker, StringComparison.Ordinal)).OrderBy(i => i.Number).FirstOrDefault()
                 ?? (kind == Verdict.Flaky
-                    ? open.Where(i => (i.Labels.Contains(FlakyLabel) || i.Title.Contains("flaky", StringComparison.OrdinalIgnoreCase))
+                    // Only an issue filed by hand: one the hunt filed names its own test in its marker.
+                    ? open.Where(i => !i.Body.Contains("<!-- flake-hunt:", StringComparison.Ordinal)
+                            && (i.Labels.Contains(FlakyLabel) || i.Title.Contains("flaky", StringComparison.OrdinalIgnoreCase))
                             && (i.Title.Contains(v.ShortName, StringComparison.Ordinal) || i.Body.Contains(v.ShortName, StringComparison.Ordinal)))
                         .OrderBy(i => i.Number).FirstOrDefault()
                     : null);
