@@ -27,6 +27,9 @@ descriptor type or any vnode read failure refuses the entire lookup. Descriptor
 lists and vnode identities are read again, process generations are checked before
 and after, and the lock path must still identify the same regular file. The adapter
 then rechecks the holder against the backend's owned ancestry and registered pane.
+The discovery interface accepts either the exact kernel start time or its exact
+deterministic .NET `Process.StartTime` representation, without a rounding tolerance.
+All native identity comparisons retain the original kernel time.
 No paths from descriptors, arguments or environment are collected, no foreign pane
 is adopted, and no hook registration is synthesized.
 
