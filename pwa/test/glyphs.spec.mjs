@@ -197,12 +197,14 @@ for (const width of [390, 900, 1440]) {
       });
     });
     await expect(page.locator('.session[data-rule="2"]')).toHaveCount(1);
-    // Rows: the glyph before the title, centred on the title's line (ui.md §5.1).
+    // Rows: the glyph before the title, centred on its first line even when it wraps.
     const rows = await page.locator('.session .row-main').evaluateAll((els) => els.map((b) => {
       const gr = b.querySelector('.glyph').getBoundingClientRect();
-      const tr = b.querySelector('.row-title').getBoundingClientRect();
+      const title = b.querySelector('.row-title');
+      const tr = title.getBoundingClientRect();
+      const firstLineHeight = parseFloat(getComputedStyle(title).lineHeight);
       const cr = b.getBoundingClientRect();
-      return { inside: tr.right <= cr.right, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + tr.bottom) / 2) <= 3 };
+      return { inside: tr.right <= cr.right, w: gr.width, h: gr.height, before: gr.right <= tr.left, centred: Math.abs((gr.top + gr.bottom) / 2 - (tr.top + firstLineHeight / 2)) <= 3 };
     }));
     expect(rows).toHaveLength(4);
     for (const r of rows) { expect(r).toEqual({ inside: true, w: 16, h: 16, before: true, centred: true }); }
