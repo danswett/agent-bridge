@@ -58,6 +58,14 @@ U2 (#165) gave the lane these properties. Every option below is measured against
 6. **Honest when it can't:** an `answerAtMachine` question says so and offers nothing to press,
    and a delegate's question names the delegate after the word "Delegate" (§6.3).
 
+Outside the app's window, notifications answer too, and none of the options changes that by
+itself. The Windows app's toasts (`ToastXml.Question`) offer a question's options as buttons,
+approvals included, under a 300-character plain-text body. The native Apple clients in #260
+offer Approve Once and Deny, or up to three choices, as notification actions. They do so only
+with previews on, and check the question against a fresh `session.get` before sending. The PWA's
+Web Push only opens the session. Neither applies the lane's whole-prompt rules (property 3).
+Question 7 asks what they should do.
+
 ## 3. Options
 
 The options differ in the list. The changes to the conversation's Now line and to Tools (§4.3,
@@ -81,6 +89,14 @@ The options differ in the list. The changes to the conversation's Now line and t
 | Principles 2 and 4 hold as written. The list's height no longer depends on what agents ask | The count no longer sits beside the words it counts. The filter is one press away |
 | The same at every width and on every platform: a toggle and rows | |
 
+**macOS and iOS (#260):** #260 already has a "Needs you" toggle in the list's filter menu, so A
+removes code rather than adding it.
+- **The list:** the "Needs you · N" `Section` above Sessions goes, and the toggle becomes the
+  surface. On macOS it is a "Needs You · N" item at the top of the sidebar, and on iOS the first
+  item of the toolbar's filter menu, with N on the filter button.
+- **Elsewhere:** the Dock badge, the iOS icon badge and the menu bar extra's label carry N.
+  Choosing a row, or a menu bar item, opens the session scrolled to its question.
+
 ### B. A compact lane of references
 
 Keep a Needs you section, but make each entry one line (glyph, title, age) with no question text
@@ -91,6 +107,11 @@ and no buttons. Choosing it opens the question.
 | Glanceable without pressing anything | Every waiting session still has two rows, which is the issue's main complaint |
 | The smallest change to U2's code | The list below shifts down a line for each question (it doesn't reorder, but it moves on screen) |
 | | Inline approval goes anyway, since a one-line entry can't show the whole prompt. Keeping it brings the big entry back |
+
+**macOS and iOS (#260):** this is close to what #260 draws today: a "Needs you · N" `Section` of
+ordinary rows, oldest first, above the same rows in Sessions. B would keep that section, but
+with one-line entries in place of full rows. The duplicate stays on Apple as it does everywhere
+else. The badges and the menu bar extra are as for A.
 
 ### C. A filter, plus a review sheet on the row
 
@@ -104,6 +125,14 @@ Approve once and Deny, through the card's model and with U2's refusals.
 | Inline approval keeps its gate, so nothing approves what isn't on screen | A row gains a control, though rows are navigation (§6.1). A row with a button inside a list item is harder to use with a keyboard and a screen reader |
 | | The most to build and test |
 
+**macOS and iOS (#260):** A, plus the review surface in each platform's own form:
+- macOS: a popover from a trailing button on the row;
+- iOS: a leading swipe action, Review, beside §7's Pin and Ask main agent to stop, that opens a
+  `.sheet` with medium and large detents.
+
+Both are new answer surfaces to secure with the lane's rules, on top of the notification actions
+#260 already has.
+
 ### Side by side
 
 | | Today | A | B | C |
@@ -112,7 +141,7 @@ Approve once and Deny, through the card's model and with U2's refusals.
 | Rows per waiting session | 2 | **1** | 2 | 1 |
 | Approve from the list | Yes | No: one more step | No | Yes, through the sheet |
 | Taps to approve on a phone | 1 | 2 | 2 | 2 (Review, then Approve once) |
-| Surfaces that send an answer | 2 | **1** | 1 | 2 |
+| In-app surfaces that send an answer (notifications aside, question 7) | 2 | **1** | 1 | 2 |
 | Principle 4 (no expanding cards) | Broken | Holds | Holds | Holds; the sheet is a sheet |
 
 C saves no taps over A on a phone: Review, then Approve once, against the row, then Approve once.
@@ -230,9 +259,9 @@ Every state, below, is on [the states board](253-attention/proposal-253-states.p
 
 ### 4.4 Approve once, only on the card, with the lane's protections
 
-The card becomes the only place that sends an answer. So the guarantee the lane gave its own
-Approve once, that what is approved is exactly what is drawn, moves to the card for every
-approval:
+The card becomes the only place in the app that sends an answer (notification actions are
+question 7). So the guarantee the lane gave its own Approve once, that what is approved is
+exactly what is drawn, moves to the card for every approval, on every client, Apple's included:
 - **Characters not drawn where they run** are drawn as visible escapes (`\u202E`), in Danger's
   text colour inside a hairline box, in the order they run. These are: bidi controls,
   zero-width, format and other default-ignorable characters, controls other than newline and
@@ -240,8 +269,13 @@ approval:
   and `NeedsYouEntry.Reveal` already do this. Approve once is still offered, because what it
   allows is now on screen (question 3).
 - **Right-to-left letters** in an approval's code are drawn in the order they run (left to right,
-  with no reordering): CSS `unicode-bidi: bidi-override` in the PWA, and an LRO added for display
-  in WinUI, never sent.
+  with no reordering), **line by line**. A line break ends a paragraph in the bidi algorithm, and
+  with it any override begun before it. So one override for the whole block would let a second
+  line's right-to-left letters reorder its shell punctuation. Instead, each line is its own
+  override, added for display only and never sent:
+  - the PWA: each line in its own element with `unicode-bidi: bidi-override; direction: ltr`;
+  - WinUI: each line wrapped in LRO … PDF;
+  - SwiftUI: the same, per line.
 - **A prompt not shaped as a host writes a permission** is drawn literal, as plain monospace
   text, rather than as Markdown. That covers a link whose words aren't its address, a fence
   in the prose, a fence not last, or an info string other than none, json or diff
@@ -307,9 +341,10 @@ Choosing the row already lands on the question, and the header isn't the place f
 - **What carries it, unchanged:**
   - the Windows tray tooltip ("Agent Bridge · 3 need you");
   - the rail's Sessions badge, and the phone's Sessions tab badge;
-  - the PWA's app badge (Badging API).
-- **Toasts and Web Push are unchanged.** Opening one lands on the question, as choosing the row
-  does.
+  - the PWA's app badge (Badging API);
+  - on Apple (#260): the macOS Dock badge, the menu bar extra's label, and the iOS icon badge.
+- **Notifications** (Windows toasts, Web Push, Apple's) open the session at the question, as
+  choosing the row does. Whether their answer buttons stay is question 7.
 
 ### 4.9 Accessibility
 
@@ -342,14 +377,28 @@ Choosing the row already lands on the question, and the header isn't the place f
 - **Reduced motion:** as §5.3. The row fading in is a cross-fade, and the scroll to the
   question is a jump.
 
-### 4.10 Other platforms, later
+### 4.10 macOS and iOS (#260), and Android later
 
-- macOS: the sidebar's "Needs You" source-list section becomes a "Needs You" item at the top
-  that filters the list.
-- iOS: a filter in the toolbar's filter menu, with its count.
-- Android: the first filter chip.
+The native Apple clients are @welshofer's, in #260 (SwiftUI, open). This is how option A maps
+onto them. It is a design mapping only: #260 decides how, and nothing here is implemented.
 
-None of these apps exist yet. Their boards are redrawn in the spec PR (§6).
+| | macOS | iOS |
+|---|---|---|
+| **The toggle** | "Needs You · N" as the first item of the sidebar's source list (ui.md §7), above Pinned. Choosing it filters the session list beside it. Choosing it again, or another section, clears the filter. It is also in the toolbar's filter menu, as #260 has it | The first item of the toolbar's filter menu (§7, "the filter … on the title row"), as a `Toggle` labelled "Needs you · N". The filter button shows N while anything waits, and a filled symbol while the filter is on |
+| **The rows** | One per session, as today: the `needs` glyph, then "Waiting on you" or "Delegate *name* asks". #260's separate "Needs you · N" `Section` goes | The same, in the inset grouped list |
+| **Choosing a waiting row** | The detail scrolls to the question (`ScrollViewReader`), and focus moves to its heading (`@AccessibilityFocusState`) | The pushed session opens at the question, with VoiceOver focus on its heading |
+| **The count** | The Dock badge (#260's setting), and the menu bar extra's label | The app icon badge. Its number is N, not the unread notification count |
+| **Menu bar extra** | Its label is N. Its menu lists the waiting sessions by name ("ULTRA: Ship 0.1.691 prerelease", at most 8, oldest first, as #260 has it) and Open Agent Bridge. It is navigation, like the Windows tray: an item opens the session at its question, and never shows the question's words or offers an answer (question 8) | Not applicable |
+| **Notifications** | Clicking one opens the session at the question. Action buttons: question 7 | Tapping one opens the pushed session at the question. Actions: question 7 |
+| **The question card** | §4.3 and §4.4, including the per-line override, the escapes and the literal shape, all in SwiftUI `Text` | The same |
+| **Tools and the inspector** | §4.5. The inspector's Tools has the linked `ask_user` row | §4.5, in the session's Tools section |
+| **Accessibility** | The source-list item reads "Needs You, 3 on every machine". A change in N is posted once (`AccessibilityNotification.Announcement`), at most every 5 s | The filter's `accessibilityValue` reads "3 need you", with the same announcement |
+
+**Android (later):** the first filter chip, "Needs you · N". A row opens at its question.
+
+The macOS, iOS and Android boards (`Mac*.dc.html`, `iOS-*.dc.html`, `Android-*.dc.html`) draw
+the lane, and are redrawn in the spec PR (§6) once the owner has decided. This proposal draws no
+Apple screens: the table above is the mapping.
 
 ### 4.11 Every board
 
@@ -459,7 +508,8 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
 +  - An approval is drawn as it runs. A character not drawn where it runs (bidi controls,
 +    zero-width, format and other default-ignorable characters, controls but newline and tab,
 +    private-use or unassigned code points, U+2028/2029) is a visible escape (`\u202E`). Its
-+    code keeps right-to-left letters in the order they run. A prompt not shaped as a host writes
++    code keeps right-to-left letters in the order they run, each line its own override (shown,
++    never sent). A prompt not shaped as a host writes
 +    a permission (§6.1's old rule: prose, then at most one fenced block ending it, its fence
 +    naming no language but json or diff, and no link whose words hide where it goes), or with a
 +    table, is drawn as literal text, not Markdown.
@@ -482,12 +532,18 @@ one presentation kept. High contrast isn't drawn: the canvas has no such theme (
  **macOS (SwiftUI, later):**
 -- **Sidebar:** a translucent source list (Needs You, Pinned, Sessions, Machines), 28 px
 -  rows, and a Bridge fill on the selected row.
-+- **Sidebar:** a translucent source list (a Needs You filter item, Pinned, Sessions,
++- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,
 +  Machines), 28 px rows, and a Bridge fill on the selected row.
++- **Menu bar:** an extra whose label is the Needs you count, and whose menu names the waiting
++  sessions (machine and title), each opening its session at the question. It never shows a
++  question's words or answers one.
++- **Dock:** the badge is the Needs you count.
 @@ iOS
 -- **Sessions:** large title with the filter and New buttons on the title row …
-+- **Sessions:** large title with the filter (whose first choice is Needs you · N) and New
-+  buttons on the title row …
++- **Sessions:** large title with the filter (whose first choice is Needs you · N, its count on
++  the button) and New buttons on the title row …
++- **Badge and notifications:** the app icon's badge is the Needs you count. A notification
++  opens the session at its question.
 @@ Android
 -- **Sessions:** a Material 3 search bar, filter chips, list items, …
 +- **Sessions:** a Material 3 search bar, filter chips (Needs you · N first), list items, …
@@ -521,10 +577,22 @@ its date, as it does for #183 and #232.
 | **1. Spec** (after sign-off) | Apply §5 to ui.md. Redraw the Windows, PWA desktop, PWA phone, macOS, iOS and Android boards without the lane. Re-render `docs/design/mockups`. Retire the proposal boards. Add U10 (#253) to ui-plan.md | `docs/design/ui.md`, `ui-plan.md`, `design/canvas`, `docs/design/mockups` |
 | **2. PWA** | Below | `pwa/` |
 | **3. App** | Below | `src/AgentBridge.App`, `src/AgentBridge.App.Core`, `tests/AgentBridge.App.Tests` |
+| **4. Apple** | §4.10, in @welshofer's clients: in #260 if it hasn't merged, else a follow-up PR of theirs. Owned and scheduled by them and the coordinator, not by this track | `apple/` |
 
 Slices 2 and 3 can run together after 1. Each links the other, and they land close together
-(ui-plan.md §2.4). **Both are security-sensitive** under AGENTS.md: they change what a remote
-device approves on a machine. So each takes an independent security review before merge.
+(ui-plan.md §2.4). **All three client slices are security-sensitive** under AGENTS.md: they
+change what a remote device approves on a machine. So each takes an independent security review
+before merge.
+
+**Apple (slice 4), for #260's author:**
+- The "Needs you · N" `Section` in `SessionWorkbench` goes. The existing `needsOnly` toggle
+  becomes the surface: the sidebar item on macOS and the filter menu's first item on iOS.
+- `SessionPresentation.needsYou` keeps the count, and the Dock badge, the menu bar label and the
+  iOS badge read it.
+- The question view draws approvals as §4.4 says, and keeps resolved questions as §4.3 says.
+- Notification actions follow the owner's answer to question 7.
+- Tests are the same sentences as below, in `AgentBridgeAppleCoreTests` and
+  `AgentBridgeClientStateTests`.
 
 **PWA (slice 2):**
 - `pwa/js/needs-you.js` keeps the model:
@@ -574,7 +642,8 @@ device approves on a machine. So each takes an independent security review befor
     character, a CR or a variation selector draws each as a visible escape on the card, in the
     order it runs;
   - an approval whose command holds right-to-left letters draws them in the order they run, not
-    reordered;
+    reordered, on every line: a multi-line command with right-to-left letters on its second line
+    keeps that line's shell punctuation where it runs;
   - an approval whose prompt a link, a fence or a table could make draw differently is drawn as
     literal text, not Markdown;
   - Approve once sends the request for exactly the question id shown, and nothing in the list
@@ -629,3 +698,13 @@ device approves on a machine. So each takes an independent security review befor
    (recommended: start off)?
 6. **The row's words:** the row says only "Waiting on you" or "Delegate *name* asks", never the
    question. Is that right, or do you want the question's first line on the row's second line?
+7. **Answering from a notification:** the Windows app's toasts offer an approval's buttons under
+   a 300-character body, and #260's Apple notifications offer Approve Once and Deny. Neither can
+   promise the whole command is on screen, or apply the lane's hidden-character rules, since the
+   OS draws and cuts the text. Should a notification:
+   - (a) only open the question for an approval, and keep its buttons for other questions
+     (recommended);
+   - (b) keep Approve once wherever the lane's rules pass and the prompt fits the body; or
+   - (c) stay as it is?
+8. **The macOS menu bar extra:** should its menu keep naming the waiting sessions, each opening
+   its question (recommended), or show only the count and Open Agent Bridge?
