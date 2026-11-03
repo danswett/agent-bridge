@@ -681,7 +681,8 @@ final class BridgeStore {
 
     private func registerSessions(_ sessions: [BridgeSession], host: HostStore) {
         let machineID = host.hello?["machine"]?["id"]?.string ?? host.id
-        let newSessions = sessions.filter { !manualOrder.contains(machineID + ":" + $0.id) }.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
+        let orderMembership = Set(manualOrder)
+        let newSessions = sessions.filter { !orderMembership.contains(machineID + ":" + $0.id) }.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
         guard !newSessions.isEmpty else { return }
         let newIDs = newSessions.map { machineID + ":" + $0.id }
         manualOrder = Array((newIDs + manualOrder).prefix(300))
