@@ -259,15 +259,17 @@ public sealed class SystemProcessInspector : IProcessInspector
     }
 
     // A runtime (what runs npx, bunx or pnpm dlx; npm's own loader is left out above), or a
-    // version manager's shim named codex (Volta's bin, Scoop's, asdf's or mise's shims). Not
-    // one whose command line cannot be read: not known to be a wrapper, it may be the session.
+    // version manager's shim named codex: in a folder named shims (Scoop's, asdf's, mise's), or
+    // in Volta's bin. Only the shim's own folder: a native Codex built under a folder named shims
+    // further up is a session. Not one whose command line cannot be read: not known to be a
+    // wrapper, it may be the session.
     static bool IsWrapper(ListedProcess p)
     {
         if (p.Candidate is "node" or "bun") { return true; }
         if (string.IsNullOrWhiteSpace(p.CommandLine) || CommandLine.Split(p.CommandLine) is not [var program, ..]) { return false; }
-        var path = program.Replace('\\', '/').ToLowerInvariant();
-        return path.Contains("/shims/", StringComparison.Ordinal) || path.Contains("/volta/bin/", StringComparison.Ordinal)
-            || path.Contains("/.volta/bin/", StringComparison.Ordinal);
+        var parts = program.Replace('\\', '/').ToLowerInvariant().Split('/');
+        if (parts.Length < 3 || parts[^1] is not ("codex" or "codex.exe" or "codex.cmd")) { return false; }
+        return parts[^2] == "shims" || (parts[^2] == "bin" && parts[^3] is "volta" or ".volta");
     }
 
     static bool IsRunning(int pid)
@@ -540,11 +542,11 @@ public static partial class CommandLine
         if (string.IsNullOrWhiteSpace(commandLine)) { return false; }
         var arguments = Split(commandLine);
         if (arguments.Count == 0) { return false; }
-        var program = CodexProgram(arguments);
-        if (InDaemonFolder(arguments[0]) || InDaemonFolder(arguments[program])) { return true; }
-        for (var i = program + 1; i < arguments.Count; i++)
+        var (program, codex) = CodexCommand(arguments);
+        if (InDaemonFolder(arguments[0]) || InDaemonFolder(program)) { return true; }
+        for (var i = 0; i < codex.Count; i++)
         {
-            var a = arguments[i];
+            var a = codex[i];
             if (a == "--") { return false; }
             if (!a.StartsWith('-')) { return a == "app-server"; }
             if (!a.Contains('=') && CodexValueOptions.Contains(a)) { i++; }
@@ -554,22 +556,33 @@ public static partial class CommandLine
 
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
-    // Where Codex's own command line starts. The program itself when it is Codex's executable
-    // (named codex, or a vendored codex-<target> binary). Under node or bun, the script the
-    // runtime runs, past its own options and their values (`--require x`, `--require=x`), when
-    // that is npm's loader (.../@openai/codex/bin/codex.js) or named codex: a preload named codex
-    // (`node --require /work/codex.cjs .../codex.js exec`) is not Codex, and nor is a loader's
-    // path in a prompt after it. Otherwise the first later argument named codex (npx's
-    // @openai/codex), else the first whose name starts with codex, else the first; never an
-    // option or a wrapper's option's value, which may name anything.
-    internal static int CodexProgram(IReadOnlyList<string> arguments)
+    // Codex's program and its own arguments after it. The program itself when it is Codex's
+    // executable (named codex, or a vendored codex-<target> binary). Under node or bun, the script
+    // the runtime runs, past its own options and their values (`--require x`, `--require=x`),
+    // when that is npm's loader (.../@openai/codex/bin/codex.js) or named codex: a preload named
+    // codex (`node --require /work/codex.cjs .../codex.js exec`) is not Codex, and nor is a
+    // loader's path in a prompt after it. Otherwise, in one pass, the first argument named codex
+    // or naming the @openai/codex package, at any version (npx's `@openai/codex@latest exec --cd
+    // /work/codex`: a later folder, value or prompt word named codex is Codex's, not Codex); the
+    // command in npx's `-c "codex app-server"`; never an option or a wrapper's option's value,
+    // which may name anything. Failing all that, the first.
+    internal static (string Program, IReadOnlyList<string> Arguments) CodexCommand(IReadOnlyList<string> arguments) =>
+        FindCodex(arguments, 0) ?? (arguments.Count == 0 ? ("", []) : (arguments[0], arguments.Skip(1).ToList()));
+
+    static (string Program, IReadOnlyList<string> Arguments)? FindCodex(IReadOnlyList<string> arguments, int depth)
     {
         static string File(string path)
         {
             var name = path.Replace('\\', '/');
             return name[(name.LastIndexOf('/') + 1)..];
         }
-        if (arguments.Count == 0 || File(arguments[0]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return 0; }
+        static bool Named(string a) => string.Equals(Path.GetFileNameWithoutExtension(File(a)), "codex", StringComparison.OrdinalIgnoreCase);
+        static bool Package(string a) => a.Equals("@openai/codex", StringComparison.OrdinalIgnoreCase)
+            || a.StartsWith("@openai/codex@", StringComparison.OrdinalIgnoreCase);
+        (string, IReadOnlyList<string>) At(int i) => (arguments[i], arguments.Skip(i + 1).ToList());
+
+        if (arguments.Count == 0) { return null; }
+        if (File(arguments[0]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return At(0); }
         var from = 1;
         if (Path.GetFileNameWithoutExtension(File(arguments[0])).ToLowerInvariant() is "node" or "bun")
         {
@@ -577,36 +590,38 @@ public static partial class CommandLine
             {
                 from += RuntimeValueOptions.Contains(arguments[from]) ? 2 : 1;
             }
-            if (from >= arguments.Count) { return 0; }
+            if (from >= arguments.Count) { return null; }
             var script = arguments[from];
-            if (script.Replace('\\', '/').EndsWith("/@openai/codex/bin/codex.js", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(Path.GetFileNameWithoutExtension(File(script)), "codex", StringComparison.OrdinalIgnoreCase))
+            if (script.Replace('\\', '/').EndsWith("/@openai/codex/bin/codex.js", StringComparison.OrdinalIgnoreCase) || Named(script))
             {
-                return from;
+                return At(from);
             }
         }
-        // A wrapper's own options and their values: npx's `--package @openai/codex codex exec` runs
-        // the command after them, which says what kind of run it is.
-        var positions = new List<int>();
         for (var i = from; i < arguments.Count; i++)
         {
-            if (!arguments[i].StartsWith('-')) { positions.Add(i); }
-            else if (WrapperValueOptions.Contains(arguments[i])) { i++; }
+            var a = arguments[i];
+            if (!a.StartsWith('-'))
+            {
+                if (Named(a) || Package(a)) { return At(i); }
+                continue;
+            }
+            // npx's command to run, as one argument; one level is all it takes.
+            if (WrapperCommandOptions.Contains(a) && i + 1 < arguments.Count && depth == 0
+                && FindCodex(Split(arguments[i + 1]), depth + 1) is { } command)
+            {
+                return command;
+            }
+            if (WrapperValueOptions.Contains(a) || WrapperCommandOptions.Contains(a)) { i++; }
         }
-        foreach (var i in positions)
-        {
-            if (string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
-        }
-        foreach (var i in positions)
-        {
-            if (File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
-        }
-        return 0;
+        return null;
     }
 
     // npx's, pnpm dlx's and bunx's options that take the next argument as their value: the
     // package to run, which is not the command.
     static readonly HashSet<string> WrapperValueOptions = new(StringComparer.Ordinal) { "-p", "--package" };
+
+    // npx's options that take the command to run, as one argument.
+    static readonly HashSet<string> WrapperCommandOptions = new(StringComparer.Ordinal) { "-c", "--call" };
 
     // node's and bun's options that take the next argument as their value: a module to load
     // before the script, whose name may be anything.

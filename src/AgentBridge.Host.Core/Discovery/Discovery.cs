@@ -497,13 +497,13 @@ internal static class CodexLockDiscovery
         "responses-api-proxy", "stdio-to-uds", "exec-server", "features", "help",
     };
 
-    // Read from Codex's own arguments, after its program (CommandLine.CodexProgram): read from
+    // Read from Codex's own arguments, after its program (CommandLine.CodexCommand): read from
     // the runtime an npm install runs it in, the script's path was the prompt, and a wrapped
     // `exec` or server was taken for a terminal.
     internal static bool IsInteractive(string commandLine)
     {
         var all = CommandLine.Split(commandLine);
-        var args = all.Skip(CommandLine.CodexProgram(all) + 1).ToList();
+        var args = CommandLine.CodexCommand(all).Arguments;
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];

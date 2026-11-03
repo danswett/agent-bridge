@@ -744,11 +744,16 @@ public class DiscoveryTests
             new("codex", 861, t, null),
             new("codex", 870, t.AddSeconds(2), Unix, Parent: 871, Ancestors: [871, 872]),
             new("node", 871, t, "node /usr/local/lib/node_modules/npm/bin/npx-cli.js -y @openai/codex"),
+            // a native Codex built under a folder named shims is no shim
+            new("codex", 880, t.AddSeconds(2), Unix, Parent: 881, Ancestors: [881]),
+            new("codex", 881, t, "/home/u/work/shims/codex/target/release/codex"),
+            new("codex", 890, t.AddSeconds(2), Unix, Parent: 891, Ancestors: [891]),
+            new("codex", 891, t, "/home/u/.volta/bin/tools/codex"),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702, 800, 801, 810, 811, 820, 821, 830, 831, 840, 841, 850, 851, 860, 861, 870, 871], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702, 800, 801, 810, 811, 820, 821, 830, 831, 840, 841, 850, 851, 860, 861, 870, 871, 880, 881, 890, 891], observation.Processes.Select(p => p.Id).Order());
         Assert.Equal([103, 201, 302, 801, 811, 821, 831, 871], observation.Launchers.Order());
     }
 
