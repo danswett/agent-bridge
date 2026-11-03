@@ -197,6 +197,32 @@ public sealed class HostManagerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Quitting_during_an_update_brings_the_host_back_once_its_task_run_has_ended()
+    {
+        manager.SetStartAtSignIn(true);
+        var stopping = new TaskCompletionSource();
+        host.On(HostOps.Stop, d => { _ = Task.Run(async () => { await stopping.Task; await host.StopAsync(); }); return new { stopping = true }; });
+        host.Start();
+        tasks.OnRun = () => host.Start();
+        tasks.StillRunningLooks = 3;
+        var applied = false;
+
+        var update = manager.StopAndApplyAsync(() => { }, () => applied = true);
+        await Wait.UntilAsync(() => host.Sent(HostOps.Stop).Count == 1, "the update's stop");
+        var logged = new List<string>();
+        var quit = Task.Run(() => manager.Quit(TimeSpan.FromSeconds(10), logged.Add));
+        await Wait.UntilAsync(() => !manager.UpdateUnderWay, "the quit to begin");
+        stopping.SetResult();
+        await quit;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => update);
+        Assert.False(applied);
+        Assert.Empty(logged);
+        Assert.Empty(tasks.Ignored);
+        Assert.True(await manager.IsRunningAsync());
+    }
+
+    [Fact]
     public async Task A_start_through_the_task_that_brings_no_host_up_is_still_reported_and_not_run_again()
     {
         manager.SetStartAtSignIn(true);
