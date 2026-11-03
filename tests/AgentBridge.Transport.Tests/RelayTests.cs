@@ -12,6 +12,19 @@ public class RelayTests
     static readonly GitHubUser Octo = new(1, "octo");
     static readonly GitHubUser Mallory = new(2, "mallory");
 
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    [InlineData("{\"device_code\":\"code\",\"interval\":false}")]
+    [Trait("Category", "Network")]
+    public async Task Malformed_upstream_device_responses_return_bad_gateway(string payload)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        relay.GitHub.DeviceResponseOverride = payload;
+        using var response = await relay.Http.PostAsync(new Uri(relay.Url, "/v1/auth/device"), null);
+        Assert.Equal(System.Net.HttpStatusCode.BadGateway, response.StatusCode);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task Sign_in_issues_a_relay_token_and_the_GitHub_token_is_revoked_not_returned()

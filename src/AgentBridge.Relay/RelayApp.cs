@@ -73,6 +73,7 @@ public static class RelayApp
             .RemoveAllLoggers();
         builder.Services.AddHttpClient("github", c =>
         {
+            c.MaxResponseContentBufferSize = 64 * 1024;
             c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("agent-bridge-relay", "0.1"));
             c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             c.Timeout = TimeSpan.FromSeconds(15);
@@ -150,25 +151,39 @@ public static class RelayApp
         app.MapGet("/v1/push/key", (PushGateway push) =>
             push.PublicKey is { } k ? Results.Ok(new { key = k }) : Results.NotFound()).RequireCors("pwa");
 
-        app.MapPost("/v1/auth/device", async (IHttpClientFactory f) =>
+        var auth = app.MapGroup("/v1/auth").RequireRateLimiting("auth").RequireCors("pwa");
+        auth.AddEndpointFilter(async (context, next) =>
+        {
+            try { return await next(context); }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException ||
+                ex is OperationCanceledException && !context.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                return Results.StatusCode(StatusCodes.Status502BadGateway);
+            }
+        });
+        auth.MapPost("/device", async (IHttpClientFactory f) =>
         {
             var gh = f.CreateClient("github");
             using var r = await gh.PostAsync($"{options.GitHubBaseUrl}/login/device/code",
                 new FormUrlEncodedContent(new Dictionary<string, string> { ["client_id"] = options.GitHubClientId }));
             if (!r.IsSuccessStatusCode) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
-            var j = JsonDocument.Parse(await r.Content.ReadAsStringAsync()).RootElement;
-            if (!j.TryGetProperty("device_code", out var code)) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+            using var json = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+            var j = json.RootElement;
+            if (!Text(j, "device_code", out var code) || !Text(j, "user_code", out var userCode)
+                || !Text(j, "verification_uri", out var uri) || !Uri.TryCreate(uri, UriKind.Absolute, out _)
+                || !Integer(j, "interval", 1, 60, out var interval) || !Integer(j, "expires_in", 1, 3600, out var expiry))
+            { return Results.StatusCode(StatusCodes.Status502BadGateway); }
             return Results.Ok(new
             {
-                deviceCode = code.GetString(),
-                userCode = j.GetProperty("user_code").GetString(),
-                verificationUri = j.GetProperty("verification_uri").GetString(),
-                interval = j.GetProperty("interval").GetInt32(),
-                expiresIn = j.GetProperty("expires_in").GetInt32(),
+                deviceCode = code,
+                userCode,
+                verificationUri = uri,
+                interval,
+                expiresIn = expiry,
             });
-        }).RequireRateLimiting("auth").RequireCors("pwa");
+        });
 
-        app.MapPost("/v1/auth/token", async (TokenRequest req, IHttpClientFactory f, Tokens tokens, RelayMetrics metrics, ILoggerFactory lf) =>
+        auth.MapPost("/token", async (TokenRequest req, IHttpClientFactory f, Tokens tokens, RelayMetrics metrics, ILoggerFactory lf) =>
         {
             var log = lf.CreateLogger("auth");
             if (string.IsNullOrEmpty(req.DeviceCode) || req.DeviceCode.Length > 200) { return Results.BadRequest(new { error = "bad_request" }); }
@@ -179,31 +194,39 @@ public static class RelayApp
                 ["device_code"] = req.DeviceCode,
                 ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code",
             }));
-            var j = JsonDocument.Parse(await r.Content.ReadAsStringAsync()).RootElement;
-            if (!j.TryGetProperty("access_token", out var at))
+            if (!r.IsSuccessStatusCode) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+            using var json = JsonDocument.Parse(await r.Content.ReadAsStringAsync());
+            var j = json.RootElement;
+            if (!Text(j, "access_token", out var githubToken))
             {
-                var error = j.TryGetProperty("error", out var e) ? e.GetString() : "github_error";
+                if (!Text(j, "error", out var error)) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+                var delay = 10;
+                if (error == "slow_down" && j.TryGetProperty("interval", out _) && !Integer(j, "interval", 1, 60, out delay))
+                { return Results.StatusCode(StatusCodes.Status502BadGateway); }
                 return error switch
                 {
                     "authorization_pending" => Results.Json(new { pending = true }, statusCode: 202),
-                    "slow_down" => Results.Json(new { pending = true, interval = j.TryGetProperty("interval", out var i) ? i.GetInt32() : 10 }, statusCode: 202),
+                    "slow_down" => Results.Json(new { pending = true, interval = delay }, statusCode: 202),
                     _ => SignInFailed(metrics, error),
                 };
             }
-            var githubToken = at.GetString()!;
             using var userReq = new HttpRequestMessage(HttpMethod.Get, $"{options.GitHubApiUrl}/user");
             userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
             using var ur = await gh.SendAsync(userReq);
             if (!ur.IsSuccessStatusCode) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
-            var user = JsonDocument.Parse(await ur.Content.ReadAsStringAsync()).RootElement;
-            var account = new Account(user.GetProperty("id").GetInt64().ToString(), user.GetProperty("login").GetString()!);
+            using var userJson = JsonDocument.Parse(await ur.Content.ReadAsStringAsync());
+            var user = userJson.RootElement;
+            if (!Text(user, "login", out var login) || !user.TryGetProperty("id", out var id)
+                || id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var accountId) || accountId <= 0)
+            { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+            var account = new Account(accountId.ToString(), login);
             await RevokeAsync(gh, githubToken, log);
             var (token, expires) = tokens.Issue(account);
             // No login or id: logs carry no identities (design §5.10).
             metrics.SignedIn("ok");
             log.LogInformation("sign-in completed");
             return Results.Ok(new { token, accountId = account.Id, login = account.Login, expiresAt = expires });
-        }).RequireRateLimiting("auth").RequireCors("pwa");
+        });
 
         app.Map("/v1/ws", async (HttpContext ctx, RelayHub hub, RelayMetrics metrics) =>
         {
@@ -243,6 +266,22 @@ public static class RelayApp
             }
             catch (HttpRequestException e) { log.LogWarning("revoking the GitHub token failed: {Message}", e.Message); }
         }
+    }
+
+    static bool Text(JsonElement obj, string key, out string value)
+    {
+        value = "";
+        if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(key, out var field)
+            || field.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(field.GetString())) { return false; }
+        value = field.GetString()!;
+        return true;
+    }
+
+    static bool Integer(JsonElement obj, string key, int min, int max, out int value)
+    {
+        value = 0;
+        return obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(key, out var field)
+            && field.ValueKind == JsonValueKind.Number && field.TryGetInt32(out value) && value >= min && value <= max;
     }
 
     static IResult SignInFailed(RelayMetrics metrics, string? error)
