@@ -104,10 +104,12 @@ Each suite in the catalog has one `kind`. The plan for each kind follows.
   - Add a `Category` trait only where a project mixes speeds: `Process` for tests that start
     real processes (InjectorIntegrationTests, HookProcessTests), `Network` for those that bind
     sockets. Ring 0 can then skip `Process` in the slow projects. Untagged means unit.
-- **Contract** (partial). One set of protocol vectors (JSON records, Noise transcripts, signed
-  command envelopes) under `docs/protocol/vectors/`, run by C#, the PWA and Swift alike. S2
-  proved the method for Noise; extend it to every record so a field renamed in one client
-  fails in all three.
+- **Contract** (partial). Records and signed commands have one set of protocol vectors under
+  `docs/protocol/vectors/`: every Protocol v1 record, valid and must-refuse, and the signed
+  command envelope. C# and the PWA replay them (#454), and Swift should too once `apple-core`
+  exists, so a field renamed in one client fails in all of them. The Noise transcripts are still
+  in `spikes/s2-noise-interop`, and the channel framing (`{id, op, data}` and its replies and
+  events, in `AgentBridge.Transport`) has no vectors yet.
 - **Shipped binaries** (exists). Keep testing the AOT injector, the AOT hook, the container,
   the package and the installer as they ship. Add **upgrade by delta** from the last
   published release (`app-upgrade`), since every installed copy updates that way and only a
@@ -276,6 +278,21 @@ pwsh quality/run.ps1 -Suite pwa-ui,host
 People and agents follow the same loop: AGENTS.md's Tests section says to run
 `pwsh quality/run.ps1` before a push. It skips, with a note, suites that only CI can run, suites
 that are planned, and suites whose tool (Node, Swift) isn't installed.
+
+**Behind a firewall that blocks api.nuget.org**, set `AGENT_BRIDGE_NUGET_SOURCE` to a NuGet
+mirror's `index.json` before running it:
+
+```
+$env:AGENT_BRIDGE_NUGET_SOURCE = 'https://<mirror>/nuget/v3/index.json'
+pwsh quality/run.ps1 -Explain
+```
+
+run.ps1 then writes `tools/AgentBridge.Quality/obj/nuget.mirror.config` (git ignores `obj/`),
+with the mirror as the only package source and the only audit source, and every restore it does
+uses that file: the selector's build and each suite's. NuGet's vulnerability audit stays on and
+reads the mirror. Overriding only the package sources (`--source`) isn't enough: audit still
+tries nuget.org from `nuget.config`, and its NU1900 warning is an error here. Unset, nothing
+changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
 
 ## 5. Coverage, timing, flakes and reports
 
