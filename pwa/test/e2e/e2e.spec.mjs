@@ -383,6 +383,52 @@ test.describe('notifications', () => {
     await expect(card(page, 'linked-2').locator('.question-slot button:not(.md-copy)').first()).toBeFocused();
     await expect(page.locator('#search')).toHaveValue('');
   });
+
+  // A notification's session, opened while its machine's list is not yet whole (#269).
+  const asking = (id, qid, message) => {
+    const t = new Date().toISOString();
+    return { id, agent: 'copilot', title: id, status: 'waiting', statusSince: t, updatedAt: t, activity: {},
+      question: { id: qid, kind: 'form', message, askedAt: t, fields: [{ name: 'answer', type: 'choice', options: [{ value: 'yes' }, { value: 'no' }] }] } };
+  };
+  const heldOpen = async (page, id, qid) => {
+    await signIn(page);
+    const release = host.holdSnapshots();
+    await page.goto(`${appUrl}?host=${host.deviceId}&session=${id}&question=${qid}`);
+    await expect(card(page, id)).toHaveClass(/linked/, { timeout: 30000 });
+    await expect(card(page, id)).toHaveAttribute('data-stale', 'confirming');
+    return release;
+  };
+
+  test('a question answered at the machine and replaced while its list was held takes no focus once the list is whole', async ({ page }) => {
+    await host.upsert(asking('held-1', 'q-held-a', 'Approve A?'));
+    const release = await heldOpen(page, 'held-1', 'q-held-a');
+    try {
+      await host.upsert(asking('held-1', 'q-held-b', 'Approve B?'));
+      await expect(card(page, 'held-1').locator('.question-message')).toContainText('Approve B?');
+    } finally {
+      release();
+    }
+    const choice = card(page, 'held-1').locator('.question-slot button:not(.md-copy)').first();
+    await expect(card(page, 'held-1')).not.toHaveAttribute('data-stale', /./);
+    await expect(choice).toBeEnabled();
+    await expect(choice).not.toBeFocused();
+    expect(await page.evaluate(() => !!document.activeElement?.closest('.question-slot'))).toBe(false);
+  });
+
+  test('focus moved elsewhere while its list was held stays there once the list is whole', async ({ page }) => {
+    await host.upsert(asking('held-2', 'q-held-c', 'Approve C?'));
+    const release = await heldOpen(page, 'held-2', 'q-held-c');
+    try {
+      await page.locator('#search').focus();
+      await expect(page.locator('#search')).toBeFocused();
+    } finally {
+      release();
+    }
+    const choice = card(page, 'held-2').locator('.question-slot button:not(.md-copy)').first();
+    await expect(card(page, 'held-2')).not.toHaveAttribute('data-stale', /./);
+    await expect(choice).toBeEnabled();
+    await expect(page.locator('#search')).toBeFocused();
+  });
 });
 
 test('every machine shows its sessions and version, and its agents\' usage, merged, whether or not it is the one being viewed', async ({ page }) => {

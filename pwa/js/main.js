@@ -81,7 +81,7 @@ function dropKeptUsage() {
 let page = null;
 
 // ---- links: a notification's ?host=&session=&question= ----
-// The session a link asked for, until its card is on screen: { host, session }.
+// The session a link asked for, until its card is on screen: { host, session, question }.
 let linked = null;
 // Set once signed in: goes to a link's machine.
 let followLink = null;
@@ -104,6 +104,10 @@ function takeLink() {
 // machine, shown alone or with every other. Its answers take focus only once that machine
 // takes them (#269: not while its list is still being confirmed), and only while the session
 // is still the one shown.
+// Focus goes to an answer only for the question the notification was about, and only if the
+// person has not moved focus since: a tap choice sends on Enter or Space, and while the machine
+// was held the question could have been answered at the machine and another asked, which a
+// focus moved later would have them approve unseen (#269 security review).
 function focusLinked() {
   if (!linked || !page?.hosts.shows(linked.host)) { return; }
   const card = page.view.card(linked.host, linked.session);
@@ -114,13 +118,18 @@ function focusLinked() {
     const want = { ...linked, shown: true };
     linked = null;
     page.showSession(card.id, card.hostId);
+    want.left = document.activeElement;
     linked = want;
   } else if (page.view.selected !== card) {
     linked = null;
     return;
   }
   if (!page.hosts.route(card.hostId)) { return; }
+  const { question, left } = linked;
   linked = null;
+  const now = document.activeElement;
+  if (now && now !== document.body && now !== left) { return; }
+  if (!question || card.session?.question?.id !== question) { return; }
   // The question's answer controls, not a code block's Copy button in its message: Enter on
   // a notification's question must answer it, not copy the command it shows.
   const el = card.view;
@@ -396,11 +405,11 @@ function begin(account) {
   const connection = new BridgeConnection({ base: BASE, key: identity.key, deviceId: identity.deviceId, name: deviceName(), account });
   const hosts = new HostSession({ connection, me: identity.deviceId });
   const link = takeLink();
-  linked = link?.host && link.session ? { host: link.host, session: link.session } : null;
+  linked = link?.host && link.session ? { host: link.host, session: link.session, question: link.question } : null;
   // A link's machine is shown: with every other when every machine is, else on its own. A
   // notification is not a choice in the Machines panel, so what is remembered stays.
-  followLink = ({ host, session }) => {
-    linked = session ? { host, session } : null;
+  followLink = ({ host, session, question }) => {
+    linked = session ? { host, session, question } : null;
     if (!hosts.all || !hosts.isOnline(host)) { hosts.visit(host); }
     focusLinked();
   };
