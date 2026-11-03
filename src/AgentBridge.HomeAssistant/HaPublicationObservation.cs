@@ -90,11 +90,27 @@ internal sealed class HaPublicationReceipts
                     stream.Write(Encoding.UTF8.GetBytes(policy.CanonicalJson));
                     stream.Flush(flushToDisk: true);
                 }
+                if (OperatingSystem.IsWindows()) { ProtectWindowsReceipt(pending); }
+                if (!IsPrivateFile(pending)) { throw new IOException("The new publication receipt is not private to this user."); }
                 File.Move(pending, path, overwrite: true);
             }
+
             finally { if (File.Exists(pending)) { File.Delete(pending); } }
             return 0;
         }, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows")]
+    static void ProtectWindowsReceipt(string path)
+    {
+        // Elevated Windows tokens may default a new file's owner to the
+        // Administrators group even inside a user-owned private directory.
+        var me = WindowsIdentity.GetCurrent().User!;
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(me, FileSystemRights.FullControl, AccessControlType.Allow));
+        security.SetOwner(me);
+        new FileInfo(path).SetAccessControl(security);
     }
 
     // ACL validation itself can briefly open a Windows handle without delete
