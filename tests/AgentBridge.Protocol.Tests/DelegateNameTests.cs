@@ -107,6 +107,8 @@ public class DelegateNameTests
     [Theory]
     [InlineData("Ma1n agent", "Delegate Ma1n agent")]
     [InlineData("Main agent", "Delegate “Main agent”")]
+    [InlineData("Delegate ", "Delegate")]
+    [InlineData("Delegate Fix the build", "Delegate Fix the build")]
     [InlineData("\u200B", "A delegate")]
     [InlineData(null, "A delegate")]
     public void A_line_that_says_who_asks_names_a_delegate_after_the_word_delegate_once(string? name, string titled) =>

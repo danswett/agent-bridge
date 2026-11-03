@@ -55,7 +55,7 @@ public static class DelegateName
     // is the guard, as in the clients (ui.md §6.3): the main agent's own lines never have it.
     public static string Titled(string? name) =>
         Clean(name) is not { } label ? "A delegate"
-        : label.StartsWith("Delegate ", StringComparison.Ordinal) ? label
+        : label == "Delegate" || label.StartsWith("Delegate ", StringComparison.Ordinal) ? label
         : "Delegate " + label;
 
     static string Strip(string? text)
