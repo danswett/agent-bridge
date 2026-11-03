@@ -243,10 +243,11 @@ public sealed class MarkdownView : StackPanel
         };
         button.Click += (_, _) =>
         {
-            copy.Copy();
+            var copied = copy.Copy();
             // Created if need be: FromElement finds only a peer something already asked for.
             FrameworkElementAutomationPeer.CreatePeerForElement(button)?.RaiseNotificationEvent(
-                AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.MostRecent, copy.Label, "AgentBridgeCodeCopied");
+                copied ? AutomationNotificationKind.ActionCompleted : AutomationNotificationKind.ActionAborted,
+                AutomationNotificationProcessing.MostRecent, copy.Label, "AgentBridgeCodeCopied");
         };
         return button;
     }
