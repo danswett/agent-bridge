@@ -85,6 +85,25 @@ async function signIn(page) {
 const card = (page, id) => view(page, id);
 const subscribes = () => host.log.filter((op) => op === 'sessions.subscribe').length;
 
+test('the installed identity reconnects across separate origins without relay cookies', async ({ page, context }) => {
+  expect(new URL(relayUrl).origin).not.toBe(new URL(appUrl).origin);
+  await signIn(page);
+  async function identity() {
+    return page.evaluate(async () => {
+      const { loadIdentity } = await import('./js/identity.js');
+      const device = await loadIdentity();
+      return { id: device.deviceId, extractable: device.key.privateKey.extractable };
+    });
+  }
+  const original = await identity();
+  expect(original.extractable).toBe(false);
+  await context.clearCookies();
+  await page.reload();
+  await expect(page.locator('#conn')).toHaveText('Connected', { timeout: 20000 });
+  expect(await identity()).toEqual(original);
+  expect(await context.cookies(relayUrl)).toEqual([]);
+});
+
 test('a signed-in phone sees a machine\'s live sessions over an end-to-end channel', async ({ page, context }) => {
   const violations = [];
   await page.exposeFunction('cspViolation', (v) => violations.push(v));
