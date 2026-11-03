@@ -34,6 +34,17 @@ public sealed class ManagedTmuxTests
         {
             var args = arguments.ToArray(); Calls.Add(args);
             if (standardInput is not null) { Inputs.Add(standardInput); }
+            if (args[0] == "if-shell")
+            {
+                if (OnCall?.Invoke(args) is { } conditional) { return Task.FromResult(conditional); }
+                if (args[2] != $"#{{==:#{{pid}},{ServerPid}}}") { return Task.FromResult(new TmuxResult(0, "replaced")); }
+                if (args[3].StartsWith("delete-buffer -b ", StringComparison.Ordinal))
+                {
+                    return RunAsync(["delete-buffer", "-b", args[3]["delete-buffer -b ".Length..]]);
+                }
+                var list = OnCall?.Invoke(["list-buffers"]) ?? new TmuxResult(0, "");
+                return Task.FromResult(new TmuxResult(list.ExitCode, list.Output + "\nverified\n"));
+            }
             if (OnCall?.Invoke(args) is { } custom) { return Task.FromResult(custom); }
             if (args[0] == "new-session") { Session = args[Array.IndexOf(args, "-s") + 1]; }
             return Task.FromResult(new TmuxResult(0, args[0] switch
@@ -204,7 +215,7 @@ public sealed class ManagedTmuxTests
             return args[0] switch
             {
                 "delete-buffer" => new(1, ""),
-                "list-buffers" => new(0, retained ? buffer! : ""),
+                "list-buffers" => new(0, retained ? "name:" + buffer : ""),
                 _ => null,
             };
         };
@@ -212,6 +223,21 @@ public sealed class ManagedTmuxTests
         Assert.Equal(expectedDeletes, commands.Calls.Count(c => c[0] == "delete-buffer"));
         Assert.Equal(retained ? 1 : 0, warnings.Count);
         Assert.DoesNotContain(warnings, w => w.Contains("fixture-secret"));
+    }
+
+    [Fact]
+    public async Task Replacement_server_cannot_confirm_cleanup_after_delete()
+    {
+        var warnings = new List<string>();
+        var (backend, commands, _, _) = StartedBackend(warnings.Add);
+        commands.OnCall = args =>
+        {
+            if (args[0] == "delete-buffer") { commands.ServerPid++; }
+            return null;
+        };
+        await backend.InjectAsync(300, new([new("private text", true, 0, 0)]));
+        Assert.Single(commands.Calls, args => args[0] == "delete-buffer");
+        Assert.Single(warnings);
     }
 
     [Theory]

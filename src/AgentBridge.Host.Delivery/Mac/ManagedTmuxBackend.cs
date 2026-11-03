@@ -333,13 +333,17 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
             try
             {
                 if (!Same(server, processes.Capture(server.ProcessId))) { break; }
-                var identity = await commands.RunAsync(["display-message", "-p", "#{pid}"]).ConfigureAwait(false);
-                if (identity.ExitCode != 0 || identity.Output.Trim() != server.ProcessId.ToString(CultureInfo.InvariantCulture)
-                    || !Same(server, processes.Capture(server.ProcessId))) { break; }
-                var deleted = await commands.RunAsync(["delete-buffer", "-b", buffer]).ConfigureAwait(false);
-                if (deleted.ExitCode == 0) { return; }
-                var buffers = await commands.RunAsync(["list-buffers", "-F", "#{buffer_name}"]).ConfigureAwait(false);
-                if (buffers.ExitCode == 0 && !buffers.Output.Split('\n').Contains(buffer, StringComparer.Ordinal)) { return; }
+                // Evaluate the pid guard inside each tmux command queue. A socket replacement
+                // between the delete and list must not delete on, or confirm via, the new server.
+                var guard = $"#{{==:#{{pid}},{server.ProcessId.ToString(CultureInfo.InvariantCulture)}}}";
+                const string mismatch = "display-message -p replaced";
+                await commands.RunAsync(["if-shell", "-F", guard, $"delete-buffer -b {buffer}", mismatch]).ConfigureAwait(false);
+                var buffers = await commands.RunAsync(["if-shell", "-F", guard,
+                    "list-buffers -F 'name:#{buffer_name}' ; display-message -p verified", mismatch]).ConfigureAwait(false);
+                var names = buffers.Output.Split('\n');
+                if (buffers.ExitCode == 0 && names.Contains("verified", StringComparer.Ordinal)
+                    && !names.Contains("name:" + buffer, StringComparer.Ordinal)
+                    && Same(server, processes.Capture(server.ProcessId))) { return; }
             }
             catch (Exception) { /* The delete or its reply may have been lost. Recheck identity before retry. */ }
         }
