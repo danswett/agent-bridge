@@ -376,7 +376,14 @@ connector's Install button on a machine the dashboard drives.
     longer gives the G6 refusal.
 
   Nothing else reads it: not updates, delivery, migration or the relay.
-* A pre-release is unsigned (below).
+* A pre-release is unsigned (below), but attested: after `publish`, CI's `attest` job downloads
+  the release's packages back (the full and delta packages, `Setup.exe` and `Portable.zip` of
+  each architecture) and records, in GitHub's attestation store, SLSA build provenance for each
+  (the workflow run and commit that built it) and its architecture's CycloneDX SBOM (every
+  NuGet package and project in the published folder, read from its `.deps.json` files by Trivy
+  in the `app` job, which keeps it as the `sbom-<runtime>-<version>` artifact on every build).
+  To check a download: `gh attestation verify AgentBridgeApp-win-Setup.exe -R
+  danswett/agent-bridge`, and add `--predicate-type https://cyclonedx.org/bom` for the SBOM.
 
 To install the latest, download the installer for the machine from the newest pre-release at
 <https://github.com/danswett/agent-bridge/releases> and run it (SmartScreen: More info, then Run
@@ -500,7 +507,7 @@ reaches the real host or its profile.
   (`agent-bridge-host migrate` / `rollback`, [migration.md](migration.md)); the page needs
   to show the dry run's report, confirm, and show the result, and it cannot be reached through
   the relay.
-* Code signing, attestations and publishing releases.
+* Code signing.
 * Arm64 builds, the first-run wizard's agent detection and winget installs.
 
 ## Testing

@@ -136,6 +136,63 @@ jobs:
           for _ in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
           curl -fsS http://127.0.0.1:8080/healthz | grep -q '"version":"ci"' || { docker logs relay; exit 1; }
           curl -fsS http://127.0.0.1:8080/readyz
+      # The relay image's scan (quality/README.md §3.3, container-scan). Blocking on a high or
+      # critical vulnerability that has a fix, in the base image's packages or the relay's NuGet
+      # packages: a rebuild on the fixed base, or a package bump, clears it. One without a fix
+      # cannot be cleared here, so it is only reported (code scanning, from main). The image had no
+      # high or critical finding, fixed or not, when this was added (#433). To accept one for a
+      # while, list it in .trivyignore with a reason and an exp: date.
+      - name: Install Trivy
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/install-trivy
+      - name: The relay image has no fixable high or critical vulnerability
+        id: relay-scan
+        if: runner.os == 'Linux'
+        run: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 agent-bridge-relay
+      - name: The relay image's high and critical vulnerabilities, fixed or not, as SARIF
+        # Also after the scan above fails: then most of all. relay-image-sarif sends it to code
+        # scanning from main.
+        if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
+        run: trivy image --scanners vuln --skip-db-update --severity HIGH,CRITICAL --format sarif --output "$RUNNER_TEMP/relay-image.sarif" agent-bridge-relay
+      - name: Keep the relay image's SARIF
+        if: runner.os == 'Linux' && !cancelled() && steps.relay-scan.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: relay-image-sarif
+          path: ${{ runner.temp }}/relay-image.sarif
+          if-no-files-found: ignore
+          retention-days: 14
+  relay-image-sarif:
+    # The relay image's scan to code scanning (the Security tab), from main only. A pull request's
+    # results would be compared with main's last upload, so a vulnerability published since then
+    # would show as one the pull request added and fail code scanning's check, for something the
+    # pull request did not do; product's scan step is the pull request's gate. Its own job, so
+    # security-events: write is not given to the job that runs every test.
+    needs: product
+    if: >-
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      github.repository == 'danswett/agent-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload the SARIF
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - id: sarif
+        # Absent when product failed before the image was built; nothing to send then.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: relay-image-sarif
+          path: ${{ runner.temp }}/sarif
+      - if: steps.sarif.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/sarif/relay-image.sarif
+          category: relay-image
   ha-integration:
     # The Home Assistant connector against a real Home Assistant and Mosquitto: containers on this
     # runner, started empty, onboarded for this run (tools/ha-ci/onboard.py) and thrown away with
@@ -308,6 +365,23 @@ jobs:
           name: ${{ matrix.artifact }}-${{ env.APP_VERSION }}
           path: ${{ matrix.out }}/releases
           retention-days: 30
+      # The package's SBOM (quality/README.md §3.3, supply-chain): every NuGet package and project
+      # in the published folder, read from its .deps.json files, as CycloneDX. On every build, so a
+      # pull request shows it still works; publish attests it against the packages it uploads.
+      - name: Install Trivy
+        uses: ./.github/actions/install-trivy
+      - name: SBOM of the published app (CycloneDX)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/sbom" | Out-Null
+          trivy fs --format cyclonedx --output "$env:RUNNER_TEMP/sbom/agent-bridge-windows-${{ matrix.runtime }}-$env:APP_VERSION.cdx.json" "${{ matrix.out }}/publish"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ matrix.runtime }}-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/sbom
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -375,6 +449,72 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./build/publish-prerelease.ps1 -Version $env:APP_VERSION -ReleasesDir out/app/releases, out/app-arm64/releases -Repository "${{ github.repository }}" -Commit "${{ github.sha }}"
+
+  attest:
+    # Build provenance and an SBOM attestation for each package publish uploaded (quality/README.md
+    # §3.3, supply-chain), so anyone can check a download with
+    # `gh attestation verify <file> -R danswett/agent-bridge` (docs/app-windows.md). The subjects
+    # are the release's own assets, downloaded back, since publishing may rebuild a delta after
+    # the app job packed it. Its own job, so the signing token is not in the job that runs vpk and
+    # holds contents: write.
+    needs: [publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # the release's assets and this run's SBOM artifacts
+      # Signs through Sigstore with this run's OIDC identity. No Azure principal trusts this job's
+      # subject (each trusts only its relay.yml environment), so the token signs in nowhere.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the packages publish uploaded
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag="v$APP_VERSION"
+          # publish uploads nothing when this version is out already or a newer one is.
+          if ! gh release view "$tag" -R "$REPO" --json tagName > /dev/null; then
+            echo "::notice::no release $tag, so nothing to attest"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Velopack's names (build/app-channels.ps1): x64's `win` channel has no suffix.
+          gh release download "$tag" -R "$REPO" -D "$RUNNER_TEMP/release/win-x64" \
+            -p "*-$APP_VERSION-full.nupkg" -p "*-$APP_VERSION-delta.nupkg" -p '*-win-Setup.exe' -p '*-win-Portable.zip'
+          gh release download "$tag" -R "$REPO" -D "$RUNNER_TEMP/release/win-arm64" \
+            -p "*-$APP_VERSION-win-arm64-full.nupkg" -p "*-$APP_VERSION-win-arm64-delta.nupkg" -p '*-win-arm64-Setup.exe' -p '*-win-arm64-Portable.zip'
+          for dir in win-x64 win-arm64; do
+            for kind in '-full.nupkg' '-Setup.exe' '-Portable.zip'; do
+              compgen -G "$RUNNER_TEMP/release/$dir/*$kind" > /dev/null || { echo "::error::$tag has no $dir *$kind"; exit 1; }
+            done
+          done
+          ls -l "$RUNNER_TEMP"/release/*
+          echo "published=true" >> "$GITHUB_OUTPUT"
+      - if: steps.release.outputs.published == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: sbom-*-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/sbom
+          merge-multiple: true
+      - name: Attest the packages' build provenance
+        if: steps.release.outputs.published == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/*/*
+      - name: Attest the x64 packages' SBOM
+        if: steps.release.outputs.published == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/win-x64/*
+          sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-x64-${{ env.APP_VERSION }}.cdx.json
+      - name: Attest the Arm64 packages' SBOM
+        if: steps.release.outputs.published == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release/win-arm64/*
+          sbom-path: ${{ runner.temp }}/sbom/agent-bridge-windows-win-arm64-${{ env.APP_VERSION }}.cdx.json
 
   s2-noise-interop:
     # The .NET and WebCrypto implementations must keep agreeing byte for byte, in

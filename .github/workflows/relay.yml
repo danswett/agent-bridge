@@ -101,9 +101,94 @@ jobs:
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")
           echo "image=$digest" >> "$GITHUB_OUTPUT"
           echo "Image: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      # The pushed image, handed to scan: scanning it here would run a third-party scanner in the
+      # job that can sign in as the staging principal.
+      - name: Save the image for scan
+        run: docker save "$REGISTRY.azurecr.io/$IMAGE:$GITHUB_SHA" | gzip -1 > "$RUNNER_TEMP/relay-image.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: relay-image
+          path: ${{ runner.temp }}/relay-image.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  scan:
+    # The image build pushed, before staging runs it (quality/README.md §3.3, container-scan), at
+    # ci.yml's threshold: a high or critical vulnerability with a fix available fails it, and then
+    # neither staging nor production gets this image. A vulnerability published
+    # between a pull request's checks and its merge is caught here. To accept one for a while,
+    # list it in .trivyignore with a reason and an exp: date. Rollback is not scanned: it rolls
+    # back to an image that already ran. Also the image's CycloneDX SBOM, which attest binds to
+    # its digest on main. No Azure sign-in and no id-token: it only reads the saved image.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: relay-image
+          path: ${{ runner.temp }}
+      - uses: ./.github/actions/install-trivy
+      - name: The image has no fixable high or critical vulnerability
+        run: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --input "$RUNNER_TEMP/relay-image.tar.gz"
+      - name: SBOM of the image (CycloneDX)
+        if: success() || failure()
+        run: trivy image --format cyclonedx --output "$RUNNER_TEMP/relay-image.cdx.json" --input "$RUNNER_TEMP/relay-image.tar.gz"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: success() || failure()
+        with:
+          name: relay-image-sbom
+          path: ${{ runner.temp }}/relay-image.cdx.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  attest:
+    # Build provenance and the SBOM for the image build pushed, bound to its digest, on main only
+    # (docs/relay-deploy.md: `gh attestation verify oci://<image>@<digest> -R danswett/agent-bridge`).
+    # Kept in GitHub's attestation store, not pushed beside the image: the registry is unchanged.
+    # Its own job, without the staging environment, so attestations: write is not given to a job
+    # that can sign in to Azure, nor to a pull request's run.
+    needs: [build, scan]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Signs through Sigstore with this run's OIDC identity. Azure trusts only the staging and
+      # production environments' subjects, so this job's token signs in nowhere.
+      id-token: write
+      attestations: write
+    steps:
+      - id: image
+        env:
+          IMAGE_REF: ${{ needs.build.outputs.image }}
+        run: |
+          if ! [[ "$IMAGE_REF" =~ ^([a-z0-9.-]+/[a-z0-9._/-]+)@(sha256:[0-9a-f]{64})$ ]]; then echo "::error::build's image is not a digest reference"; exit 1; fi
+          echo "name=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          echo "digest=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: relay-image-sbom
+          path: ${{ runner.temp }}/sbom
+      - name: Attest the image's build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+      - name: Attest the image's SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom/relay-image.cdx.json
 
   staging:
-    needs: build
+    needs: [build, scan]
     runs-on: ubuntu-latest
     environment:
       name: staging
