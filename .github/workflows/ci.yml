@@ -70,7 +70,7 @@ jobs:
           pwsh -NoProfile -File build/test-report.ps1 -CoverageSummary TestResults/coverage-report/Summary.json -TestResults TestResults -Title '.NET tests: ${{ matrix.os }}' >> $env:GITHUB_STEP_SUMMARY
       - name: Keep the coverage report and test results
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-${{ matrix.os }}
           path: |
@@ -491,7 +491,7 @@ jobs:
               print "## PWA unit test coverage\n\n| Lines % | Branches % | Functions % |\n|---:|---:|---:|"
               print "| " pct(lh, lf) " | " pct(bh, bf) " | " pct(fh, ff) " |"
             }' "$out/lcov.info" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: success() || failure()
         with:
           name: pwa-coverage
