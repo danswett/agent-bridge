@@ -216,15 +216,23 @@
                     <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Host log" />
                     <Button HorizontalAlignment="Right" Content="Refresh" Click="OnRefreshLog" />
                 </Grid>
+                <CheckBox
+                    Content="Wrap lines"
+                    IsChecked="True"
+                    AutomationProperties.AutomationId="WrapHostLog"
+                    Checked="OnWrapLog"
+                    Unchecked="OnWrapLog" />
                 <TextBox
+                    x:Name="HostLog"
                     IsReadOnly="True"
                     AcceptsReturn="True"
-                    TextWrapping="NoWrap"
+                    TextWrapping="Wrap"
                     MaxHeight="360"
                     FontFamily="{StaticResource MonoFontFamily}"
                     FontSize="12"
                     AutomationProperties.AutomationId="HostLog"
-                    ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.HorizontalScrollMode="Disabled"
                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                     Text="{x:Bind ViewModel.Log, Mode=OneWay}" />
             </StackPanel>

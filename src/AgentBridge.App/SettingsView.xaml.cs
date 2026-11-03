@@ -60,6 +60,16 @@ public sealed partial class SettingsView : UserControl
     async void OnInstallUpdate(object sender, RoutedEventArgs e) { if (viewModel is { } v) { await v.InstallUpdateAsync(); } }
     void OnRefreshLog(object sender, RoutedEventArgs e) => viewModel?.RefreshLog();
 
+    void OnWrapLog(object sender, RoutedEventArgs e)
+    {
+        // Checked may fire before the following TextBox has been constructed.
+        if (HostLog is not { } log) { return; }
+        var wrap = ((CheckBox)sender).IsChecked == true;
+        log.TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap;
+        ScrollViewer.SetHorizontalScrollBarVisibility(log, wrap ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto);
+        ScrollViewer.SetHorizontalScrollMode(log, wrap ? ScrollMode.Disabled : ScrollMode.Enabled);
+    }
+
     // The device code goes to the clipboard and GitHub's page opens: the person pastes and
     // approves there, and the host finishes signing in by itself.
     async void OnOpenSignIn(object sender, RoutedEventArgs e)
