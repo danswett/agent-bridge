@@ -307,6 +307,12 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   body[data-inspector="shown"] .session-view .inspector { display: grid; border-left: 1px solid var(--ab-stroke2); }
   body[data-inspector="shown"] .session-view .details, body[data-inspector="shown"] .session-view .delegates-panel, body[data-inspector="shown"] .session-view .tools-panel { display: block; }
 }
+/* Whatever scrolls holds what is positioned inside it (#288). Text kept for a screen reader
+   (.sr-only, a delegate's "under …") is absolutely positioned; with no positioned ancestor its
+   containing block is the window, so a pane's overflow never clipped it, and a line far down an
+   overflowing inspector or conversation stretched the page under the app bar: a second, outer
+   scrollbar beside the pane's own. */
+.content, .list-pane, .stream-scroll, .inspector { position: relative; }
 
 /* ---- shared ---- */
 .panel, .banner {
