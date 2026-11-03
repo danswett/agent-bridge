@@ -10,6 +10,7 @@ using AgentBridge.Host.Core.Processes;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
+using AgentBridge.Host.Delivery.Mac;
 using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Host.Delivery.Windows;
 using AgentBridge.Local;
@@ -78,6 +79,9 @@ string? Option(string name)
 }
 bool Flag(string name) => arguments.Contains(name);
 
+HostPaths paths;
+try { paths = HostPaths.Resolve(Option("--data-root"), Option("--profile"), Option("--registration-root"), OperatingSystem.IsMacOS()); }
+catch (ArgumentException e) { Console.Error.WriteLine(e.Message); return 2; }
 var defaults = SessionSourceOptions.ForCurrentUser();
 // serve reads what it may do on this machine from the profile's config.json (HostSettings), and
 // so do ha shadow, which must see the sessions as serve would (permissions.remoteApproval), and
@@ -88,13 +92,13 @@ var serveFolder = command == "serve" || (command == "ha" && arguments.ElementAtO
 var (settings, settingsProblem) = serveFolder is not null
     ? HostSettings.Load(serveFolder)
     : command is "usage" or "devbox" && Identity.IsValidProfile(Option("--profile") ?? "default")
-        ? HostSettings.Load(Path.Combine(Identity.DefaultRoot, Option("--profile") ?? "default"))
+        ? HostSettings.Load(paths.ProfileFolder)
         // An invalid profile is refused by the usage command itself, before anything is read.
         : (HostSettings.Default, null);
 // sessions, get, watch and usage read a migrated installation's registrations as serve does, from
 // the same profile; they look for its folder without creating one.
-var profileName = Option("--profile") ?? "default";
-var intakeFolder = serveFolder ?? (Identity.IsValidProfile(profileName) ? Path.Combine(Identity.DefaultRoot, profileName) : null);
+var profileName = paths.Profile;
+var intakeFolder = serveFolder ?? (Identity.IsValidProfile(profileName) ? paths.ProfileFolder : null);
 var (intakeState, intakeProblem) = intakeFolder is not null && Directory.Exists(intakeFolder) ? IntakeState.Load(intakeFolder) : (null, null);
 // A migrated installation's registrations are read where its runtime is, wherever that is.
 string[] WithIntake(IReadOnlyList<string> roots, string folder) =>
@@ -105,8 +109,8 @@ var options = new SessionSourceOptions
     CopilotHome = Option("--copilot-home") ?? intakeState?.Homes?.Copilot ?? defaults.CopilotHome,
     ClaudeHome = Option("--claude-home") ?? intakeState?.Homes?.Claude ?? defaults.ClaudeHome,
     CodexHome = Option("--codex-home") ?? intakeState?.Homes?.Codex ?? defaults.CodexHome,
-    ClaudeRegistrationRoots = WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder),
-    CodexRegistrationRoots = WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder),
+    ClaudeRegistrationRoots = paths.Registrations(true, WithIntake(defaults.ClaudeRegistrationRoots, SpoolContract.ClaudeFolder)),
+    CodexRegistrationRoots = paths.Registrations(false, WithIntake(defaults.CodexRegistrationRoots, SpoolContract.CodexFolder)),
     CopilotRemoteApproval = settings.RemoteApproval,
     Log = command == "serve" ? Log : null,
 };
@@ -244,7 +248,7 @@ switch (command)
         {
             using var stop = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
-            return await MigrateCommands.RunAsync(arguments, Identity.DefaultRoot, Console.Out, Console.Error, o => OperatingSystem.IsWindows()
+            return await MigrateCommands.RunAsync(arguments, paths.DataRoot, Console.Out, Console.Error, o => OperatingSystem.IsWindows()
                 ? new AgentBridge.Host.Migration.Migrator(o, new AgentBridge.Host.Migration.WindowsAgentHaBridgeRuntime(), new AgentBridge.Host.Migration.LocalMigrationHost(o.ProfileFolder), new AgentBridge.Host.Migration.ProcessHookRunner())
                 : throw new PlatformNotSupportedException(), stop.Token);
         }
@@ -254,7 +258,7 @@ switch (command)
             using var stop = new CancellationTokenSource();
             Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
             using var devCenter = new AgentBridge.Host.Core.DevBox.DevCenterHttp(TimeSpan.FromSeconds(30));
-            return await DevBoxCommands.RunAsync(arguments, settings, settingsProblem, Path.Combine(Identity.DefaultRoot, profileName, "logs", "host.log"),
+            return await DevBoxCommands.RunAsync(arguments, settings, settingsProblem, Path.Combine(paths.ProfileFolder, "logs", "host.log"),
                 FindDevBox, AgentHaBridgeKeepAwakeOwner, () => NewKeepAwake(devCenter), Console.Out, Console.Error, stop.Token);
         }
     default:
@@ -264,10 +268,11 @@ switch (command)
         Console.Error.WriteLine("       agent-bridge-host hooks status | migrate [--dry-run] [--bridge-home <dir>] [--hook <file>] | rollback [--dry-run] | migration status");
         Console.Error.WriteLine("       agent-bridge-host devbox status | devbox dry-run");
         Console.Error.WriteLine("       [--copilot-home <dir>] [--claude-home <dir>] [--codex-home <dir>] [--profile <name>]");
+        Console.Error.WriteLine("       [--data-root <absolute-dir>] [--registration-root <absolute-dir>]");
         return command == "help" ? 0 : 2;
 }
 
-Identity LoadIdentity() => Identity.Load(Option("--profile") ?? "default");
+Identity LoadIdentity() => Identity.Load(paths.Profile, root: paths.DataRoot);
 
 // What may only be done by a person never runs inside an agent session (§6.3 invariant 13): the
 // host's own command line refuses it there, as the pipe does.
@@ -320,7 +325,10 @@ async Task<int> ServeAsync()
     var drivers = new SessionDrivers();
     // One source for the life of the process: reconnecting to the relay neither rescans the
     // machine nor loses a change, and every new channel subscribes to the same state.
-    await using var source = new SessionSource(options, drivers: drivers);
+    var mac = MacDelivery.Create(identity.Folder, Log);
+    var globalProcesses = new SystemProcessInspector();
+    IProcessInspector processes = mac is null ? globalProcesses : new ManagedSessionProcessInspector(mac);
+    await using var source = new SessionSource(options, processes, drivers: drivers);
     await source.StartAsync(stop.Token);
     // Files over 256 KiB come from the relay's blob store, through whichever connection is up.
     using var relayBlobs = new RelayBlobs();
@@ -328,7 +336,7 @@ async Task<int> ServeAsync()
     // approval on a migrated machine is not answered.
     HookIntake? runningIntake = null;
     var codexUnsettled = HookIntake.AnswerGate(intakeState?.RuntimeRoot, intakeProblem, () => runningIntake);
-    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled);
+    var (answers, replies, attachments, stops) = Typists(source, Path.Combine(identity.Folder, "attachments"), Path.Combine(identity.Folder, "answer-attempts.json"), relayBlobs, codexUnsettled, mac, processes);
     using var attachmentsLifetime = attachments;
     // Notifications: the account's phones hear of questions and finished turns even with the
     // app closed. Subscriptions live in the profile's own folder, for this account only. None at
@@ -344,9 +352,10 @@ async Task<int> ServeAsync()
     // hello leaves usage out.
     using var usageHttp = new UsageHttp(TimeSpan.FromSeconds(15));
     var haProbe = OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : null;
+    IAgentHaBridgeProbe deliveryProbe = OperatingSystem.IsMacOS() ? new MacAgentHaBridgeProbe() : haProbe ?? (IAgentHaBridgeProbe)new NoAgentHaBridge();
     foreach (var problem in settings.UsageProblems) { Log($"config.json: {problem}"); }
     await using var usageMonitor = settings.Usage.Publish
-        ? NewUsageMonitor(source, usageHttp, Log, () => OperatingSystem.IsWindows() ? haProbe!.Active() : null)
+        ? NewUsageMonitor(source, usageHttp, Log, deliveryProbe.Active)
         : null;
     Log(usageMonitor is null ? "agent usage is off (usage.publish)"
         : $"agent usage is on{(settings.Usage.CopilotAccounts.Count == 0 ? "" : $", with {settings.Usage.CopilotAccounts.Count} further Copilot account(s) (usage.copilotAccounts)")}");
@@ -368,12 +377,12 @@ async Task<int> ServeAsync()
     // The Home Assistant connector (docs/ha-connector.md): this machine's sessions on the dashboard
     // agent-ha-bridge's writer generates. Off unless config.json turns it on, and paused while
     // agent-ha-bridge runs for this user (looked at every few seconds, as the app's view of it is).
-    Func<string?>? haActive = haProbe is null ? null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
+    Func<string?> haActive = HostControl.Cached(deliveryProbe.Active, () => Environment.TickCount64);
     // Ended sessions moved between the account's machines, on commands a person's device signs,
     // through the relay's blob store (docs/host-transfer.md). Bundles wait in the profile's own
     // private folder, never a shared temporary one.
     using var transfers = new SessionTransfers(identity.Key, Path.Combine(identity.Folder, "transfers"), Log);
-    var launcher = Launcher(source, attachments, transfers);
+    var launcher = Launcher(source, attachments, transfers, mac, globalProcesses);
     transfers.Launcher = launcher;
     // Folder-trust questions answered by a person from their devices, where config.json allows it.
     var trustAnswers = new FolderTrustAnswers(identity.Key, launcher, Log);
@@ -383,7 +392,7 @@ async Task<int> ServeAsync()
     // serve as Ctrl+C would, once the release is handed to the updater. None on a read-only host
     // (delivery.readOnly), which acts on nothing from another device: the buttons are withdrawn.
     var hostUpdates = VelopackHostUpdates.For(ReadOnlyReason(), OperatingSystem.IsWindows(),
-        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? Identity.DefaultRoot, profile, () => stop.Cancel(), Log));
+        () => new VelopackHostUpdates(Path.GetDirectoryName(identity.Folder) ?? paths.DataRoot, profile, () => stop.Cancel(), Log));
     // Home Assistant's refusals of this machine, counted with every other process of this user so a
     // rejected token is never repeated into a ban (#227); the app shows what it says.
     var haAuth = new AgentBridge.HomeAssistant.HaAuthGuard(AgentBridge.HomeAssistant.HaAuthGuard.FileFor(identity.Folder), log: Log);
@@ -392,7 +401,7 @@ async Task<int> ServeAsync()
     // What takes answering, replying, ending and launching away while it runs (design G5).
     // Asked afresh, as the delivery services ask it for what hello offers: a cached answer
     // could say read-only beside actions offered, or offer none without saying why.
-    string? ServeReadOnly() => ReadOnlyReason() ?? (OperatingSystem.IsWindows() ? haProbe?.Active() : null);
+    string? ServeReadOnly() => ReadOnlyReason() ?? deliveryProbe.Active();
     // Updates asked for from the account's other devices, which the app beside this host installs
     // (#51, docs/protocol/v1-update.md). A read-only machine serves none, as #112 withdrew Home
     // Assistant's Install there.
@@ -438,7 +447,7 @@ async Task<int> ServeAsync()
         identity.Account is { } a && ServeRelay() is { } r ? new RelayAccount(r.ToString(), a.Token, a.AccountId, a.Login) : null);
     PublishCredential();
     // agent-ha-bridge's state for the app's status, looked for at most every few seconds.
-    var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
+    var agentHaCached = HostControl.Cached(deliveryProbe.Active, () => Environment.TickCount64);
     var control = new HostControl(new HostControlOptions
     {
         Profile = profile,
@@ -623,21 +632,22 @@ async Task<int> ServeAsync()
 }
 
 // Launching and resuming sessions from other devices (docs/host-launch.md): only in the folders
-// the profile's config.json approves, and on Windows only for now. The agent starts in a console
-// of its own on this desktop, so the host must run here, as the user, unelevated.
-LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, SessionTransfers transfers)
+// the profile's config.json approves. Windows starts a desktop console; macOS starts an
+// owned pane in a private tmux server. Both run as the user, unelevated.
+LaunchService Launcher(ISessionSource source, AttachmentStore? attachments, SessionTransfers transfers, ManagedTmuxBackend? mac, IProcessInspector processes)
 {
     foreach (var problem in settings.LaunchProblems) { Log($"config.json: {problem}"); }
-    IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : new UnsupportedPlatformStarter();
-    IAgentHaBridgeProbe probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new NoAgentHaBridge(), ReadOnlyReason());
-    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : new NoScreens();
+    IAgentStarter starter = OperatingSystem.IsWindows() ? new WindowsAgentStarter() : mac is not null ? mac : new UnsupportedPlatformStarter();
+    IAgentHaBridgeProbe probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : OperatingSystem.IsMacOS() ? new MacAgentHaBridgeProbe() : new NoAgentHaBridge(), ReadOnlyReason());
+    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : mac is not null ? mac : new NoScreens();
     var launcher = new LaunchService(source, probe, injector, starter, new AgentLocator(), new AgencyCatalog(new BatchFileRunner(new CommandRunner())), new LaunchServiceOptions
     {
         CopilotHome = options.CopilotHome,
         ClaudeHome = options.ClaudeHome,
         CodexHome = options.CodexHome,
         Config = settings.Launch,
-        WorktreeUsage = new AgentWorktreeUsage(new SystemProcessInspector(), options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
+        PlatformSupported = OperatingSystem.IsWindows() || mac is not null,
+        WorktreeUsage = new AgentWorktreeUsage(processes, options.CopilotHome, options.ClaudeRegistrationRoots, options.CodexRegistrationRoots),
         Transfers = transfers,
         TransferStaging = transfers.Staging,
     }, Log, attachments);
@@ -668,9 +678,9 @@ KeepAwakeService NewKeepAwake(IDevCenterHttp http) => new(new KeepAwakeOptions
     Token = new AzCliToken(new BatchFileRunner(new CommandRunner()), AzCliToken.Find),
     Http = http,
     Lock = OperatingSystem.IsWindows()
-        ? new KeepAwakeLocks(new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+        ? new KeepAwakeLocks(new FileKeepAwakeLock(Path.Combine(paths.DataRoot, "devbox-keepawake.lock")),
             new DelegateKeepAwakeLock(() => OperatingSystem.IsWindows() ? new AgentHaBridgeProbe().HoldKeepAwake() : null))
-        : new FileKeepAwakeLock(Path.Combine(Identity.DefaultRoot, "devbox-keepawake.lock")),
+        : new FileKeepAwakeLock(Path.Combine(paths.DataRoot, "devbox-keepawake.lock")),
     AgentHaBridgeKeepAwake = AgentHaBridgeKeepAwakeOwner,
 }, Log);
 
@@ -716,35 +726,35 @@ HookIntake? StartIntake(AgentHaBridgeProbe? probe, CancellationToken cancellatio
 static string OsName() =>
     OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
 
-// Answers and replies are typed through agent-bridge-injector beside this executable, on
-// Windows only for now, and never while agent-ha-bridge runs for this user (checked again
+// Answers and replies use the Windows injector or a Mac pane owned by this host run,
+// and never while agent-ha-bridge may run for this user (checked again
 // for every hello, answer, reply and stop; this is only the startup note). They share one
 // gate, so an answer, a reply and ending a session (which types /exit) never act on one
 // session at once. Files sent with replies are staged in the profile's own folder, private
 // to this user (docs/host-replies.md), and the prompts already
 // answered are recorded there too, so none is typed into twice.
-(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled)
+(ISessionAnswerer, ISessionReplier, AttachmentStore?, ISessionStopper) Typists(ISessionSource source, string staging, string attempts, IBlobSource blobs, Func<string, string?>? codexUnsettled, ManagedTmuxBackend? mac, IProcessInspector processes)
 {
-    if (!OperatingSystem.IsWindows())
+    if (!OperatingSystem.IsWindows() && mac is null)
     {
-        Log("answering, replying and ending sessions from other devices are not supported on this platform yet");
+        Log("answering, replying and ending sessions are unavailable; on Mac they require managed tmux delivery");
         return (new UnsupportedPlatformAnswerer(), new UnsupportedPlatformReplier(), null, new UnsupportedPlatformStopper());
     }
-    var probe = new ReadOnlyGate(new AgentHaBridgeProbe(), ReadOnlyReason());
-    var injector = new WorkerInjector();
-    var guard = new TargetGuard();
-    var processes = new SystemProcessInspector();
+    var probe = new ReadOnlyGate(OperatingSystem.IsWindows() ? new AgentHaBridgeProbe() : new MacAgentHaBridgeProbe(), ReadOnlyReason());
+    IConsoleInjector injector = OperatingSystem.IsWindows() ? new WorkerInjector() : mac!;
+    ITargetGuard guard = OperatingSystem.IsWindows() ? new TargetGuard() : mac!;
+    IProcessControl control = OperatingSystem.IsWindows() ? new WindowsProcessControl() : mac!;
     var gate = new DeliveryGate();
-    if (!File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
+    if (OperatingSystem.IsWindows() && !File.Exists(Path.Combine(AppContext.BaseDirectory, WorkerInjector.FileName))) { Log($"{WorkerInjector.FileName} is missing beside the host; answers and replies will be refused"); }
     Log(probe.Active() is { } active ? $"answering, replying and ending sessions are off for now: {active}" : "answering, replying and ending sessions are on");
     if (settingsProblem is not null) { Log(settingsProblem); }
     Log($"approving Copilot permission prompts from other devices is {(settings.RemoteApproval ? "on" : "off")} (permissions.remoteApproval)");
     var attachments = new AttachmentStore(new AttachmentOptions { StagingRoot = staging }, Log, blobs: blobs);
     return (
-        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled }, Log, gate),
-        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { CopilotHome = options.CopilotHome }, Log, gate, attachments),
+        new AnswerService(source, processes, probe, guard, injector, new AnswerOptions { PlatformSupported = true, CopilotHome = options.CopilotHome, AttemptLedgerPath = attempts, CopilotRemoteApproval = settings.RemoteApproval, CodexApprovalsUnsettled = codexUnsettled }, Log, gate),
+        new ReplyService(source, processes, probe, guard, injector, new ReplyOptions { PlatformSupported = true, CopilotHome = options.CopilotHome }, Log, gate, attachments),
         attachments,
-        new StopService(source, processes, probe, injector, new WindowsProcessControl(), new StopOptions { CopilotHome = options.CopilotHome }, Log, gate));
+        new StopService(source, processes, probe, injector, control, new StopOptions { PlatformSupported = true, CopilotHome = options.CopilotHome }, Log, gate));
 }
 
 // Why this host takes nothing from other devices whatever agent-ha-bridge does, or null: made
