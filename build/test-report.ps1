@@ -87,12 +87,13 @@ foreach ($trx in Get-ChildItem $TestResults -Filter *.trx -Recurse -ErrorAction 
             Seconds = ([datetimeoffset]$run.Times.finish - [datetimeoffset]$run.Times.start).TotalSeconds
         }
         $testRows = foreach ($r in $results) {
-            if ($r.duration) {
+            $duration = [timespan]::Zero
+            if ([timespan]::TryParse([string]$r.duration, [cultureinfo]::InvariantCulture, [ref]$duration)) {
                 [pscustomobject]@{
                     Suite   = $suite
                     Name    = $r.testName
                     Outcome = $r.outcome
-                    Seconds = [timespan]::Parse($r.duration, [cultureinfo]::InvariantCulture).TotalSeconds
+                    Seconds = $duration.TotalSeconds
                 }
             }
         }
