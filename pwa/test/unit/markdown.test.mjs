@@ -305,3 +305,28 @@ test('the linear trim draws exactly what the trailing-blank-lines rule did, for 
   for (let from = 0, n = 0; n < 6; n++) { const to = all.length; for (let i = from; i < to; i++) { for (const c of alphabet) { all.push(all[i] + c); } } from = to; }
   for (const s of all) { assert.equal(codeText(s), rule(s), JSON.stringify(s)); }
 });
+// #429: the stand-ins for a bare CR and the separators are chosen in one read of the text.
+test('a message holding 50,000 private-use code points and a carriage return parses in linear time', () => {
+  let held = '';
+  for (let c = 0xF0000; c < 0xF0000 + 50000; c++) { held += String.fromCodePoint(c); }
+  const start = performance.now();
+  const [p] = parseMarkdown(held + '\recho');
+  assert.ok(performance.now() - start < 250, `took ${performance.now() - start} ms`);
+  // Every code point it held is drawn as itself, and the CR as the CR it was.
+  assert.equal(textOf(p), held + '\recho');
+});
+
+test('the stand-ins skip every private-use code point a message holds, and the separators come back as they were', () => {
+  const held = '\u{F0000}\u{F0001}\u{F0002}\u{F0004}';
+  const [p] = parseMarkdown(`a${held}\rb\u2028c\u2029d`);
+  assert.equal(textOf(p), `a${held}\rb\u2028c\u2029d`);
+  assert.equal(blockOf(`\`\`\`\n${held}\r\u2028\u2029\n\`\`\``), '\\u{F0000}\\u{F0001}\\u{F0002}\\u{F0004}\\u000D\\u2028\\u2029');
+  assert.deepEqual(notesOfBlock(`\`\`\`\nx\ry\n\`\`\``), ['Contains hidden characters']);
+});
+
+test('an approval with 200,000 blank lines before its text is drawn in linear time', () => {
+  const start = performance.now();
+  const [p] = parseApproval('\n'.repeat(200000) + 'echo hi' + '\n \n'.repeat(100000));
+  assert.ok(performance.now() - start < 250, `took ${performance.now() - start} ms`);
+  assert.equal(textOf(p), 'echo hi');
+});

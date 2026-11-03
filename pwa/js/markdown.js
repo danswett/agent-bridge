@@ -97,10 +97,18 @@ const SEPARATORS = /[\r\u2028\u2029]/;
 function standIns(text) {
   if (!SEPARATORS.test(text)) { return { text, restore: (nodes) => nodes }; }
   const by = new Map();
-  for (let c = 0xF0000; by.size < 3; c++) {
-    const s = String.fromCodePoint(c);
-    if (!text.includes(s)) { by.set(['\r', '\u2028', '\u2029'][by.size], s); }
+  // The private-use code points the text holds, read once: a check per candidate read the whole
+  // text again, so a message holding U+F0000 onward took seconds to parse (#429).
+  const present = new Set();
+  for (const ch of text) { const c = ch.codePointAt(0); if (c >= 0xF0000 || (c >= 0xE000 && c <= 0xF8FF)) { present.add(c); } }
+  for (const [from, to] of [[0xF0000, 0x10FFFD], [0xE000, 0xF8FF]]) {
+    for (let c = from; c <= to && by.size < 3; c++) {
+      if (!present.has(c)) { by.set(['\r', '\u2028', '\u2029'][by.size], String.fromCodePoint(c)); }
+    }
   }
+  // A text holding nearly every private-use code point leaves none to stand in: its separators are
+  // escaped before parsing instead, drawn the same, though a block cannot then say it held them.
+  if (by.size < 3) { return { text: text.replace(new RegExp(SEPARATORS.source, 'g'), (c) => revealLineSeparators(c)), restore: (nodes) => nodes }; }
   const back = new Map([...by].map(([k, v]) => [v, k]));
   const there = new RegExp([...back.keys()].join('|'), 'gu');
   const put = (s) => s.replace(there, (c) => back.get(c));
@@ -133,9 +141,12 @@ function standIns(text) {
 export function parseApproval(src) {
   const text = typeof src === 'string' ? src : '';
   const lines = text.replace(/\r\n/g, '\n').split('\n');
-  while (lines.length && blank(lines[0])) { lines.shift(); }
-  while (lines.length && blank(lines[lines.length - 1])) { lines.pop(); }
-  return lines.length ? [el('p', [lines.join('\n')], { class: 'md-literal' })] : [];
+  // Indices, not shift(): each shift moves every line after it, quadratic in a long blank head.
+  let start = 0;
+  let end = lines.length;
+  while (start < end && blank(lines[start])) { start++; }
+  while (end > start && blank(lines[end - 1])) { end--; }
+  return end > start ? [el('p', [lines.slice(start, end).join('\n')], { class: 'md-literal' })] : [];
 }
 
 // lines: what structure is read from, leading tabs expanded and blank lines in list items
