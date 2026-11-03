@@ -685,8 +685,11 @@ machine, online ones first, then the account's offline machines (#213):
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
-once, and an answer anywhere withdraws its notification (`docs/protocol/v1-sessions.md`,
-Notifications). Opening one opens the session at its question, as choosing its row does.
+once, and an answer anywhere clears its notification (`docs/protocol/v1-sessions.md`,
+Notifications): the Windows app withdraws its toast, while Web Push replaces it in place with a
+silent "no longer waiting" notice, or the finished turn's, since every push must show a
+notification or iOS revokes the permission (`pwa/sw.js`). Opening one opens the session at its
+question, as choosing its row does.
 - **An approval's notification only opens its question** (#253 decision 7, #372). It never
   offers Approve once or Deny: the OS draws its body as plain text and cuts it short, so it
   can show neither the whole command nor the escapes and notes that hidden, bidi and
