@@ -1432,6 +1432,9 @@ deduplicated. Malformed or conflicting peer inventories refuse a partial rebuild
 The fenced writer maintains the exact machine-selector helper, including actual
 option/selection readback and asynchronous selection repair, then verifies the
 actual policy, card and dashboard receipt. A successful save alone is not proof.
+Selector creation, option changes and selection repair share the card/dashboard
+transaction gate through actual control readback; concurrent local instances
+cannot invalidate each other's fence midway through those operations.
 Restart, overwrite and selector changes are reconciled from actual HA state rather
 than trusting a cached input signature. Newer accepted cards are never downgraded.
 

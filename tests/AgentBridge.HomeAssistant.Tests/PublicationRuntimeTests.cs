@@ -18,7 +18,7 @@ public sealed class PublicationRuntimeTests : IDisposable
 
     public PublicationRuntimeTests()
     {
-        var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json")));
+        using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json")));
         var initial = JsonNode.Parse(fixture.RootElement.GetProperty("policy").GetRawText())!;
         initial["render"]!["version"] = "1.13.0";
         initial["highRender"]!["version"] = "1.13.0";
@@ -201,6 +201,44 @@ public sealed class PublicationRuntimeTests : IDisposable
         Assert.Equal("Alpha", ha.States[entity].State);
         Assert.Empty(ha.PublicationWrites);
         Assert.True((await Proof()).Verified);
+    }
+
+    [Fact]
+    public async Task Selector_and_card_transactions_share_the_endpoint_gate_through_actual_control_readback()
+    {
+        var identity = new HaPublicationIdentity(Writer.Authority, Writer.Participant, Writer.Writer, Writer.Generation);
+        var writer = new HaPublicationWriter(ha, Dashboard, new(folder, Instance, Dashboard), identity);
+        await writer.PublishCardAsync(HaPublicationRenderer.CardUrl);
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ha.BeforePublicationWrite = async command =>
+        {
+            if (command["type"]!.GetValue<string>() == "input_select/create")
+            {
+                paused.SetResult();
+                await resume.Task;
+            }
+        };
+        var selector = writer.ReconcileSelectorAsync([new("alpha", "Alpha"), new("beta", "Beta")], HaPublicationRenderer.Artifact);
+        Task card = Task.CompletedTask;
+        try
+        {
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var other = new HaPublicationWriter(ha, Dashboard, new(Path.Combine(folder, "other-profile"), Instance, Dashboard), identity);
+            var url = "data:text/javascript;base64," + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("const CARD_VERSION = '1.43.0';")) +
+                "#agent-bridge-reply-card.js?v=1.43.0";
+            card = other.PublishCardAsync(url);
+            Assert.False(card.IsCompleted);
+        }
+        finally
+        {
+            resume.TrySetResult();
+            await Task.WhenAll(selector, card).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        Assert.Equal("input_select.agent_bridge_target_machine", await selector);
+        var actual = (await writer.ReadAsync()).Policy!;
+        Assert.Equal(HaPublicationRenderer.Artifact, actual.HighRender);
+        Assert.Equal("1.43.0", actual.HighCard.VersionText);
     }
 
     [Theory]

@@ -58,7 +58,7 @@ public sealed partial class HaConnector
         {
             return;
         }
-        await publicationWriter.PublishDashboardAsync(rendered.Config, rendered.InputHash, rendered.RenderedNodes, HaPublicationRenderer.Artifact, ct);
+        await publicationWriter.PublishDashboardAsync(rendered, HaPublicationRenderer.Artifact, ct);
     }
 
     void HoldRetirement()

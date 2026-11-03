@@ -12,6 +12,7 @@ internal sealed partial class HaPublicationWriter
     public async Task<string> ReconcileSelectorAsync(IReadOnlyCollection<HaFleetMachine> machines,
         HaPublicationArtifact renderer, CancellationToken ct = default)
     {
+        using var transaction = await BeginAsync(ct);
         var state = await FenceAsync(HaPublicationComponent.Render, renderer, ct);
         var policyHash = state.Policy!.Hash;
         var options = machines.Where(m => m.Online).OrderBy(m => m.Slug, StringComparer.CurrentCultureIgnoreCase)
