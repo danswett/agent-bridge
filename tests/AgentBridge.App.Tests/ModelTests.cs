@@ -378,6 +378,16 @@ public sealed class MarkdownTests
         Assert.Equal([new MdText(quotes + "echo safe\\u202Eb\\u2028c\\u000Drm"), new MdBreak(), new MdText("\\u05D0\\u05D1")], p.Inlines);
     }
 
+    [Fact]
+    public void Text_drawn_as_written_keeps_a_bare_CR_at_its_end_as_an_escape()
+    {
+        var text = Repeat("> ", 33) + "rm\r\nrun\r";
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdText(Repeat("> ", 33) + "rm"), new MdBreak(), new MdText("run\\u000D")], p.Inlines);
+    }
+
     [Theory]
     [InlineData("[](")]
     [InlineData("[a](")]

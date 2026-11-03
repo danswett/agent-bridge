@@ -221,12 +221,12 @@ public static class MarkdownModel
     static MdParagraph Literal(string markdown)
     {
         var inlines = new List<MdInline>();
-        var first = true;
-        foreach (var raw in markdown.Split('\n'))
+        var lines = markdown.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
         {
-            if (!first) { inlines.Add(new MdBreak()); }
-            first = false;
-            var line = raw.EndsWith('\r') ? raw[..^1] : raw;
+            if (i > 0) { inlines.Add(new MdBreak()); }
+            // A CR is a line's ending only before an LF: a last line's bare CR is drawn, escaped.
+            var line = i < lines.Length - 1 && lines[i].EndsWith('\r') ? lines[i][..^1] : lines[i];
             if (line.Length > 0) { inlines.Add(new MdText(HiddenText.Reveal(line, rightToLeft: true))); }
         }
         return new MdParagraph(inlines);
