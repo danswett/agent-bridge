@@ -80,6 +80,7 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 - **Overall coordinator** (Copilot session 50e5b45a on DEV-VM1 since 2026-11-02 14:20 PT, taking over from a6ed320ca83044c5): the whole project, track A of the UI plan (sub-agents S1 #173, S2 #174, S5 #175), #172 (shared usage), the relay, migration, the shadow gate, machines, and this page outside §5.
 - **UI coordinator**: track B (§5), which names the session currently holding it; it moved to DSWETT-DEV-VM2 on 11-02. It merges its own PRs under the same rule.
 - Cross-track needs go on #170.
+- **VP of Design** (Copilot session c187cf6c on DEV-VM1, since 2026-11-03; #477): audits and design proposals across all clients. Additive, so no merging and no slices. Material design changes need the owner's approval ([handoff.md](design/handoff.md)).
 
 **Handoff, 2026-11-02 13:30 PT** (the overall coordinator's session ends for DEV-VM1's migration; background delegates are lost, their work is on branches):
 - **#238 (#200, live Claude and Codex usage)**, head ac2b8498: CI green, Copilot reviewed, 0 threads. Before merge it needs:
