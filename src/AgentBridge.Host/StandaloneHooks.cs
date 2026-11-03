@@ -52,7 +52,9 @@ public sealed class StandaloneHooks(
         {
             throw new InvalidOperationException("this profile belongs to a migration; use migration status or rollback");
         }
-        if (state is not null && (state.Homes != homes || !Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))
+        if (state is not null && (state.Homes is not { } saved || !Same(saved.Copilot, homes.Copilot)
+            || !Same(saved.Claude, homes.Claude) || !Same(saved.Codex, homes.Codex)
+            || !Same(state.RuntimeRoot, Runtime) || !Same(state.BridgeHome, profile)))
         {
             throw new InvalidOperationException("this profile already uses different agent homes or a different runtime");
         }
@@ -71,6 +73,18 @@ public sealed class StandaloneHooks(
             Path.Combine(homes.Codex, "agent-ha-bridge-owner.json") })
         {
             if (File.Exists(path) || Directory.Exists(path)) { throw new InvalidOperationException($"{path} is a legacy registration; use Migrate"); }
+        }
+        var claudeSettings = Path.Combine(homes.Claude, "settings.json");
+        if (File.Exists(claudeSettings))
+        {
+            var claudeOwner = Path.Combine(homes.Claude, OwnerFile);
+            var record = File.Exists(claudeOwner) ? Read(claudeOwner) : null;
+            var owned = record is not null && (int?)record["version"] == 1
+                && (string?)record["profile"] is { } ownedProfile && Same(ownedProfile, profile);
+            if (HasBridgeCommands(Read(claudeSettings), owned))
+            {
+                throw new InvalidOperationException($"{claudeSettings} retains legacy or unowned bridge commands; use Migrate or inspect the registrations; it was left alone");
+            }
         }
     }
 
@@ -266,8 +280,7 @@ public sealed class StandaloneHooks(
                 {
                     foreach (var hook in inner.OfType<JsonObject>().ToList())
                     {
-                        if ((string?)hook["command"] is { } command && new[] { "ask", "notification", "stop", "register" }
-                            .Any(n => string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))) { inner.Remove(hook); }
+                        if ((string?)hook["command"] is { } command && OwnedClaudeCommand(command)) { inner.Remove(hook); }
                     }
                     if (inner.Count == 0) { entries.Remove(entry); }
                 }
@@ -283,13 +296,16 @@ public sealed class StandaloneHooks(
         return parent[key] as JsonObject ?? throw new InvalidDataException($"{key} is not an object; it was left alone");
     }
 
-    static bool HasBridgeCommands(JsonObject root)
+    bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register" }
+        .Any(n => string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+
+    bool HasBridgeCommands(JsonObject root, bool owned = false)
     {
         if (root["hooks"] is not JsonObject hooks) { return false; }
         return hooks.Select(p => p.Value).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())
             .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())
             .Select(h => h["command"]).OfType<JsonValue>()
-            .Any(v => v.TryGetValue<string>(out var command) && (
+            .Any(v => v.TryGetValue<string>(out var command) && (!owned || !OwnedClaudeCommand(command)) && (
                 command.Contains("agent-bridge", StringComparison.OrdinalIgnoreCase)
                 || command.Contains("ha-bridge", StringComparison.OrdinalIgnoreCase)));
     }
@@ -306,6 +322,11 @@ public sealed class StandaloneHooks(
         var text = await RunCodexAsync(executable, ["plugin", "marketplace", "list", "--json"], ct);
         var listing = JsonNode.Parse(text) as JsonObject;
         if (listing?["marketplaces"] is not JsonArray marketplaces) { throw new InvalidDataException("Codex returned an unreadable marketplace list; nothing was registered"); }
+        if (marketplaces.OfType<JsonObject>().Any(m => string.Equals((string?)m["name"], "agent-ha-bridge", StringComparison.OrdinalIgnoreCase)
+            || string.Equals((string?)m["name"], "copilot-ha-bridge", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("Codex retains a legacy bridge marketplace; use Migrate; it was left alone");
+        }
         var matches = marketplaces.OfType<JsonObject>().Where(m => (string?)m["name"] == Marketplace).ToList();
         if (matches.Count > 1 || (matches.Count == 1 && (!owned || (string?)matches[0]["root"] is not { } root || !Same(root, CodexMarketplace))))
         {

@@ -129,6 +129,35 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Single(Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray());
     }
 
+    [Fact]
+    public async Task Equivalent_agent_home_paths_allow_reinstall_and_removal_without_changing_the_saved_homes()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        string Equivalent(string path) => (OperatingSystem.IsWindows() ? path.ToUpperInvariant() : path) + Path.DirectorySeparatorChar;
+        var equivalent = new IntakeState.AgentHomes(Equivalent(Homes.Copilot), Equivalent(Homes.Claude), Equivalent(Homes.Codex));
+        var setup = new StandaloneHooks(Profile, equivalent, Source, Legacy, () => active, locator, codex);
+
+        await setup.InstallAsync("copilot", false, TextWriter.Null);
+        await setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        Assert.False(File.Exists(Owner("claude")));
+        Assert.Equal(Homes, IntakeState.Load(Profile).State!.Homes);
+    }
+
+    [Fact]
+    public async Task A_genuinely_different_agent_home_still_refuses_setup_without_mutation()
+    {
+        await Setup.InstallAsync("copilot", false, TextWriter.Null);
+        var other = Homes with { Claude = Path.Combine(root, "other-claude") };
+        var setup = new StandaloneHooks(Profile, other, Source, Legacy, () => active, locator, codex);
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => setup.InstallAsync("copilot", false, TextWriter.Null));
+
+        Assert.Equal(before, Listing());
+    }
+
     void ConfigurePath(string agent, string path) => Write(Path.Combine(Profile, HostSettings.FileName),
         new JsonObject { ["launch"] = new JsonObject { ["agents"] = new JsonObject { [agent] = new JsonObject { ["path"] = path } } } }.ToJsonString());
 
@@ -300,9 +329,13 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Theory]
-    [InlineData("agent-bridge-host-hook.exe claude register")]
-    [InlineData("pwsh -File C:\\tools\\ha-bridge\\register.ps1")]
-    public async Task Unowned_Claude_bridge_commands_are_refused_even_without_a_legacy_directory(string command)
+    [InlineData("claude", "agent-bridge-host-hook.exe claude register")]
+    [InlineData("claude", "pwsh -File C:\\tools\\ha-bridge\\register.ps1")]
+    [InlineData("copilot", "agent-bridge-host-hook.exe claude register")]
+    [InlineData("copilot", "pwsh -File C:\\tools\\ha-bridge\\register.ps1")]
+    [InlineData("codex", "agent-bridge-host-hook.exe claude register")]
+    [InlineData("codex", "pwsh -File C:\\tools\\ha-bridge\\register.ps1")]
+    public async Task Unowned_Claude_bridge_commands_are_refused_even_without_a_legacy_directory(string agent, string command)
     {
         Write(Registration("claude"), new JsonObject
         {
@@ -312,7 +345,34 @@ public sealed class StandaloneHooksTests : IDisposable
             }) },
         }.ToJsonString());
         var before = Listing();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync(agent, false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("codex")]
+    public async Task Owned_standalone_Claude_commands_do_not_prevent_setting_up_another_agent(string agent)
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+
+        await Setup.InstallAsync(agent, false, TextWriter.Null);
+
+        Assert.True(File.Exists(Owner(agent)));
+        Assert.True(File.Exists(Owner("claude")));
+    }
+
+    [Fact]
+    public async Task A_Claude_ownership_marker_does_not_hide_an_additional_legacy_command()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var settings = Read(Registration("claude"));
+        settings["hooks"]!["SessionStart"]![0]!["hooks"]!.AsArray().Add(new JsonObject { ["command"] = "pwsh -File C:\\tools\\ha-bridge\\register.ps1" });
+        Write(Registration("claude"), settings.ToJsonString());
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("copilot", false, TextWriter.Null));
+
         Assert.Equal(before, Listing());
     }
 
@@ -353,6 +413,23 @@ public sealed class StandaloneHooksTests : IDisposable
         codex.Present = true;
         var before = Listing();
         await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData("agent-ha-bridge", false)]
+    [InlineData("copilot-ha-bridge", false)]
+    [InlineData("agent-ha-bridge", true)]
+    [InlineData("copilot-ha-bridge", true)]
+    public async Task A_legacy_Codex_marketplace_refuses_setup_even_when_its_old_directory_is_gone(string marketplace, bool owned)
+    {
+        if (owned) { await Setup.InstallAsync("codex", false, TextWriter.Null); }
+        Directory.CreateDirectory(Homes.Codex);
+        codex.LegacyMarketplace = marketplace;
+        var before = Listing();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("codex", false, TextWriter.Null));
+
         Assert.Equal(before, Listing());
     }
 
@@ -429,6 +506,7 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool Present;
         public bool FailPlugin;
         public bool FailMarketplace;
+        public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
         public Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
         {
@@ -437,8 +515,10 @@ public sealed class StandaloneHooksTests : IDisposable
             {
                 var path = OperatingSystem.IsWindows() ? @"\\?\" + Root : Root;
                 var entry = new JsonObject { ["name"] = "agent-bridge", ["root"] = path };
+                var marketplaces = Present ? new JsonArray(entry) : new JsonArray();
+                if (LegacyMarketplace is { } legacy) { marketplaces.Add(new JsonObject { ["name"] = legacy, ["root"] = Path.Combine(Root, "missing-legacy") }); }
                 return Task.FromResult(new CommandResult(true, false, 0,
-                    new JsonObject { ["marketplaces"] = Present ? new JsonArray(entry) : new JsonArray() }.ToJsonString()));
+                    new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString()));
             }
             if (arguments[1] == "marketplace")
             {

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
+using AgentBridge.Host.Core.Intake;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
@@ -82,11 +83,11 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
         return change is null ? config : change(config);
     }
 
-    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
+    private protected LaunchService Launcher(LaunchConfig config, TimeSpan? wait = null, IWorktreeUsage? usage = null, Func<DateTime>? now = null, SessionTransfers? transfers = null, ISessionFetcher? fetcher = null, AttachmentStore? attachments = null, TimeSpan? readyWait = null, IAgentHaBridgeProbe? gate = null, TimeSpan? trustConfirm = null, TimeSpan? follow = null, IntakeState.AgentHomes? homes = null) => new(source, gate ?? probe, screens, starter, locator, new AgencyCatalog(agency), new LaunchServiceOptions
     {
-        CopilotHome = f.CopilotHome,
-        ClaudeHome = f.ClaudeHome,
-        CodexHome = f.CodexHome,
+        CopilotHome = homes?.Copilot ?? f.CopilotHome,
+        ClaudeHome = homes?.Claude ?? f.ClaudeHome,
+        CodexHome = homes?.Codex ?? f.CodexHome,
         Config = config,
         PlatformSupported = true,
         RegistrationWait = wait ?? TimeSpan.FromSeconds(5),
@@ -140,6 +141,51 @@ public abstract partial class LaunchFlowFixture : IAsyncLifetime
 [Trait("Category", "Network")]
 public sealed partial class LaunchFlowTests : LaunchFlowFixture
 {
+    [Theory]
+    [InlineData("copilot")]
+    [InlineData("agency")]
+    [InlineData("claude")]
+    [InlineData("codex")]
+    public async Task An_app_style_launch_uses_the_agent_homes_saved_by_fresh_hook_setup(string agent)
+    {
+        var profile = Path.Combine(f.Root, "fresh-profile");
+        var hook = Path.Combine(f.Root, "native-hook.exe");
+        File.WriteAllText(hook, "hook fixture");
+        var homes = new IntakeState.AgentHomes(f.CopilotHome, f.ClaudeHome, f.CodexHome);
+        await new StandaloneHooks(profile, homes, hook, Path.Combine(f.Root, "absent-legacy"), () => null, locator, agency)
+            .InstallAsync("copilot", false, TextWriter.Null);
+        var saved = IntakeState.Load(profile).State!.Homes!;
+        locator.Installed[agent] = @"C:\fake\" + agent + ".exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: saved);
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = agent, Prompt = "go" }, "fixture");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        Assert.Equal(saved.Copilot, environment["COPILOT_HOME"]);
+        Assert.Equal(saved.Claude, environment["CLAUDE_CONFIG_DIR"]);
+        Assert.Equal(saved.Codex, environment["CODEX_HOME"]);
+        Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
+    [Fact]
+    public async Task A_launch_keeps_matching_profile_homes_inherited_without_relocating_Claude_s_account_file()
+    {
+        var defaults = SessionSourceOptions.ForCurrentUser();
+        var homes = new IntakeState.AgentHomes(defaults.CopilotHome, defaults.ClaudeHome, defaults.CodexHome);
+        locator.Installed["claude"] = @"C:\fake\claude.exe";
+        starter.Registers = false;
+        var launcher = Launcher(Config(), wait: TimeSpan.FromMilliseconds(100), homes: homes);
+
+        await launcher.LaunchAsync(new LaunchRequest { Request = Guid.NewGuid().ToString(), Agent = "claude", Prompt = "go" }, "fixture");
+
+        var environment = Assert.Single(starter.Specs).Environment!;
+        Assert.False(environment.ContainsKey("COPILOT_HOME"));
+        Assert.False(environment.ContainsKey("CLAUDE_CONFIG_DIR"));
+        Assert.False(environment.ContainsKey("CODEX_HOME"));
+        Assert.False(string.IsNullOrEmpty(environment[Launchers.SessionVariable]));
+    }
+
     [Fact]
     public async Task Hello_offers_launching_only_while_agent_ha_bridge_is_not_running_and_the_host_can_start_agents_here()
     {

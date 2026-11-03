@@ -30,6 +30,10 @@ host profile. Nothing automatically approves launch workspaces or trusts agent h
 CLI lookup uses that profile's `launch.agents.<id>.path`, including Agency as the Copilot
 fallback and Codex removal. Unreadable profile or invalid launch settings refuse setup
 instead of silently choosing another CLI.
+Saved agent homes are also passed into bridge-launched agents, so an app-started host
+discovers sessions in the same homes where setup registered their hooks and plugins.
+Homes matching the inherited profile are left alone, preserving Claude's default
+account-file location rather than setting `CLAUDE_CONFIG_DIR` unnecessarily.
 
 Restart the host from the app and **start new agent sessions**: open sessions retain their
 old commands. Start Codex locally and approve its hook trust prompt once; until then Codex
@@ -41,11 +45,14 @@ stable native hook and pointer in `<profile>\hooks`. It refuses an existing lega
 legacy registrations, migrated profiles and another profile's ownership marker. G5 still
 checks the legacy daemon before intake or delivery. Fresh setup never writes the legacy
 home, changes a legacy task or starts a host automatically.
+Every agent's preflight checks Claude bridge commands, excluding this profile's owned
+standalone commands. Codex setup also refuses retained `agent-ha-bridge` or
+`copilot-ha-bridge` marketplaces even when their old directories are gone.
 Hook updates reuse migration's recoverable Windows-safe image swap: a running invocation
 finishes on the previous image, and an interrupted replacement restores that image before
 retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
-Equivalent Windows profile casing does not leave owned Claude commands behind
-when removing or reinstalling hooks.
+Equivalent home paths (including trailing separators and Windows casing) do not block
+setup or removal, and Windows profile casing does not leave owned Claude commands behind.
 
 Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into
 `settings.json` with unrelated settings and hooks preserved, plus its first original settings
