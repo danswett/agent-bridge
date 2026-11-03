@@ -690,6 +690,42 @@ public class DiscoveryTests
             .Observation.Processes.Select(p => p.Id));
     }
 
+    // Found in review (#437): npx, bunx, pnpm dlx and a version manager's shim read as an
+    // interactive Codex. Above an interactive executable they launched, they are told apart.
+    [Fact]
+    public void A_launcher_above_an_interactive_codex_executable_is_told_apart_from_its_session()
+    {
+        var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
+        const string Native = @"C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe";
+        const string Loader = @"""C:\Program Files\nodejs\node.exe"" C:\Users\u\AppData\Local\npm-cache\_npx\0a1b\node_modules\@openai\codex\bin\codex.js";
+        const string Npx = @"""C:\Program Files\nodejs\node.exe"" ""C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js"" -y @openai/codex@latest";
+        var listing = new SystemProcessInspector.ListedProcess[]
+        {
+            // npx, then a shell, then npm's loader, then the executable
+            new("codex", 100, t.AddSeconds(2), Native, Parent: 101, Ancestors: [101, 102, 103]),
+            new("node", 101, t.AddSeconds(1), Loader),
+            new("node", 103, t, Npx),
+            new("codex", 200, t.AddSeconds(2), "/home/u/.bun/install/cache/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex",
+                Parent: 201, Ancestors: [201]),
+            new("bun", 201, t, "bun x @openai/codex"),
+            // a version manager's shim, itself named codex
+            new("codex", 300, t.AddSeconds(2), Native, Parent: 301, Ancestors: [301, 302, 9]),
+            new("node", 301, t.AddSeconds(1), Loader),
+            new("codex", 302, t, @"C:\Users\u\AppData\Local\Volta\bin\codex.exe", Parent: 9, Ancestors: [9]),
+            // what an `exec` run's launcher launched is no session
+            new("codex", 400, t.AddSeconds(2), Native + " exec list", Parent: 401, Ancestors: [401]),
+            new("node", 401, t, Npx + " exec list"),
+            // a pid above that started after the executable went to another process
+            new("codex", 500, t, Native, Parent: 501, Ancestors: [501]),
+            new("node", 501, t.AddSeconds(5), Npx),
+        };
+
+        var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
+
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([103, 201, 302], observation.Launchers.Order());
+    }
+
     [Fact]
     public void VS_Codes_copilot_shim_is_left_out_when_the_real_cli_it_started_is_listed()
     {

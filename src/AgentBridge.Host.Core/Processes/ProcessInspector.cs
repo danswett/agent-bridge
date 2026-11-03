@@ -37,6 +37,10 @@ public sealed record AgentProcessObservation(IReadOnlyList<AgentProcess> Process
 {
     public bool Listed { get; init; } = true;
     public IReadOnlyList<AgentProcess> Unidentified { get; init; } = [];
+    // Of Codex's Processes, those that started (through any processes between) an interactive
+    // Codex executable that is listed too: a launcher (npx, bunx, pnpm dlx, a version manager's
+    // shim), whose session, if any, is that executable. Empty where ancestry cannot be read.
+    public IReadOnlySet<int> Launchers { get; init; } = new HashSet<int>();
 }
 
 // The real machine, on Windows, macOS and Linux. Only reads: it opens a process for
@@ -82,9 +86,13 @@ public sealed class SystemProcessInspector : IProcessInspector
                     try { started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero); }
                     catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException) { }
                     // Only the agent's own executable is asked for its parent: that is the
-                    // loader or launcher to recognise in Classify.
+                    // loader or launcher to recognise in Classify. Codex's is asked for those above it too,
+                    // for the launchers its pid-less registrations are told apart from (#437).
                     var parent = candidate is "node" or "bun" ? null : AgentBridge.Hooks.Ancestry.ParentOf(id);
-                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent));
+                    var ancestors = agent == AgentKind.Codex && parent is { } p
+                        ? AgentBridge.Hooks.Ancestry.Walk(p, MaxAncestors, AgentBridge.Hooks.Ancestry.ParentOf)
+                        : null;
+                    listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent, ancestors));
                 }
             }
         }
@@ -105,7 +113,13 @@ public sealed class SystemProcessInspector : IProcessInspector
         return observation;
     }
 
-    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine, int? Parent = null);
+    // How far up an executable's ancestry a launcher is looked for: npx, a shell and the loader
+    // between it and the executable are three; the hooks read as far.
+    const int MaxAncestors = 12;
+
+    // Ancestors: the executable's parent and those above it, nearest first, where the OS says.
+    internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine, int? Parent = null,
+        IReadOnlyList<int>? Ancestors = null);
 
     // What a listing of candidate processes says about this agent, apart from reading the
     // machine, so the filtering is testable. Kept are the processes whose cached command
@@ -140,7 +154,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             : [];
         foreach (var process in all)
         {
-            var (candidate, id, started, commandLine, _) = process;
+            var (candidate, id, started, commandLine, _, _) = process;
             // Another user's agent is none of this user's sessions, and nothing of it can
             // be read: taken for one, it held discovery for as long as it ran (#143).
             if (commandLine is null && windows && anotherUsers(id)) { continue; }
@@ -175,7 +189,23 @@ public sealed class SystemProcessInspector : IProcessInspector
             }
             found.Add(new AgentProcess(id, started, commandLine));
         }
-        return (new(found, known) { Listed = listed, Unidentified = unidentified }, kept);
+        // A listed process above an interactive Codex executable, and started no later, launched
+        // it (npx, bunx, pnpm dlx, a version manager's shim): its session, if any, is that
+        // executable. A pid above it that started later is another process the pid went to.
+        var foundIds = found.Select(p => p.Id).ToHashSet();
+        var launchers = new HashSet<int>();
+        foreach (var child in kept.Where(p => agent == AgentKind.Codex && p.Candidate is not ("node" or "bun") && foundIds.Contains(p.Id)
+            && p.Ancestors is { Count: > 0 } && (string.IsNullOrEmpty(p.CommandLine) || Discovery.CodexLockDiscovery.IsInteractive(p.CommandLine))))
+        {
+            foreach (var above in child.Ancestors!)
+            {
+                if (above == child.Id || !foundIds.Contains(above)) { continue; }
+                var launcher = found.First(p => p.Id == above);
+                if (launcher.StartedAt is { } a && child.StartedAt is { } b && a > b) { continue; }
+                launchers.Add(above);
+            }
+        }
+        return (new(found, known) { Listed = listed, Unidentified = unidentified, Launchers = launchers }, kept);
     }
 
     // A command line's arguments without its program, which differs between a launcher and
@@ -480,10 +510,11 @@ public static partial class CommandLine
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
     // Where Codex's own command line starts. The program itself when it is Codex's executable
-    // (named codex, or a vendored codex-<target> binary); under a runtime, the script named codex
-    // (codex.js) it runs, so neither a runtime's options nor their values (`node --require
-    // /work/codex-preload.cjs .../codex.js`) are read as Codex's; failing that, the first argument
-    // whose name starts with codex, else the first.
+    // (named codex, or a vendored codex-<target> binary). Under node or bun, npm's loader
+    // (.../@openai/codex/bin/codex.js) when it is there, so a preload named codex (`node --require
+    // /work/codex.cjs .../codex.js exec`) is not taken for Codex and its `exec` for a session.
+    // Otherwise the argument named codex (codex.js, npx's @openai/codex), else the first whose
+    // name starts with codex, else the first; never the value of a runtime's own option.
     internal static int CodexProgram(IReadOnlyList<string> arguments)
     {
         static string File(string path)
@@ -492,16 +523,36 @@ public static partial class CommandLine
             return name[(name.LastIndexOf('/') + 1)..];
         }
         if (arguments.Count == 0 || File(arguments[0]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return 0; }
-        for (var i = 1; i < arguments.Count; i++)
+        var values = new HashSet<int>();
+        if (Path.GetFileNameWithoutExtension(File(arguments[0])).ToLowerInvariant() is "node" or "bun")
         {
-            if (string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            for (var i = 1; i < arguments.Count; i++)
+            {
+                if (arguments[i].Replace('\\', '/').EndsWith("/@openai/codex/bin/codex.js", StringComparison.OrdinalIgnoreCase)) { return i; }
+            }
+            // The runtime's options come before its script: their values are the runtime's.
+            for (var i = 1; i < arguments.Count && arguments[i].StartsWith('-'); i++)
+            {
+                if (RuntimeValueOptions.Contains(arguments[i]) && i + 1 < arguments.Count) { values.Add(++i); }
+            }
         }
         for (var i = 1; i < arguments.Count; i++)
         {
-            if (File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            if (!values.Contains(i) && string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+        }
+        for (var i = 1; i < arguments.Count; i++)
+        {
+            if (!values.Contains(i) && File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
         }
         return 0;
     }
+
+    // node's and bun's options that take the next argument as their value: a module to load
+    // before the script, whose name may be anything.
+    static readonly HashSet<string> RuntimeValueOptions = new(StringComparer.Ordinal)
+    {
+        "-r", "--require", "--import", "--loader", "--experimental-loader", "--preload",
+    };
 
     // Codex's global options that take the next argument as their value, before any subcommand
     // (codex-rs cli/src/main.rs and tui/src/cli.rs). One list for every reader: one missing from
