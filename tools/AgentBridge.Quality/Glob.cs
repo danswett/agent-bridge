@@ -12,10 +12,10 @@ sealed class Glob
 {
     readonly Regex regex;
 
-    public Glob(string pattern)
+    public Glob(string pattern, bool ignoreCase = false)
     {
         Pattern = pattern;
-        regex = new Regex(ToRegex(RepoPath.Normalize(pattern)), RegexOptions.CultureInvariant);
+        regex = new Regex(ToRegex(RepoPath.Normalize(pattern)), RegexOptions.CultureInvariant | (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None));
     }
 
     public string Pattern { get; }

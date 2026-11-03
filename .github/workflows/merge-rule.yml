@@ -1,0 +1,90 @@
+name: Merge rule
+
+# Posts the commit status `merge-rule` on each open pull request into main (AGENTS.md, "Pull
+# requests"; quality/README.md §4.9). Main's ruleset requires it beside quality-gate, so with
+# auto-merge on, GitHub merges a pull request only when this says success: not a draft, no hold
+# label, a Copilot review of the exact head, CodeQL green, and, when the change touches a
+# sensitive path, an independent review's receipt on the exact head.
+#
+# The pull request under judgement must not be able to loosen its own gate (#487, Finding 1). So
+# every trigger here runs main's copy of this workflow, the job checks out main and builds main's
+# evaluator, which reads main's quality/merge-rule.yml, and the pull request is only ever read
+# through the API: its code is never checked out, built or run.
+#  - pull_request_target: opened, pushed to, reopened, ready or back to draft, retargeted (edited),
+#    labelled or unlabelled.
+#  - status: an `independent-review` receipt posted on a head (statuses this workflow posts with
+#    its own token start no workflow, so it can't loop).
+#  - workflow_run: a review was submitted or dismissed (the relay in merge-rule-review.yml, since
+#    pull_request_review runs the pull request's copy of a workflow, which mustn't post statuses),
+#    or CodeQL finished on a pull request.
+#  - schedule and workflow_dispatch: every open pull request, as a backstop for anything the
+#    events missed. That includes Dependabot's: runs it triggers may get a read-only token, so
+#    their posts can fail (allowed below), and the next scheduled run posts instead.
+
+on:
+  # Safe as a pull_request_target and workflow_run workflow because it never checks out, builds or
+  # runs the pull request's code (above).
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited, labeled, unlabeled]
+  status:
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [Merge rule review relay, CodeQL]
+    types: [completed]
+  schedule:
+    # Every 10 minutes. GitHub may run it later under load; the events above do the prompt work.
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # One evaluation per head at a time; a newer one waits rather than cancelling, so the last to
+  # post read the newest state. The sweeps share one group of their own.
+  group: merge-rule-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.event.sha || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  # Named evaluate, not merge-rule: GitHub requires every check and status of a required name to
+  # pass, so a job of that name would be one more thing for each pull request to wait on.
+  evaluate:
+    if: >-
+      (github.event_name != 'status' || github.event.context == 'independent-review')
+      && (github.event_name != 'workflow_run' || contains(fromJSON('["pull_request", "pull_request_review"]'), github.event.workflow_run.event))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out main
+      pull-requests: read # the pull requests, their files, labels and reviews
+      checks: read # code scanning's check on the head
+      actions: read # which workflow each of the head's check suites is (CodeQL's run)
+      statuses: write # read the receipts, post merge-rule
+    # A Dependabot-triggered run's token may be read-only (see above); its post failing mustn't
+    # turn the run red when the schedule will post in its place.
+    continue-on-error: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Main's evaluator and rules, whatever the event; never the pull request's.
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build main's evaluator
+        run: dotnet build tools/AgentBridge.Quality -c Release --nologo -v q
+      - name: Judge and post merge-rule
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
+          TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          tool=(dotnet tools/AgentBridge.Quality/bin/Release/net10.0/agent-bridge-quality.dll merge-rule
+            --slug "$GITHUB_REPOSITORY" --post --target-url "$TARGET_URL" --summary "$GITHUB_STEP_SUMMARY")
+          case "$EVENT" in
+            pull_request_target) "${tool[@]}" --pr "$PR" ;;
+            status|workflow_run) "${tool[@]}" --sha "$SHA" ;;
+            *) "${tool[@]}" --all ;;
+          esac

@@ -39,17 +39,21 @@ Everything lands through a PR, including documentation.
 1. Rebase onto freshly fetched `origin/main`, never merging main in, and re-run the tests after the rebase.
 2. Open the PR with `gh pr create`, saying what changed, why, and exactly what was run to verify it.
 3. Copilot code review runs automatically on each push; you can also request it with `gh pr edit <n> --add-reviewer "@copilot"`. Wait for green CI on the final head **and** a Copilot review whose commit is that head. Fix every substantive comment or reply with a reasoned disposition, then resolve the threads.
-4. **Merge rule:** CI green (SUCCESS, SKIPPED or NEUTRAL), a Copilot review on the exact head, 0 unresolved threads, and `mergeable` MERGEABLE. Then:
+4. **Merge rule**, enforced by GitHub through main's ruleset ([quality/ruleset-main.json](quality/ruleset-main.json)): `quality-gate` green, the `merge-rule` status green, 0 unresolved threads, squash only, and no conflicts. Main's copy of `.github/workflows/merge-rule.yml` posts `merge-rule` on each head from [quality/merge-rule.yml](quality/merge-rule.yml): not a draft, no `hold` or `do-not-merge` label, a Copilot review whose commit is the head, CodeQL green on the head, and for a sensitive change (rule 5) an independent review's receipt on the head. Its description names what's missing; `dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr <n>` shows the same verdict without posting anything. Once the PR is ready for review, turn on auto-merge, pinned to the head you mean:
    ```
-   gh pr merge <n> --squash --match-head-commit <sha>
+   gh pr merge <n> --auto --squash --match-head-commit <sha>
    ```
-   Delete the branch afterwards.
-5. **Security-sensitive PRs** need one more step before merge: anything that lets a remote device act on a machine, changes authorization, keys or tokens, or touches the relay. Run an independent review (a code-review or security-review agent), then fix and re-review until clean.
+   GitHub merges once everything is green, and deletes the branch. To stop it, add the `hold` label (`gh pr edit <n> --add-label hold`) or run `gh pr merge <n> --disable-auto`.
+5. **Security-sensitive PRs** need one more step: anything that lets a remote device act on a machine, changes authorization, keys or tokens, or touches the relay, the protocol, CI or the build (`sensitive_paths` in [quality/merge-rule.yml](quality/merge-rule.yml)). Run an independent review (a code-review or security-review agent, never the session that wrote the change), then fix and re-review until clean. The coordinator who ran it then posts the receipt on the exact head reviewed, linking the comment that holds the review:
+   ```
+   gh api -X POST repos/danswett/agent-bridge/statuses/<sha> -f state=success -f context=independent-review -f description="sec-<n> CLEAN" -f target_url=<review comment URL>
+   ```
+   A receipt binds to its commit, so any later push needs a new review and a new receipt. `-f state=failure` with the finding as the description blocks the merge until a later success replaces it. Only receipts from the accounts in `independent_review.posters` count.
 6. If CI fails on something you did not touch, check whether `main` fails the same way and say so.
 
 Delegated work: when a coordinating session hands work to delegates, each delegate
 opens one PR per slice and reports "#<n> ready at <sha>". **Only the designated merge
-coordinator merges: currently Quality**, not each implementation or UI coordinator.
+coordinator merges, or turns on auto-merge: currently Quality**, not each implementation or UI coordinator.
 The [current role reference](docs/status.md#running-work) identifies the accepted
 owner and handoff evidence while the #170 index cutover is incomplete. Implementation owners submit exact-head
 readiness on their PR and yield the merge slot; a ready packet is not a merge grant.

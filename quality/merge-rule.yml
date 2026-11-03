@@ -1,0 +1,102 @@
+# The merge rule GitHub enforces (AGENTS.md, "Pull requests"; quality/README.md §4.9). The
+# merge-rule workflow (.github/workflows/merge-rule.yml) reads this file from main, never from the
+# pull request it judges, and posts the commit status `merge-rule` on each open pull request's
+# head; main's ruleset (quality/ruleset-main.json) requires that status and `quality-gate`.
+# A pull request that changes this file is itself security-sensitive (quality/** below), so the
+# rule can only be loosened with an independent review on the exact head, and only takes effect
+# once that change is on main.
+
+# Only pull requests into this branch are judged; main's ruleset protects only it.
+base: main
+
+# A review whose author is this bot, on the head commit, is the Copilot review. GraphQL names the
+# bot without REST's "[bot]" suffix, and the evaluator also requires the author to be a Bot, so a
+# user account with the same login can't stand in for it.
+copilot_reviewer: copilot-pull-request-reviewer
+
+# Any of these labels holds a pull request, whatever else it has.
+hold_labels: [hold, do-not-merge]
+
+# The independent review's receipt: a commit status with this context on the exact head, whose
+# latest from one of these accounts is success (AGENTS.md says how to post it). A status binds to
+# its commit, so any new push drops it. Statuses from anyone else, the workflows' own token above
+# all, are ignored: a pull request's workflow can't post its own receipt.
+independent_review:
+  context: independent-review
+  posters: [danswett]
+
+# CodeQL (#452): the latest run on the head of the workflow with this name must have succeeded,
+# and code scanning's check of that name (new alerts at GitHub's threshold) must not have failed.
+# A required code_scanning rule can't do this: a pull request whose languages CodeQL skips (#464)
+# uploads nothing, and the rule would wait for results forever.
+codeql:
+  workflow: CodeQL
+  check: CodeQL
+
+# A pull request that changes any of these paths also needs the independent review. Globs as in
+# quality/catalog.yml (src/**trust** is any path below src/ with "trust" in it, folders included),
+# matched case-insensitively against each changed path and each renamed file's old path. The list
+# follows AGENTS.md's rule 5: when in doubt, a path is on it. Not "key" alone, though: that would
+# take in the design system's DesignKeys.
+sensitive_paths:
+  # The rule itself, CI, the selector and the build: what decides what "green" means.
+  - .github/**
+  - quality/**
+  - tools/AgentBridge.Quality/**
+  - tests/AgentBridge.Quality.Tests/**
+  - build/**
+  - infra/**
+  - '**/Directory.*.props'
+  - '**/Directory.*.targets'
+  - '**/Directory.Build.rsp'
+  - nuget.config
+  - global.json
+  - .config/dotnet-tools.json
+  # The wire, the relay and what types into sessions: what lets a remote device act on a machine.
+  - docs/protocol/**
+  - src/AgentBridge.Protocol/**
+  - src/AgentBridge.Transport/**
+  - src/AgentBridge.Relay/**
+  - src/AgentBridge.Local/**
+  - src/AgentBridge.Injector/**
+  - tools/AgentBridge.RelaySmoke/**
+  - pwa/js/protocol.js
+  - pwa/js/relay.js
+  - pwa/js/channels.js
+  - pwa/js/connection.js
+  - pwa/js/noise-*.js
+  - pwa/sw.js
+  # Security, approvals, trust, the roster and enrollment, authorization, keys, tokens, signing,
+  # and the lifecycle (install, update): by name, wherever they live in the product.
+  - src/**secur**
+  - src/**approv**
+  - src/**trust**
+  - src/**roster**
+  - src/**enrol**
+  - src/**pair**
+  - src/**auth**
+  - src/**devicekey**
+  - src/**privatekey**
+  - src/**publickey**
+  - src/**keystore**
+  - src/**token**
+  - src/**signed**
+  - src/**signing**
+  - src/**signature**
+  - src/**secret**
+  - src/**crypt**
+  - src/**cert**
+  - src/**permission**
+  - src/**identity**
+  - src/**lifecycle**
+  - src/**install**
+  - src/**update**
+  - pwa/js/*identity*
+  - pwa/js/*signin*
+  - pwa/js/*approv*
+  - pwa/js/*trust*
+  - pwa/js/*roster*
+  - pwa/js/*pair*
+  - pwa/js/*update*
+  - pwa/js/*push*
+  - pwa/js/*forget*
