@@ -7,6 +7,7 @@ using Xunit;
 
 // The cards' view models: the question form, the reply box, End session and the card itself,
 // against a host on a real pipe.
+[Trait("Category", "Network")]
 public sealed class CardTests : IAsyncLifetime
 {
     readonly FakeHost host = new();

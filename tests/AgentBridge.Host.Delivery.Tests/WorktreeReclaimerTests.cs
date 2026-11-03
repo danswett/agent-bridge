@@ -8,6 +8,7 @@ using Xunit;
 // agent-ha-bridge's Remove-BridgeFinishedWorktree, protection by protection. Liveness comes
 // from a fixed snapshot, or from the real usage reader over a synthetic agent home; nothing
 // here reads the machine's own processes or sessions.
+[Trait("Category", "Process")]
 public sealed class WorktreeReclaimerTests : IDisposable
 {
     readonly string root = Directory.CreateTempSubdirectory("abreclaim-").FullName;

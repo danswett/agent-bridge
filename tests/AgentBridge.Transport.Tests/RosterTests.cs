@@ -34,6 +34,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_that_has_left_is_listed_as_offline_with_when_it_was_last_seen_and_one_online_is_not()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -53,6 +54,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Only_hosts_are_recorded_and_each_only_as_itself()
     {
         var store = new MemoryRosterStore();
@@ -78,6 +80,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Another_accounts_machines_are_never_listed_and_cannot_be_forgotten()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -97,6 +100,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Only_a_persons_device_can_forget_a_machine()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -127,6 +131,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_online_machine_an_unknown_one_and_a_malformed_id_are_refused()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -143,6 +148,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_forgotten_machine_that_comes_back_is_listed_again_when_it_next_leaves()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -162,6 +168,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Forgets_are_rate_limited_per_account()
     {
         await using var relay = await TestRelay.StartAsync(o => o.Roster.MaxForgetsPerMinute = 2);
@@ -178,6 +185,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_oldest_offline_machines_go_past_the_cap()
     {
         await using var relay = await TestRelay.StartAsync(o => o.Roster.MaxMachines = 3);
@@ -197,6 +205,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_relay_without_a_roster_says_nothing_of_one_and_a_client_does_not_ask()
     {
         await using var relay = await TestRelay.StartAsync(o => o.Roster.Backend = "off");
@@ -210,6 +219,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_restarted_relay_still_knows_the_accounts_machines_from_its_store()
     {
         var store = new MemoryRosterStore();
@@ -442,6 +452,7 @@ public class RosterTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_relay_tells_an_accounts_devices_when_its_stored_list_arrives_late()
     {
         var store = new FlakyStore();

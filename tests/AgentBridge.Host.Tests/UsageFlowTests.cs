@@ -10,6 +10,7 @@ using Xunit;
 
 // usage.get, usage.subscribe and hello's machine status, served through the in-process relay
 // over a Noise channel to a client, with the agents' allowances from fake collectors.
+[Trait("Category", "Network")]
 public sealed class UsageFlowTests : IAsyncLifetime
 {
     const string Id = "77777777-7777-4777-8777-777777777777";

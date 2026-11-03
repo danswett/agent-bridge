@@ -6,6 +6,7 @@ using Xunit;
 
 // The Launch page (pwa/test/launch.spec.mjs): what a machine offers, every setting and the whole
 // prompt sent, each press to one outcome, and the new session's card opened.
+[Trait("Category", "Network")]
 public sealed class LaunchTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
@@ -392,6 +393,7 @@ public sealed class LaunchTests : IAsyncLifetime
 }
 
 // Launching on another machine of the account: its own choices, and the launch goes to it.
+[Trait("Category", "Network")]
 public sealed class RemoteLaunchTests : IAsyncLifetime
 {
     readonly FakeHost localHost = new();

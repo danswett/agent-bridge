@@ -506,6 +506,7 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_linked_copilot_session_folder_holds_rather_than_being_read_or_ignored()
     {
         using var f = new Fixture();
@@ -524,6 +525,7 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_linked_codex_thread_lock_folder_holds_and_keeps_the_session_its_lock_gave()
     {
         using var f = new Fixture();
@@ -544,6 +546,7 @@ public class DiscoveryHoldTests
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_linked_registration_folder_holds_and_keeps_the_sessions_it_had()
     {
         using var f = new Fixture();

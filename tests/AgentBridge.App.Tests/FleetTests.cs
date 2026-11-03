@@ -11,6 +11,7 @@ using Xunit;
 // The account's other machines in the app (pwa/js/fleet.js and its tests): each host the relay
 // lists becomes a machine with cards of its own, everything done on a card goes to that card's
 // machine, and this machine's own host is never listed twice.
+[Trait("Category", "Network")]
 public sealed class FleetTests : IAsyncLifetime
 {
     readonly FakeHost localHost = new();
@@ -1090,6 +1091,7 @@ public sealed class RelayFleetLinkTests
     static readonly TimeSpan Patience = TimeSpan.FromSeconds(15);
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_app_reaches_another_machines_host_through_the_relay_with_this_hosts_account()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1113,6 +1115,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_app_lists_a_machine_that_has_gone_offline_and_as_a_persons_device_can_forget_it()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1132,6 +1135,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_large_file_goes_sealed_through_the_relays_blob_store_to_the_one_machine_it_is_for()
     {
         await using var relay = await TestRelay.StartAsync(o => { o.Blobs.Backend = "local"; o.Blobs.MaxBytesPerAccountPerDay = 8L * 1024 * 1024; });
@@ -1159,6 +1163,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_upload_that_storage_stalls_gives_up_in_time_as_one_to_try_again()
     {
         await using var relay = await TestRelay.StartAsync(o => o.Blobs.Backend = "local");
@@ -1183,6 +1188,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_account_s_machines_that_hand_sessions_on_are_listed_with_their_keys_and_a_command_signed_for_one_is_theirs_alone()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1242,6 +1248,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_host_whose_introduction_is_malformed_is_offline_for_now_not_the_end_of_trying()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1258,6 +1265,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Without_an_account_the_app_waits_signed_out_and_a_refused_token_says_so()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1276,6 +1284,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Signing_this_machines_host_in_to_another_account_moves_a_connected_app_to_it()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1303,6 +1312,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Another_copy_of_the_app_taking_the_connection_is_left_alone_until_this_machines_host_signs_in_again()
     {
         await using var relay = await TestRelay.StartAsync();
@@ -1338,6 +1348,7 @@ public sealed class RelayFleetLinkTests
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_copy_of_the_app_without_the_relay_lock_never_connects_and_connects_once_it_has_it()
     {
         await using var relay = await TestRelay.StartAsync();

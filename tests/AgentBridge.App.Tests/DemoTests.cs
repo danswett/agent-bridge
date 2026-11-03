@@ -5,6 +5,7 @@ using Xunit;
 
 // The demo host the app runs with --demo: every example session reaches the window's view
 // model, and it answers as a cooperative host would.
+[Trait("Category", "Network")]
 public sealed class DemoTests
 {
     [Fact]

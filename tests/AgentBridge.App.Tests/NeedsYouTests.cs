@@ -7,6 +7,7 @@ using Xunit;
 // rules): every pending question, oldest first, above the list and never moving it; Approve once
 // and Deny pressed through the card's own question; forms opening their session; prompts only the
 // machine can answer saying so; delegates named; and the count the tray and badge show.
+[Trait("Category", "Network")]
 public sealed class NeedsYouTests : IAsyncLifetime
 {
     readonly FakeHost host = new();

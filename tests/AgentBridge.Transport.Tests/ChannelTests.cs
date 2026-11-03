@@ -12,6 +12,7 @@ namespace AgentBridge.Transport.Tests;
 
 // End-to-end channels through the relay, and what a device does about peers and relays
 // that misbehave.
+[Trait("Category", "Network")]
 public class ChannelTests
 {
     const string Marker = "AGENT-BRIDGE-PLAINTEXT-MARKER";

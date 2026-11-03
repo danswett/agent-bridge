@@ -27,6 +27,7 @@ public sealed class WindowsTheoryAttribute : TheoryAttribute
 // (agent-bridge-console-echo), started in a new hidden console, which writes down every key
 // event it reads. Nothing here touches any console the tests did not create.
 // AGENT_BRIDGE_INJECTOR points at a published (NativeAOT) worker; otherwise the build's own.
+[Trait("Category", "Process")]
 public sealed class InjectorIntegrationTests(ITestOutputHelper output) : IDisposable
 {
     readonly string root = Directory.CreateTempSubdirectory("abinj-").FullName;

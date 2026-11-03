@@ -15,6 +15,7 @@ using Xunit;
 // (sharing its gate with a real AnswerService) into a fake injector that plays the CLI: it
 // writes the prompt the session would record. Real keys into a real console are in
 // InjectorIntegrationTests.
+[Trait("Category", "Network")]
 public sealed class ReplyFlowTests : IAsyncLifetime
 {
     const string Id = "99999999-9999-4999-8999-999999999999";

@@ -7,6 +7,7 @@ using Xunit;
 
 // The app's connection to its host, and the deliveries that go through it, against a host on
 // a real pipe.
+[Trait("Category", "Network")]
 public sealed class ConnectionTests : IAsyncLifetime
 {
     readonly FakeHost host = new();

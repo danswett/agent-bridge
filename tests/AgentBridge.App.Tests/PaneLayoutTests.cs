@@ -5,6 +5,7 @@ using Xunit;
 // The Sessions page's panes by window width (ui.md §5.2, #180): three panes from 1280, two
 // with tabs from 760, one column below, at the PWA's breakpoints, and the session shown
 // surviving every resize.
+[Trait("Category", "Network")]
 public sealed class PaneLayoutTests : IAsyncLifetime
 {
     readonly FakeHost host = new();

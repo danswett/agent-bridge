@@ -7,6 +7,7 @@ using Xunit;
 // A launched agent asking whether to trust its folder, on the Launch page (pwa/test/launch.spec.mjs,
 // "a folder-trust question"): shown in full, answered with Trust or Quit through the relay with a
 // command this app signs, and otherwise left for the machine with why.
+[Trait("Category", "Network")]
 public sealed class TrustTests : IAsyncLifetime
 {
     const string Long = @"C:\Users\dana\repos\a-rather-long-folder-name-that-will-not-fit-on-one-line\and-a-subfolder\web";

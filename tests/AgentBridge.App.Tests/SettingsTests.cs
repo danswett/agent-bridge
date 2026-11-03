@@ -6,6 +6,7 @@ using Xunit;
 // The Settings page over a host on a real pipe: signing in, the host's settings, the switches
 // that install things, restarting and updating. Task Scheduler, processes, the Run entry and
 // Velopack are fakes.
+[Trait("Category", "Network")]
 public sealed class SettingsTests : IAsyncLifetime
 {
     readonly FakeHost host = new();
