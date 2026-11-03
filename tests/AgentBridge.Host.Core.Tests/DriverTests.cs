@@ -39,9 +39,19 @@ public class DriverTests
         // Codex counts the prompt at task_started; its text follows in a record of its own, and a
         // read can fall between them.
         d.Observe(At(1, SessionStatus.Working, "first"), Fixture.T0, drivers.Arm);
+        // Between the count and its text, the prompt shown is still the person's (#489).
+        Assert.False(d.PromptIsAgents);
         d.Observe(At(1, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
 
         Assert.Equal((DriverKind.Agent, Principal), d.Shown);
+        Assert.True(d.PromptIsAgents);
+
+        // The person's next turn, read the same way: the agent's words stay the agent's until the
+        // person's own replace them.
+        d.Observe(At(2, SessionStatus.Working, "the agent's prompt"), Fixture.T0, drivers.Arm);
+        Assert.True(d.PromptIsAgents);
+        d.Observe(At(2, SessionStatus.Working, "mine"), Fixture.T0, drivers.Arm);
+        Assert.False(d.PromptIsAgents);
     }
 
     [Fact]
@@ -187,6 +197,33 @@ public class DriverTests
 
         var s = source.Get(Id)!;
         Assert.Equal(("the agent's words", UserMessageFrom.Agent, DriverKind.Agent, 1), (s.Activity.UserMessage, s.Activity.UserMessageFrom, s.Driver, s.Activity.TurnCount));
+    }
+
+    // A notice that starts a turn of its own once the agent's has ended changes the count but not
+    // the prompt: the agent's words stay the agent's.
+    [Fact]
+    public async Task A_notice_after_an_agents_turn_has_ended_leaves_its_prompt_the_agents()
+    {
+        using var f = new Fixture();
+        var drivers = new SessionDrivers();
+        var events = f.CopilotSession(Id, 100);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source(drivers: drivers);
+        Fixture.Append(events, Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
+        await source.RefreshAsync();
+
+        f.Time.Advance(TimeSpan.FromSeconds(5));
+        drivers.For(Id).ArmDriver(SessionDrivers.Agent, f.Time.GetUtcNow(), Principal);
+        await Until(source, s => s.Driver == DriverKind.Agent);
+        Fixture.Append(events, Copilot.User("the agent's words", 10), Copilot.TurnStart(11), Copilot.TurnEnd(12));
+        await source.RefreshAsync();
+        Fixture.Append(events,
+            Copilot.Event("user.message", new { content = "<system_notification> Shell command completed.</system_notification>", interactionId = "i20", source = "system", delivery = "idle" }, 20),
+            Copilot.TurnStart(21));
+        await source.RefreshAsync();
+
+        var s = source.Get(Id)!;
+        Assert.Equal((SessionStatus.Working, "the agent's words", UserMessageFrom.Agent), (s.Status, s.Activity.UserMessage, s.Activity.UserMessageFrom));
     }
 
     [Fact]

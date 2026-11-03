@@ -94,8 +94,13 @@ public sealed class SessionDriver
     string? principal;
     DateTimeOffset? pendingAt;
     string? turnKey;
-    // The turn an agent's reply or launch started: its prompt is the agent's (userMessageFrom, #489).
-    string? agentTurn;
+    // The prompt an agent's reply or launch sent, by its text (userMessageFrom, #489), and whether
+    // a turn it started is still waiting for its text. By text, not by turn: Codex counts a turn
+    // before its text arrives, and a turn no prompt started (a notice) changes the count but not
+    // the prompt, so a turn key would hand one prompt's sender to another.
+    string? agentPrompt;
+    bool awaitingAgentPrompt;
+    string? lastMessage;
     // An agent's launch: its opening turn, the prompt it launched with, is the agent's, and the arm
     // is for that turn alone. The opening turn may be here already (the session registered before
     // its launch was reported), so it is looked for as well as waited for; the turn after it is
@@ -136,7 +141,7 @@ public sealed class SessionDriver
     // one, so it never makes the prompt before it the agent's.
     public bool PromptIsAgents
     {
-        get { lock (gate) { return agentTurn is not null && agentTurn == turnKey; } }
+        get { lock (gate) { return agentPrompt is not null && agentPrompt == lastMessage; } }
     }
 
     // A reply or a press of Send: shown at once, and armed for the prompt it is.
@@ -213,7 +218,7 @@ public sealed class SessionDriver
                     driver = SessionDrivers.Human;
                     principal = null;
                 }
-                agentTurn = driver == SessionDrivers.Agent ? turn : null;
+                awaitingAgentPrompt = driver == SessionDrivers.Agent;
                 pendingAt = null;
                 openingPrompt = null;
             }
@@ -223,11 +228,18 @@ public sealed class SessionDriver
                 var head = opening[..Math.Min(80, opening.Length)];
                 if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && full.Activity.TurnCount >= 1))
                 {
-                    if (driver == SessionDrivers.Agent) { agentTurn = turn; }
+                    if (driver == SessionDrivers.Agent) { (agentPrompt, awaitingAgentPrompt) = (message, false); }
                     pendingAt = null;
                     openingPrompt = null;
                 }
             }
+            // The agent's turn's own text: the first message it brings that is new.
+            var said = full.Activity.UserMessage is { } m2 ? Collapse(m2) : null;
+            if (awaitingAgentPrompt && said is not null && said != lastMessage)
+            {
+                (agentPrompt, awaitingAgentPrompt) = (said, false);
+            }
+            lastMessage = said;
             turnKey = turn;
             return before != ShownLocked();
         }
