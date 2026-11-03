@@ -113,6 +113,9 @@ static partial class SelfTest
             result["needsYouButtons"] = lane is null ? null : Find<Button>(lane).Select(b => $"{AutomationProperties.GetAutomationId(b)}: {(b.IsEnabled ? "enabled" : "disabled")}, {b.Visibility}").ToList();
             Check(offered && main.NeedsYou.SingleOrDefault(e => e.Card.Id == "demo-approval") is { Approvable: true }, "offers Approve once and Deny in Needs you for the permission prompt");
             if (lane is not null) { await Picture(lane, Path.ChangeExtension(outFile, ".needs-you.png")); }
+            // The lane draws a whole approval as its card does: exactly as written (ui.md §6.1, §6.4).
+            var prompts = lane is null ? [] : Find<MarkdownView>(lane).Where(m => AutomationProperties.GetAutomationId(m) == "NeedsYouPrompt").ToList();
+            Check(prompts.Count > 0 && prompts.All(m => m.Approval) && prompts.Any(m => Find<TextBlock>(m).Any(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.StartsWith("Allow **shell**?", StringComparison.Ordinal))), "draws an approval's prompt in Needs you exactly as written, as its card does");
             // ui.md §6.1: the list's first section, above Pinned and Sessions, inside the list pane;
             // an entry opens its session in the session pane.
             double Top(FrameworkElement e) => e.TransformToVisual(window.RootElement).TransformPoint(default).Y;
