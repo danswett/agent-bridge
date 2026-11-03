@@ -83,7 +83,7 @@ struct ProbeManifest: Decodable, Sendable {
             let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
             guard descriptor >= 0 else { throw ProbeFailure(check: "fixture.create-trigger") }
             let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-            defer { try? file.close(); unlink(temporary) }
+            defer { unlink(temporary) }
             try file.write(contentsOf: Data("advance\n".utf8))
             try file.close()
             // link publishes complete contents atomically and refuses an existing

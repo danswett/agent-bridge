@@ -190,7 +190,7 @@ struct SessionWorkbench: View {
         .id(entry.id)
     }
 
-    @ViewBuilder private func detail(_ entry: SessionEntry) -> some View {
+    private func detail(_ entry: SessionEntry) -> some View {
         #if os(macOS)
             HSplitView {
                 VStack(spacing: 0) {
