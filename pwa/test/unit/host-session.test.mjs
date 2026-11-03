@@ -418,6 +418,8 @@ test('an offline machine\'s sessions go after fifteen minutes; the one machine c
   connection.emit('presence');
   t.mock.timers.tick(OFFLINE_KEEP_MS);
   assert.deepEqual([s.selection, s.sessions.size, s.phase], ['a', 0, 'waiting']);
+  s.select(ALL);
+  assert.deepEqual([s.shownIds(), s.link('a')], [[], null], 'gone past the bound, it is not kept with every machine');
 });
 
 test('a machine back within fifteen minutes keeps its sessions past the bound', async (t) => {

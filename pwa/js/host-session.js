@@ -56,6 +56,9 @@ export class HostLink {
   // timer that drops its last list once it has been away too long.
   offlineSince = null;
   expiry = null;
+  // Away so long its list went (the one machine chosen, which stays chosen): not kept on screen
+  // with every machine, should every machine be chosen again before it is back.
+  expired = false;
   // Its list may be out of date: it left presence, and no full snapshot has come since it came
   // back. Nothing is sent to it meanwhile.
   stale = false;
@@ -159,7 +162,7 @@ export class HostSession {
     if (this.selection === null) { return []; }
     if (this.selection !== ALL) { return [this.selection]; }
     const online = this.online().map((d) => d.id);
-    const kept = [...this.#links.values()].filter((l) => l.offlineSince !== null && !online.includes(l.id)).map((l) => l.id);
+    const kept = [...this.#links.values()].filter((l) => l.offlineSince !== null && !l.expired && !online.includes(l.id)).map((l) => l.id);
     return [...online, ...kept];
   }
 
@@ -315,6 +318,7 @@ export class HostSession {
         link.expiry.unref?.();
       } else if (link.offlineSince !== null) {
         link.offlineSince = null;
+        link.expired = false;
         clearTimeout(link.expiry);
         link.expiry = null;
       }
@@ -326,7 +330,7 @@ export class HostSession {
   #expire(link) {
     link.expiry = null;
     if (this.#links.get(link.id) !== link || link.offlineSince === null) { return; }
-    if (this.selection === link.id) { link.store.clear(); } else { this.#drop(link.id); }
+    if (this.selection === link.id) { link.store.clear(); link.expired = true; } else { this.#drop(link.id); }
     this.#emit();
   }
 

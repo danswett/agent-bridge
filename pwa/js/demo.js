@@ -14,7 +14,8 @@
 //   askTrust(question) for a launched agent asking whether to trust its folder, scriptTrust(...)
 //   for the next answers to one, host.trustLog for every launch.trust.answer received,
 //   host.holdResponses() and host.releaseResponses() to keep responses back until a test has
-//   looked, and host.holdSnapshot() and host.releaseSnapshot() the end of a snapshot
+//   looked, and host.holdSnapshot() and host.releaseSnapshot() to hold and release the end of
+//   a snapshot (sessions.synced)
 //
 // It answers questions as a host would: the same validation (answers.js mirrors the C#
 // Answers.Check), stale when the session is no longer asking, a request seen before gets

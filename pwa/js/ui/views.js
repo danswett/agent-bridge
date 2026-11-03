@@ -443,7 +443,8 @@ export function renderMachineTabs(bar, { presence, me, current, nameOf = () => n
     ...kept.map(awayTab),
     ...(current && !all && !hosts.some((d) => d.id === current) ? [awayTab(current)] : []),
   ];
-  const chosen = (t) => t.id === current || (all && hosts.length + kept.length === 1 && t.id === hosts[0]?.id);
+  const sole = hosts.length + kept.length === 1 ? hosts[0]?.id ?? kept[0] : null;
+  const chosen = (t) => t.id === current || (all && t.id === sole);
   // One machine and it is the one shown: there is nothing to choose.
   const show = tabs.length > 1 || (tabs.length === 1 && !chosen(tabs[0]));
   const key = JSON.stringify([show, current, tabs.map((t) => [t.id, t.name, !!t.away])]);
