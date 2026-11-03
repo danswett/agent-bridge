@@ -43,6 +43,10 @@ personal account is used.
   its last polling sleep to the remaining lifetime. Isolated URLSession fixtures
   cover pending responses, interval changes, cancellation, expiry, redirect
   refusal, verification URLs, exact response limits and safe refusal messages.
+- **Delegate outcome icons could hide completion or failure.** Unknown outcome
+  strings now use the protocol's `done` fallback, while missing outcomes stay
+  absent. Idle background delegates show their completion/failure icon without
+  being treated as ended.
 
 ## Performance changes
 
@@ -67,6 +71,11 @@ not a security certification or a real-service interoperability result.
 
 The repository's [verification script](../apple/scripts/verify.sh) runs the full
 Swift test suite, formatting checks and unsigned macOS and iOS Simulator builds.
+The older hosted runner's test hang was traced to blocking POSIX socket fixtures
+on Swift's cooperative executor. Moving that I/O onto Dispatch queues let all
+221 tests finish in under six seconds. That run exposed a lifecycle test timing
+assumption, corrected with a consumed-stream marker before its exact report
+assertions; assertions and time limits remain intact.
 Real relay/.NET-host acceptance, minimum-supported-OS and physical-device checks,
 OS notification/login behavior, and accessibility interaction remain the gaps
 listed in [Apple parity](apple-parity.md). Distribution remains local development
