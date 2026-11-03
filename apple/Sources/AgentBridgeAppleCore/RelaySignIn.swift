@@ -99,24 +99,55 @@ public struct RelaySignIn: Sendable {
         return code
     }
 
-    public func wait(for code: RelayDeviceCode) async throws -> RelayAccount {
+    public func wait(for code: RelayDeviceCode, canPoll: @Sendable () async -> Bool = { true },
+                     onConnectivityChange: @Sendable (Bool) async -> Void = { _ in }) async throws -> RelayAccount
+    {
+        guard (1 ... 3600).contains(code.expiresIn), (1 ... 60).contains(code.interval) else { throw RelayError.invalidMessage }
         let deadline = now().advanced(by: .seconds(code.expiresIn))
         var interval = code.interval
+        var interrupted = false
         while now() < deadline {
             try await sleep(min(.seconds(interval), now().duration(to: deadline)))
             try Task.checkCancellation()
             guard now() < deadline else { break }
+            // GitHub can consume the grant on a successful exchange. While Safari
+            // is in front, keep the existing deadline and defer that exchange.
+            let permitted = await canPoll()
+            try Task.checkCancellation()
+            guard now() < deadline else { break }
+            guard permitted else { continue }
             let body = try JSONEncoder().encode(["deviceCode": code.deviceCode])
-            let (data, response) = try await post("v1/auth/token", body: body)
+            let data: Data
+            let response: HTTPURLResponse
+            do {
+                (data, response) = try await post("v1/auth/token", body: body)
+            } catch let error as URLError where Self.isTransient(error.code) {
+                try Task.checkCancellation()
+                guard now() < deadline else { break }
+                // Safari can temporarily interrupt a poll while the person approves
+                // the code. RFC 8628 §3.5 backs off on timeouts within the same grant.
+                interval = min(60, interval * 2)
+                if !interrupted {
+                    interrupted = true
+                    await onConnectivityChange(false)
+                }
+                continue
+            }
             try Task.checkCancellation()
             // A response can arrive after the code expired, even if its request
             // began on time. Never turn that late response into a signed-in account.
             guard now() < deadline else { break }
+            if interrupted {
+                interrupted = false
+                await onConnectivityChange(true)
+                try Task.checkCancellation()
+                guard now() < deadline else { break }
+            }
             if response.statusCode == 202 {
                 if let json = try? JSONDecoder().decode(JSONValue.self, from: data),
                    let next = json["interval"]?.number, next.isFinite, next >= 1, next <= 60
                 {
-                    interval = Int(next)
+                    interval = max(interval, Int(next))
                 }
                 continue
             }
@@ -129,6 +160,13 @@ public struct RelaySignIn: Sendable {
             return account
         }
         throw RelayError.refused("The code expired. Start sign-in again.")
+    }
+
+    private static func isTransient(_ code: URLError.Code) -> Bool {
+        switch code {
+        case .networkConnectionLost, .notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed: true
+        default: false
+        }
     }
 
     private func post(_ path: String, body: Data?) async throws -> (Data, HTTPURLResponse) {
