@@ -17,6 +17,9 @@ targets:
       - package: AgentBridgeAppleCore
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: dev.agentbridge.mac
+      CODE_SIGN_STYLE: Automatic
+      CODE_SIGN_IDENTITY: Apple Development
+      CODE_SIGN_ENTITLEMENTS: Config/AgentBridgeMac.entitlements
       GENERATE_INFOPLIST_FILE: YES
       INFOPLIST_KEY_CFBundleDisplayName: Agent Bridge
   AgentBridgeMobile:
