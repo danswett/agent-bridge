@@ -206,12 +206,14 @@ const askedAt = (s) => s.question.askedAt ?? s.statusSince ?? s.updatedAt ?? '';
 
 // entries: [{ hostId, session }] from every machine shown. capabilities(hostId): what that
 // machine takes from here ([] for one not connected). nameOf(hostId): its name. labelled: whether
-// entries name their machine (more than one shown).
-export function needsYou(entries, { capabilities = () => [], nameOf = () => '', labelled = false } = {}) {
+// entries name their machine (more than one shown). current(hostId): whether that machine's list
+// is current; one offline, or back without its whole list yet (#269), has questions that may
+// have gone, which are neither listed nor counted (nor in the app badge).
+export function needsYou(entries, { capabilities = () => [], nameOf = () => '', labelled = false, current = () => true } = {}) {
   const out = [];
   for (const { hostId, session: s } of entries) {
     const q = s?.question;
-    if (!q) { continue; }
+    if (!q || !current(hostId)) { continue; }
     const machine = nameOf(hostId) ?? '';
     const able = answerability(q, capabilities(hostId) ?? [], s.agent);
     const pair = decisions(q);

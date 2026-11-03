@@ -400,6 +400,7 @@ function begin(account) {
   // Each machine's updates (#51): Check and Install, from a person's device, which this is.
   const updates = new UpdateControl({ fleet });
   const dropMachine = (id) => {
+    hosts.dropMachine(id);
     fleet.forget(id);
     updates.forget(id);
     if (hosts.targetId === id) { hosts.select(ALL); }

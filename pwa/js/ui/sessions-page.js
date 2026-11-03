@@ -49,7 +49,12 @@ export function hostNote(link, name, { online, named = false }) {
   const about = (text) => (named ? `${name}: ${text}` : text);
   switch (link.phase) {
     case 'waiting':
-      return link.error ? about(link.error) : online ? `Connecting to ${name}…` : `${name} is offline. Its sessions will show when it is back.`;
+      if (link.error) { return about(link.error); }
+      if (online) { return `Connecting to ${name}…`; }
+      // Its last list is still shown (#269): it reads as it was, and takes nothing until it is back.
+      return link.store?.size
+        ? `${name} is offline. Its sessions are as it last sent them, and can't be answered or ended from here until it is back.`
+        : `${name} is offline. Its sessions will show when it is back.`;
     case 'opening': return `Opening an end-to-end encrypted channel to ${name}…`;
     case 'unsupported': return about(link.error);
     case 'failed': return `Couldn't reach ${name}: ${link.error}. Trying again.`;
@@ -98,10 +103,13 @@ export class SessionsPage {
     Object.assign(this, { $, hosts, connection, me, shell, relayMax, transfers, trust, status, facts, forget, updates, storage, onRendered });
     const current = (hostId) => hosts.route(hostId);
     const timing = retryMs ? { retryMs } : {};
-    this.answers = new AnswerService({ current, ...timing });
-    this.replies = new ReplyService({ current, ...timing, blobs });
-    this.stops = new StopService({ current, ...timing });
-    this.launches = new LaunchService({ current, ...timing });
+    // Nothing new is given for a machine whose list may be out of date (#269): its controls are
+    // disabled, and this holds even if one is pressed anyway.
+    const accepts = (hostId) => !hosts.staleOf(hostId);
+    this.answers = new AnswerService({ current, accepts, ...timing });
+    this.replies = new ReplyService({ current, accepts, ...timing, blobs });
+    this.stops = new StopService({ current, accepts, ...timing });
+    this.launches = new LaunchService({ current, accepts, ...timing });
     this.launchPanel = new LaunchPanel($('launch'), {
       service: this.launches,
       jump: (id, hostId) => this.showSession(id, hostId),
@@ -135,6 +143,7 @@ export class SessionsPage {
       order: this.order,
       shows: (hostId) => hosts.shows(hostId),
       settled: (hostId) => hosts.link(hostId)?.client?.synced !== false,
+      stale: (hostId) => hosts.staleOf(hostId),
     });
     this.view.onRender = (n) => { this.#drawCount(n); this.#settleSelection(); this.#delegateStep(); };
     this.view.onSelect = (card) => this.#choose(card);
@@ -283,13 +292,15 @@ export class SessionsPage {
   #several() { return this.hosts.all && this.hosts.shownIds().length > 1; }
 
   // Who answers a machine's questions, sends its replies and ends its sessions, and whether
-  // it takes each: null for a machine not shown.
+  // it takes each: null for a machine not shown. stale: why nothing can be given for it now
+  // (HostSession.staleOf), or null.
   answering(hostId) {
     const link = this.hosts.link(hostId);
     if (!link) { return null; }
     return {
       service: this.answers, replies: this.replies, stops: this.stops, hostId,
       capabilities: link.capabilities, readOnly: link.machine?.readOnly ?? null,
+      stale: this.hosts.staleOf(hostId),
       largeAttachments: () => largeLimit(link.capabilities, this.relayMax()),
     };
   }
@@ -528,12 +539,13 @@ export class SessionsPage {
     const links = hosts.links();
     for (const id of [...this.#shownCaps.keys()]) { if (!hosts.link(id)) { this.#shownCaps.delete(id); } }
     for (const link of links) {
-      const caps = `${link.capabilities.join(' ')}:${link.machine?.readOnly ?? ''}`;
+      const caps = `${link.capabilities.join(' ')}:${link.machine?.readOnly ?? ''}:${hosts.staleOf(link.id)?.reason ?? ''}`;
       if (this.#shownCaps.get(link.id) !== caps) { this.#shownCaps.set(link.id, caps); this.view.refreshQuestions(link.id); }
     }
     // What a machine takes may have changed, and machine names with it: the lane says so too.
     this.lane.render();
     this.view.refreshMachines();
+    this.view.refreshStale();
     this.$('sessions').hidden = hosts.selection === null;
     // The page is Sessions; which machines it shows is said to a screen reader in the heading,
     // and to the eye by the machine tabs.
@@ -581,9 +593,10 @@ export class SessionsPage {
     const links = hosts.links();
     const synced = (l) => l.phase === 'open' && l.client?.synced !== false;
     // Only once every machine shown has said what it has, or that it can't: an empty list is
-    // not news while one is still connecting.
-    const settled = links.length
-      ? links.some(synced) && links.every((l) => synced(l) || l.phase === 'unsupported')
+    // not news while one is still connecting. One that is offline has said all it will for now.
+    const live = links.filter((l) => hosts.isOnline(l.id));
+    const settled = live.length
+      ? live.some(synced) && live.every((l) => synced(l) || l.phase === 'unsupported')
       : hosts.all && this.connection.ready;
     const empty = $('sessions-empty');
     const query = this.view.filter;
@@ -595,9 +608,10 @@ export class SessionsPage {
       return;
     }
     empty.hidden = n !== 0 || !settled;
-    empty.textContent = hosts.all && links.length !== 1
-      ? links.length ? 'No live sessions on any of your machines.' : 'No live sessions: none of your machines is online.'
-      : `No live sessions on ${hosts.nameOf(links[0]?.id) ?? 'this machine'}.`;
+    const among = hosts.all ? live : links;
+    empty.textContent = hosts.all && among.length !== 1
+      ? among.length ? 'No live sessions on any of your machines.' : 'No live sessions: none of your machines is online.'
+      : `No live sessions on ${hosts.nameOf(among[0]?.id) ?? 'this machine'}.`;
     this.onRendered(n);
   }
 
@@ -607,10 +621,12 @@ export class SessionsPage {
   // launches now (read-only, or agent-ha-bridge runs there) still gets a panel, to show a
   // folder-trust question waiting on it read-only, while it reconnects too; but with every
   // machine shown, only when none of them launches, so the picker offers only machines that do.
+  // A machine that went offline is offered nothing until it is back with a whole new list
+  // (#269): its folder-trust questions and what it could launch may have changed meanwhile.
   #drawLaunch() {
     const { hosts, launchPanel: panel } = this;
     if (hosts.selection === null) { panel.setMachines(null); panel.setTarget(null); return; }
-    const links = hosts.links();
+    const links = hosts.links().filter((l) => !hosts.staleOf(l.id));
     const launches = links.filter((l) => this.#launches(l));
     const inspect = hosts.all && launches.length ? [] : links.filter((l) => !this.#launches(l) && this.#inspectOnly(l));
     const can = [...launches, ...inspect];
@@ -674,6 +690,8 @@ export class SessionsPage {
     renderMachineTabs($('machine-tabs'), {
       presence, me: this.me, current: hosts.selection, controls: 'session-list',
       nameOf: (id) => hosts.nameOf(id),
+      // With every machine shown, one that left keeps its tab, offline, while its rows stay (#269).
+      away: hosts.all ? hosts.away() : [],
       onSelect: (id) => this.#pickMachine(id),
     });
     this.shell?.setOnline(n);

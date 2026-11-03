@@ -67,6 +67,7 @@ export class EndSession {
   #tick = null;
   #busyTimer = null;
   #busyFor = null;
+  #held = null;
 
   // stopping: { service, hostId, sessionId }.
   constructor({ machineName, stopping, now = () => Date.now() }) {
@@ -91,11 +92,14 @@ export class EndSession {
     e.button = h('button', { type: 'button', class: 'end-button', onclick: () => this.#press() }, icon('stop'), h('span', null, 'End session'));
     e.resend = h('button', { type: 'button', class: 'button secondary resend', hidden: true, onclick: () => this.#resend() }, 'Try again');
     e.status = h('p', { class: 'answer-status stop-status', role: 'status', 'aria-live': 'polite' });
-    this.element = h('div', { class: 'end-session', dataset: { stop: 'none' } }, e.button, e.status, e.resend);
+    e.held = h('p', { class: 'note warn stop-held', hidden: true });
+    this.element = h('div', { class: 'end-session', dataset: { stop: 'none' } }, e.button, e.held, e.status, e.resend);
   }
 
-  update(session) {
+  // held: why it can't be pressed now (its machine offline, #269), or null.
+  update(session, { held = null } = {}) {
     this.#session = session;
+    this.#held = held || null;
     this.#show(this.entry);
   }
 
@@ -110,13 +114,14 @@ export class EndSession {
 
   #press() {
     const entry = this.entry;
-    if (this.#pending(entry) || this.#busyTimer || this.#session?.status === 'ending') { return; }
+    if (this.#held || this.#pending(entry) || this.#busyTimer || this.#session?.status === 'ending') { return; }
     const { service, hostId, sessionId } = this.stopping;
     const confirm = this.#left(entry) !== null ? entry.detail.confirm : null;
     service.submit({ hostId, sessionId, confirm });
   }
 
   #resend() {
+    if (this.#held) { return; }
     const { service, hostId, sessionId } = this.stopping;
     service.resend(hostId, sessionId);
   }
@@ -146,7 +151,10 @@ export class EndSession {
       this.#busyTimer = setTimeout(() => { this.#busyTimer = null; this.#show(this.entry); }, STOP_BUSY_PAUSE_MS);
     }
     const ending = this.#session?.status === 'ending';
-    e.button.disabled = this.#pending(entry) || !!this.#busyTimer || ending;
+    e.button.disabled = this.#pending(entry) || !!this.#busyTimer || ending || !!this.#held;
+    e.resend.disabled = !!this.#held;
+    e.held.textContent = this.#held ?? '';
+    e.held.hidden = !this.#held;
     e.button.setAttribute('aria-label', left === null ? 'End session' : `End session: press again to confirm, ${left} seconds left`);
   }
 }
