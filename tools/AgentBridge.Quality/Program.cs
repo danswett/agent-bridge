@@ -53,7 +53,7 @@ static class Program
                     var schema = catalog.Validate(graph.CsprojCount);
                     if (schema.Count > 0)
                         throw new FormatException("quality/catalog.yml breaks its schema; run check for the list. First: " + schema[0].Message);
-                    var ring = int.Parse(options.GetValueOrDefault("ring") ?? "0", System.Globalization.CultureInfo.InvariantCulture);
+                    var ring = ParseRing(options.GetValueOrDefault("ring"));
                     var platform = options.GetValueOrDefault("platform") switch
                     {
                         null or "any" => null,
@@ -125,6 +125,14 @@ static class Program
         if (pending is not null)
             throw new ArgumentException($"--{pending} needs a value.");
         return options;
+    }
+
+    // Out of range would select nothing at all, and look like a passing plan.
+    internal static int ParseRing(string? value)
+    {
+        if (!int.TryParse(value ?? "0", System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var ring) || ring is < 0 or > 4)
+            throw new ArgumentException($"--ring {value} is not a ring: rings are 0 to 4.");
+        return ring;
     }
 
     static List<string> List(string? value) =>

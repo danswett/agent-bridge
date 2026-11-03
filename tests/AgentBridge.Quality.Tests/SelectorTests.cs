@@ -190,6 +190,26 @@ public class SelectorTests
         Assert.True(options.ContainsKey("explain"));
     }
 
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("5")]
+    [InlineData("one")]
+    public void A_ring_outside_zero_to_four_is_refused_rather_than_selecting_nothing(string ring) =>
+        Assert.Throws<ArgumentException>(() => Program.ParseRing(ring));
+
+    [Fact]
+    public void Deleting_a_projects_csproj_still_reaches_the_tests_that_reference_it()
+    {
+        // src/HostCore's .csproj is gone from disk, but Host and HomeAssistant still reference it.
+        var graph = new ProjectGraph(Fixture.Graph().Projects.Where(p => p.Folder != "src/HostCore"));
+        var selector = new Selector(Fixture.Catalog(), graph);
+
+        var selection = selector.Select(["src/HostCore/HostCore.csproj"], ring: 0);
+
+        Assert.Equal(["protocol", "host", "homeassistant"], Fixture.Ids(selection));
+        Assert.Empty(selection.Unclaimed);
+    }
+
     [Fact]
     public void The_json_lists_each_suite_with_its_reasons_and_the_os_matrix()
     {

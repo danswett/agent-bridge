@@ -1,5 +1,7 @@
 namespace AgentBridge.Quality.Tests;
 
+// Real git processes in a throwaway repository, so ring 0 leaves it to ring 1.
+[Trait("Category", "Process")]
 public class ChangedFilesTests
 {
     [Fact]

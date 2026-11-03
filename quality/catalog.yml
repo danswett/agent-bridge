@@ -391,7 +391,8 @@ suites:
     platforms: [browser]
     runner: hosted
     triggers: [pwa/**, design/**]
-    command: cd pwa && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
+    # The e2e specs, which this runs too, skip themselves (and pass) without the dev stack built.
+    command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test   # Chromium and WebKit, demo mode, the published build's CSP
     where: ci.yml pwa
     baseline: { files: 25 }
     status: exists
@@ -403,7 +404,7 @@ suites:
     platforms: [browser]
     runner: hosted
     triggers: [pwa/**, src/AgentBridge.Transport/**, src/AgentBridge.Relay/**, spikes/s4-relay/**]
-    command: cd pwa && npx playwright test test/e2e   # through the spike dev stack's relay
+    command: cd pwa && dotnet build ../spikes/s4-relay/src/S4.DevStack -c Release --nologo && npx playwright test test/e2e   # through the spike dev stack's relay
     where: ci.yml pwa
     status: exists
 

@@ -53,6 +53,9 @@ sealed class Catalog
     public IReadOnlyList<Problem> Validate(Func<string, int> csprojCount)
     {
         var problems = new List<Problem>();
+        // A missing or misspelled suites key would otherwise pass, and select nothing, even by the fail-safe.
+        if (Suites.Count == 0)
+            problems.Add(new("schema", "the catalog lists no suites"));
         void Add(Suite suite, string message) => problems.Add(new("schema", $"suite {suite.Id} {message}"));
         void OneOf(Suite suite, string field, string? value, string[] allowed)
         {

@@ -73,9 +73,14 @@ function Get-Skip($s) {
     if ($s.runner -ne 'local' -and -not ($s.runner -eq 'hosted' -and $Ring -ge 1)) { return "runs on a $($s.runner) runner" }
     if (-not $command) { return 'no command in the catalog' }
     if ($command -match '^see\s') { return "the command is prose: $command" }
-    # The first program the command runs, after any leading "cd <dir> &&".
-    $program = ($command -replace '^cd\s+\S+\s*&&\s*', '' -split '\s+')[0]
-    if (-not (Get-Command $program -ErrorAction SilentlyContinue)) { return "needs $program, which isn't on PATH" }
+    # Every program the command runs, so "dotnet build ... && npx playwright test" is skipped,
+    # not failed, on a machine without Node. "cd" is a shell builtin, and "#" starts a comment.
+    $programs = ($command -replace '\s#.*$', '') -split '&&|;' |
+        ForEach-Object { ($_.Trim() -split '\s+')[0] } |
+        Where-Object { $_ -and $_ -ne 'cd' }
+    foreach ($program in $programs) {
+        if (-not (Get-Command $program -ErrorAction SilentlyContinue)) { return "needs $program, which isn't on PATH" }
+    }
     return $null
 }
 

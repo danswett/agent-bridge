@@ -20,6 +20,14 @@ public class CatalogTests
     }
 
     [Fact]
+    public void A_catalog_with_no_suites_is_refused_since_nothing_could_ever_be_selected()
+    {
+        var problem = Assert.Single(Catalog.Parse("sutes:\n  - id: a\n").Validate(_ => 1));
+
+        Assert.Equal("the catalog lists no suites", problem.Message);
+    }
+
+    [Fact]
     public void A_catalog_that_lists_a_suite_twice_is_refused()
     {
         var yaml = "suites:\n  - id: a\n    ring: 0\n  - id: a\n    ring: 1\n";

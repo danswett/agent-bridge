@@ -117,17 +117,19 @@ sealed class ProjectGraph
 
     /// <summary>
     /// The projects a file belongs to: the one whose folder is the longest prefix of its path, and
-    /// any that link it in from outside their folder.
+    /// any that link it in from outside their folder. A folder that projects still reference but
+    /// whose .csproj is gone counts too: deleting a project, or its .csproj, must reach the tests
+    /// that depend on it, not slip past them because the graph no longer lists it.
     /// </summary>
     public IReadOnlyList<Project> OwnersOf(string path)
     {
         var owners = new List<Project>();
         Project? byFolder = null;
-        foreach (var project in projects.Values)
+        foreach (var folder in projects.Keys.Concat(referencedBy.Keys.Where(k => !projects.ContainsKey(k))))
         {
-            if ((project.Folder.Length == 0 || path.StartsWith(project.Folder + "/", StringComparison.Ordinal))
-                && (byFolder is null || project.Folder.Length > byFolder.Folder.Length))
-                byFolder = project;
+            if ((folder.Length == 0 || path.StartsWith(folder + "/", StringComparison.Ordinal))
+                && (byFolder is null || folder.Length > byFolder.Folder.Length))
+                byFolder = projects.GetValueOrDefault(folder) ?? Project.Create(folder);
         }
         if (byFolder is not null)
             owners.Add(byFolder);
