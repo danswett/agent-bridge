@@ -309,7 +309,7 @@ public sealed class HomeAssistantClient : IHomeAssistant
     async Task<JsonElement> ReadInventoryAsync(string type, CancellationToken cancellationToken)
     {
         var result = await CommandAsync(new JsonObject { ["type"] = type }, cancellationToken);
-        if (result.ValueKind != JsonValueKind.Array) { throw new InvalidDataException("Unreadable HA publication inventory; it is not absence."); }
+        if (result.ValueKind != JsonValueKind.Array) { throw new InvalidDataException($"Unreadable HA publication inventory from {type}: expected Array, received {result.ValueKind}; it is not absence."); }
         return result;
     }
 

@@ -148,6 +148,7 @@ internal sealed record HaPublicationObservation(
     HaPublicationStateKind Kind, HaPublicationPolicy? Policy, HaPublicationResource? PolicyResource,
     HaPublicationResource? CardResource, JsonElement Dashboards, bool DashboardExists, HaDashboard Dashboard)
 {
+    static readonly Regex PolicyMarker = new(@"#agent-bridge-publication-policy\.js(?:\?|$)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Compiled);
     public string CardUrl => CardResource?.Url ?? "";
 
     public static async Task<HaPublicationObservation> ReadAsync(IHomeAssistant ha, string dashboard,
@@ -163,7 +164,7 @@ internal sealed record HaPublicationObservation(
         foreach (var resource in resources.EnumerateArray())
         {
             var url = RequiredText(resource, "url");
-            var isPolicy = Regex.IsMatch(url, @"#agent-bridge-publication-policy\.js(?:\?|$)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+            var isPolicy = PolicyMarker.IsMatch(url);
             var named = url.StartsWith("data:", StringComparison.Ordinal) && url.Contains('#') ? url[(url.LastIndexOf('#') + 1)..] : url;
             var name = named.Split('?')[0].Split('/', '\\')[^1];
             var isCard = name == "agent-bridge-reply-card.js";

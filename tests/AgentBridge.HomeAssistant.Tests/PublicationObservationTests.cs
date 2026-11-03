@@ -7,15 +7,25 @@ public sealed class PublicationObservationTests : IDisposable
 {
     const string Dashboard = "agent-decisions";
     readonly string folder = Path.Combine(Directory.GetCurrentDirectory(), "TestResults", "publication-" + Guid.NewGuid().ToString("N"));
-    static readonly JsonElement Fixture = JsonDocument.Parse(File.ReadAllText(
-        Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json"))).RootElement.Clone();
+    static readonly JsonElement Fixture = Json(File.ReadAllText(
+        Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication.json")));
 
     HaPublicationReceipts Receipts() => new(folder, new Uri("https://ha.test"), Dashboard);
-    static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+    static JsonElement Json(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
     static HaPublicationPolicy Policy() => HaPublicationPolicy.Read(Fixture.GetProperty("policy"), Dashboard);
-    public static IEnumerable<object[]> ObservationCases() => JsonDocument.Parse(File.ReadAllText(
-        Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication-observation.json"))).RootElement.GetProperty("cases")
-        .EnumerateArray().Select(c => new object[] { c.GetProperty("name").GetString()!, c.Clone() });
+    public static IEnumerable<object[]> ObservationCases()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "Fixtures", "ha-publication-observation.json")));
+        foreach (var example in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            yield return [example.GetProperty("name").GetString()!, example.Clone()];
+        }
+    }
     static JsonElement Resources(HaPublicationPolicy policy) => JsonSerializer.SerializeToElement(new[]
     {
         new { id = "policy", type = "module", url = policy.ResourceUrl },

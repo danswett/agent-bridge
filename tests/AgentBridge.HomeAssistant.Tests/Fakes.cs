@@ -474,8 +474,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         return Task.FromResult(Dashboard is null ? HaDashboard.NotFound : new HaDashboard(true, Dashboard));
     }
 
-    public JsonElement Resources { get; set; } = JsonDocument.Parse("[]").RootElement.Clone();
-    public JsonElement Dashboards { get; set; } = JsonDocument.Parse("[]").RootElement.Clone();
+    public JsonElement Resources { get; set; } = JsonSerializer.SerializeToElement(Array.Empty<object>());
+    public JsonElement Dashboards { get; set; } = JsonSerializer.SerializeToElement(Array.Empty<object>());
     public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => Task.FromResult(Resources);
     public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => Task.FromResult(Dashboards);
 
