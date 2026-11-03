@@ -13,6 +13,7 @@ struct ConnectionView: View {
     @State private var deviceName: String
     @State private var profile: String
     @State private var copiedCode = false
+    @FocusState private var profileFocused: Bool
     @AppStorage("bridge.reading.showDetails") private var showDetails = true
 
     init(store: BridgeStore) {
@@ -33,6 +34,13 @@ struct ConnectionView: View {
                     if let cacheStatus = store.cacheStatus {
                         Text(cacheStatus).font(.caption).foregroundStyle(.secondary)
                     }
+                    #if os(macOS)
+                        if store.hosts.contains(where: { $0.isLocal && $0.localConnectionTimedOut }) {
+                            Label("Local host profile ‘\(store.profile)’ did not respond.", systemImage: "exclamationmark.triangle")
+                            Button("Review Local Profile") { profileFocused = true }
+                            Button("Retry Local Connection", action: connect)
+                        }
+                    #endif
                     Button("Reconnect", action: connect).disabled(store.isSigningIn || store.isFixture)
                     if store.isLive || store.isConnecting {
                         Button("Disconnect", action: store.disconnect).disabled(store.isFixture)
@@ -91,7 +99,7 @@ struct ConnectionView: View {
                     #endif
                     TextField("This device’s name", text: $deviceName)
                     #if os(macOS)
-                        TextField("Local host profile", text: $profile).autocorrectionDisabled()
+                        TextField("Local host profile", text: $profile).autocorrectionDisabled().focused($profileFocused)
                     #endif
                     Button("Apply and Reconnect", action: connect)
                 } header: {

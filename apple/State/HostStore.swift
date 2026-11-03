@@ -58,6 +58,7 @@ final class HostStore: Identifiable {
     private(set) var isLive = false
     private(set) var isConnecting = false
     private(set) var status = "Not connected"
+    private(set) var localConnectionTimedOut = false
     private(set) var discoveryHold: String?
     private(set) var connectionID = UUID() {
         // The host stages files for one connection. Hidden sessions keep their text drafts.
@@ -309,6 +310,7 @@ final class HostStore: Identifiable {
                 try Task.checkCancellation()
                 guard token == generation else { await current.close(); return }
                 transport = current
+                localConnectionTimedOut = false
                 connectionID = UUID()
                 let attempt = connectionID
                 nextID = 0
@@ -406,6 +408,11 @@ final class HostStore: Identifiable {
                 isConnecting = false
                 connectionID = UUID()
                 onDisconnected?()
+                #if os(macOS)
+                    if isLocal, case LocalBridge.Failure.timeout = error {
+                        localConnectionTimedOut = true
+                    }
+                #endif
                 status = Task.isCancelled ? "Disconnected" : "\(error.localizedDescription) Reconnecting…"
             }
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
