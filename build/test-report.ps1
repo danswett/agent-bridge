@@ -35,7 +35,7 @@ foreach ($csproj in Get-ChildItem (Join-Path $root 'tests') -Filter *.csproj -Re
     $testProjects[$csproj.BaseName] = $csproj.BaseName
 }
 
-function Format-Seconds([double] $seconds) { '{0:N1} s' -f $seconds }
+function Format-Seconds([double] $seconds) { $seconds.ToString('F1', [cultureinfo]::InvariantCulture) + ' s' }
 function Escape-Cell([string] $text) { $text.Replace('|', '\|').Replace("`r", ' ').Replace("`n", ' ') }
 
 "## $Title"
