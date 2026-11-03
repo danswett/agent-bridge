@@ -65,10 +65,10 @@ public sealed class MarkdownView : StackPanel
         }
     }
 
-    // An approval's message on its card (#220): only fences are structure, everything else is drawn
-    // as its literal source (MarkdownModel.Approval), with what is not on screen as it runs
-    // (right-to-left letters too) as escapes, and read left to right. A Codex approval's command is
-    // prose, and Approve once allows what was read.
+    // An approval's message on its card (#220): drawn exactly as written, fence markers included,
+    // as one block in the code face, with nothing in it read as Markdown (MarkdownModel.Approval):
+    // what is not on screen as it runs (right-to-left letters too) shown as escapes, read left to
+    // right. A Codex approval's command is prose, and Approve once allows what was read.
     public bool Approval
     {
         get => approval;
@@ -78,26 +78,6 @@ public sealed class MarkdownView : StackPanel
             approval = value;
             if (value) { FlowDirection = FlowDirection.LeftToRight; } else { ClearValue(FlowDirectionProperty); }
             Render();
-        }
-    }
-
-    static void InOrder(DependencyObject element)
-    {
-        switch (element)
-        {
-            case RichTextBlock rich:
-                rich.FlowDirection = FlowDirection.LeftToRight;
-                rich.TextReadingOrder = TextReadingOrder.UseFlowDirection;
-                break;
-            case Panel panel:
-                foreach (var child in panel.Children) { InOrder(child); }
-                break;
-            case Border { Child: { } child }:
-                InOrder(child);
-                break;
-            case ContentControl { Content: DependencyObject inner }:
-                InOrder(inner);
-                break;
         }
     }
 
@@ -122,7 +102,6 @@ public sealed class MarkdownView : StackPanel
         {
             var element = Block(b);
             if (Reading) { Read(element); }
-            if (Approval) { InOrder(element); }
             Children.Add(element);
         }
     }

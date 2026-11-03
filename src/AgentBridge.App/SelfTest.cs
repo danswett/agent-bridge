@@ -67,8 +67,8 @@ static partial class SelfTest
             Check(approval is not null && ById<Button>(approval, "Option:approve") is { IsEnabled: true } && ById<Button>(approval, "Option:deny") is not null,
                 "shows Approve once and Deny on a Copilot permission prompt");
             // Where Approve once is pressed, the command reads in the order it runs (#220).
-            var approvalCode = approval is null ? null : Find<TextBlock>(approval).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.StartsWith("dotnet test", StringComparison.Ordinal));
-            Check(approvalCode is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection }, "draws an approval's command on its card left to right, in the order it runs");
+            var approvalCode = approval is null ? null : Find<TextBlock>(approval).FirstOrDefault(b => AutomationProperties.GetAutomationId(b) == "CodeText" && b.Text.Contains("dotnet test", StringComparison.Ordinal));
+            Check(approvalCode is { FlowDirection: FlowDirection.LeftToRight, TextReadingOrder: TextReadingOrder.UseFlowDirection } && approvalCode.Text.StartsWith("Allow **shell**?", StringComparison.Ordinal) && approvalCode.Text.Contains("\n```\ndotnet test", StringComparison.Ordinal), $"draws an approval's message on its card exactly as written, fence markers included, left to right ({approvalCode?.Text})");
             // All of an approval's message is drawn escaped and in order (#220); any other question's as written.
             static MarkdownView? Message(SessionView? v) => v is not null && ById<FrameworkElement>(v, "Question") is { } q ? Find<MarkdownView>(q).FirstOrDefault() : null;
             Check(Message(approval) is { Approval: true }, "draws all of an approval's message on its card in its escaped, left-to-right mode");

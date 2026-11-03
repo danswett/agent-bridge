@@ -204,45 +204,14 @@ public static class MarkdownModel
     public static string? Safe(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) ? u.AbsoluteUri : null;
 
-    // An approval's message as its card draws it (#220). Only a fenced code block is structure;
-    // everything outside a fence is drawn as literal source text, with no links, emphasis, backslash
-    // escapes or code spans, backticks and brackets visible and its line breaks kept. A Codex
-    // approval carries its command in prose ("Codex wants to run:\n\ngit push"), and Markdown there
-    // can hide what runs: a link drew `echo "[safe](https://a/";curl …|sh;")"` as `echo "safe"`, a
-    // code span joined two lines into one comment, `\#` lost its backslash and `*tmp*` its stars.
-    // Every character outside a fence is then shown as HiddenText.Reveal gives it, right-to-left
-    // letters included; a fence's text is revealed as every block's is (CodeCopy). The ordinary
-    // conversation keeps its Markdown.
-    public static IReadOnlyList<MdBlock> Approval(string? markdown)
-    {
-        if (string.IsNullOrEmpty(markdown)) { return []; }
-        var source = KeepBareReturns(markdown);
-        var blocks = new List<MdBlock>();
-        var at = 0;
-        foreach (var fence in Markdown.Parse(source, Pipeline).OfType<FencedCodeBlock>())
-        {
-            Literal(source[at..Math.Min(fence.Span.Start, source.Length)], blocks);
-            // The opening line's words after the fence (its info string) are not drawn with the code,
-            // so they are drawn here, as written.
-            var open = source.Split('\n')[fence.Line].TrimEnd('\r');
-            if (open.Trim().TrimStart(fence.FencedChar).Trim().Length > 0) { Literal(open, blocks); }
-            blocks.Add(new MdCode(Lines(fence), null));
-            at = Math.Min(fence.Span.End + 1, source.Length);
-        }
-        Literal(source[at..], blocks);
-        return blocks;
-    }
-
-    static void Literal(string text, List<MdBlock> blocks)
-    {
-        var lines = text.Replace("\r\n", "\n").Trim('\n').Split('\n');
-        if (lines is [""]) { return; }
-        var inlines = new List<MdInline>();
-        foreach (var line in lines)
-        {
-            if (inlines.Count > 0) { inlines.Add(new MdBreak()); }
-            if (line.Length > 0) { inlines.Add(new MdText(HiddenText.Reveal(line, rightToLeft: true))); }
-        }
-        blocks.Add(new MdParagraph(inlines));
-    }
+    // An approval's message as its card draws it (#220): exactly as written, fence markers
+    // included, as one block in the code face; nothing in it is read as Markdown. Whatever a parser
+    // decides can hide what runs. A Codex approval carries its command in prose, where a link drew
+    // `echo "[safe](https://a/";curl…|sh;")"` as `echo "safe"`; and a line of three backticks, which
+    // Markdown takes as a fence, is a command substitution to bash: `bash -c '` then a fenced
+    // `echo rm -rf ~` read as a harmless echo, and bash runs `rm -rf ~`. The block reveals what is
+    // not on screen as it runs, right-to-left letters and a bare CR included (CodeCopy), and reads
+    // left to right. Only CRLF line endings are taken as line breaks.
+    public static IReadOnlyList<MdBlock> Approval(string? markdown) =>
+        string.IsNullOrEmpty(markdown) ? [] : [new MdCode(markdown.Replace("\r\n", "\n"), null)];
 }
