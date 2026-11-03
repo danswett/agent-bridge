@@ -834,4 +834,25 @@ public class DiscoveryHoldTests
         Assert.NotNull(after.Held);
         Assert.Empty(after.Snapshot());
     }
+
+    // Found in review: only the current registration says a session ended, not an older copy of it
+    // in agent-ha-bridge's other (legacy temp) root.
+    [Fact]
+    public async Task An_older_ended_registration_in_another_root_does_not_keep_a_restart_from_bringing_back_a_live_session()
+    {
+        using var f = new Fixture();
+        var state = await ListedThenKeptOnlyByAHold(f);
+        var legacy = Path.Combine(f.Root, "temp", "agent-bridge-codex");
+        Directory.CreateDirectory(legacy);
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), status: "ended", ended: true, updated: Fixture.T0.AddMinutes(5));
+        File.Move(Path.Combine(f.CodexRegistrations, C + ".json"), Path.Combine(legacy, C + ".json"));
+        f.CodexRegistration(C, 950, f.CodexTranscript(C), updated: Fixture.T0.AddMinutes(10));
+        f.Processes.Unidentify(AgentKind.Codex, 950);
+
+        await using var after = f.Source(stateFile: state, codexRoots: [f.CodexRegistrations, legacy]);
+        await after.RefreshAsync();
+
+        Assert.NotNull(after.Held);
+        Assert.Equal(C, Assert.Single(after.Snapshot()).Id);
+    }
 }

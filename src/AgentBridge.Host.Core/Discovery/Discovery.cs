@@ -695,13 +695,10 @@ internal static class RegistrationDiscovery
                 // Only the generation it was written by: a process that took an old registration's
                 // pid is a session yet to register, which is exactly what the hold is for.
                 if (running.TryGetValue(registration.ProcessId, out var holder) && OfGeneration(registration, holder)) { accounted?.Add(registration.ProcessId); }
-                else if (unread.TryGetValue(registration.ProcessId, out var runtime) && OfGeneration(registration, runtime))
+                // A live session whose runtime's command line could not be read: not one that ended.
+                else if (!registration.Ended && unread.TryGetValue(registration.ProcessId, out var runtime) && OfGeneration(registration, runtime))
                 {
-                    // A live session whose runtime's command line could not be read: not one that ended.
-                    if (!registration.Ended) { holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})"); }
-                    // One that says it ended stays ended, even with its runtime unreadable: a restart's
-                    // first pass would otherwise bring back what it remembered of it (#147).
-                    else { ended?.Add(registration.SessionId); }
+                    holds?.Add($"a {name} process that could not be read (pid {registration.ProcessId})");
                 }
                 if (!registration.Ended && registration.ProcessId <= 0) { holds?.Add($"a {name} registration names no process"); continue; }
                 // The same session registered under both the runtime and the legacy temp
@@ -714,7 +711,15 @@ internal static class RegistrationDiscovery
         var live = new List<DiscoveredSession>();
         foreach (var r in best.Values)
         {
-            if (r.ProcessId <= 0 || !running.TryGetValue(r.ProcessId, out var process)) { continue; }
+            if (r.ProcessId <= 0) { continue; }
+            if (!running.TryGetValue(r.ProcessId, out var process))
+            {
+                // The current registration says it ended, and its runtime cannot be read: it stays
+                // ended, or a restart's first pass would bring back what it remembered of it (#147).
+                // Only the current one: an older ended copy in another root says nothing.
+                if (r.Ended && unread.TryGetValue(r.ProcessId, out var runtime) && OfGeneration(r, runtime)) { ended?.Add(r.SessionId); }
+                continue;
+            }
             if (!OfGeneration(r, process)) { continue; }
             // An ended session whose process still runs is not a session, and other ways of
             // finding one (a thread lock) are told so rather than bringing it back.

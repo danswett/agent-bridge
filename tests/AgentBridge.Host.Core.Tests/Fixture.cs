@@ -29,13 +29,13 @@ internal sealed class Fixture : IDisposable
     public string CodexRegistrations => Path.Combine(Runtime, "agent-bridge-codex");
 
     public SessionSourceOptions Options(long tailBytes = 4 * 1024 * 1024, bool watch = false, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null) => new()
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) => new()
     {
         CopilotHome = CopilotHome,
         ClaudeHome = ClaudeHome,
         CodexHome = CodexHome,
         ClaudeRegistrationRoots = [ClaudeRegistrations],
-        CodexRegistrationRoots = [CodexRegistrations],
+        CodexRegistrationRoots = codexRoots ?? [CodexRegistrations],
         UseFileSystemWatcher = watch,
         InitialTailBytes = tailBytes,
         MaxSkimBytes = maxSkim,
@@ -47,8 +47,8 @@ internal sealed class Fixture : IDisposable
     };
 
     public SessionSource Source(long tailBytes = 4 * 1024 * 1024, long maxSkim = 512L * 1024 * 1024, bool remoteApproval = true,
-        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null) =>
-        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile), Processes, Time, drivers);
+        Action<string>? log = null, Action<string>? afterRegistrationRead = null, SessionDrivers? drivers = null, string? stateFile = null, IReadOnlyList<string>? codexRoots = null) =>
+        new(Options(tailBytes, maxSkim: maxSkim, remoteApproval: remoteApproval, log: log, afterRegistrationRead: afterRegistrationRead, stateFile: stateFile, codexRoots: codexRoots), Processes, Time, drivers);
 
     // session-state/<id>/ with workspace.yaml and, optionally, inuse.<pid>.lock. Returns
     // the events.jsonl path (not created).
