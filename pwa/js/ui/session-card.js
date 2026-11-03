@@ -36,6 +36,14 @@ import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
 const TOOL_GLYPH = { running: 'working', done: 'done', failed: 'failed' };
+// How long a question's controls ignore a pointer's click once the question appears or is
+// scrolled into view (ui.md §5.3, Scroll to a question). A click is often already on its way
+// when the content under it changes: people take about a quarter of a second to see a change
+// and more to stop a click, so twice that is kept. One click on a choice sends the answer, and
+// a click aimed at the agent's last lines must not answer a question that moved under it. No
+// motion token measures this, and reduced motion keeps it: a jump moves the content as surely.
+// A key still acts at once, since nothing moves the focus to a question.
+export const QUESTION_ARRIVAL_GUARD_MS = 500;
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -80,6 +88,13 @@ export class SessionCard {
   #asked = undefined;
   #touches = false;
   #pressing = false;
+  // A mouse or pen over the conversation: someone reading it, perhaps about to click.
+  #hovering = false;
+  // Until when the question's controls ignore a pointer's click (QUESTION_ARRIVAL_GUARD_MS).
+  #guardUntil = 0;
+  // The question's view the guard covers, and the question it was armed for.
+  #guarded = null;
+  #guardedId = null;
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   #menu = new RowMenu();
@@ -176,6 +191,7 @@ export class SessionCard {
     e.tool = h('p', { class: 'tool-line', hidden: true }, e.toolGlyph, e.toolName, e.toolSummary);
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.tool);
     e.question = h('div', { class: 'question-slot' });
+    this.#guardQuestion(e.question);
     e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
@@ -302,11 +318,11 @@ export class SessionCard {
     e.delegates.hidden = !listed;
     e.tabD.hidden = !listed;
     if (!listed && this.#tab === 'delegates') { this.setTab('conversation'); }
-    const said = (s.activity.userMessage ?? '') !== e.userText.textContent;
+    const echoed = (s.activity.userMessage ?? '') !== e.userText.textContent;
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
     // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place.
-    if (!first && said && s.activity.userMessage) { enter(e.user, 'acknowledge', { dy: 1 }); }
+    if (!first && echoed && s.activity.userMessage) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
     if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
       this.#renderFacts(s);
@@ -607,7 +623,29 @@ export class SessionCard {
       this.#receipt.fresh = false;
       enter(this.#receipt.element, 'acknowledge', { dy: 1 });
     }
+    // A question newly drawn where the person can see it: its controls wait before a click counts.
+    // Not the same question redrawn (reworded, or its machine's capabilities changed).
+    if (view && q.id !== this.#guardedId) {
+      this.#guardedId = q.id;
+      if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
+    }
+    this.#guarded = view || null;
     this.#arrived = arrived && view ? view : null;
+  }
+
+  #guard() { this.#guardUntil = (globalThis.performance?.now() ?? Date.now()) + QUESTION_ARRIVAL_GUARD_MS; }
+
+  // A click from a pointer (detail > 0) on the question's own controls during the guard is
+  // dropped before any handler, form or default action sees it: a choice, Approve once, Deny,
+  // Send, a radio or its label. A key's activation (detail 0) goes through, and so does anything
+  // else in the slot (a kept draft's Dismiss, say), which the question didn't bring.
+  #guardQuestion(slot) {
+    slot.addEventListener('click', (e) => {
+      if (e.detail === 0 || (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
+      if (!this.#guarded?.contains(e.target) || !e.target.closest?.('button, input, select, label, summary, a')) { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
   }
 
   #atEnd() {
@@ -617,22 +655,33 @@ export class SessionCard {
 
   // Smoothly, and never into a conversation scrolled back through or held: atEnd is where the
   // reader was before the update, since a longer response drawn with the question moves it.
+  // Held is a finger on it, a mouse button down, or a mouse or pen over it: someone reading,
+  // whose next click must land on what they were reading (ui.md §5.3).
   #bringQuestion(atEnd) {
     const view = this.#arrived;
     this.#arrived = null;
     const sc = this.els.scroll;
-    if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && this.#selected && this.viewing() && sc.getClientRects().length) {
+    if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && !this.#hovering && this.#selected && this.viewing() && sc.getClientRects().length) {
       view.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
+      // From where it lands, too: a smooth scroll takes the browser's own time. Only this scroll's
+      // end: one the person makes later must not hold the question's buttons back.
+      this.#guard();
+      const ended = new AbortController();
+      sc.addEventListener('scrollend', () => this.#guard(), { once: true, signal: ended.signal });
+      setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
     }
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer
   // events: once the browser takes a touch over to scroll it sends pointercancel while the finger
-  // is still down. A mouse button holds it until released, wherever that is.
+  // is still down. A mouse button holds it until released, wherever that is, and a mouse or pen
+  // holds it while it is over it.
   #watchHold(scroller) {
     const fingers = (e) => { this.#touches = (e.touches?.length ?? 0) > 0; };
     scroller.addEventListener('touchstart', () => { this.#touches = true; }, { passive: true });
     for (const end of ['touchend', 'touchcancel']) { scroller.addEventListener(end, fingers, { passive: true }); }
+    scroller.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch') { this.#hovering = true; } });
+    scroller.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') { this.#hovering = false; } });
     scroller.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'touch') { return; }
       this.#pressing = true;

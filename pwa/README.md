@@ -522,7 +522,9 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   its token and none past 300 ms; under reduced motion only fades no longer than the cross-fade,
   and presses at once; a tap during a push and during a menu's entrance landing; a question
   scrolled to only while the conversation is read to its end and not held (a finger stays down
-  through pointercancel), and below a longer response that comes with it; a Needs you mark fading
+  through pointercancel, and a mouse resting on it holds it too), and below a longer response that
+  comes with it; a click landing on a question's choice as it appears ignored for 500 ms, while a
+  key answers at once; a Needs you mark fading
   in only for an entry that arrives, never again on Back; a session the address names at startup
   shown at once, and a question arriving mid-push stopping the slide; a fill easing back only on a
   press's release (a second press at once; an answer's choice never), and a pressed button's

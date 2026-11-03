@@ -655,3 +655,71 @@ test('a second Alt+Down while the first move still slides goes on from where the
   });
   expect(Math.abs(seenAfter - seenBefore)).toBeLessThan(3);
 });
+test('a question that arrives while a mouse rests on the conversation waits: the view never moves under it', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await upsert(page, CODEX, { activity: { response: long }, updatedAt: later() });
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  const top = await scroller.evaluate((el) => el.scrollTop);
+  // Reading, the pointer over the agent's last lines, about to click.
+  const b = await scroller.boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height - 40);
+  await page.evaluate((from) => {
+    const d = window.agentBridgeDemo;
+    const question = { ...d.host.get(from).question, id: 'q-hovered' };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), question, status: 'waiting', updatedAt: new Date(Date.now() + 2000).toISOString() });
+  }, COPILOT);
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(400);
+  expect(await scroller.evaluate((el) => el.scrollTop)).toBe(top);
+  await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+});
+
+test('a click that lands on a question\'s choice as the question appears is ignored; a moment later it answers, and a key answers at once', async ({ page }) => {
+  await openDemo(page);
+  const v = await open(page, CODEX);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // The question and a click already on its way, in one go: the click lands the moment the
+  // question's first choice is there.
+  const clicked = await page.evaluate(async () => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-1', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+    let choice = null;
+    for (let i = 0; i < 50 && !choice; i += 1) {
+      await new Promise((r) => setTimeout(r, 0));
+      choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    }
+    if (!choice) { return false; }
+    choice.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return true;
+  });
+  expect(clicked).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+  // Past the guard, the same click answers.
+  await page.waitForTimeout(600);
+  await v.locator('.question-slot .choice').first().click();
+  await expect.poll(answers).toBe(before + 1);
+  // A key needs no wait: nothing moves the focus to a question, so a key is meant for it.
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 120_000).toISOString();
+    const question = {
+      id: 'q-guard-2', kind: 'form', message: 'And?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'Third' }, { value: 'b', label: 'Fourth' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  const third = v.locator('.question-slot .choice', { hasText: 'Third' });
+  await third.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(answers).toBe(before + 2);
+});
