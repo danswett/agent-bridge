@@ -63,7 +63,7 @@ struct LaunchView: View {
     }
 
     private var eligibleHosts: [HostStore] {
-        store.canonicalHosts.filter { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil || $0.id == machineID }
+        store.canonicalHosts.filter { $0.canOpenLauncher || $0.id == machineID }
     }
 
     private struct TransferChoice: Identifiable {

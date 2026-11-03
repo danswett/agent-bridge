@@ -176,6 +176,9 @@ func readOnlyReasonOverridesActionCapabilitiesButKeepsAdvertisedCapabilitiesAndR
         #expect(host.can(capability))
     }
     #expect(!host.can("not.advertised"))
+    #expect(host.canOpenLauncher == !readOnly)
+    host.stop()
+    #expect(!host.canOpenLauncher)
 }
 
 @MainActor @Test func readOnlyHostDoesNotRecordOrSendANewMutationOrConsumeItsDraft() async throws {

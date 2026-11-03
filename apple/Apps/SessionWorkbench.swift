@@ -278,10 +278,11 @@ struct SessionWorkbench: View {
         } description: {
             if store.account == nil, !store.isSample, let status = store.signInStatus {
                 Text(status)
-            } else if store.isLive, !store.canOpenLauncher, let reason = store.canonicalHosts.compactMap(\.readOnlyReason).first {
-                Text("This machine is read-only: \(reason)")
             } else {
                 Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
+            }
+            if store.isLive, let reason = store.canonicalHosts.compactMap(\.readOnlyReason).first {
+                Text("This machine is read-only: \(reason)")
             }
         } actions: {
             if store.isLive, store.canOpenLauncher {

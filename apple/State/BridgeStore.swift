@@ -81,7 +81,7 @@ final class BridgeStore {
     @ObservationIgnored private var hostRelays: [String: ObjectIdentifier] = [:]
 
     var canOpenLauncher: Bool {
-        hosts.contains { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil }
+        hosts.contains(where: \.canOpenLauncher)
     }
 
     var isLive: Bool {

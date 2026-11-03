@@ -123,6 +123,10 @@ final class HostStore: Identifiable {
             && (readOnlyReason == nil || !Self.readOnlyBlockedCapabilities.contains(capability))
     }
 
+    var canOpenLauncher: Bool {
+        can("sessions.launch") || can("launch.trust") || attempts["launch"] != nil
+    }
+
     var isRunning: Bool {
         task != nil
     }
