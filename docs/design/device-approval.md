@@ -195,8 +195,13 @@ adding it to one set (`RosterKinds.IsPerson`) in each implementation.
 
 ### 3.3 Validity of one entry
 
-An entry is evaluated in the **state of its parents** (§3.5 computes that state). It is valid
-only if:
+An entry is evaluated in the **history state of its parents**: the state §3.5 computes from all
+of the entry's ancestors, **quarantine ignored**. Quarantine is a verifier's local decision about
+whether to apply a branch, not part of the branch's history, so it never makes an entry invalid: a
+removal or merge signed by a device whose add is quarantined at some verifier is still valid, and
+is kept there until the branch is adopted (§3.5 rules 3 and 4). Applying entries is a separate,
+later step that does use quarantine. "Active in that state", here and below, means active in the
+history state. It is valid only if:
 
 * it parses strictly (§3.2) and `account` and `generation` match;
 * `sig` verifies under `by`'s `sign` key (and `cosig` under `cosigner`'s), as recorded by the add
@@ -323,17 +328,19 @@ only if:
     Evidence is stored and gossiped, used only to check R's validity, and never applied itself, as
     quarantined entries are not. A removal that needs more, or needs over-budget entries of a signer
     outside T and its subtree, is **refused** at that verifier and reported, never a reason to fail
-    closed. A removal refused this way shows as unconfirmed at that host (§6.3), and the import at the machine below admits it.
+    closed. A removal refused this way shows as unconfirmed at that host (§6.3), and the import at
+    the machine below admits it.
   * **What the remover's client does.** The cascade with every device ticked is one removal with
     `voidGrants` (§3.4), which is exactly the removal that can carry the subtree's evidence, so the
     removal the client offers by default is accepted at every host that holds the target's add,
-    unless a key outside the target's subtree has also exceeded a budget in its ancestry. A
-    cosigned removal of a device that is not junior cannot carry `voidGrants`; if a host refuses
-    one for evidence, the import below is the remedy.
-    When the person unticks devices to keep, the client signs without the flag; if a host then
-    refuses it for evidence, the Devices page shows that host as not having confirmed it (§6.3)
-    and offers the full cascade, which it would accept. An import at the machine (`devices sync`)
-    is a local action, and admits the evidence it carries without the 256-entry limit.
+    **provided** its evidence fits the limits above and no key outside the target's subtree has
+    also exceeded a budget in its ancestry. A cosigned removal of a device that is not junior cannot
+    carry `voidGrants`. When the person unticks devices to keep, the client signs without the flag.
+    Whenever a host refuses a removal for evidence, the Devices page shows that host as not having
+    confirmed it (§6.3). It offers the full cascade only when that removal's evidence would fit the
+    limits there; otherwise, and for a cosigned removal, it directs the person to the import at the
+    machine (`devices sync`), a local action that admits the evidence it carries without these
+    limits.
 
 ### 3.4 Seniority, probation and confirmation
 
@@ -482,10 +489,10 @@ lacks entries the verifier has is simply no news. A verifier accepts an offered 
      order decide whether a device stays revoked. Its ancestors are
      **not** accepted for their own effect: any non-removal ancestor that would itself be
      quarantined (below) is quarantined, so delivering a removal cannot smuggle in the `add(X)`
-     beneath it. The removal applies if it is valid in the state of its parents computed from
-     unquarantined entries alone. If it is valid only through a quarantined entry (its signer,
-     cosigner or target was added by one), it is held as evidence with that branch, and applies
-     when a merge adopts it. Because merges are never void and adoption is irrevocable (§3.3),
+     beneath it. The removal is always valid or invalid by its history state (§3.3). It **applies**
+     at once if it would also be valid in the state of its parents computed from unquarantined
+     entries alone. If it is valid only through a quarantined entry (its signer, cosigner or target
+     was added by one), it is kept, and applies when a merge or a local adoption adopts that branch. Because merges are never void and adoption is irrevocable (§3.3),
      once it applies nothing un-applies it;
    * a `merge` signed with presence is always accepted. That is how a person adopts a branch. A
      merge whose signer was itself added by a quarantined entry adopts nothing until a merge by a
@@ -499,9 +506,11 @@ lacks entries the verifier has is simply no news. A verifier accepts an offered 
 4. **Quarantine is inherited.** An entry with a quarantined ancestor is quarantined too, whether
    or not it starts a fork, until a merge adopts that branch. Otherwise the first child of a
    quarantined entry would bypass rule 3: an established signer's quarantined rename followed by
-   an add would take effect without a merge, because its signing key is already active. The one
-   exception is the removal rule of rule 3: a removal on a quarantined branch applies if it is
-   valid from unquarantined entries alone, and is held otherwise.
+   an add would take effect without a merge, because its signing key is already active. Inherited
+   quarantine, like quarantine, affects only application: the entries stay valid by their history
+   states. The one exception is the removal rule of rule 3: a removal on a quarantined branch
+   applies if it would be valid from unquarantined entries alone, and is kept until adoption
+   otherwise.
 
 Two verifiers that received a far fork in different orders can therefore differ only in which
 quarantined entries they apply: adds, and removals that depend on them. The verifier that took
@@ -1031,12 +1040,19 @@ residual is stated at the end.
   needs a presence proof, so it cannot be produced by a stolen key alone. The host accepts it only
   if it holds every head named, and those heads include or descend from every head named by the
   last attestation it took from another device: it can keep a host fresh, never move it back.
-* **The clock.** Freshness uses the larger of elapsed monotonic time (persisted across restarts)
-  and elapsed wall-clock time since receipt, so a clock jump or a machine left off makes a host
-  stale sooner, never later.
-* **Acknowledgement.** A host's attestations to person's devices also carry its heads. So after a
-  removal, the remover's Devices page shows which machines have confirmed it: "Revoked on 3 of 4
-  machines; *Desk* has not confirmed (last heard 2 h ago)". A machine that does not confirm is
+* **The clock.** Neither clock can measure time a machine spent off if the wall clock also moved
+  back meanwhile, so an attestation never survives a discontinuity: after a restart, or when the
+  wall clock jumps by more than 5 minutes against the monotonic clock, the host is **stale** until
+  it receives a new attestation. Otherwise freshness uses the larger of elapsed monotonic time and
+  elapsed wall-clock time since receipt. Other hosts every 5 minutes and the app over the pipe
+  refresh it within minutes of a restart.
+* **Acknowledgement.** Heads alone do not show that a host applied a removal: it can hold the
+  removal and still serve the target, as when the signers' adds are quarantined there (§3.5,
+  "Local adoption"). So a host's attestation to a person's device also lists the enrollment adds it
+  has **revoked in its applied state**, under the same MAC. After a removal, the remover's Devices
+  page counts a machine as confirming only when its attestation lists the target's exact add:
+  "Revoked on 3 of 4 machines; *Desk* holds the removal but has not applied it: adopt the branch
+  there" or "*Desk* has not confirmed (last heard 2 h ago)". A machine that does not confirm is
   something the person can go and look at.
 
 **What freshness does not bound.** A relay that partitions the account can keep a removed device
@@ -1055,8 +1071,10 @@ removed device's keys.
 
 Every `add`, `remove`, `rename` and open fork is shown on every person's device ("*Kitchen
 laptop* was added by *Desk app* at 14:05 PT") and logged by every host. Probation (§3.4) gives the
-person 72 hours to notice a device they did not approve before it can act, and seniority means
-it cannot remove the devices that would notice.
+person 72 hours to notice a device they did not approve before its adds and renames take effect,
+and confirmation (§3.4) keeps it from cosigning any removal until its approver confirms it, but
+neither delays session access: an approved device can read and drive sessions at once, which is
+why every add is announced. Seniority means it cannot remove the devices that would notice.
 
 ### 6.5 What a removed device sees
 
@@ -1543,6 +1561,9 @@ Each slice adds its own. Together they cover:
   removal, and the 513th add of a generation are refused, counted across every branch and
   including quarantined and void entries. One approver that signs removals Rᵢ of a junior C and
   then removals Sᵢ of a junior B on top of each, from one head, stops at 64 removals.
+* A removal or merge signed by a device whose add is quarantined at a verifier is valid there by
+  its history state, and kept: the removal applies, and the merge adopts, when that branch is
+  adopted. Neither is refused as signed by an inactive device.
 * Quarantine is inherited: an established signer's quarantined rename on a far fork, followed by
   an add on top of it, leaves both quarantined and the added device inactive until a merge adopts
   the branch. A removal on that branch that is valid from unquarantined entries alone applies.
@@ -1608,11 +1629,17 @@ Each slice adds its own. Together they cover:
   and attestations. The removed device's own attestation does not keep the host fresh for it, even
   when the host's copy lists it as the only person's device. A wall clock moved back a day, or a
   machine left off for a day, makes the host stale, not fresh.
+* A host switched off for 48 hours that comes back with its wall clock moved back 48 hours is
+  stale until a new attestation, as after any restart. A wall-clock jump of more than 5 minutes
+  against the monotonic clock while running makes it stale too.
 * With `selfAttest` on: an `attest` person command with the host's nonce and heads that include or
   descend from the last peer-attested heads keeps the host fresh, and makes a host that was already
   stale fresh again, and the host reports the setting.
   One without a presence proof, without the nonce, naming heads the host lacks, or naming heads
   older than the last peer-attested ones: refused.
+* A host that holds a removal whose signers' adds are quarantined there, and so still serves the
+  target, is not counted as confirming it: its attestation does not list the target's add as
+  revoked, and the Devices page offers local adoption there.
 * The remover's Devices page lists which machines have confirmed a removal. A machine kept in a
   simulated partition never confirms, and a roster imported at the machine ends the partition.
 * A removal that names a device's id but revokes only a fabricated duplicate add of that id does
