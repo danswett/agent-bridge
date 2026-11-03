@@ -162,6 +162,24 @@ public class ClientTests
         }
     }
 
+    [Theory]
+    [InlineData(true, "lovelace/resources")]
+    [InlineData(false, "lovelace/dashboards/list")]
+    public async Task Publication_inventory_uses_authenticated_commands_and_never_treats_invalid_results_as_empty(bool resources, string type)
+    {
+        var (client, received, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonArray() });
+        var inventory = resources ? await client.ReadResourcesAsync() : await client.ReadDashboardsAsync();
+        Assert.Equal(JsonValueKind.Array, inventory.ValueKind);
+        Assert.Equal(type, received[1]["type"]!.GetValue<string>());
+        var (malformed, _, _) = Server(_ => new JsonObject { ["success"] = true, ["result"] = new JsonObject() });
+        await Assert.ThrowsAsync<InvalidDataException>(() => resources ? malformed.ReadResourcesAsync() : malformed.ReadDashboardsAsync());
+        var (denied, _, _) = Server(_ => new JsonObject
+        {
+            ["success"] = false, ["error"] = new JsonObject { ["code"] = "unauthorized", ["message"] = "denied" },
+        });
+        await Assert.ThrowsAsync<HaCommandException>(() => resources ? denied.ReadResourcesAsync() : denied.ReadDashboardsAsync());
+    }
+
     [Fact]
     public async Task A_registry_command_authenticates_then_runs_and_reads_its_own_result()
     {

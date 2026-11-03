@@ -96,8 +96,9 @@ Check `gh pr list -R danswett/agent-bridge` for open PRs. Two coordinators work 
 In flight on #317 (publication owner above):
 - #318: first slice is the native protocol-1 policy/fence contract, verified against
   legacy-function recordings (`PublicationTests`). It does not enable publication.
-  Next: protected receipts and actual HA resource/dashboard observation, renderer and
-  versioned card publication, then integration into the connector.
+  The next slice adds protected local receipts and authoritative HA resource/dashboard
+  observation, including restart/lost-policy refusals and legacy-function recordings.
+  Renderer and versioned card publication, then connector integration, remain next.
 - #319: writer cutover remains blocked until #318 and the disposable-HA handover/
   rollback rehearsal pass. No live HA or legacy-install changes during development.
 

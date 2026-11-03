@@ -33,6 +33,9 @@ public interface IHomeAssistant
     // lovelace/config for one dashboard: its JSON as served, or NotFound when there is none.
     Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default);
 
+    Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default);
+    Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default);
+
     // One service call naming at most one entity (ServiceTarget): select.select_option and
     // text.set_value on a session's own controls.
     Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default);
@@ -289,6 +292,19 @@ public sealed class HomeAssistantClient : IHomeAssistant
         }
         // Home Assistant's answer for a path with no dashboard, or one with no saved config.
         catch (HaCommandException e) when (e.Code == "config_not_found") { return HaDashboard.NotFound; }
+    }
+
+    public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) =>
+        ReadInventoryAsync("lovelace/resources", cancellationToken);
+
+    public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) =>
+        ReadInventoryAsync("lovelace/dashboards/list", cancellationToken);
+
+    async Task<JsonElement> ReadInventoryAsync(string type, CancellationToken cancellationToken)
+    {
+        var result = await CommandAsync(new JsonObject { ["type"] = type }, cancellationToken);
+        if (result.ValueKind != JsonValueKind.Array) { throw new InvalidDataException("Unreadable HA publication inventory; it is not absence."); }
+        return result;
     }
 
     public async Task<byte[]?> DownloadImageAsync(string imageId, long maxBytes, CancellationToken cancellationToken = default)

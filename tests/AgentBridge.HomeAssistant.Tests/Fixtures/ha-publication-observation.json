@@ -1,0 +1,406 @@
+{
+  "source": {
+    "dirty": false,
+    "commit": "ef5454e8ea6fd1dab304658ca097b5aae7667e97"
+  },
+  "cases": [
+    {
+      "name": "empty",
+      "kind": "empty",
+      "accepted": true,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "legacy-dashboard",
+      "kind": "legacy",
+      "accepted": true,
+      "dashboards": [
+        {
+          "id": "old",
+          "url_path": "copilot-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "legacy-card",
+      "kind": "legacy",
+      "accepted": true,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "/local/agent-bridge-reply-card.js?v=1.0.0",
+          "id": "card"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "established",
+      "kind": "established",
+      "accepted": true,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": true
+    },
+    {
+      "name": "missing-config",
+      "kind": "established",
+      "accepted": true,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "config_not_found",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": true
+    },
+    {
+      "name": "lost-local-policy",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 3,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "saved": false
+    },
+    {
+      "name": "lost-dashboard-policy",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {
+        "agent_bridge_publication": null
+      },
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "duplicate-policy",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        },
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "duplicate-card",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "/local/agent-bridge-reply-card.js",
+          "id": "a"
+        },
+        {
+          "type": "module",
+          "url": "/other/agent-bridge-reply-card.js",
+          "id": "b"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-resource",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "url": 42
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-owned-id",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": ""
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-owned-type",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "js",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-dashboard",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "url_path": "other"
+        }
+      ],
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "duplicate-dashboard",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "id": "a",
+          "url_path": "agent-decisions"
+        },
+        {
+          "id": "b",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "denied-config",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "unauthorized",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-config",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": [],
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-resources",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": {},
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "invalid-dashboards",
+      "kind": null,
+      "accepted": false,
+      "dashboards": {},
+      "config": {},
+      "configError": "",
+      "resources": [],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "malformed-policy",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "bad#agent-bridge-publication-policy.js",
+          "id": "policy"
+        }
+      ],
+      "previous": null,
+      "saved": false
+    },
+    {
+      "name": "generation-regression",
+      "kind": null,
+      "accepted": false,
+      "dashboards": [
+        {
+          "id": "target",
+          "url_path": "agent-decisions"
+        }
+      ],
+      "config": {},
+      "configError": "",
+      "resources": [
+        {
+          "type": "module",
+          "url": "data:text/javascript;base64,ZXhwb3J0IHt9Ow==#agent-bridge-publication-policy.js?policy=eyJhdXRob3JpdHkiOiJ0ZXN0LWF1dGhvcml0eSIsImNhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiZGFzaGJvYXJkIjoiYWdlbnQtZGVjaXNpb25zIiwiZ2VuZXJhdGlvbiI6MywiaGlnaENhcmQiOnsiaGFzaCI6ImE4YTQwMTNlMWM0NWM0NGJjMzEwNWEzZjY2ZTMzZDBhNGQ3ZjU2MmFjYTViZjljMjVlMTdmMzU4MjAxNGIxMWQiLCJ2ZXJzaW9uIjoiMS4wLjAifSwiaGlnaFJlbmRlciI6eyJoYXNoIjoiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYiIsInZlcnNpb24iOiIyLjAuMCJ9LCJsZWdhY3lDYXJkIjoiIiwibW9kZSI6ImFkdmFuY2UiLCJwcm90b2NvbCI6MSwicmVuZGVyIjp7Imhhc2giOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwidmVyc2lvbiI6IjIuMC4wIn0sIndyaXRlciI6InRlc3Qtd3JpdGVyIn0=",
+          "id": "policy"
+        }
+      ],
+      "previous": {
+        "highRender": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "writer": "test-writer",
+        "render": {
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": "2.0.0"
+        },
+        "highCard": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "mode": "advance",
+        "generation": 4,
+        "card": {
+          "hash": "a8a4013e1c45c44bc3105a3f66e33d0a4d7f562aca5bf9c25e17f3582014b11d",
+          "version": "1.0.0"
+        },
+        "protocol": 1,
+        "legacyCard": "",
+        "dashboard": "agent-decisions",
+        "authority": "test-authority"
+      },
+      "saved": false
+    }
+  ]
+}

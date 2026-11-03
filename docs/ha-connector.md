@@ -1327,3 +1327,26 @@ restarting Home Assistant nor editing the file is enough on its own. To clear it
    `unavailable` for a minute or two while it starts.
 4. The host's next look finds Home Assistant answering again and carries on by itself. To look at
    once, give the token again with `ha token set` and restart the host.
+
+### Authoritative publication observation (#318)
+
+The connector now has an authenticated read boundary for actual Lovelace resource
+and dashboard inventories. The native observation contract rejects malformed,
+duplicate or ambiguous bridge registrations, denied reads and lost established
+policies; none counts as permission to bootstrap. Only `config_not_found` means a
+missing dashboard config.
+
+Accepted policies are kept under the new host's profile in an owner-only
+`ha-publication/<instance-and-dashboard-digest>/receipt.json`. A named local mutex
+rechecks progression against the current receipt before an atomic, flushed
+replacement. This mutex is **not a distributed lease**. Corrupt/inaccessible
+receipts refuse observation, and deleting a dashboard cannot reset an established
+high-water mark. No legacy configuration or installed files are read or changed.
+
+This boundary does not yet enable shared writes. The shared publisher and explicit
+reversible writer handover remain tracked by #318/#319; G7 is unchanged.
+
+`PublicationObservationTests` compares the actual inventory boundary with the
+original functions recorded by
+`tools/ha-contract/Export-HaPublicationObservation.ps1`. The recording keeps the
+publication source pin separate from the per-machine compatibility pin.

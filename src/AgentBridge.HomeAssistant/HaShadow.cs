@@ -229,6 +229,8 @@ public static partial class HaShadow
         public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default) => real.GetStatesAsync(cancellationToken);
         public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default) => real.ListEntityRegistryAsync(cancellationToken);
         public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => real.ReadDashboardAsync(urlPath, cancellationToken);
+        public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => real.ReadResourcesAsync(cancellationToken);
+        public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => real.ReadDashboardsAsync(cancellationToken);
         public Task<IReadOnlyList<HaMessage>> ReadTopicsAsync(IReadOnlyList<string> filters, TimeSpan window, CancellationToken cancellationToken = default) => real.ReadTopicsAsync(filters, window, cancellationToken);
     }
 }

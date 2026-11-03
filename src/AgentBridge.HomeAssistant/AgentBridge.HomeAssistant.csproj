@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AgentBridge.Host.Core\AgentBridge.Host.Core.csproj" />
+    <!-- Reuse the audited owner-only atomic staging boundary for publication receipts. -->
+    <ProjectReference Include="..\AgentBridge.Host.Delivery\AgentBridge.Host.Delivery.csproj" />
   </ItemGroup>
 
 </Project>

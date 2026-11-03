@@ -474,6 +474,11 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
         return Task.FromResult(Dashboard is null ? HaDashboard.NotFound : new HaDashboard(true, Dashboard));
     }
 
+    public JsonElement Resources { get; set; } = JsonDocument.Parse("[]").RootElement.Clone();
+    public JsonElement Dashboards { get; set; } = JsonDocument.Parse("[]").RootElement.Clone();
+    public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => Task.FromResult(Resources);
+    public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => Task.FromResult(Dashboards);
+
     // A dashboard as the writer would generate it, drawing these session nodes' cards.
     public void Draw(params string[] nodes) =>
         Dashboard = HaContract.Serialize(new JsonObject

@@ -1275,5 +1275,7 @@ public sealed partial class HaConnector : IAsyncDisposable
         public Task<IReadOnlyList<HaState>> GetStatesAsync(CancellationToken cancellationToken = default) => inner.GetStatesAsync(cancellationToken);
         public Task<IReadOnlyList<HaRegistryEntry>> ListEntityRegistryAsync(CancellationToken cancellationToken = default) => inner.ListEntityRegistryAsync(cancellationToken);
         public Task<HaDashboard> ReadDashboardAsync(string urlPath, CancellationToken cancellationToken = default) => inner.ReadDashboardAsync(urlPath, cancellationToken);
+        public Task<JsonElement> ReadResourcesAsync(CancellationToken cancellationToken = default) => inner.ReadResourcesAsync(cancellationToken);
+        public Task<JsonElement> ReadDashboardsAsync(CancellationToken cancellationToken = default) => inner.ReadDashboardsAsync(cancellationToken);
     }
 }
