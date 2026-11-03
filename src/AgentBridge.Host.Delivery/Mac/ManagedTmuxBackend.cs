@@ -55,7 +55,9 @@ public sealed class ManagedTmuxBackend : IAgentStarter, IConsoleInjector, ITarge
     internal ManagedTmuxBackend(ITmuxCommand commands, IMacProcessProbe processes, Func<string, string?> imageFor)
     {
         this.commands = commands; this.processes = processes; this.imageFor = imageFor;
-        supported = true; tmuxImage = "/test/tmux"; SocketPath = "/test/private-socket";
+        // The injected backend also runs on Windows in policy tests; its fake image
+        // must satisfy that runner's absolute-path rules without changing Mac checks.
+        supported = true; tmuxImage = Path.GetFullPath("/test/tmux"); SocketPath = "/test/private-socket";
     }
 
     public string? Unavailable() => !supported ? "managed tmux delivery requires macOS"
