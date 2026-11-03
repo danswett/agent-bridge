@@ -96,6 +96,8 @@ export class SessionCard {
   #guarded = null;
   #guardedId = null;
   #guardTimer = null;
+  // Listening for the end of a smooth scroll to the question, until it ends or is replaced.
+  #scrollEnd = null;
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   #menu = new RowMenu();
@@ -452,6 +454,9 @@ export class SessionCard {
     this.#applyTab();
     this.#revealTools();
     if (this.#tab === was) { return; }
+    // Back on the conversation, its question shows again where a click may be headed: the same
+    // wait as a question arriving, one that came while another tab was shown included.
+    if (this.#tab === 'conversation' && this.#guarded?.isConnected && this.#selected) { this.#guard(); }
     // Tab switch (ui.md §5.3): the bar under the tab slides from the one left, and what the tab
     // shows fades in without sliding.
     const now = this.#tabEl(this.#tab);
@@ -673,8 +678,7 @@ export class SessionCard {
     this.#arrived = null;
     const sc = this.els.scroll;
     if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && !this.#hovering && this.#selected && this.viewing() && sc.getClientRects().length) {
-      view.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
-      this.#guardScroll();
+      this.#scrollTo(view, scrollBehavior());
     }
   }
 
@@ -682,19 +686,26 @@ export class SessionCard {
   // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump.
   revealQuestion(behavior = scrollBehavior()) {
     const view = this.#guarded?.isConnected ? this.#guarded : null;
-    if (!view) { return; }
-    view.scrollIntoView({ block: 'nearest', behavior });
-    this.#guardScroll();
+    if (view) { this.#scrollTo(view, behavior); }
   }
 
-  // A scroll to the question under way: the guard runs from now, and again from where it lands,
-  // since a smooth scroll takes the browser's own time. Only this scroll's end: one the person
-  // makes later must not hold the question's buttons back.
-  #guardScroll() {
+  // A scroll to the question: the guard runs from now and, for a smooth scroll that has somewhere
+  // to go, again from where it lands, since that takes the browser's own time. Only that scroll's
+  // end, heard for a little while: a question already in sight makes no scroll, and a scroll the
+  // person makes later must not hold the question's buttons back. A newer scroll replaces it.
+  #scrollTo(view, behavior) {
     const sc = this.els.scroll;
+    this.#scrollEnd?.abort();
+    this.#scrollEnd = null;
+    const v = view.getBoundingClientRect();
+    const box = sc.getBoundingClientRect();
+    // A pixel's rounding is nowhere to go.
+    const moves = sc.getClientRects().length > 0 && (v.top < box.top - 1 || v.bottom > box.bottom + 1);
+    view.scrollIntoView({ block: 'nearest', behavior });
     this.#guard();
-    const ended = new AbortController();
-    sc.addEventListener('scrollend', () => this.#guard(), { once: true, signal: ended.signal });
+    if (!moves || behavior !== 'smooth') { return; }
+    const ended = this.#scrollEnd = new AbortController();
+    sc.addEventListener('scrollend', () => { this.#guard(); ended.abort(); }, { signal: ended.signal });
     setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 

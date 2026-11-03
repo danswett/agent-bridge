@@ -787,3 +787,75 @@ test('a question scrolled into sight from Needs you in a session already open ta
   await page.waitForTimeout(100);
   expect(await answers()).toBe(before);
 });
+test('a question that came while another tab was shown takes no click for a moment when Conversation is chosen again', async ({ page }) => {
+  await openDemo(page, { width: 1000 });
+  const v = await open(page, CODEX);
+  await v.getByRole('tab', { name: 'Tools' }).click();
+  await expect(v.locator('.conversation')).toBeHidden();
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-tab', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+  await page.waitForTimeout(600);
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  const tapped = await page.evaluate(() => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    tap([...view.querySelectorAll('[role="tab"]')].find((t) => t.textContent.trim() === 'Conversation'));
+    const choice = view.querySelector('.question-slot .choice');
+    if (!choice || !choice.getClientRects().length) { return false; }
+    tap(choice);
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+
+test('bringing a question already in sight into view starts no wait for a later scroll: a click after the person scrolls still counts', async ({ page }) => {
+  await openDemo(page, { height: 900 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await page.evaluate((long) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-inview', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    const s = d.host.get('019a1b2c-codex-example');
+    d.upsert({ ...s, activity: { ...s.activity, response: long }, status: 'waiting', statusSince: t, updatedAt: t, question });
+  }, long);
+  const v = await open(page, CODEX);
+  const scroller = v.locator('.stream-scroll');
+  // The whole question in sight, so bringing it into view has nowhere to go.
+  await v.locator('.question-slot .question').evaluate((el) => el.scrollIntoView({ block: 'nearest' }));
+  await expect(v.locator('.question-slot .question')).toBeInViewport({ ratio: 0.99 });
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  // In one go, so the page's own clock times it: from Needs you, with the question in sight
+  // already (nothing scrolls); past the guard, the person scrolls a little, and clicks a choice
+  // once that scroll has ended.
+  const arriving = await page.evaluate(async (id) => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    const view = document.querySelector(`.session-view[data-id="${id}"]`);
+    const el = view.querySelector('.stream-scroll');
+    tap(document.querySelector(`#needs-you .needs-entry[data-id="${id}"] .needs-title`));
+    await new Promise((r) => setTimeout(r, 600));
+    const ended = new Promise((r) => el.addEventListener('scrollend', r, { once: true }));
+    el.scrollTop -= 20;
+    await Promise.race([ended, new Promise((r) => setTimeout(r, 500))]);
+    const question = view.querySelector('.question-slot .question');
+    const was = question.hasAttribute('data-arriving');
+    tap(question.querySelector('.choice'));
+    return was;
+  }, CODEX);
+  expect(arriving).toBe(false);
+  await expect.poll(answers).toBe(before + 1);
+});
