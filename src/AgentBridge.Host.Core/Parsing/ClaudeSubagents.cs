@@ -24,8 +24,9 @@ internal sealed class ClaudeSubagents
     readonly Dictionary<string, (DateTime Written, long Length, Record? Record)> _read = new(StringComparer.Ordinal);
 
     // The nested agents recorded beside a transcript, parents first. Past the most that are
-    // read, the earliest written: the same ones on every read, whatever order the folder lists
-    // them in, and an agent's parent (written before it) kept before it.
+    // read, the first by name: the same ones on every read and every platform, whatever order the
+    // folder lists them in. Not by time: Claude rewrites a record when its agent finishes, and a
+    // creation time is not kept, or kept coarsely, on every file system.
     public IReadOnlyList<Record> Read(string transcript)
     {
         var dir = Path.Combine(Path.GetDirectoryName(transcript) ?? "", Path.GetFileNameWithoutExtension(transcript), "subagents");
@@ -33,8 +34,7 @@ internal sealed class ClaudeSubagents
         try
         {
             if (!Directory.Exists(dir)) { return []; }
-            files = [.. new DirectoryInfo(dir).EnumerateFiles(Prefix + "*" + MetaSuffix)
-                .OrderBy(f => f.CreationTimeUtc).ThenBy(f => f.Name, StringComparer.Ordinal).Take(MaxRecords).Select(f => f.FullName)];
+            files = [.. Directory.EnumerateFiles(dir, Prefix + "*" + MetaSuffix).Order(StringComparer.Ordinal).Take(MaxRecords)];
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return Known(); }
         var names = new HashSet<string>(StringComparer.Ordinal);

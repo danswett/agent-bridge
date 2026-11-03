@@ -1015,7 +1015,7 @@ command); the shapes are in `tests/fixtures/claude`.
   exists and who started it (`parentAgentId`, `description`, `agentType`, `toolUseId`,
   `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
   and its prompt. Read once a delegate is known, each again only when it changes, at most
-  256 of them (the earliest written), and listed only under a delegate that is listed. It ends as above (its notice
+  256 of them (the first by name), and listed only under a delegate that is listed. It ends as above (its notice
   is queued in the session's transcript too), or when the delegate above it ends. One that
   started before the delegate above it began its current run belongs to an earlier run, which
   was notified only once it had stopped: with its end not read, it is listed with no `outcome`

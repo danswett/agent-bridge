@@ -277,7 +277,8 @@ internal sealed class CodexParser(SessionState state, TimeProvider time) : Trans
         {
             receivers.AddRange(ids.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()).OfType<string>().Where(x => x.Length > 0));
         }
-        receivers.AddRange(nicknames.Keys.Where(k => !receivers.Contains(k)));
+        receivers.AddRange(nicknames.Keys);
+        receivers = [.. receivers.Distinct(StringComparer.Ordinal)];
         switch (Json.Str(item, "tool"))
         {
             case "spawn_agent":

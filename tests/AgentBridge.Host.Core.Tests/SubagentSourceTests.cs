@@ -409,9 +409,9 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
-    public void Past_the_most_records_read_the_earliest_written_are_read_whatever_order_the_folder_lists_them_in()
+    public void Past_the_most_records_read_the_first_by_name_are_read_whatever_order_they_were_written_in()
     {
-        // Found in review: the first the folder listed were read, and a folder lists by name here.
+        // Found in review: the first the folder listed were read, an order no platform promises.
         using var f = new Fixture();
         var transcript = f.ClaudeTranscript(Id);
         var beside = Path.Combine(Path.GetDirectoryName(transcript)!, Id, "subagents");
@@ -419,23 +419,17 @@ public class ClaudeSubagentTests
         var count = AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords + 4;
         for (var i = 0; i < count; i++)
         {
-            // The last few written after a pause, so even a file system that keeps creation times
-            // coarsely, or only as set here, has them last.
-            if (i == AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords) { Thread.Sleep(100); }
-            // Written later, named earlier.
+            // Written later, named earlier, and the latest written last.
             var file = Path.Combine(beside, $"agent-a{count - i:x4}.meta.json");
             File.WriteAllText(file, $"{{\"parentAgentId\":\"{Nester}\",\"spawnDepth\":2}}");
-            // Where a file system keeps no creation time, it is read from these.
             File.SetLastWriteTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i));
-            try { File.SetCreationTimeUtc(file, Fixture.T0.UtcDateTime.AddSeconds(i)); }
-            catch (Exception e) when (e is PlatformNotSupportedException or UnauthorizedAccessException or IOException) { }
         }
 
         var read = new AgentBridge.Host.Core.Parsing.ClaudeSubagents().Read(transcript);
 
         Assert.Equal(AgentBridge.Host.Core.Parsing.ClaudeSubagents.MaxRecords, read.Count);
-        Assert.DoesNotContain(read, r => r.Id == $"a{4:x4}");
-        Assert.Contains(read, r => r.Id == $"a{count:x4}");
+        Assert.Contains(read, r => r.Id == $"a{1:x4}");
+        Assert.DoesNotContain(read, r => r.Id == $"a{count:x4}");
     }
 
     // A message to an agent from the main agent, at a time after Fixture.T0.
