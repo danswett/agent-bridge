@@ -101,7 +101,8 @@ public sealed class MotionCatalogue
 }
 
 // Scroll to a question (ui.md §5.3): the conversation follows a question that arrives only while
-// the person is at its end, and never while they have scrolled back through it or are touching it.
+// the person is at its end, and never while they have scrolled back through it, are touching it, or
+// have the pointer over it (#261's guard: a pointer over the conversation counts as a finger on it).
 // "At the end" is where the person last left the view: content growing under them (a response
 // streaming in, a question laid out) does not make them someone who scrolled back.
 public sealed class ConversationFollow
@@ -110,11 +111,13 @@ public sealed class ConversationFollow
     public const double Slack = 1;
 
     readonly HashSet<uint> contacts = [];
+    readonly HashSet<uint> over = [];
     bool manipulating;
     double? offset;
 
     public bool AtEnd { get; private set; } = true;
-    public bool Touching => contacts.Count > 0 || manipulating;
+    // A finger on the conversation, a pan under way, or a mouse or pen over it.
+    public bool Held => contacts.Count > 0 || manipulating || over.Count > 0;
 
     // The view moved. Only a move of the view counts: the conversation growing or shrinking under
     // a still view (a response streaming in, a question laid out above) leaves the person where
@@ -142,6 +145,30 @@ public sealed class ConversationFollow
     public void PanStarted() => manipulating = true;
     public void PanEnded() { manipulating = false; contacts.Clear(); }
 
+    // A mouse or pen over the conversation, by pointer id, until it leaves (or is lost).
+    public void PointerOver(uint pointer) => over.Add(pointer);
+    public void PointerLeft(uint pointer) => over.Remove(pointer);
+
     // A question arrived on the session shown: whether to bring it into view.
-    public bool Follows => AtEnd && !Touching;
+    public bool Follows => AtEnd && !Held;
+}
+
+// A question's answer controls (its choices, Send, Approve once and Deny, in the conversation and
+// in Needs you) take no pointer activation for a moment after they appear or are scrolled into
+// view: a click aimed at what was there a moment before must not answer a question (#261's guard,
+// from its security review). The keyboard is never held back: a key goes where focus visibly is.
+public sealed class AnswerGuard
+{
+    // The PWA's (#261), to be the same on both clients.
+    public static readonly TimeSpan Window = TimeSpan.FromMilliseconds(500);
+
+    DateTimeOffset? armed;
+
+    // The controls appeared, or were brought into view: the window starts again.
+    public void Arm(DateTimeOffset now) => armed = now;
+
+    public TimeSpan Remaining(DateTimeOffset now) =>
+        armed is { } at && at + Window - now is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero;
+
+    public bool Accepts(bool pointer, DateTimeOffset now) => !pointer || Remaining(now) == TimeSpan.Zero;
 }

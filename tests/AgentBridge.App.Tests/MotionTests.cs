@@ -127,4 +127,34 @@ public sealed class MotionTests
         follow.TouchCanceled(4);
         Assert.True(follow.Follows);
     }
+
+    [Fact]
+    public void A_mouse_over_the_conversation_holds_it_as_a_finger_would()
+    {
+        var follow = new ConversationFollow();
+        follow.PointerOver(1);
+        Assert.False(follow.Follows);
+        follow.PointerLeft(1);
+        Assert.True(follow.Follows);
+    }
+
+    [Fact]
+    public void Answer_controls_take_no_click_for_500_ms_after_they_appear_or_are_scrolled_into_view_and_a_key_at_once()
+    {
+        var t0 = DateTimeOffset.Parse("2026-11-02T16:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var guard = new AnswerGuard();
+        Assert.True(guard.Accepts(pointer: true, t0));
+        Assert.Equal(TimeSpan.FromMilliseconds(500), AnswerGuard.Window);
+
+        guard.Arm(t0);
+        Assert.False(guard.Accepts(pointer: true, t0.AddMilliseconds(499)));
+        Assert.True(guard.Accepts(pointer: false, t0));
+        Assert.True(guard.Accepts(pointer: true, t0.AddMilliseconds(500)));
+
+        // Scrolled into view again: the window starts again from there.
+        guard.Arm(t0.AddMilliseconds(400));
+        Assert.False(guard.Accepts(pointer: true, t0.AddMilliseconds(800)));
+        Assert.Equal(TimeSpan.FromMilliseconds(100), guard.Remaining(t0.AddMilliseconds(800)));
+        Assert.True(guard.Accepts(pointer: true, t0.AddMilliseconds(900)));
+    }
 }

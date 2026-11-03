@@ -587,8 +587,13 @@ static partial class SelfTest
             var back = ById<Button>(page.SessionPaneView, "Back");
             if (back is not null) { ((IInvokeProvider)new ButtonAutomationPeer(back).GetPattern(PatternInterface.Invoke)).Invoke(); }
             var started = DateTime.UtcNow;
+            // Needs you's buttons take no click for a moment as the list comes back (AnswerGuard).
+            var lane = page.FindName("LaneItems") as UIElement;
+            var held = lane is { IsHitTestVisible: false };
             var returned = back is not null && await Until(() => main.Selected is null && Shows(Pane("ListPane")), TimeSpan.FromSeconds(5));
             check(returned, $"goes back to the list at once when Back is pressed while the session slides in ({(DateTime.UtcNow - started).TotalMilliseconds:0} ms)");
+            var released = await Until(() => lane is { IsHitTestVisible: true }, TimeSpan.FromSeconds(3));
+            check(held && released, $"holds Needs you's buttons from the pointer for {AnswerGuard.Window.TotalMilliseconds:0} ms as the list comes back, then takes clicks again (held: {held}, released: {released})");
         }
         else { check(false, "finds a session without a question to push"); }
 

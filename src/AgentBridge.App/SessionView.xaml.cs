@@ -50,6 +50,9 @@ public sealed partial class SessionView : UserControl
         ConversationScroll.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchUp(e.Pointer.PointerId); } }), true);
         ConversationScroll.AddHandler(PointerCanceledEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
         ConversationScroll.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => { if (Touch(e)) { follow.TouchCanceled(e.Pointer.PointerId); } }), true);
+        // A mouse or pen over the conversation holds it as a finger does (#261's guard).
+        ConversationScroll.AddHandler(PointerEnteredEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerOver(e.Pointer.PointerId); } }), true);
+        ConversationScroll.AddHandler(PointerExitedEvent, new PointerEventHandler((_, e) => { if (!Touch(e)) { follow.PointerLeft(e.Pointer.PointerId); } }), true);
         ConversationScroll.DirectManipulationStarted += (_, _) => follow.PanStarted();
         ConversationScroll.DirectManipulationCompleted += (_, _) => follow.PanEnded();
     }
@@ -233,6 +236,7 @@ public sealed partial class SessionView : UserControl
             // at start or with animations off), and that queued scroll then stands down.
             var inQuestion = Motion.Within(target, QuestionCard);
             (inQuestion ? (UIElement)QuestionCard : target).StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Ready && Motion.Scrolls });
+            if (inQuestion) { GuardAnswer(); }
             questionScrolled |= inQuestion;
             if (focusPending) { focusPending = false; LayoutUpdated -= OnFocusLayout; }
         }
@@ -269,6 +273,7 @@ public sealed partial class SessionView : UserControl
         {
             if (Card != card || QuestionCard.Visibility != Visibility.Visible || questionScrolled) { return; }
             QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = smooth });
+            GuardAnswer();
         });
     }
 
@@ -288,7 +293,9 @@ public sealed partial class SessionView : UserControl
         {
             // Asked again: a scroll of the person's own since (a wheel, a key) has the last word.
             // Follows changes only as the view moves, never as the question is laid out above it.
-            if (Card == card && follow.Follows && layout?.ShowConversation == true && QuestionCard.Visibility == Visibility.Visible) { QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Motion.Scrolls }); }
+            if (Card != card || !follow.Follows || layout?.ShowConversation != true || QuestionCard.Visibility != Visibility.Visible) { return; }
+            QuestionCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = Motion.Scrolls });
+            GuardAnswer();
         });
     }
 
@@ -368,6 +375,7 @@ public sealed partial class SessionView : UserControl
         questionView?.Detach();
         questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText) { Tag = q };
         QuestionHost.Content = questionView;
+        if (questionView is not null) { GuardAnswer(); }
         QuestionCard.Visibility = Ui.Some(questionView);
     }
 
@@ -494,5 +502,34 @@ public sealed partial class SessionView : UserControl
         await reader.LoadAsync((uint)output.Size);
         reader.ReadBytes(bytes);
         return bytes;
+    }
+
+    // The question's controls take no click for a moment after they appear or are brought into
+    // view (App.Core's AnswerGuard): out of hit testing meanwhile, so a pointer passes through to
+    // nothing, while keyboard focus and keys work as ever.
+    readonly AnswerGuard guard = new();
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? guardTimer;
+
+    void GuardAnswer()
+    {
+        if (questionView is null) { return; }
+        guard.Arm(DateTimeOffset.UtcNow);
+        questionView.IsHitTestVisible = false;
+        guardTimer ??= NewGuardTimer();
+        guardTimer.Interval = guard.Remaining(DateTimeOffset.UtcNow);
+        guardTimer.Start();
+    }
+
+    Microsoft.UI.Dispatching.DispatcherQueueTimer NewGuardTimer()
+    {
+        var timer = DispatcherQueue.CreateTimer();
+        timer.IsRepeating = false;
+        timer.Tick += (t, _) =>
+        {
+            var left = guard.Remaining(DateTimeOffset.UtcNow);
+            if (left > TimeSpan.Zero) { t.Interval = left; t.Start(); return; }
+            if (questionView is not null) { questionView.IsHitTestVisible = true; }
+        };
+        return timer;
     }
 }

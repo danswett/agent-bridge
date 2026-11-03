@@ -115,6 +115,8 @@ public sealed partial class SessionsPage : UserControl
     void OnMoved(PaneMove move)
     {
         if (move.Kind == PaneMotion.Settle) { Session.Moved(move); return; }
+        // The list, and its lane, back under a pointer that was on the session, motion or none.
+        if (move.Kind == PaneMotion.Pop) { GuardLane(); }
         if (!ready) { return; }
         switch (move.Kind)
         {
@@ -146,6 +148,9 @@ public sealed partial class SessionsPage : UserControl
     // there at once, and never fade or move.
     void OnLaneChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        // An entry appearing, or the lane's entries moving, can put Approve once under a pointer
+        // aimed at something else: the lane takes no click for a moment (AnswerGuard).
+        if (e.Action is NotifyCollectionChangedAction.Add or NotifyCollectionChangedAction.Move) { GuardLane(); }
         if (!ready || viewModel is null || Layout?.ShowList != true || e.Action != NotifyCollectionChangedAction.Add) { return; }
         foreach (NeedsYouEntry entry in e.NewItems ?? Array.Empty<object>())
         {
@@ -341,5 +346,30 @@ public sealed partial class SessionsPage : UserControl
             item.Click += (_, _) => viewModel.SortIndex = index;
             SortMenu.Items.Add(item);
         }
+    }
+
+    // Needs you's Approve once and Deny take no click for a moment after an entry appears or the
+    // list comes back (App.Core's AnswerGuard): the lane is out of hit testing meanwhile, while
+    // keyboard focus and keys work as ever.
+    readonly AnswerGuard laneGuard = new();
+    Microsoft.UI.Dispatching.DispatcherQueueTimer? laneTimer;
+
+    void GuardLane()
+    {
+        laneGuard.Arm(DateTimeOffset.UtcNow);
+        LaneItems.IsHitTestVisible = false;
+        if (laneTimer is null)
+        {
+            laneTimer = DispatcherQueue.CreateTimer();
+            laneTimer.IsRepeating = false;
+            laneTimer.Tick += (t, _) =>
+            {
+                var left = laneGuard.Remaining(DateTimeOffset.UtcNow);
+                if (left > TimeSpan.Zero) { t.Interval = left; t.Start(); return; }
+                LaneItems.IsHitTestVisible = true;
+            };
+        }
+        laneTimer.Interval = laneGuard.Remaining(DateTimeOffset.UtcNow);
+        laneTimer.Start();
     }
 }
