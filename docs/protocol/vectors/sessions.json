@@ -352,19 +352,6 @@
             "status": "done",
             "startedAt": "2026-10-28T04:22:43.182Z"
           }
-        }
-      ],
-      "refused": [
-        {
-          "name": "missing-id",
-          "json": {
-            "name": "edit",
-            "summary": "src/AgentBridge.Protocol/Sessions.cs",
-            "status": "done",
-            "startedAt": "2026-10-28T04:22:43.182Z",
-            "endedAt": "2026-10-28T04:22:45.182Z"
-          },
-          "refusedBy": "parse"
         },
         {
           "name": "missing-name",
@@ -375,7 +362,14 @@
             "startedAt": "2026-10-28T04:22:43.182Z",
             "endedAt": "2026-10-28T04:22:45.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "call_6",
+            "name": "",
+            "summary": "src/AgentBridge.Protocol/Sessions.cs",
+            "status": "done",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:22:45.182Z"
+          }
         },
         {
           "name": "missing-status",
@@ -386,7 +380,14 @@
             "startedAt": "2026-10-28T04:22:43.182Z",
             "endedAt": "2026-10-28T04:22:45.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "call_6",
+            "name": "edit",
+            "summary": "src/AgentBridge.Protocol/Sessions.cs",
+            "status": "done",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:22:45.182Z"
+          }
         },
         {
           "name": "missing-startedAt",
@@ -395,6 +396,26 @@
             "name": "edit",
             "summary": "src/AgentBridge.Protocol/Sessions.cs",
             "status": "done",
+            "endedAt": "2026-10-28T04:22:45.182Z"
+          },
+          "reads": {
+            "id": "call_6",
+            "name": "edit",
+            "summary": "src/AgentBridge.Protocol/Sessions.cs",
+            "status": "done",
+            "startedAt": "0001-01-01T00:00:00.000Z",
+            "endedAt": "2026-10-28T04:22:45.182Z"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-id",
+          "json": {
+            "name": "edit",
+            "summary": "src/AgentBridge.Protocol/Sessions.cs",
+            "status": "done",
+            "startedAt": "2026-10-28T04:22:43.182Z",
             "endedAt": "2026-10-28T04:22:45.182Z"
           },
           "refusedBy": "parse"
@@ -695,9 +716,188 @@
             "fields": [],
             "askedAt": "2026-10-28T04:22:43.182Z"
           }
+        },
+        {
+          "name": "missing-askedAt",
+          "json": {
+            "id": "call_q1",
+            "kind": "form",
+            "message": "Which spike next, and **why**?",
+            "fields": [
+              {
+                "name": "spike",
+                "title": "Spike",
+                "description": "Which spike to run next",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "s6",
+                    "label": "S6: TPM-backed device keys (Recommended)"
+                  },
+                  {
+                    "value": "s7"
+                  }
+                ],
+                "allowOther": true,
+                "default": "s6",
+                "required": true
+              },
+              {
+                "name": "parts",
+                "title": "Parts",
+                "type": "multi",
+                "options": [
+                  {
+                    "value": "host"
+                  },
+                  {
+                    "value": "relay"
+                  },
+                  {
+                    "value": "pwa"
+                  }
+                ],
+                "allowOther": true
+              },
+              {
+                "name": "confirm",
+                "type": "boolean"
+              },
+              {
+                "name": "notes",
+                "type": "text"
+              },
+              {
+                "name": "count",
+                "type": "number",
+                "default": 3
+              }
+            ]
+          },
+          "reads": {
+            "id": "call_q1",
+            "kind": "form",
+            "message": "Which spike next, and **why**?",
+            "fields": [
+              {
+                "name": "spike",
+                "title": "Spike",
+                "description": "Which spike to run next",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "s6",
+                    "label": "S6: TPM-backed device keys (Recommended)"
+                  },
+                  {
+                    "value": "s7"
+                  }
+                ],
+                "allowOther": true,
+                "default": "s6",
+                "required": true
+              },
+              {
+                "name": "parts",
+                "title": "Parts",
+                "type": "multi",
+                "options": [
+                  {
+                    "value": "host"
+                  },
+                  {
+                    "value": "relay"
+                  },
+                  {
+                    "value": "pwa"
+                  }
+                ],
+                "allowOther": true
+              },
+              {
+                "name": "confirm",
+                "type": "boolean"
+              },
+              {
+                "name": "notes",
+                "type": "text"
+              },
+              {
+                "name": "count",
+                "type": "number",
+                "default": 3
+              }
+            ],
+            "askedAt": "0001-01-01T00:00:00.000Z"
+          }
         }
       ],
       "refused": [
+        {
+          "name": "a-choice-that-cannot-be-read",
+          "json": {
+            "id": "req-41#3f9a",
+            "kind": "approval",
+            "message": "Run `git push`?",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": "Approve once"
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  },
+                  null
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-choice-label-that-is-not-text",
+          "json": {
+            "id": "req-41#3f9a",
+            "kind": "approval",
+            "message": "Run `git push`?",
+            "fields": [
+              {
+                "name": "decision",
+                "type": "choice",
+                "options": [
+                  {
+                    "value": "approve",
+                    "label": true
+                  },
+                  {
+                    "value": "deny",
+                    "label": "Deny"
+                  }
+                ]
+              }
+            ],
+            "askedAt": "2026-10-28T04:22:43.182Z"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "a-delegate-that-is-not-an-id",
+          "json": {
+            "id": "call_q2",
+            "kind": "form",
+            "message": "Which branch should I use?",
+            "fields": [],
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "agent": 1
+          },
+          "refusedBy": "parse"
+        },
         {
           "name": "missing-id",
           "json": {
@@ -876,65 +1076,6 @@
           "refusedBy": "parse"
         },
         {
-          "name": "missing-askedAt",
-          "json": {
-            "id": "call_q1",
-            "kind": "form",
-            "message": "Which spike next, and **why**?",
-            "fields": [
-              {
-                "name": "spike",
-                "title": "Spike",
-                "description": "Which spike to run next",
-                "type": "choice",
-                "options": [
-                  {
-                    "value": "s6",
-                    "label": "S6: TPM-backed device keys (Recommended)"
-                  },
-                  {
-                    "value": "s7"
-                  }
-                ],
-                "allowOther": true,
-                "default": "s6",
-                "required": true
-              },
-              {
-                "name": "parts",
-                "title": "Parts",
-                "type": "multi",
-                "options": [
-                  {
-                    "value": "host"
-                  },
-                  {
-                    "value": "relay"
-                  },
-                  {
-                    "value": "pwa"
-                  }
-                ],
-                "allowOther": true
-              },
-              {
-                "name": "confirm",
-                "type": "boolean"
-              },
-              {
-                "name": "notes",
-                "type": "text"
-              },
-              {
-                "name": "count",
-                "type": "number",
-                "default": 3
-              }
-            ]
-          },
-          "refusedBy": "parse"
-        },
-        {
           "name": "wrong-type-id",
           "json": {
             "id": 42,
@@ -1012,18 +1153,20 @@
             "agents": 0,
             "shells": 3
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-agents",
           "json": {
             "agents": "many",
             "shells": 1
           },
-          "refusedBy": "parse"
+          "reads": {
+            "agents": 0,
+            "shells": 1
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "ActivitySource": {
       "direction": "host",
@@ -1071,9 +1214,7 @@
             "response": "Main agent's answer",
             "at": "2026-10-28T04:22:43.182Z"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-response",
           "json": {
@@ -1082,9 +1223,14 @@
             "reasoning": "Main agent's thought",
             "at": "2026-10-28T04:22:43.182Z"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "responseTruncated": true,
+            "reasoning": "Main agent's thought",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "Activity": {
       "direction": "host",
@@ -1131,9 +1277,7 @@
         {
           "name": "empty",
           "json": {}
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-response",
           "json": {
@@ -1172,9 +1316,44 @@
               "at": "2026-10-28T04:22:43.182Z"
             }
           },
-          "refusedBy": "parse"
+          "reads": {
+            "responseTruncated": true,
+            "reasoning": "The suite is green; summarize.",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "history": [
+              {
+                "id": "call_6",
+                "name": "edit",
+                "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                "status": "done",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:22:45.182Z"
+              }
+            ],
+            "userMessage": "Run the tests",
+            "turnCount": 4,
+            "compactions": 1,
+            "background": {
+              "agents": 1,
+              "shells": 2
+            },
+            "source": {
+              "reasoning": "agent-1"
+            },
+            "own": {
+              "reasoning": "Waiting on the delegate.",
+              "at": "2026-10-28T04:22:43.182Z"
+            }
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "Subagent": {
       "direction": "host",
@@ -1258,29 +1437,6 @@
             "outcome": "done",
             "shells": 0
           }
-        }
-      ],
-      "refused": [
-        {
-          "name": "missing-id",
-          "json": {
-            "kind": "background",
-            "name": "Run the suite",
-            "task": "Run every test and report failures",
-            "model": "claude-haiku-5.5",
-            "status": "working",
-            "startedAt": "2026-10-28T04:22:43.182Z",
-            "line": "Running the protocol tests",
-            "currentTool": {
-              "id": "call_7",
-              "name": "powershell",
-              "summary": "Run the protocol tests",
-              "status": "running",
-              "startedAt": "2026-10-28T04:25:43.182Z"
-            },
-            "shells": 1
-          },
-          "refusedBy": "parse"
         },
         {
           "name": "missing-kind",
@@ -1301,7 +1457,24 @@
             },
             "shells": 1
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "agent-1",
+            "kind": "task",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          }
         },
         {
           "name": "missing-status",
@@ -1311,6 +1484,46 @@
             "name": "Run the suite",
             "task": "Run every test and report failures",
             "model": "claude-haiku-5.5",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          "reads": {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "idle",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-id",
+          "json": {
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
             "startedAt": "2026-10-28T04:22:43.182Z",
             "line": "Running the protocol tests",
             "currentTool": {
@@ -1581,117 +1794,61 @@
             "activity": {},
             "driver": "person"
           }
-        }
-      ],
-      "refused": [
+        },
         {
-          "name": "missing-id",
+          "name": "a-title-that-is-not-text-and-no-status",
           "json": {
-            "agent": "copilot",
-            "title": "Protocol vectors",
-            "cwd": "C:\\src\\agent-bridge",
-            "repository": "danswett/agent-bridge",
-            "branch": "quality/protocol-vectors",
-            "model": "claude-opus-5.5",
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "title": 5,
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          },
+          "reads": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          }
+        },
+        {
+          "name": "a-question-whose-message-is-not-text",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
             "status": "waiting",
-            "statusSince": "2026-10-28T04:25:43.182Z",
-            "startedAt": "2026-10-28T04:22:43.182Z",
-            "updatedAt": "2026-10-28T04:25:43.182Z",
-            "processId": 4120,
-            "activity": {
-              "response": "All **47** tests pass.",
-              "responseTruncated": true,
-              "reasoning": "The suite is green; summarize.",
-              "currentTool": {
-                "id": "call_7",
-                "name": "powershell",
-                "summary": "Run the protocol tests",
-                "status": "running",
-                "startedAt": "2026-10-28T04:25:43.182Z"
-              },
-              "history": [
-                {
-                  "id": "call_6",
-                  "name": "edit",
-                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
-                  "status": "done",
-                  "startedAt": "2026-10-28T04:22:43.182Z",
-                  "endedAt": "2026-10-28T04:22:45.182Z"
-                }
-              ],
-              "userMessage": "Run the tests",
-              "turnCount": 4,
-              "compactions": 1,
-              "background": {
-                "agents": 1,
-                "shells": 2
-              },
-              "source": {
-                "reasoning": "agent-1"
-              },
-              "own": {
-                "reasoning": "Waiting on the delegate.",
-                "at": "2026-10-28T04:22:43.182Z"
-              }
-            },
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {},
             "question": {
-              "id": "call_q1",
+              "id": "call_q2",
               "kind": "form",
-              "message": "Which spike next, and **why**?",
-              "fields": [
-                {
-                  "name": "spike",
-                  "title": "Spike",
-                  "description": "Which spike to run next",
-                  "type": "choice",
-                  "options": [
-                    {
-                      "value": "s6",
-                      "label": "S6: TPM-backed device keys (Recommended)"
-                    },
-                    {
-                      "value": "s7"
-                    }
-                  ],
-                  "allowOther": true,
-                  "default": "s6",
-                  "required": true
-                },
-                {
-                  "name": "parts",
-                  "title": "Parts",
-                  "type": "multi",
-                  "options": [
-                    {
-                      "value": "host"
-                    },
-                    {
-                      "value": "relay"
-                    },
-                    {
-                      "value": "pwa"
-                    }
-                  ],
-                  "allowOther": true
-                },
-                {
-                  "name": "confirm",
-                  "type": "boolean"
-                },
-                {
-                  "name": "notes",
-                  "type": "text"
-                },
-                {
-                  "name": "count",
-                  "type": "number",
-                  "default": 3
-                }
-              ],
+              "message": 7,
+              "fields": [],
               "askedAt": "2026-10-28T04:22:43.182Z"
-            },
-            "driver": "agent",
-            "driverPrincipal": "homeassistant:0f1e2d3c",
+            }
+          },
+          "reads": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "waiting",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          }
+        },
+        {
+          "name": "delegates-that-cannot-be-read",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {},
             "subagents": [
               {
                 "id": "agent-1",
@@ -1711,20 +1868,65 @@
                 },
                 "shells": 1
               },
+              null,
               {
-                "id": "agent-2",
-                "parent": "agent-1",
-                "kind": "task",
-                "status": "ended",
-                "outcome": "failed",
-                "startedAt": "2026-10-28T04:22:43.182Z",
-                "endedAt": "2026-10-28T04:25:43.182Z",
-                "shells": 0
+                "kind": "background",
+                "status": "working"
               }
-            ],
-            "subagentsMore": 2
+            ]
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {},
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              }
+            ]
+          }
+        },
+        {
+          "name": "a-source-that-cannot-be-read",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {
+              "response": "Bisecting.",
+              "source": {
+                "response": 7
+              }
+            }
+          },
+          "reads": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          }
         },
         {
           "name": "missing-agent",
@@ -1866,7 +2068,145 @@
             ],
             "subagentsMore": 2
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "unknown",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "waiting",
+            "statusSince": "2026-10-28T04:25:43.182Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:25:43.182Z",
+            "processId": 4120,
+            "activity": {
+              "response": "All **47** tests pass.",
+              "responseTruncated": true,
+              "reasoning": "The suite is green; summarize.",
+              "currentTool": {
+                "id": "call_7",
+                "name": "powershell",
+                "summary": "Run the protocol tests",
+                "status": "running",
+                "startedAt": "2026-10-28T04:25:43.182Z"
+              },
+              "history": [
+                {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              ],
+              "userMessage": "Run the tests",
+              "turnCount": 4,
+              "compactions": 1,
+              "background": {
+                "agents": 1,
+                "shells": 2
+              },
+              "source": {
+                "reasoning": "agent-1"
+              },
+              "own": {
+                "reasoning": "Waiting on the delegate.",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          }
         },
         {
           "name": "missing-status",
@@ -2008,7 +2348,145 @@
             ],
             "subagentsMore": 2
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:25:43.182Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:25:43.182Z",
+            "processId": 4120,
+            "activity": {
+              "response": "All **47** tests pass.",
+              "responseTruncated": true,
+              "reasoning": "The suite is green; summarize.",
+              "currentTool": {
+                "id": "call_7",
+                "name": "powershell",
+                "summary": "Run the protocol tests",
+                "status": "running",
+                "startedAt": "2026-10-28T04:25:43.182Z"
+              },
+              "history": [
+                {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              ],
+              "userMessage": "Run the tests",
+              "turnCount": 4,
+              "compactions": 1,
+              "background": {
+                "agents": 1,
+                "shells": 2
+              },
+              "source": {
+                "reasoning": "agent-1"
+              },
+              "own": {
+                "reasoning": "Waiting on the delegate.",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          }
         },
         {
           "name": "missing-statusSince",
@@ -2150,7 +2628,145 @@
             ],
             "subagentsMore": 2
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "waiting",
+            "statusSince": "0001-01-01T00:00:00.000Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:25:43.182Z",
+            "processId": 4120,
+            "activity": {
+              "response": "All **47** tests pass.",
+              "responseTruncated": true,
+              "reasoning": "The suite is green; summarize.",
+              "currentTool": {
+                "id": "call_7",
+                "name": "powershell",
+                "summary": "Run the protocol tests",
+                "status": "running",
+                "startedAt": "2026-10-28T04:25:43.182Z"
+              },
+              "history": [
+                {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              ],
+              "userMessage": "Run the tests",
+              "turnCount": 4,
+              "compactions": 1,
+              "background": {
+                "agents": 1,
+                "shells": 2
+              },
+              "source": {
+                "reasoning": "agent-1"
+              },
+              "own": {
+                "reasoning": "Waiting on the delegate.",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          }
         },
         {
           "name": "missing-updatedAt",
@@ -2292,7 +2908,145 @@
             ],
             "subagentsMore": 2
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "waiting",
+            "statusSince": "2026-10-28T04:25:43.182Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "0001-01-01T00:00:00.000Z",
+            "processId": 4120,
+            "activity": {
+              "response": "All **47** tests pass.",
+              "responseTruncated": true,
+              "reasoning": "The suite is green; summarize.",
+              "currentTool": {
+                "id": "call_7",
+                "name": "powershell",
+                "summary": "Run the protocol tests",
+                "status": "running",
+                "startedAt": "2026-10-28T04:25:43.182Z"
+              },
+              "history": [
+                {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              ],
+              "userMessage": "Run the tests",
+              "turnCount": 4,
+              "compactions": 1,
+              "background": {
+                "agents": 1,
+                "shells": 2
+              },
+              "source": {
+                "reasoning": "agent-1"
+              },
+              "own": {
+                "reasoning": "Waiting on the delegate.",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          }
         },
         {
           "name": "missing-activity",
@@ -2309,6 +3063,265 @@
             "startedAt": "2026-10-28T04:22:43.182Z",
             "updatedAt": "2026-10-28T04:25:43.182Z",
             "processId": 4120,
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          },
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "waiting",
+            "statusSince": "2026-10-28T04:25:43.182Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:25:43.182Z",
+            "processId": 4120,
+            "activity": {},
+            "question": {
+              "id": "call_q1",
+              "kind": "form",
+              "message": "Which spike next, and **why**?",
+              "fields": [
+                {
+                  "name": "spike",
+                  "title": "Spike",
+                  "description": "Which spike to run next",
+                  "type": "choice",
+                  "options": [
+                    {
+                      "value": "s6",
+                      "label": "S6: TPM-backed device keys (Recommended)"
+                    },
+                    {
+                      "value": "s7"
+                    }
+                  ],
+                  "allowOther": true,
+                  "default": "s6",
+                  "required": true
+                },
+                {
+                  "name": "parts",
+                  "title": "Parts",
+                  "type": "multi",
+                  "options": [
+                    {
+                      "value": "host"
+                    },
+                    {
+                      "value": "relay"
+                    },
+                    {
+                      "value": "pwa"
+                    }
+                  ],
+                  "allowOther": true
+                },
+                {
+                  "name": "confirm",
+                  "type": "boolean"
+                },
+                {
+                  "name": "notes",
+                  "type": "text"
+                },
+                {
+                  "name": "count",
+                  "type": "number",
+                  "default": 3
+                }
+              ],
+              "askedAt": "2026-10-28T04:22:43.182Z"
+            },
+            "driver": "agent",
+            "driverPrincipal": "homeassistant:0f1e2d3c",
+            "subagents": [
+              {
+                "id": "agent-1",
+                "kind": "background",
+                "name": "Run the suite",
+                "task": "Run every test and report failures",
+                "model": "claude-haiku-5.5",
+                "status": "working",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "line": "Running the protocol tests",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "shells": 1
+              },
+              {
+                "id": "agent-2",
+                "parent": "agent-1",
+                "kind": "task",
+                "status": "ended",
+                "outcome": "failed",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "endedAt": "2026-10-28T04:25:43.182Z",
+                "shells": 0
+              }
+            ],
+            "subagentsMore": 2
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "an-id-that-is-not-text",
+          "json": {
+            "id": 7,
+            "agent": "claude",
+            "status": "idle",
+            "statusSince": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:22:43.182Z",
+            "activity": {}
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-id",
+          "json": {
+            "agent": "copilot",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "repository": "danswett/agent-bridge",
+            "branch": "quality/protocol-vectors",
+            "model": "claude-opus-5.5",
+            "status": "waiting",
+            "statusSince": "2026-10-28T04:25:43.182Z",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "updatedAt": "2026-10-28T04:25:43.182Z",
+            "processId": 4120,
+            "activity": {
+              "response": "All **47** tests pass.",
+              "responseTruncated": true,
+              "reasoning": "The suite is green; summarize.",
+              "currentTool": {
+                "id": "call_7",
+                "name": "powershell",
+                "summary": "Run the protocol tests",
+                "status": "running",
+                "startedAt": "2026-10-28T04:25:43.182Z"
+              },
+              "history": [
+                {
+                  "id": "call_6",
+                  "name": "edit",
+                  "summary": "src/AgentBridge.Protocol/Sessions.cs",
+                  "status": "done",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:22:45.182Z"
+                }
+              ],
+              "userMessage": "Run the tests",
+              "turnCount": 4,
+              "compactions": 1,
+              "background": {
+                "agents": 1,
+                "shells": 2
+              },
+              "source": {
+                "reasoning": "agent-1"
+              },
+              "own": {
+                "reasoning": "Waiting on the delegate.",
+                "at": "2026-10-28T04:22:43.182Z"
+              }
+            },
             "question": {
               "id": "call_q1",
               "kind": "form",
@@ -2760,9 +3773,7 @@
             "sessions": [],
             "revision": 7
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-next",
           "json": {
@@ -2914,9 +3925,157 @@
               ]
             }
           },
-          "refusedBy": "parse"
+          "reads": {
+            "sessions": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "copilot",
+                "title": "Protocol vectors",
+                "cwd": "C:\\src\\agent-bridge",
+                "repository": "danswett/agent-bridge",
+                "branch": "quality/protocol-vectors",
+                "model": "claude-opus-5.5",
+                "status": "waiting",
+                "statusSince": "2026-10-28T04:25:43.182Z",
+                "startedAt": "2026-10-28T04:22:43.182Z",
+                "updatedAt": "2026-10-28T04:25:43.182Z",
+                "processId": 4120,
+                "activity": {
+                  "response": "All **47** tests pass.",
+                  "responseTruncated": true,
+                  "reasoning": "The suite is green; summarize.",
+                  "currentTool": {
+                    "id": "call_7",
+                    "name": "powershell",
+                    "summary": "Run the protocol tests",
+                    "status": "running",
+                    "startedAt": "2026-10-28T04:25:43.182Z"
+                  },
+                  "userMessage": "Run the tests",
+                  "turnCount": 4,
+                  "compactions": 1,
+                  "background": {
+                    "agents": 1,
+                    "shells": 2
+                  },
+                  "source": {
+                    "reasoning": "agent-1"
+                  },
+                  "own": {
+                    "reasoning": "Waiting on the delegate.",
+                    "at": "2026-10-28T04:22:43.182Z"
+                  }
+                },
+                "question": {
+                  "id": "call_q1",
+                  "kind": "form",
+                  "message": "Which spike next, and **why**?",
+                  "fields": [
+                    {
+                      "name": "spike",
+                      "title": "Spike",
+                      "description": "Which spike to run next",
+                      "type": "choice",
+                      "options": [
+                        {
+                          "value": "s6",
+                          "label": "S6: TPM-backed device keys (Recommended)"
+                        },
+                        {
+                          "value": "s7"
+                        }
+                      ],
+                      "allowOther": true,
+                      "default": "s6",
+                      "required": true
+                    },
+                    {
+                      "name": "parts",
+                      "title": "Parts",
+                      "type": "multi",
+                      "options": [
+                        {
+                          "value": "host"
+                        },
+                        {
+                          "value": "relay"
+                        },
+                        {
+                          "value": "pwa"
+                        }
+                      ],
+                      "allowOther": true
+                    },
+                    {
+                      "name": "confirm",
+                      "type": "boolean"
+                    },
+                    {
+                      "name": "notes",
+                      "type": "text"
+                    },
+                    {
+                      "name": "count",
+                      "type": "number",
+                      "default": 3
+                    }
+                  ],
+                  "askedAt": "2026-10-28T04:22:43.182Z"
+                },
+                "driver": "agent",
+                "driverPrincipal": "homeassistant:0f1e2d3c",
+                "subagents": [
+                  {
+                    "id": "agent-1",
+                    "kind": "background",
+                    "name": "Run the suite",
+                    "task": "Run every test and report failures",
+                    "model": "claude-haiku-5.5",
+                    "status": "working",
+                    "startedAt": "2026-10-28T04:22:43.182Z",
+                    "line": "Running the protocol tests",
+                    "currentTool": {
+                      "id": "call_7",
+                      "name": "powershell",
+                      "summary": "Run the protocol tests",
+                      "status": "running",
+                      "startedAt": "2026-10-28T04:25:43.182Z"
+                    },
+                    "shells": 1
+                  },
+                  {
+                    "id": "agent-2",
+                    "parent": "agent-1",
+                    "kind": "task",
+                    "status": "ended",
+                    "outcome": "failed",
+                    "startedAt": "2026-10-28T04:22:43.182Z",
+                    "endedAt": "2026-10-28T04:25:43.182Z",
+                    "shells": 0
+                  }
+                ],
+                "subagentsMore": 2
+              },
+              {
+                "id": "b7e1c2d3-0000-4000-8000-000000000001",
+                "agent": "claude",
+                "status": "idle",
+                "statusSince": "2026-10-28T04:22:43.182Z",
+                "updatedAt": "2026-10-28T04:22:43.182Z",
+                "activity": {}
+              }
+            ],
+            "revision": 118,
+            "discoveryHeld": {
+              "reason": "an unrecognised copilot process (pid 4120)",
+              "agents": [
+                "copilot"
+              ]
+            }
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "DiscoveryChanged": {
       "direction": "host",
@@ -2935,17 +4094,16 @@
         {
           "name": "released",
           "json": {}
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-discoveryHeld",
           "json": {
             "discoveryHeld": "wrong"
           },
-          "refusedBy": "parse"
+          "reads": {}
         }
-      ]
+      ],
+      "refused": []
     },
     "ListRequest": {
       "direction": "client",
@@ -2980,18 +4138,20 @@
             "revision": 118,
             "count": 3
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-revision",
           "json": {
             "revision": "many",
             "count": 3
           },
-          "refusedBy": "parse"
+          "reads": {
+            "revision": 0,
+            "count": 3
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "SessionsSynced": {
       "direction": "host",
@@ -3013,9 +4173,7 @@
           "json": {
             "revision": 118
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-revision",
           "json": {
@@ -3027,6 +4185,21 @@
               ]
             }
           },
+          "reads": {
+            "revision": 0,
+            "discoveryHeld": {
+              "reason": "an unrecognised copilot process (pid 4120)",
+              "agents": [
+                "copilot"
+              ]
+            }
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "not-a-record",
+          "json": [],
           "refusedBy": "parse"
         }
       ]
@@ -3161,22 +4334,12 @@
           "context": "an-approval"
         },
         {
-          "name": "words-led-by-a-hangul-filler",
+          "name": "a-byte-order-mark-is-text",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "question": "call_q2",
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "ㅤship it"
-          },
-          "context": "a-plain-question"
-        },
-        {
-          "name": "a-joined-emoji",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uD83D\uDC68‍\uD83D\uDC69‍\uD83D\uDC67"
+            "text": "\uFEFF"
           },
           "context": "a-plain-question"
         }
@@ -3251,101 +4414,6 @@
           "context": "a-plain-question",
           "refusedBy": "Answers.Check",
           "reason": "the answer is empty"
-        },
-        {
-          "name": "only-a-byte-order-mark",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uFEFF"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "only-a-hangul-filler",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "ㅤ"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "only-a-variation-selector-and-a-combining-mark",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "️́"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "only-a-blank-braille-pattern",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "⠀"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "only-default-ignorables",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "͏\u2065\uDB40\uDC00\uDB40\uDD00"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "only-an-unassigned-code-point",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q2",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\u0378"
-          },
-          "context": "a-plain-question",
-          "refusedBy": "Answers.Check",
-          "reason": "the answer is empty"
-        },
-        {
-          "name": "an-other-answer-of-only-a-hangul-filler",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "question": "call_q1",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "fields": {
-              "spike": {
-                "other": "ㅤ"
-              },
-              "parts": [
-                "host",
-                "pwa"
-              ],
-              "confirm": true,
-              "notes": "Run it on Linux too",
-              "count": 3
-            }
-          },
-          "context": "a-form",
-          "refusedBy": "Answers.Check",
-          "reason": "\"Spike\": the other answer is empty"
         },
         {
           "name": "no-answer-at-all",
@@ -3826,18 +4894,19 @@
             "outcome": "unconfirmed",
             "reason": "later"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-reason",
           "json": {
             "outcome": "delivered",
             "reason": 42
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "delivered"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "ReplyRequest": {
       "direction": "client",
@@ -3929,14 +4998,6 @@
             "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
             "text": "\u00A0hello"
           }
-        },
-        {
-          "name": "a-joined-emoji-then-a-slash",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uD83D\uDC68‍\uD83D\uDC69‍\uD83D\uDC67 /tmp is full"
-          }
         }
       ],
       "refused": [
@@ -3999,116 +5060,6 @@
           },
           "refusedBy": "Replies.Check",
           "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-slash-command-after-a-zero-width-space",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "​/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-lone-slash-after-a-hangul-filler",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "ㅤ/"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-shell-command-after-a-tag-character",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uDB40\uDC01!dir"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
-        },
-        {
-          "name": "only-invisible-characters",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "ㅤ​️⠀"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "the reply is empty"
-        },
-        {
-          "name": "a-slash-command-after-a-combining-grapheme-joiner",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "͏/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-shell-command-after-an-invisible-operator",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\u2065!dir"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
-        },
-        {
-          "name": "a-slash-command-after-a-language-tag",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uDB40\uDC00/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-slash-command-after-a-variation-selector-supplement",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\uDB40\uDD00/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-slash-command-after-a-blank-braille-pattern",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "⠀/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-slash-command-after-a-combining-mark",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "́/clear"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with /, which the agent would run as a command; type commands at the machine"
-        },
-        {
-          "name": "a-shell-command-after-an-unassigned-code-point",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "request": "3d5e7f90-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
-            "text": "\u0378!dir"
-          },
-          "refusedBy": "Replies.Check",
-          "reason": "a reply cannot start with !, which the agent would run as a shell command; type commands at the machine"
         },
         {
           "name": "eleven-attachments",
@@ -4252,18 +5203,19 @@
           "reads": {
             "outcome": "unconfirmed"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-reason",
           "json": {
             "outcome": "delivered",
             "reason": 42
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "delivered"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "StopRequest": {
       "direction": "client",
@@ -4408,107 +5360,28 @@
             "outcome": "failed",
             "reason": "later"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-reason",
           "json": {
             "outcome": "ended",
             "reason": 42
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "ended"
+          }
         }
-      ]
+      ],
+      "refused": []
     }
   },
   "knownDifferences": [
     {
-      "vector": "AnswerResult/wrong-type-reason",
+      "vector": "ActivitySource/wrong-type-response",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ReplyResult/wrong-type-reason",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "StopResult/wrong-type-reason",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "MachineInfo/wrong-type-id",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "HelloResult/wrong-type-protocol",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ToolCall/missing-id",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ToolCall/missing-name",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ToolCall/missing-status",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ToolCall/missing-startedAt",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ToolCall/wrong-type-id",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "Option/wrong-type-value",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -4516,7 +5389,31 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "HelloResult/wrong-type-protocol",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "MachineInfo/wrong-type-id",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
+      "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "Option/wrong-type-value",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -4524,7 +5421,7 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -4532,7 +5429,7 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -4540,15 +5437,7 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "Question/missing-askedAt",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -4556,120 +5445,120 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "Background/wrong-type-agents",
+      "vector": "ToolCall/missing-id",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "ActivitySource/wrong-type-response",
+      "vector": "ToolCall/wrong-type-id",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "OwnActivity/wrong-type-response",
+      "vector": "Question/a-choice-that-cannot-be-read",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "Activity/wrong-type-response",
+      "vector": "Question/a-choice-label-that-is-not-text",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "Subagent/missing-kind",
+      "vector": "Question/a-delegate-that-is-not-an-id",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "Subagent/missing-status",
+      "vector": "Question/missing-askedAt",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "Session/missing-agent",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "Session/missing-status",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "Session/missing-statusSince",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "Session/missing-updatedAt",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "Session/missing-activity",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "SessionList/wrong-type-next",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "DiscoveryChanged/wrong-type-discoveryHeld",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "SessionsSynced/wrong-type-revision",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "Subagent/missing-status",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "ToolCall/missing-name",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "ToolCall/missing-startedAt",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "SessionsSynced/not-a-record",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
+      "pwa": "reads it as a synced with no revision, which ends the snapshot"
+    },
+    {
+      "vector": "AnswerRequest/a-byte-order-mark-is-text",
+      "issue": 448,
+      "differs": "pwa",
+      "step": "check",
+      "csharp": "takes it: U+FEFF is not whitespace to string.IsNullOrWhiteSpace",
+      "pwa": "checkAnswer reads it as blank and refuses it as empty"
     }
   ]
 }

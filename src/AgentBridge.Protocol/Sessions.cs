@@ -287,9 +287,9 @@ public enum AnswerOutcome { Delivered, Unconfirmed, Stale, Busy, Refused }
 // design G5), for a client to say so rather than only leave the controls out. Instance: this
 // run of the host, new each time it starts, so a client can tell a reconnect to the same process
 // from a restart.
-public sealed record MachineInfo(string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
+public sealed record MachineInfo([property: Strict(Strictness.Identity)] string Id, string Name, string Os, string HostVersion, bool? Dev = null, int? Sessions = null, string? ReadOnly = null, string? Instance = null);
 
-public sealed record HelloResult(int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
+public sealed record HelloResult([property: Strict(Strictness.Identity)] int Protocol, MachineInfo Machine, IReadOnlyList<string> Capabilities);
 
 public sealed record Session
 {

@@ -122,7 +122,9 @@ public static class LocalClient
     // the pipe after saying why; that reason is what the caller gets.
     public static async Task<HelloResult> HelloAsync(this IClientChannel channel, CancellationToken ct = default)
     {
-        try { return await channel.CallAsync<HelloResult>(Ops.Hello, ct: ct); }
+        // Read as any host record is (Received): a machine without a readable id or protocol is
+        // refused, any other field it cannot read is absent.
+        try { return await channel.ReadAsync<HelloResult>(Ops.Hello, ct: ct); }
         catch (Exception e) when (e is IOException or HostErrorException && Refusal(channel) is { } reason) { throw new LocalRefusedException(reason); }
     }
 

@@ -15,6 +15,10 @@ public static class ProtocolVectors
     const string Client = "client";
     const string HostToHost = "host-to-host";
 
+    // Whether a vector's record is read under v1-sessions.md "Malformed records" (Received): one a
+    // host sends a client over the channel. Not a push (push.json), and not one host to another.
+    public static bool ReadLeniently(string direction, string file) => direction == Host && file != "push.json";
+
     static readonly DateTimeOffset T0 = new(2026, 10, 28, 4, 22, 43, 182, TimeSpan.Zero);
     static readonly DateTimeOffset T1 = T0.AddMinutes(3);
     const string SessionId = "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b";
@@ -27,6 +31,14 @@ public static class ProtocolVectors
     static readonly string BlobKey = Attachments.Base64Url([.. Enumerable.Range(0, 32).Select(i => (byte)i)]);
 
     static string Repeat(char c, int n) => new(c, n);
+
+    // A record as written, then broken: the malformed records v1-sessions.md decides (#446).
+    static string Broken<T>(T value, Action<System.Text.Json.Nodes.JsonObject> change)
+    {
+        var json = JsonSerializer.SerializeToNode(value, ProtocolJson.Options)!.AsObject();
+        change(json);
+        return json.ToJsonString();
+    }
 
     public static IReadOnlyDictionary<string, System.Text.Json.Nodes.JsonObject> Files()
     {
@@ -124,7 +136,11 @@ public static class ProtocolVectors
             .Valid("approval", Approval)
             .Valid("truncated", Plain with { Truncated = true, Fields = [] })
             .Valid("a-delegates-question-answered-at-the-machine", Plain with { AnswerAtMachine = true, Agent = "agent-1" })
-            .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""");
+            .Reads("an-unknown-kind-reads-as-a-form", """{"id":"q","kind":"wizard","message":"m","fields":[],"askedAt":"2026-10-28T04:22:43.182Z"}""")
+            // Never shown with a choice left out, or a choice without the words it was asked with.
+            .Refused("a-choice-that-cannot-be-read", Broken(Approval, j => j["fields"]![0]!["options"]!.AsArray().Add(null)))
+            .Refused("a-choice-label-that-is-not-text", Broken(Approval, j => j["fields"]![0]!["options"]![0]!["label"] = true))
+            .Refused("a-delegate-that-is-not-an-id", Broken(Plain with { Agent = "agent-1" }, j => j["agent"] = 1));
         f.Record<Background>(Host)
             .Valid("agents-and-shells", new Background { Agents = 2, Shells = 1 })
             .Valid("shells-only", new Background { Agents = 0, Shells = 3 });
@@ -147,7 +163,17 @@ public static class ProtocolVectors
             .Valid("minimal", MinimalSession)
             .Valid("waiting-on-a-delegate", MinimalSession with { Agent = AgentKind.Copilot, Status = SessionStatus.Waiting, Question = Plain with { Agent = "agent-1", AnswerAtMachine = true }, Subagents = [Delegate with { Status = SubagentStatus.Waiting }], WaitingOn = "agent-1" })
             .Valid("ending", MinimalSession with { Agent = AgentKind.Codex, Status = SessionStatus.Ending })
-            .Reads("unknown-values-and-fields-from-a-newer-host", """{"id":"x","agent":"gemini","status":"thinking","driver":"robot","statusSince":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:22:43.182Z","activity":{"mood":"good"},"somethingNew":{"a":1}}""");
+            .Reads("unknown-values-and-fields-from-a-newer-host", """{"id":"x","agent":"gemini","status":"thinking","driver":"robot","statusSince":"2026-10-28T04:22:43.182Z","updatedAt":"2026-10-28T04:22:43.182Z","activity":{"mood":"good"},"somethingNew":{"a":1}}""")
+            // A field that cannot be read is absent, and a required one its default, as the reads say.
+            .Reads("a-title-that-is-not-text-and-no-status", Broken(MinimalSession with { Title = "Fix the build" }, j => { j["title"] = 5; j.Remove("status"); }))
+            // A question that cannot be read is dropped; its session is kept.
+            .Reads("a-question-whose-message-is-not-text", Broken(MinimalSession with { Status = SessionStatus.Waiting, Question = Plain }, j => j["question"]!["message"] = 7))
+            // Entries of a list that cannot be read are left out, and the list kept.
+            .Reads("delegates-that-cannot-be-read", Broken(MinimalSession with { Subagents = [Delegate] }, j => { j["subagents"]!.AsArray().Add(null); j["subagents"]!.AsArray().Add(new System.Text.Json.Nodes.JsonObject { ["kind"] = "background", ["status"] = "working" }); }))
+            // Who wrote the text, unreadable: the activity is not shown, rather than a delegate's
+            // words shown as the main agent's.
+            .Reads("a-source-that-cannot-be-read", Broken(MinimalSession with { Activity = new Activity { Response = "Bisecting.", Source = new ActivitySource { Response = "agent-1" } } }, j => j["activity"]!["source"]!["response"] = 7))
+            .Refused("an-id-that-is-not-text", Broken(MinimalSession, j => j["id"] = 7));
         f.Record<DiscoveryHeld>(Host)
             .Valid("one-agent", Held)
             .Valid("every-agent", new DiscoveryHeld("the process list could not be read", [AgentKind.Copilot, AgentKind.Claude, AgentKind.Codex]));
@@ -164,7 +190,9 @@ public static class ProtocolVectors
         f.Record<SubscribeResult>(Host).Valid("three-sessions", new SubscribeResult(118, 3));
         f.Record<SessionsSynced>(Host)
             .Valid("held", new SessionsSynced(118, Held))
-            .Valid("plain", new SessionsSynced(118));
+            .Valid("plain", new SessionsSynced(118))
+            // Ends no snapshot: no session is removed and no hold lifted on a record nobody could read.
+            .Refused("not-a-record", "[]");
         f.Record<SessionRemoved>(Host).Valid("gone", new SessionRemoved(SessionId));
 
         const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields";

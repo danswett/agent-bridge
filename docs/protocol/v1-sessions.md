@@ -73,6 +73,8 @@ with the wrong type):
 
 | Record | Identity | Security |
 |---|---|---|
+| `HelloResult` | `protocol` | |
+| `MachineInfo` | `id` | |
 | `Session` | `id` | |
 | `Subagent` | `id` | |
 | `ToolCall` | `id` | |
@@ -104,6 +106,10 @@ options whose `defaults.permissions` can't be read are refused whole, so nothing
 a permission mode the client guessed. A session whose `activity.source` can't be read keeps an
 empty `activity` (rule 4: the required field takes its default): read as absent, a delegate's
 text would be shown as the main agent's.
+
+The shared vectors ([vectors/](vectors/README.md)) work these rules through for every record a
+host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
+refused because a strict field is involved.
 
 This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
 `session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as

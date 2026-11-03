@@ -38,15 +38,17 @@ public sealed class MalformedRecordException(string path, string why)
 // Only a top-level record that cannot be read is refused, as a MalformedRecordException.
 public static class Received
 {
-    public static T Read<T>(JsonElement data) where T : class =>
-        Strictly<T>(Clean(data, typeof(T), "$", strict: false), "$") ?? throw new MalformedRecordException("$", "no record");
+    public static T Read<T>(JsonElement data) where T : class => (T)Read(data, typeof(T));
+
+    public static object Read(JsonElement data, Type type) =>
+        Strictly(Clean(data, type, "$", strict: false), type, "$") ?? throw new MalformedRecordException("$", "no record");
 
     // The strict read, with every way it can fail made the one way a reader handles: a converter
     // that cannot decode its text throws InvalidOperationException or FormatException, which a
     // caller catching JsonException (the launch page) never saw.
-    static T? Strictly<T>(JsonNode? node, string path)
+    static object? Strictly(JsonNode? node, Type type, string path)
     {
-        try { return node.Deserialize<T>(ProtocolJson.Options); }
+        try { return node.Deserialize(type, ProtocolJson.Options); }
         catch (Exception x) when (x is InvalidOperationException or FormatException or NotSupportedException or ArgumentException) { throw Bad(path, "unreadable"); }
     }
 

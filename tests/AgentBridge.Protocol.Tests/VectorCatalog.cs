@@ -102,6 +102,17 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
 
     public override Type Type => typeof(T);
 
+    // A record a host sends is read as a client reads it (Received; v1-sessions.md "Malformed
+    // records", #446): a field it cannot read is absent or its default, and only a strict one
+    // refuses the record. Anything else is read as ProtocolJson.Options reads it, and so is a
+    // push, which is no channel's record: a notification the service worker cannot read is not
+    // shown at all.
+    bool ReadLeniently => ProtocolVectors.ReadLeniently(direction, file.Name);
+
+    T Read(JsonNode json) => ReadLeniently
+        ? (T)Received.Read(JsonSerializer.SerializeToElement(json), typeof(T))
+        : JsonSerializer.Deserialize<T>(json.ToJsonString(), ProtocolJson.Options)!;
+
     public override bool Has(string vector) => vector.StartsWith(typeof(T).Name + "/", StringComparison.Ordinal) && names.Contains(vector[(typeof(T).Name.Length + 1)..]);
 
     static JsonNode Json(object? value) => JsonSerializer.SerializeToNode(value, ProtocolJson.Options)!;
@@ -134,7 +145,7 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
     {
         Name(name);
         var ctx = context is null ? null : file.Context(context);
-        var record = JsonSerializer.Deserialize<T>(json.ToJsonString(), ProtocolJson.Options)!;
+        var record = Read(json);
         if (check is not null && VectorChecks.Run(check, record, ctx) is { } problem)
         {
             throw new InvalidOperationException($"{typeof(T).Name}/{name} is meant to be valid, but {check} says {problem}");
@@ -154,7 +165,7 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
         var entry = new JsonObject { ["name"] = name, ["json"] = json };
         if (context is not null) { entry["context"] = context; }
         T record;
-        try { record = JsonSerializer.Deserialize<T>(json.ToJsonString(), ProtocolJson.Options)!; }
+        try { record = Read(json); }
         catch (JsonException)
         {
             entry["refusedBy"] = "parse";
@@ -175,8 +186,26 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
         typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.GetCustomAttribute<JsonIgnoreAttribute>() is null && p.GetIndexParameters().Length == 0 && p.Name != "EqualityContract");
 
+    // A change to the first valid vector that a reader may refuse or read leniently: a record a
+    // host sends that a client still reads under the malformed-records rule is a valid vector,
+    // with what it reads as; any other is refused.
+    void Malformed(string name, Action<JsonObject> change)
+    {
+        var json = valid[0]["json"]!.DeepClone().AsObject();
+        change(json);
+        if (ReadLeniently && check is null)
+        {
+            try { _ = Read(json); }
+            catch (JsonException) { AddRefused(name, json, null); return; }
+            AddValid(name, json, null);
+            return;
+        }
+        AddRefused(name, json, null);
+    }
+
     // The refusals every record gets from its first valid vector: each required field left out,
-    // and one field of the wrong JSON type.
+    // and one field of the wrong JSON type. For a record a host sends, those a client reads
+    // anyway are valid vectors, with what they read as.
     void Mechanical()
     {
         if (valid.Count == 0) { throw new InvalidOperationException($"{typeof(T).Name} has no valid vector"); }
@@ -185,7 +214,7 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
         {
             var key = JsonName(p);
             if (!first.ContainsKey(key)) { throw new InvalidOperationException($"{typeof(T).Name}'s first vector lacks required {key}"); }
-            Refused($"missing-{key}", j => j.Remove(key));
+            Malformed($"missing-{key}", j => j.Remove(key));
         }
         var wire = WireProperties().ToList();
         var present = wire.Where(p => first.ContainsKey(JsonName(p))).ToList();
@@ -203,7 +232,7 @@ public sealed class RecordBuilder<T>(VectorFileBuilder file, string direction, s
             : type.IsPrimitive ? JsonValue.Create("many")
             : JsonValue.Create("wrong");
         var name = JsonName(wrong);
-        Refused($"wrong-type-{name}", j => j[name] = value.DeepClone());
+        Malformed($"wrong-type-{name}", j => j[name] = value.DeepClone());
     }
 
     public override JsonObject Build()

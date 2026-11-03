@@ -523,6 +523,30 @@
             "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "bytes": 1048576
           }
+        },
+        {
+          "name": "missing-session",
+          "json": {
+            "from": "00112233445566778899aabbccddeeff",
+            "bytes": 1048576
+          },
+          "reads": {
+            "from": "00112233445566778899aabbccddeeff",
+            "session": "",
+            "bytes": 1048576
+          }
+        },
+        {
+          "name": "missing-bytes",
+          "json": {
+            "from": "00112233445566778899aabbccddeeff",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
+          },
+          "reads": {
+            "from": "00112233445566778899aabbccddeeff",
+            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "bytes": 0
+          }
         }
       ],
       "refused": [
@@ -531,22 +555,6 @@
           "json": {
             "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "bytes": 1048576
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-session",
-          "json": {
-            "from": "00112233445566778899aabbccddeeff",
-            "bytes": 1048576
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-bytes",
-          "json": {
-            "from": "00112233445566778899aabbccddeeff",
-            "session": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
           },
           "refusedBy": "parse"
         },
@@ -591,9 +599,7 @@
               "bytes": 1048576
             }
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "missing-agent",
           "json": {
@@ -606,21 +612,17 @@
             "context": "1m",
             "permissions": "ask"
           },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-permissions",
-          "json": {
-            "agent": "copilot",
+          "reads": {
+            "agent": "",
             "workspace": "agent-bridge",
             "cwd": "C:\\src\\agent-bridge.worktrees\\launch-1",
             "worktree": true,
             "profile": "work",
             "model": "claude-opus-5.5",
             "effort": "high",
-            "context": "1m"
-          },
-          "refusedBy": "parse"
+            "context": "1m",
+            "permissions": "ask"
+          }
         },
         {
           "name": "wrong-type-agent",
@@ -634,6 +636,32 @@
             "effort": "high",
             "context": "1m",
             "permissions": "ask"
+          },
+          "reads": {
+            "agent": "",
+            "workspace": "agent-bridge",
+            "cwd": "C:\\src\\agent-bridge.worktrees\\launch-1",
+            "worktree": true,
+            "profile": "work",
+            "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1m",
+            "permissions": "ask"
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-permissions",
+          "json": {
+            "agent": "copilot",
+            "workspace": "agent-bridge",
+            "cwd": "C:\\src\\agent-bridge.worktrees\\launch-1",
+            "worktree": true,
+            "profile": "work",
+            "model": "claude-opus-5.5",
+            "effort": "high",
+            "context": "1m"
           },
           "refusedBy": "parse"
         }
@@ -695,9 +723,7 @@
           "reads": {
             "outcome": "unconfirmed"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-session",
           "json": {
@@ -715,9 +741,23 @@
               "permissions": "ask"
             }
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "started",
+            "launched": {
+              "agent": "copilot",
+              "workspace": "agent-bridge",
+              "cwd": "C:\\src\\agent-bridge.worktrees\\launch-1",
+              "worktree": true,
+              "profile": "work",
+              "model": "claude-opus-5.5",
+              "effort": "high",
+              "context": "1m",
+              "permissions": "ask"
+            }
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "LaunchTuning": {
       "direction": "host",
@@ -734,9 +774,7 @@
         {
           "name": "empty",
           "json": {}
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-model",
           "json": {
@@ -745,9 +783,14 @@
             "context": "1m",
             "profile": "work"
           },
-          "refusedBy": "parse"
+          "reads": {
+            "effort": "high",
+            "context": "1m",
+            "profile": "work"
+          }
         }
-      ]
+      ],
+      "refused": []
     },
     "LaunchAgent": {
       "direction": "host",
@@ -792,37 +835,6 @@
             "contexts": [],
             "needsPrompt": true
           }
-        }
-      ],
-      "refused": [
-        {
-          "name": "missing-id",
-          "json": {
-            "label": "Copilot CLI",
-            "kind": "copilot",
-            "models": [
-              "claude-opus-5.5",
-              "gpt-5.6-sol"
-            ],
-            "efforts": [
-              "low",
-              "high"
-            ],
-            "contexts": [
-              "1m"
-            ],
-            "profiles": [
-              "work"
-            ],
-            "defaults": {
-              "model": "claude-opus-5.5",
-              "effort": "high",
-              "context": "1m",
-              "profile": "work"
-            },
-            "attachments": true
-          },
-          "refusedBy": "parse"
         },
         {
           "name": "missing-label",
@@ -851,13 +863,94 @@
             },
             "attachments": true
           },
-          "refusedBy": "parse"
+          "reads": {
+            "id": "copilot",
+            "label": "",
+            "kind": "copilot",
+            "models": [
+              "claude-opus-5.5",
+              "gpt-5.6-sol"
+            ],
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "contexts": [
+              "1m"
+            ],
+            "profiles": [
+              "work"
+            ],
+            "defaults": {
+              "model": "claude-opus-5.5",
+              "effort": "high",
+              "context": "1m",
+              "profile": "work"
+            },
+            "attachments": true
+          }
         },
         {
           "name": "missing-kind",
           "json": {
             "id": "copilot",
             "label": "Copilot CLI",
+            "models": [
+              "claude-opus-5.5",
+              "gpt-5.6-sol"
+            ],
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "contexts": [
+              "1m"
+            ],
+            "profiles": [
+              "work"
+            ],
+            "defaults": {
+              "model": "claude-opus-5.5",
+              "effort": "high",
+              "context": "1m",
+              "profile": "work"
+            },
+            "attachments": true
+          },
+          "reads": {
+            "id": "copilot",
+            "label": "Copilot CLI",
+            "kind": "unknown",
+            "models": [
+              "claude-opus-5.5",
+              "gpt-5.6-sol"
+            ],
+            "efforts": [
+              "low",
+              "high"
+            ],
+            "contexts": [
+              "1m"
+            ],
+            "profiles": [
+              "work"
+            ],
+            "defaults": {
+              "model": "claude-opus-5.5",
+              "effort": "high",
+              "context": "1m",
+              "profile": "work"
+            },
+            "attachments": true
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-id",
+          "json": {
+            "label": "Copilot CLI",
+            "kind": "copilot",
             "models": [
               "claude-opus-5.5",
               "gpt-5.6-sol"
@@ -931,6 +1024,18 @@
             "label": "notes",
             "path": "/home/dev/notes"
           }
+        },
+        {
+          "name": "missing-path",
+          "json": {
+            "label": "agent-bridge",
+            "isolate": true
+          },
+          "reads": {
+            "label": "agent-bridge",
+            "path": "",
+            "isolate": true
+          }
         }
       ],
       "refused": [
@@ -938,14 +1043,6 @@
           "name": "missing-label",
           "json": {
             "path": "C:\\src\\agent-bridge",
-            "isolate": true
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-path",
-          "json": {
-            "label": "agent-bridge",
             "isolate": true
           },
           "refusedBy": "parse"
@@ -984,6 +1081,46 @@
             "launcher": "codex",
             "title": "s-2"
           }
+        },
+        {
+          "name": "missing-agent",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "launcher": "agency",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "workspace": "agent-bridge",
+            "updatedAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "unknown",
+            "launcher": "agency",
+            "title": "Protocol vectors",
+            "cwd": "C:\\src\\agent-bridge",
+            "workspace": "agent-bridge",
+            "updatedAt": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        {
+          "name": "missing-title",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "launcher": "agency",
+            "cwd": "C:\\src\\agent-bridge",
+            "workspace": "agent-bridge",
+            "updatedAt": "2026-10-28T04:22:43.182Z"
+          },
+          "reads": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "agent": "copilot",
+            "launcher": "agency",
+            "title": "",
+            "cwd": "C:\\src\\agent-bridge",
+            "workspace": "agent-bridge",
+            "updatedAt": "2026-10-28T04:22:43.182Z"
+          }
         }
       ],
       "refused": [
@@ -1000,35 +1137,11 @@
           "refusedBy": "parse"
         },
         {
-          "name": "missing-agent",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "launcher": "agency",
-            "title": "Protocol vectors",
-            "cwd": "C:\\src\\agent-bridge",
-            "workspace": "agent-bridge",
-            "updatedAt": "2026-10-28T04:22:43.182Z"
-          },
-          "refusedBy": "parse"
-        },
-        {
           "name": "missing-launcher",
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
             "agent": "copilot",
             "title": "Protocol vectors",
-            "cwd": "C:\\src\\agent-bridge",
-            "workspace": "agent-bridge",
-            "updatedAt": "2026-10-28T04:22:43.182Z"
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-title",
-          "json": {
-            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-            "agent": "copilot",
-            "launcher": "agency",
             "cwd": "C:\\src\\agent-bridge",
             "workspace": "agent-bridge",
             "updatedAt": "2026-10-28T04:22:43.182Z"
@@ -1066,6 +1179,18 @@
           "json": {
             "permissions": "allowAll"
           }
+        },
+        {
+          "name": "wrong-type-agent",
+          "json": {
+            "agent": 42,
+            "workspace": "agent-bridge",
+            "permissions": "ask"
+          },
+          "reads": {
+            "workspace": "agent-bridge",
+            "permissions": "ask"
+          }
         }
       ],
       "refused": [
@@ -1074,15 +1199,6 @@
           "json": {
             "agent": "copilot",
             "workspace": "agent-bridge"
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "wrong-type-agent",
-          "json": {
-            "agent": 42,
-            "workspace": "agent-bridge",
-            "permissions": "ask"
           },
           "refusedBy": "parse"
         }
@@ -1182,85 +1298,6 @@
               "permissions": "ask"
             }
           }
-        }
-      ],
-      "refused": [
-        {
-          "name": "missing-defaults",
-          "json": {
-            "agents": [
-              {
-                "id": "copilot",
-                "label": "Copilot CLI",
-                "kind": "copilot",
-                "models": [
-                  "claude-opus-5.5",
-                  "gpt-5.6-sol"
-                ],
-                "efforts": [
-                  "low",
-                  "high"
-                ],
-                "contexts": [
-                  "1m"
-                ],
-                "profiles": [
-                  "work"
-                ],
-                "defaults": {
-                  "model": "claude-opus-5.5",
-                  "effort": "high",
-                  "context": "1m",
-                  "profile": "work"
-                },
-                "attachments": true
-              },
-              {
-                "id": "codex",
-                "label": "Codex",
-                "kind": "codex",
-                "models": [],
-                "efforts": [],
-                "contexts": [],
-                "needsPrompt": true
-              }
-            ],
-            "workspaces": [
-              {
-                "label": "agent-bridge",
-                "path": "C:\\src\\agent-bridge",
-                "isolate": true
-              }
-            ],
-            "resumable": [
-              {
-                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
-                "agent": "copilot",
-                "launcher": "agency",
-                "title": "Protocol vectors",
-                "cwd": "C:\\src\\agent-bridge",
-                "workspace": "agent-bridge",
-                "updatedAt": "2026-10-28T04:22:43.182Z"
-              }
-            ],
-            "busy": "a launch is starting",
-            "trust": [
-              {
-                "id": "trust-1",
-                "agent": "codex",
-                "kind": "codex",
-                "label": "Codex",
-                "workspace": "agent-bridge",
-                "folder": "C:\\src\\agent-bridge\\pwa",
-                "root": "C:\\src\\agent-bridge",
-                "rootNote": "Trusting applies to the whole repository",
-                "warning": "Do you trust the files in this folder?",
-                "askedAt": "2026-10-28T04:22:43.182Z",
-                "answerable": true
-              }
-            ]
-          },
-          "refusedBy": "parse"
         },
         {
           "name": "wrong-type-busy",
@@ -1342,6 +1379,161 @@
               }
             ]
           },
+          "reads": {
+            "agents": [
+              {
+                "id": "copilot",
+                "label": "Copilot CLI",
+                "kind": "copilot",
+                "models": [
+                  "claude-opus-5.5",
+                  "gpt-5.6-sol"
+                ],
+                "efforts": [
+                  "low",
+                  "high"
+                ],
+                "contexts": [
+                  "1m"
+                ],
+                "profiles": [
+                  "work"
+                ],
+                "defaults": {
+                  "model": "claude-opus-5.5",
+                  "effort": "high",
+                  "context": "1m",
+                  "profile": "work"
+                },
+                "attachments": true
+              },
+              {
+                "id": "codex",
+                "label": "Codex",
+                "kind": "codex",
+                "models": [],
+                "efforts": [],
+                "contexts": [],
+                "needsPrompt": true
+              }
+            ],
+            "workspaces": [
+              {
+                "label": "agent-bridge",
+                "path": "C:\\src\\agent-bridge",
+                "isolate": true
+              }
+            ],
+            "resumable": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "copilot",
+                "launcher": "agency",
+                "title": "Protocol vectors",
+                "cwd": "C:\\src\\agent-bridge",
+                "workspace": "agent-bridge",
+                "updatedAt": "2026-10-28T04:22:43.182Z"
+              }
+            ],
+            "defaults": {
+              "agent": "copilot",
+              "workspace": "agent-bridge",
+              "permissions": "ask"
+            },
+            "trust": [
+              {
+                "id": "trust-1",
+                "agent": "codex",
+                "kind": "codex",
+                "label": "Codex",
+                "workspace": "agent-bridge",
+                "folder": "C:\\src\\agent-bridge\\pwa",
+                "root": "C:\\src\\agent-bridge",
+                "rootNote": "Trusting applies to the whole repository",
+                "warning": "Do you trust the files in this folder?",
+                "askedAt": "2026-10-28T04:22:43.182Z",
+                "answerable": true
+              }
+            ]
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-defaults",
+          "json": {
+            "agents": [
+              {
+                "id": "copilot",
+                "label": "Copilot CLI",
+                "kind": "copilot",
+                "models": [
+                  "claude-opus-5.5",
+                  "gpt-5.6-sol"
+                ],
+                "efforts": [
+                  "low",
+                  "high"
+                ],
+                "contexts": [
+                  "1m"
+                ],
+                "profiles": [
+                  "work"
+                ],
+                "defaults": {
+                  "model": "claude-opus-5.5",
+                  "effort": "high",
+                  "context": "1m",
+                  "profile": "work"
+                },
+                "attachments": true
+              },
+              {
+                "id": "codex",
+                "label": "Codex",
+                "kind": "codex",
+                "models": [],
+                "efforts": [],
+                "contexts": [],
+                "needsPrompt": true
+              }
+            ],
+            "workspaces": [
+              {
+                "label": "agent-bridge",
+                "path": "C:\\src\\agent-bridge",
+                "isolate": true
+              }
+            ],
+            "resumable": [
+              {
+                "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+                "agent": "copilot",
+                "launcher": "agency",
+                "title": "Protocol vectors",
+                "cwd": "C:\\src\\agent-bridge",
+                "workspace": "agent-bridge",
+                "updatedAt": "2026-10-28T04:22:43.182Z"
+              }
+            ],
+            "busy": "a launch is starting",
+            "trust": [
+              {
+                "id": "trust-1",
+                "agent": "codex",
+                "kind": "codex",
+                "label": "Codex",
+                "workspace": "agent-bridge",
+                "folder": "C:\\src\\agent-bridge\\pwa",
+                "root": "C:\\src\\agent-bridge",
+                "rootNote": "Trusting applies to the whole repository",
+                "warning": "Do you trust the files in this folder?",
+                "askedAt": "2026-10-28T04:22:43.182Z",
+                "answerable": true
+              }
+            ]
+          },
           "refusedBy": "parse"
         }
       ]
@@ -1376,6 +1568,62 @@
             "askedAt": "2026-10-28T04:22:43.182Z",
             "answerable": false,
             "atMachine": "launch.trust is off on this machine"
+          }
+        },
+        {
+          "name": "missing-label",
+          "json": {
+            "id": "trust-1",
+            "agent": "codex",
+            "kind": "codex",
+            "workspace": "agent-bridge",
+            "folder": "C:\\src\\agent-bridge\\pwa",
+            "root": "C:\\src\\agent-bridge",
+            "rootNote": "Trusting applies to the whole repository",
+            "warning": "Do you trust the files in this folder?",
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "answerable": true
+          },
+          "reads": {
+            "id": "trust-1",
+            "agent": "codex",
+            "kind": "codex",
+            "label": "",
+            "workspace": "agent-bridge",
+            "folder": "C:\\src\\agent-bridge\\pwa",
+            "root": "C:\\src\\agent-bridge",
+            "rootNote": "Trusting applies to the whole repository",
+            "warning": "Do you trust the files in this folder?",
+            "askedAt": "2026-10-28T04:22:43.182Z",
+            "answerable": true
+          }
+        },
+        {
+          "name": "missing-askedAt",
+          "json": {
+            "id": "trust-1",
+            "agent": "codex",
+            "kind": "codex",
+            "label": "Codex",
+            "workspace": "agent-bridge",
+            "folder": "C:\\src\\agent-bridge\\pwa",
+            "root": "C:\\src\\agent-bridge",
+            "rootNote": "Trusting applies to the whole repository",
+            "warning": "Do you trust the files in this folder?",
+            "answerable": true
+          },
+          "reads": {
+            "id": "trust-1",
+            "agent": "codex",
+            "kind": "codex",
+            "label": "Codex",
+            "workspace": "agent-bridge",
+            "folder": "C:\\src\\agent-bridge\\pwa",
+            "root": "C:\\src\\agent-bridge",
+            "rootNote": "Trusting applies to the whole repository",
+            "warning": "Do you trust the files in this folder?",
+            "askedAt": "0001-01-01T00:00:00.000Z",
+            "answerable": true
           }
         }
       ],
@@ -1429,22 +1677,6 @@
           "refusedBy": "parse"
         },
         {
-          "name": "missing-label",
-          "json": {
-            "id": "trust-1",
-            "agent": "codex",
-            "kind": "codex",
-            "workspace": "agent-bridge",
-            "folder": "C:\\src\\agent-bridge\\pwa",
-            "root": "C:\\src\\agent-bridge",
-            "rootNote": "Trusting applies to the whole repository",
-            "warning": "Do you trust the files in this folder?",
-            "askedAt": "2026-10-28T04:22:43.182Z",
-            "answerable": true
-          },
-          "refusedBy": "parse"
-        },
-        {
           "name": "missing-folder",
           "json": {
             "id": "trust-1",
@@ -1456,22 +1688,6 @@
             "rootNote": "Trusting applies to the whole repository",
             "warning": "Do you trust the files in this folder?",
             "askedAt": "2026-10-28T04:22:43.182Z",
-            "answerable": true
-          },
-          "refusedBy": "parse"
-        },
-        {
-          "name": "missing-askedAt",
-          "json": {
-            "id": "trust-1",
-            "agent": "codex",
-            "kind": "codex",
-            "label": "Codex",
-            "workspace": "agent-bridge",
-            "folder": "C:\\src\\agent-bridge\\pwa",
-            "root": "C:\\src\\agent-bridge",
-            "rootNote": "Trusting applies to the whole repository",
-            "warning": "Do you trust the files in this folder?",
             "answerable": true
           },
           "refusedBy": "parse"
@@ -1611,115 +1827,28 @@
           "reads": {
             "outcome": "unconfirmed"
           }
-        }
-      ],
-      "refused": [
+        },
         {
           "name": "wrong-type-session",
           "json": {
             "outcome": "started",
             "session": 42
           },
-          "refusedBy": "parse"
+          "reads": {
+            "outcome": "started"
+          }
         }
-      ]
+      ],
+      "refused": []
     }
   },
   "knownDifferences": [
-    {
-      "vector": "LaunchedTransfer/missing-session",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchedTransfer/missing-bytes",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchedWith/missing-agent",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
     {
       "vector": "LaunchedWith/missing-permissions",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchedWith/wrong-type-agent",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchResult/wrong-type-session",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchTuning/wrong-type-model",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchAgent/missing-label",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchAgent/missing-kind",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchWorkspace/missing-path",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ResumableSession/missing-agent",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "ResumableSession/missing-title",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -1727,15 +1856,7 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "LaunchOptions/wrong-type-busy",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -1743,31 +1864,7 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "TrustQuestion/missing-kind",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "TrustQuestion/missing-label",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
-      "pwa": "reads it, the field absent or its default"
-    },
-    {
-      "vector": "TrustQuestion/missing-askedAt",
-      "issue": 446,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
@@ -1775,16 +1872,80 @@
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
     },
     {
-      "vector": "TrustAnswerResult/wrong-type-session",
+      "vector": "TrustQuestion/missing-kind",
       "issue": 446,
       "differs": "pwa",
       "step": "read",
-      "csharp": "refuses the record: it cannot be deserialized",
+      "csharp": "refuses the record: the field is strict (v1-sessions.md, Malformed records)",
       "pwa": "reads it, the field absent or its default"
+    },
+    {
+      "vector": "LaunchAgent/missing-label",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "LaunchedTransfer/missing-bytes",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "LaunchedTransfer/missing-session",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "LaunchedWith/missing-agent",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "LaunchedWith/wrong-type-agent",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "ResumableSession/missing-title",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "TrustQuestion/missing-askedAt",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
+    },
+    {
+      "vector": "TrustQuestion/missing-label",
+      "issue": 446,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "reads it, the field its type's default",
+      "pwa": "reads it, the field absent or filled in from another"
     },
     {
       "vector": "LaunchRequest/a-transfer-from-something-not-a-device-id",

@@ -355,7 +355,11 @@ public sealed class ReplyViewModel : Observable
     // How often to ask whether the machine has fetched a blob yet.
     public TimeSpan BlobPoll { get; init; } = TimeSpan.FromMilliseconds(400);
 
-    static AttachmentState Read(JsonElement e) => e.Deserialize<AttachmentState>(ProtocolJson.Options) ?? throw new Local.HostErrorException("the machine's answer about the attachment was empty");
+    // Read as the spec says (v1-sessions.md "Malformed records"): a field the app cannot read is
+    // absent, so an unreadable count reads as 0 received and the file is sent again from the start.
+    static AttachmentState Read(JsonElement e) => e.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+        ? throw new Local.HostErrorException("the machine's answer about the attachment was empty")
+        : Received.Read<AttachmentState>(e);
 
     public void Refresh()
     {
