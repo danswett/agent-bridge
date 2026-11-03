@@ -277,7 +277,7 @@ class Component extends DCLogic {
       isBefore: before, isAfter: !before, filterOn,
       filterAria: filterOn ? 'true' : 'false',
       toggleFill: filterOn ? t.sel : 'transparent',
-      toggleEdge: filterOn ? t.stroke2 : t.stroke2,
+      toggleEdge: t.stroke2,
       toggleWeight: filterOn ? 600 : 400,
       showPinned: !filterOn,
       rows: filterOn ? all.filter(r => r.needs) : all
