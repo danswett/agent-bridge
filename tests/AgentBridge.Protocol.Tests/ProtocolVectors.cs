@@ -326,7 +326,9 @@ public static class ProtocolVectors
 
     static void Push(VectorFileBuilder f)
     {
-        var keys = new PushKeys("BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g", "dGhpcyBpcyBhdXRo");
+        // A real P-256 point (the signed-command vectors' signer) and a 16-byte secret, as the host
+        // checks them (PushNotifier.Problem; PushVectorTests in AgentBridge.Host.Tests).
+        var keys = new PushKeys("BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48", Attachments.Base64Url([.. Enumerable.Range(16, 16).Select(i => (byte)i)]));
         f.Record<PushSubscribeRequest>(Client)
             .Valid("full", new PushSubscribeRequest { Endpoint = "https://web.push.apple.com/QGx0c0", Keys = keys, App = "https://danswett.github.io/agent-bridge/", Device = "iPhone · Agent Bridge" })
             .Valid("no-device-name", new PushSubscribeRequest { Endpoint = "https://fcm.googleapis.com/fcm/send/abc", Keys = keys, App = "https://danswett.github.io/agent-bridge/" });

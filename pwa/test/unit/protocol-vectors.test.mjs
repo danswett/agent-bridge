@@ -268,6 +268,7 @@ const BUILDS = {
     build: sendPrepared,
     // Its id and SHA-256 are the PWA's own making, so only these come from the person.
     offered: ['a-blank-name', 'a-name-over-255-bytes', 'a-type-over-127-bytes', 'empty', 'over-256-KiB-in-the-channel'],
+    made: ['attachment', 'sha256'],
   },
   AttachmentChunk: {
     build: async (j, context) => {
@@ -404,7 +405,9 @@ for (const [record, r] of records) {
       test(`the PWA never sends a ${record} "${v.name}" as it is`, () => agrees(`${record}/${v.name}`, 'build', async () => {
         let sent;
         try { sent = await builds.build(v.json, context(v)); } catch { return; }
-        assert.notDeepEqual(sent, v.json);
+        // Only what the person gave counts: the id and digest the PWA makes itself would differ anyway.
+        const given = (x) => Object.fromEntries(Object.entries(x).filter(([k]) => !(builds.made ?? []).includes(k)));
+        assert.notDeepEqual(given(sent), given(v.json));
       }));
     }
   }

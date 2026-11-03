@@ -12,8 +12,8 @@
           "json": {
             "endpoint": "https://web.push.apple.com/QGx0c0",
             "keys": {
-              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-              "auth": "dGhpcyBpcyBhdXRo"
+              "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+              "auth": "EBESExQVFhcYGRobHB0eHw"
             },
             "app": "https://danswett.github.io/agent-bridge/",
             "device": "iPhone · Agent Bridge"
@@ -24,8 +24,8 @@
           "json": {
             "endpoint": "https://fcm.googleapis.com/fcm/send/abc",
             "keys": {
-              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-              "auth": "dGhpcyBpcyBhdXRo"
+              "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+              "auth": "EBESExQVFhcYGRobHB0eHw"
             },
             "app": "https://danswett.github.io/agent-bridge/"
           }
@@ -36,8 +36,8 @@
           "name": "missing-endpoint",
           "json": {
             "keys": {
-              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-              "auth": "dGhpcyBpcyBhdXRo"
+              "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+              "auth": "EBESExQVFhcYGRobHB0eHw"
             },
             "app": "https://danswett.github.io/agent-bridge/",
             "device": "iPhone · Agent Bridge"
@@ -58,8 +58,8 @@
           "json": {
             "endpoint": "https://web.push.apple.com/QGx0c0",
             "keys": {
-              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-              "auth": "dGhpcyBpcyBhdXRo"
+              "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+              "auth": "EBESExQVFhcYGRobHB0eHw"
             },
             "device": "iPhone · Agent Bridge"
           },
@@ -70,8 +70,8 @@
           "json": {
             "endpoint": 42,
             "keys": {
-              "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-              "auth": "dGhpcyBpcyBhdXRo"
+              "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+              "auth": "EBESExQVFhcYGRobHB0eHw"
             },
             "app": "https://danswett.github.io/agent-bridge/",
             "device": "iPhone · Agent Bridge"
@@ -86,8 +86,8 @@
         {
           "name": "keys",
           "json": {
-            "p256dh": "BOr3B2bQZ0yT3S1rXc8m1rK2nFZ0u2wZb3y8xk8p1kQ2l4w5c6v7b8n9m0q1w2e3r4t5y6u7i8o9p0a1s2d3f4g",
-            "auth": "dGhpcyBpcyBhdXRo"
+            "p256dh": "BKzKtn9kLPn5w1wkF1-3gOdtAPCieCpa8m26esY0ZHt_c9CCDcF-wjeuJwqZOyt0ANZiKE0bkhyDwbg5E2FjE48",
+            "auth": "EBESExQVFhcYGRobHB0eHw"
           }
         }
       ],
@@ -96,7 +96,7 @@
           "name": "wrong-type-p256dh",
           "json": {
             "p256dh": 42,
-            "auth": "dGhpcyBpcyBhdXRo"
+            "auth": "EBESExQVFhcYGRobHB0eHw"
           },
           "refusedBy": "parse"
         }
