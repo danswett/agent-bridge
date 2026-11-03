@@ -63,9 +63,10 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
     string? _responseMessage;
     // Ends of agents not known yet: a nested agent is known only from its own record, which
     // can be read after the session's transcript says it stopped. Owed: queued, its delivery not
-    // read yet. As many as there can be records (ClaudeSubagents); past that, a record with no
-    // end kept is not known to be running.
-    readonly Dictionary<string, (SubagentOutcome Outcome, DateTimeOffset? At, bool Owed)> _unclaimed = new(StringComparer.Ordinal);
+    // read yet. WokenAt: a message woke it since. As many as there can be records
+    // (ClaudeSubagents); past that, a record with no end kept is not known to be running.
+    readonly Dictionary<string, Unclaimed> _unclaimed = new(StringComparer.Ordinal);
+    readonly record struct Unclaimed(SubagentOutcome Outcome, DateTimeOffset? At, bool Owed, DateTimeOffset? WokenAt = null);
     bool _unclaimedDropped;
 
     public override void Reset()
@@ -93,12 +94,14 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         {
             case "user" when Json.Bool(e, "isMeta") != true && Json.Bool(e, "isCompactSummary") != true:
                 S.StartedAt ??= Json.Time(e, "timestamp");
-                if (Prompt(e) is { } text && !IsInterrupt(text) && !IsNotice(text))
-                {
-                    S.FirstUserMessage ??= text;
-                    S.UserMessage = text;
-                    S.Prompts++;
-                }
+                if (Prompt(e) is not { } text || IsInterrupt(text)) { break; }
+                // Which turn the last is, a prompt's or a notice's, holds past the skim: the
+                // window may begin inside it.
+                if (IsNotice(text)) { S.UncountedTurn = true; break; }
+                S.FirstUserMessage ??= text;
+                S.UserMessage = text;
+                S.Prompts++;
+                S.UncountedTurn = false;
                 break;
             case "system" when Json.Str(e, "subtype") == "compact_boundary":
                 S.Compactions++;
@@ -192,9 +195,11 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
                 foreach (var block in Blocks(Json.Obj(e, "message")))
                 {
                     if (Json.Str(block, "type") == "tool_use" && Json.Str(block, "name") == "SendMessage"
-                        && Json.Obj(block, "input") is { } input && Json.Str(input, "to") is { } to && work.Knows(to))
+                        && Json.Obj(block, "input") is { } input && Json.Str(input, "to") is { } to)
                     {
-                        work.AgentActive(to, at);
+                        if (work.Knows(to)) { work.AgentActive(to, at); }
+                        // A nested agent whose record is not read yet, woken after it stopped.
+                        else if (_unclaimed.TryGetValue(to, out var stopped)) { _unclaimed[to] = stopped with { WokenAt = at }; }
                     }
                 }
                 break;
@@ -229,7 +234,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             _unclaimed.Remove(_unclaimed.MinBy(p => p.Value.At ?? DateTimeOffset.MinValue).Key);
             _unclaimedDropped = true;
         }
-        _unclaimed[id] = (outcome, at, queued);
+        _unclaimed[id] = new Unclaimed(outcome, at, queued);
     }
 
     // A sub-agent another one started, known from its own record: listed as working unless the
@@ -258,6 +263,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
         {
             if (end.Owed) { work.AgentRunEnded(record.Id, end.At, end.Outcome); }
             else { work.AgentIdle(record.Id, end.At, end.Outcome); }
+            if (end.WokenAt is { } woken) { work.AgentActive(record.Id, woken); }
         }
         else if (_unclaimedDropped) { work.ForgetRun(record.Id); }
         else if (work.Stopped(parent, out var parentEnded, out var parentOutcome))
@@ -304,6 +310,7 @@ internal sealed class ClaudeParser(SessionState state, TimeProvider time) : Tran
             // A turn of the main agent's, about a delegate or a command that stopped: neither
             // the person's message nor a prompt counted, and the text in it is the delegate's.
             S.UncountedTurn = true;
+            S.ForgetReasoning();
             S.SetStatus(SessionStatus.Working);
             S.Activity(at);
             return;

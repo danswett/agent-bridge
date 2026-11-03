@@ -1003,7 +1003,8 @@ command); the shapes are in `tests/fixtures/claude`.
   ended, never ending one a message has started since. An agent's run ends `done` for `<status>completed</status>` and
   `failed` for any other, and it is `idle`; any run still going under it ends `done` too,
   since Claude notifies an agent only once none of its own is live. A `SendMessage` `tool_use`
-  whose `input.to` is an agent's id wakes it. A notice delivered to the main agent starts a
+  whose `input.to` is an agent's id wakes it, a nested one whose record is read only later
+  too. A notice delivered to the main agent starts a
   turn of the main agent's (`working`), but is neither `userMessage` nor a prompt counted in
   `turnCount`, and the delegate's result in it is not the session's text.
 * **Nested delegates.** Only `<session id>/subagents/agent-<agentId>.meta.json` says one
@@ -1011,7 +1012,9 @@ command); the shapes are in `tests/fixtures/claude`.
   `requestShape`); the first entry of `agent-<agentId>.jsonl` beside it says when it started
   and its prompt. Read once a delegate is known, each again only when it changes, at most
   256 of them, and listed only under a delegate that is listed. It ends as above (its notice
-  is queued in the session's transcript too), or when the delegate above it ends.
+  is queued in the session's transcript too), or when the delegate above it ends. A message
+  the delegate above it sends it is in that delegate's own transcript, which is not read (and
+  was not recorded): one woken that way stays listed as it stopped.
 * Starts and ends are read from the skimmed part of the transcript too. Where the host could
   not read everything before the window, a run the skim saw start is listed with no
   `outcome` and not counted, since its end may be in what was not read, and no delivery is

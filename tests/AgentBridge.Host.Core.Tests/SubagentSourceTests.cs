@@ -337,6 +337,49 @@ public class ClaudeSubagentTests
     }
 
     [Fact]
+    public async Task A_turn_for_a_notice_the_window_begins_inside_leaves_the_prompts_already_answered_counted()
+    {
+        // Found in review: the notice itself was only skimmed. The turn's first reply is made one
+        // that goes on, so the window holds the turn still running.
+        static bool Delivered(string l) => l.Contains("\"type\":\"user\"", StringComparison.Ordinal) && l.Contains("<task-notification>", StringComparison.Ordinal);
+        await using var r = new Replay(l => l.Contains("04:00:10.486Z", StringComparison.Ordinal) ? l.Replace("\"stop_reason\":\"end_turn\"", "\"stop_reason\":null", StringComparison.Ordinal) : l,
+            tailBytes: 2560, skim: lines => Through(lines, Delivered));
+
+        var s = await r.Through(10.6);
+
+        Assert.Equal(SessionStatus.Working, s.Status);
+        Assert.Equal(1, s.Activity.TurnCount);
+    }
+
+    [Fact]
+    public async Task A_turn_for_a_notice_does_not_show_the_reasoning_of_the_turn_before()
+    {
+        await using var r = new Replay();
+        Assert.Equal("Waiting for the delegates.", (await r.Through(9.25)).Activity.Reasoning);
+
+        var s = await r.Through(9.28);
+
+        Assert.Equal(SessionStatus.Working, s.Status);
+        Assert.Null(s.Activity.Reasoning);
+    }
+
+    [Fact]
+    public async Task A_nested_delegate_woken_after_it_stopped_but_before_its_record_is_read_is_running()
+    {
+        // Found in review: the wake names an agent not known yet, so it was dropped.
+        await using var r = new Replay();
+        r.Held.Add("agent-" + Nested);
+        await r.Through(10.3);
+        var wake = JsonNode.Parse(Claude.Assistant(0, "tool_use", Claude.ToolUse("toolu_wake", "SendMessage", new JsonObject { ["to"] = Nested, ["summary"] = "Again", ["message"] = "Show them again." })))!;
+        wake["timestamp"] = Fixture.T0.AddMilliseconds(10290).ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
+        await r.Append(wake.ToJsonString());
+
+        var s = await r.Release(Nested, 10.3);
+
+        Assert.Equal((SubagentStatus.Working, (SubagentOutcome?)null), (Entry(s, Nested).Status, Entry(s, Nested).Outcome));
+    }
+
+    [Fact]
     public async Task A_nested_delegate_found_between_its_queued_notice_and_its_delivery_is_not_stopped_again_by_the_delivery()
     {
         // Found in review: its record is read only after the queue said it stopped, a message
