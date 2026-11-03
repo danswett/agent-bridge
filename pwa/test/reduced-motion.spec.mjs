@@ -67,8 +67,11 @@ function moving({ crossFade, animated }) {
   for (const a of document.getAnimations()) {
     if (a.playState !== 'running' || !a.effect?.target) { continue; }
     const t = a.effect.getTiming();
-    const opacityOnly = a.transitionProperty === 'opacity' && typeof t.duration === 'number' && t.duration <= crossFade;
-    if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty ?? 'animation'}`); }
+    // What it animates, from its keyframes: every engine has those, not every one names a
+    // transition's property on the animation.
+    const props = new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)).filter((p) => !['offset', 'computedOffset', 'easing', 'composite'].includes(p)));
+    const opacityOnly = props.size === 1 && props.has('opacity') && typeof t.duration === 'number' && t.duration <= crossFade;
+    if (!opacityOnly) { found.add(`${name(a.effect.target, a.effect.pseudoElement)}: running ${a.animationName ?? a.transitionProperty ?? [...props].join(' ')}`); }
   }
   // Shown means drawn: in the layout, not hidden and not transparent. Below the fold counts: what is
   // read is computed style, which scrolling doesn't change.
