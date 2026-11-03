@@ -353,6 +353,9 @@ public sealed class TrustTests : IAsyncLifetime
         localTrust = [Question(answerable: false, atMachine: "Answer at the machine.") with { Workspace = "here" }];
         localHost.Status = FakeHost.StatusOf() with { Settings = new HostSettingsView(true, RemoteFolderTrust: true, RemoteFolderTrustDevices: [phone]) };
         await localHost.SendAsync(HostOps.StatusEvent, localHost.Status);
+        // Held before going on: events are pumped apart from replies, so a reply sent after this
+        // event can be read first, and the status checked below was then still the old one.
+        await Wait.UntilAsync(() => local.Status?.Settings.RemoteFolderTrustDevices is [phone], "the status listing the phone");
         // The host saves each change; its status event is not sent.
         localHost.On(HostOps.Settings, d =>
         {

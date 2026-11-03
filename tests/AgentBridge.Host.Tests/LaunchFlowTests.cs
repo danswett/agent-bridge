@@ -528,6 +528,9 @@ public sealed partial class LaunchFlowTests : IAsyncLifetime
         Assert.Equal("started", (await LaunchAsync(ch, new { prompt = "again" })).Outcome_);
         Assert.False(Directory.Exists(first));
         Assert.True(Worktrees.IsManaged(starter.Specs[1].WorkingDirectory));
+        // Unlocked once it registers, as the first was. Until then git is still at work in the
+        // fixture, and its lock file went from under DisposeAsync's sweep (#101).
+        await WaitAsync(() => Task.FromResult(!File.Exists(Path.Combine(Worktrees.AdminFolder(starter.Specs[1].WorkingDirectory)!, "locked"))));
     }
 
     sealed class NoSessions : IWorktreeUsage
