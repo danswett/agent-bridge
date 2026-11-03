@@ -78,6 +78,16 @@ public class CompletenessTests
         Assert.Equal(["pwa/test/visual holds tests, but no suite's command runs them"], problems.Select(p => p.Message));
     }
 
+    [Theory]
+    [InlineData("cd pwa && node --test \"test/unit/*.test.mjs\"", "pwa/test/unit", false, true)]
+    [InlineData("cd pwa && node --test \"test/unit/*.test.mjs\"", "pwa/test", false, false)]
+    [InlineData("cd pwa && npx playwright test test/e2e   # through the relay", "pwa/test/e2e", true, true)]
+    [InlineData("cd pwa && npx playwright test test/e2e   # through the relay", "pwa/test", true, false)]
+    [InlineData("cd pwa && npx playwright test   # Chromium and WebKit", "pwa/test", true, true)]
+    [InlineData("cd pwa && npx playwright test   # Chromium and WebKit", "pwa/test/unit", false, false)]
+    public void A_command_runs_a_test_folder_only_by_naming_it_or_as_a_bare_playwright_run(string command, string folder, bool hasSpecs, bool runs) =>
+        Assert.Equal(runs, Completeness.RunsFolder(command, folder, hasSpecs));
+
     [Fact]
     public void A_tracked_file_no_rule_claims_is_reported()
     {

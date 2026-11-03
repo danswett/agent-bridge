@@ -118,10 +118,11 @@ static class Completeness
             .OrderBy(x => x.Key, StringComparer.Ordinal);
 
     /// <summary>
-    /// Whether a suite's command runs a test folder: it names the folder (after its own "cd"), or
-    /// it's a bare "playwright test", which runs every spec under pwa/test (playwright.config.mjs).
+    /// Whether a suite's command runs a test folder: it names the folder, alone or with one file
+    /// glob after it (after its own "cd"), or it's a bare "playwright test", which runs every spec
+    /// under pwa/test (playwright.config.mjs). "test/unit/*.test.mjs" names test/unit, not test.
     /// </summary>
-    static bool RunsFolder(string command, string folder, bool hasPlaywrightSpecs)
+    internal static bool RunsFolder(string command, string folder, bool hasPlaywrightSpecs)
     {
         var relative = folder;
         var trimmed = command.TrimStart();
@@ -132,8 +133,9 @@ static class Completeness
             if (folder.StartsWith(dir + "/", StringComparison.Ordinal))
                 relative = folder[(dir.Length + 1)..];
         }
-        if (command.Contains(relative + "/", StringComparison.Ordinal) || command.TrimEnd().EndsWith(" " + relative, StringComparison.Ordinal)
-            || command.Contains(" " + relative + " ", StringComparison.Ordinal))
+        // "playwright test" is a subcommand, not the folder "test".
+        var words = command.Replace("playwright test", "playwright", StringComparison.Ordinal);
+        if (System.Text.RegularExpressions.Regex.IsMatch(words, $"""(^|[\s"']){System.Text.RegularExpressions.Regex.Escape(relative)}(/[^/\s"']*[*.][^/\s"']*)?([\s"']|$)"""))
             return true;
         if (!hasPlaywrightSpecs)
             return false;
