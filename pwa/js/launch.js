@@ -3,6 +3,7 @@
 // of a launch's result, and checkLaunch, which is LaunchProtocol.Check case for case, with its
 // wording, so a launch the machine would refuse is never sent.
 import { readAgent } from './protocol.js';
+import { INVISIBLE } from './answers.js';
 
 export const LAUNCH = Object.freeze({
   capability: 'sessions.launch',
@@ -54,7 +55,8 @@ export function checkLaunch(l) {
   if (new Set(attachments.map((a) => a.id.toLowerCase())).size !== attachments.length) { return 'the same attachment is in the launch twice'; }
   const prompt = l.prompt ?? '';
   if (utf8(prompt) > MAX_PROMPT) { return `the prompt is longer than ${MAX_PROMPT / 1024} KiB; send the rest as an attachment or a reply once it has started`; }
-  const first = [...prompt].find((c) => !/\s/.test(c) && !isControl(c));
+  // Judged by its first visible character, as the host does (INVISIBLE, #448).
+  const first = [...prompt].find((c) => !INVISIBLE.test(c));
   if (first === '/') { return 'a prompt cannot start with /, which the agent would run as a command; type commands at the machine'; }
   if (first === '!') { return 'a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine'; }
   return null;

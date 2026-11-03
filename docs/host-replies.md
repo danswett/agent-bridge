@@ -114,14 +114,19 @@ held to those rows (`KeySend.Expect`), so nothing is typed if they change in bet
   between its rules and "Esc to cancel" beneath. Neither is taken for the box. After a turn
   Claude suggests a next prompt in the empty box, as text a screen read cannot tell from
   typed words, so the box is typed into whatever it shows: words someone left in it would go
-  with the reply, and Claude's record of them would leave the reply `unconfirmed`.
+  with the reply, and Claude's record of them would leave the reply `unconfirmed`. One
+  exception: words starting with `/` or `!` (after whatever shows as nothing) are a command
+  held for Enter, which a reply would complete and run. Claude strips invisible characters
+  from what it is given and leaves the rest in its box unsent, so a reply `"\u3164/"`
+  could leave a bare `/` there ([#448](https://github.com/danswett/agent-bridge/issues/448)).
+  A box holding one is refused ("holds a command that a reply would run").
 - Codex 0.165: the last row starting `›` with "? for shortcuts" in the footer below it,
   which Codex shows only while nothing is typed (idle or working; the box's own text is one
   of several placeholders). An approval's first option also starts `›`, but has no such
   footer and ends "Press enter to confirm or esc to cancel".
 
-Otherwise the reply is `refused` ("input box is not on its screen", or, for Codex, "already
-typed in Codex's input box"), and nothing is typed.
+Otherwise the reply is `refused` ("input box is not on its screen", for Codex "already
+typed in Codex's input box", or a box holding a command), and nothing is typed.
 
 **Confirmed by identity.** Claude: a `user` entry (not meta, not a subagent's, no
 `tool_result`) whose content is the line, or, typed while it works, the `queue-operation`

@@ -76,9 +76,9 @@ public static partial class LaunchProtocol
         var prompt = launch.Prompt ?? "";
         if (Encoding.UTF8.GetByteCount(prompt) > MaxPrompt) { return $"the prompt is longer than {MaxPrompt / 1024} KiB; send the rest as an attachment or a reply once it has started"; }
         // The agent takes the prompt as its first input, so the rules for a reply hold: one
-        // beginning with / or ! would run as a command on the machine.
-        var first = prompt.FirstOrDefault(c => !char.IsWhiteSpace(c) && !char.IsControl(c));
-        return first switch
+        // beginning with / or ! would run as a command on the machine, however many invisible
+        // characters come first (Invisible).
+        return Invisible.First(prompt) switch
         {
             '/' => "a prompt cannot start with /, which the agent would run as a command; type commands at the machine",
             '!' => "a prompt cannot start with !, which the agent would run as a shell command; type commands at the machine",

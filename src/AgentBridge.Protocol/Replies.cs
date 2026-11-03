@@ -15,16 +15,16 @@ public static class Replies
         if (attachments.Any(a => a is null || !Attachments.IsId(a.Id))) { return "each attachment must be the UUID of one sent with attachment.start"; }
         if (attachments.Select(a => a.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() != attachments.Count) { return "the same attachment is in the reply twice"; }
         var text = reply.Text ?? "";
-        // Control characters are typed as spaces, so text of nothing else is empty too. With
-        // attachments the words are optional, as at the machine.
-        var blank = text.All(c => char.IsWhiteSpace(c) || char.IsControl(c));
-        if (blank && attachments.Count == 0) { return "the reply is empty"; }
+        // Control characters are typed as spaces and format characters show as nothing, so text
+        // of nothing else is empty too. With attachments the words are optional, as at the machine.
+        var first = Invisible.First(text);
+        if (first is null && attachments.Count == 0) { return "the reply is empty"; }
         if (Encoding.UTF8.GetByteCount(text) > Limits.ReplyText) { return $"the reply is longer than {Limits.ReplyText / 1024} KiB"; }
         // What the agent's input sees first once control characters have become spaces and
-        // it has trimmed the line. A prompt beginning with / is a slash command and one
-        // beginning with ! a shell command, in Copilot CLI and Claude Code alike: they would
-        // run on the machine, not reach the agent, and could never be confirmed.
-        var first = text.FirstOrDefault(c => !char.IsWhiteSpace(c) && !char.IsControl(c));
+        // it has trimmed the line, invisible format characters included (Invisible). A prompt
+        // beginning with / is a slash command and one beginning with ! a shell command, in
+        // Copilot CLI and Claude Code alike: they would run on the machine, not reach the
+        // agent, and could never be confirmed.
         return first switch
         {
             '/' => "a reply cannot start with /, which the agent would run as a command; type commands at the machine",

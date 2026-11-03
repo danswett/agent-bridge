@@ -17,8 +17,18 @@ const encoder = new TextEncoder();
 // UTF-8 bytes, as the host counts them: a lone surrogate counts as U+FFFD (3 bytes) in both.
 export const utf8Bytes = (s) => encoder.encode(s).length;
 
-// C#'s string.IsNullOrWhiteSpace, near enough: \s covers the Unicode spaces it does.
-const blank = (s) => s === null || s === undefined || /^\s*$/u.test(s);
+// What an agent's input passes over, drops or draws as nothing before what a person typed
+// starts, as C#'s Invisible.Is: white space, control characters (typed as spaces), format
+// characters (Cf: U+FEFF, U+200B-U+200D, U+2060, bidi marks, tags), default-ignorable code
+// points (Hangul fillers, variation selectors), combining marks with no base of their own,
+// unassigned code points, and U+2800. So text is judged by its first visible base character:
+// Copilot CLI trims U+FEFF and Claude Code strips the rest of these before it sends, so a
+// leading "\uFEFF/" or "\u3164/" would have reached the agent as a command (#448). Applied
+// one code point at a time ([...text]), as the host reads runes. Every \s is in it.
+export const INVISIBLE = /[\p{White_Space}\p{Cc}\p{Cf}\p{M}\p{Default_Ignorable_Code_Point}\p{Cn}\u2800]/u;
+const visible = (s) => [...s].some((c) => !INVISIBLE.test(c));
+// C#'s Invisible.Blank: what shows as nothing is no answer.
+const blank = (s) => s === null || s === undefined || !visible(s);
 const isObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 

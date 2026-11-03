@@ -197,6 +197,21 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_reply_is_refused_with_nothing_typed_while_the_input_box_holds_a_command_it_would_complete()
+    {
+        // Claude leaves what it stripped of invisible characters in its box, unsent: a reply's
+        // Enter would run it (#448).
+        foreach (var held in new[] { "/", "/cle", "!", " \u3164!dir" })
+        {
+            console.Rows = ClaudeIdle(held);
+            var result = await ReplyAsync(ClaudeId, "clear");
+            Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+            Assert.Contains("holds a command that a reply would run", result.Reason);
+        }
+        Assert.Empty(console.Plans);
+    }
+
+    [Fact]
     public async Task A_Claude_box_showing_a_suggested_prompt_is_typed_into_since_its_screen_cannot_tell_that_from_typed_words()
     {
         // Claude 2.1 suggests a next prompt in its empty box, as text like any other.

@@ -240,6 +240,9 @@ A field's value, by type:
 
 Free text, in `text` or `other`, is at most 4 KiB of UTF-8; the whole request is at most
 16 KiB. A host collapses control characters and line breaks to spaces before typing.
+Free text of nothing but what shows as nothing (white space, control and format characters,
+default-ignorables such as U+3164, marks with no base; see `session.reply`) is empty, and
+`refused` as such.
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
@@ -334,9 +337,17 @@ reply path (`Get-CopilotInjectableText`) replaces every control character with a
 because an Enter inside the words would submit part of the reply. A client may let the
 person type several lines, and says they will arrive as one.
 
-A reply whose first character, after spaces and control characters, is `/` or `!` is
-`refused`: Copilot CLI and Claude Code would run it as a slash command or a shell command
-on the machine, not give it to the agent, and nothing could confirm it.
+A reply whose first visible base character is `/` or `!` is `refused`: Copilot CLI and
+Claude Code would run it as a slash command or a shell command on the machine, not give it
+to the agent, and nothing could confirm it. Whatever shows as nothing in front of it is
+passed over first (`Invisible` in C#, `INVISIBLE` in the PWA): white space, control
+characters, format characters (Cf: U+FEFF, U+200B to U+200D, U+2060, bidi marks, tags),
+default-ignorable code points (Hangul fillers such as U+3164, variation selectors, U+034F),
+combining marks, unassigned code points and U+2800. Agents drop these: Copilot CLI trims its
+input with JavaScript's `trim()`, which removes U+FEFF, so `"\uFEFF/clear"` ran as `/clear`,
+and Claude Code strips the zero-width, filler, variation-selector and tag characters before it
+sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but
+those characters, with no attachments, is `refused` as empty.
 
 Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
 
