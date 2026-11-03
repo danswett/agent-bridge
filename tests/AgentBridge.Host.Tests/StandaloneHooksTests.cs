@@ -159,6 +159,61 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Theory]
+    [InlineData("copilot", "claude")]
+    [InlineData("copilot", "codex")]
+    [InlineData("claude", "codex")]
+    public async Task Shared_agent_homes_are_refused_before_any_hook_or_ownership_write(string first, string second)
+    {
+        var homes = Homes;
+        var shared = first == "copilot" ? homes.Copilot : homes.Claude;
+        shared = (OperatingSystem.IsWindows() ? shared.ToUpperInvariant() : shared) + Path.DirectorySeparatorChar;
+        homes = second == "claude" ? homes with { Claude = shared } : homes with { Codex = shared };
+        var setup = new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+        var before = Listing();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => setup.InstallAsync(first, false, TextWriter.Null));
+
+        Assert.Contains("separate agent homes", error.Message);
+        Assert.Equal(before, Listing());
+        Assert.Empty(codex.Calls);
+    }
+
+    [Theory]
+    [InlineData("[]", true)]
+    [InlineData("{\"hooks\":false}", true)]
+    [InlineData("{\"hooks\":false}", false)]
+    public async Task Invalid_Claude_settings_return_a_failed_command_with_a_diagnostic_including_dry_runs(string settings, bool dryRun)
+    {
+        Write(Registration("claude"), settings);
+        var before = Listing();
+        using var error = new StringWriter();
+
+        var result = await HookCommands.RunSetupAsync(Setup, ["claude"], true, dryRun, TextWriter.Null, error);
+
+        Assert.Equal(1, result);
+        Assert.Contains("Hook setup incomplete:", error.ToString());
+        Assert.Contains("it was left alone", error.ToString());
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
+    public async Task Removing_an_agent_from_preexisting_shared_homes_preserves_the_other_agents_hooks_and_ownership()
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var homes = Homes with { Copilot = Homes.Claude };
+        (IntakeState.Load(Profile).State! with { Homes = homes }).Save(Profile);
+        Write(Path.Combine(homes.Copilot, "hooks", "agent-bridge.json"), "{\"version\":1,\"hooks\":{}}");
+        var setup = new StandaloneHooks(Profile, homes, Source, Legacy, () => active, locator, codex);
+        var before = Listing();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => setup.RemoveAsync("copilot", false, TextWriter.Null));
+
+        Assert.Contains("separate agent homes", error.Message);
+        Assert.Equal(before, Listing());
+        Assert.True(File.Exists(Owner("claude")));
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void CLI_setup_recovers_an_unknown_Claude_mode_only_from_its_matching_invocation_profile(bool explicitConfigDir)

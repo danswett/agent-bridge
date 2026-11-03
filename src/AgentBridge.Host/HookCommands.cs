@@ -67,16 +67,22 @@ public static class HookCommands
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
             new AgentBridge.Host.Delivery.Windows.AgentHaBridgeProbe().Active, new AgentLocator(),
             new BatchFileRunner(new CommandRunner(environment), environment));
+        return await RunSetupAsync(setup, rest.Distinct(), args[1] == "install", dryRun, output, error, ct);
+    }
+
+    internal static async Task<int> RunSetupAsync(StandaloneHooks setup, IEnumerable<string> agents, bool install,
+        bool dryRun, TextWriter output, TextWriter error, CancellationToken ct = default)
+    {
         try
         {
-            foreach (var agent in rest.Distinct())
+            foreach (var agent in agents)
             {
-                if (args[1] == "install") { await setup.InstallAsync(agent, dryRun, output, ct); }
+                if (install) { await setup.InstallAsync(agent, dryRun, output, ct); }
                 else { await setup.RemoveAsync(agent, dryRun, output, ct); }
             }
             return 0;
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidOperationException or ArgumentException)
         {
             error.WriteLine($"Hook setup incomplete: {e.Message}");
             return 1;

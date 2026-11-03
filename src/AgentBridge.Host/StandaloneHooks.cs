@@ -42,6 +42,10 @@ public sealed class StandaloneHooks(
     void Preflight(string agent, bool removing)
     {
         _ = Home(agent);
+        if (Same(homes.Copilot, homes.Claude) || Same(homes.Copilot, homes.Codex) || Same(homes.Claude, homes.Codex))
+        {
+            throw new InvalidOperationException("Copilot, Claude and Codex require separate agent homes; shared hook ownership cannot be safely installed or removed. Inspect existing registrations before changing these homes.");
+        }
         if (active() is { } why) { throw new InvalidOperationException($"agent-ha-bridge is active or cannot be checked ({why}); use Migrate instead"); }
         // Even a stopped legacy install must go through its reversible migration, not
         // acquire a second set of hooks when its task next starts.

@@ -62,6 +62,10 @@ finishes on the previous image, and an interrupted replacement restores that ima
 retrying. Startup refresh and setup share the migration lock so swaps cannot overlap.
 Equivalent home paths (including trailing separators and Windows casing) do not block
 setup or removal, and Windows profile casing does not leave owned Claude commands behind.
+The three agents must use separate home directories: setup and removal refuse shared
+homes, including equivalent paths, before changing registrations or ownership. If an
+existing configuration shares homes, inspect its registrations before changing those
+homes; removal cannot safely decide which agent owns the shared marker.
 
 Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into
 `settings.json` with unrelated settings and hooks preserved, plus its first original settings
