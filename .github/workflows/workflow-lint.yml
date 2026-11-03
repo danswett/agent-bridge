@@ -1,0 +1,77 @@
+name: Workflow lint
+
+# The workflows themselves are code that runs with this repository's tokens (quality/README.md,
+# §3.3, "Supply chain"), so a pull request that changes one is linted:
+#  - actionlint (blocking): syntax, expressions, contexts, runner labels and action inputs. It
+#    was clean on main when added, so a finding here is one the pull request made.
+#  - shellcheck, through actionlint, over the bash in `run:` steps (advisory): main had findings
+#    when this was added (#360), so they are warnings until those are fixed.
+#  - zizmor (advisory): security findings such as unpinned actions, credentials kept by
+#    checkout and template injection. Also warnings, for the same reason (#360).
+# An advisory step's findings are annotations on the run and, where they fall on a changed
+# line, on the pull request's diff; the job stays green.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+
+permissions: {}
+
+concurrency:
+  group: workflow-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # Read the workflows; zizmor's online audits also read the actions they use, which are
+      # public.
+      contents: read
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      # From the release's actionlint_1.7.12_checksums.txt, so a replaced asset fails here.
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install actionlint
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tarball" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/actionlint"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/actionlint" actionlint
+          echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+      - name: actionlint
+        # Shellcheck and pyflakes are off here and reported by the next step instead.
+        run: |
+          # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
+          actionlint -shellcheck= -pyflakes= \
+            -format '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title=actionlint {{$err.Kind}}::{{$err.Message}}\n{{end}}'
+      - name: shellcheck, through actionlint (advisory)
+        if: success() || failure()
+        # actionlint exits 1 for findings and above 1 when it could not run; only the latter
+        # fails the step.
+        run: |
+          code=0
+          # shellcheck disable=SC2016 # the template is actionlint's to expand, not the shell's
+          actionlint \
+            -format '{{range $err := .}}{{if or (eq $err.Kind "shellcheck") (eq $err.Kind "pyflakes")}}::warning file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}},title={{$err.Kind}}::{{$err.Message}}\n{{end}}{{end}}' \
+            || code=$?
+          if [ "$code" -gt 1 ]; then exit "$code"; fi
+      - name: zizmor (advisory)
+        if: success() || failure()
+        # zizmor exits non-zero for any finding, so the step is allowed to fail without failing
+        # the job; its findings are the annotations it writes.
+        continue-on-error: true
+        uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          version: 1.32.0
+          advanced-security: false
+          annotations: true
