@@ -65,9 +65,10 @@ public sealed class MarkdownView : StackPanel
         }
     }
 
-    // An approval's message on its card (#220): all of it, prose and code spans as well as fences,
-    // drawn with what is not on screen as it runs (right-to-left letters too) as escapes, and read
-    // left to right. A Codex approval's command is prose, and Approve once allows what was read.
+    // An approval's message on its card (#220): only fences are structure, everything else is drawn
+    // as its literal source (MarkdownModel.Approval), with what is not on screen as it runs
+    // (right-to-left letters too) as escapes, and read left to right. A Codex approval's command is
+    // prose, and Approve once allows what was read.
     public bool Approval
     {
         get => approval;
@@ -117,8 +118,7 @@ public sealed class MarkdownView : StackPanel
     {
         Children.Clear();
         if (markdown is null) { return; }
-        var blocks = MarkdownModel.Parse(markdown);
-        foreach (var b in Approval ? MarkdownModel.Revealed(blocks) : blocks)
+        foreach (var b in Approval ? MarkdownModel.Approval(markdown) : MarkdownModel.Parse(markdown))
         {
             var element = Block(b);
             if (Reading) { Read(element); }

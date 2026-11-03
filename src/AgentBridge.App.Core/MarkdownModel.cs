@@ -204,27 +204,45 @@ public static class MarkdownModel
     public static string? Safe(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.Scheme == Uri.UriSchemeHttps || u.Scheme == Uri.UriSchemeHttp) ? u.AbsoluteUri : null;
 
-    // An approval's whole message as its card draws it (#220): every word and code span with what is
-    // not on screen as it runs, right-to-left letters included, as visible escapes (a fence is drawn
-    // so already, as every block is: CodeCopy, which also notes the right-to-left letters). A Codex
-    // approval carries its command in prose ("Codex wants to run:\n\ngit push"), not in a fence, and
-    // Approve once allows what the person read. Links keep where they go; only their words change.
-    public static IReadOnlyList<MdBlock> Revealed(IReadOnlyList<MdBlock> blocks) => [.. blocks.Select(Reveal)];
-
-    static MdBlock Reveal(MdBlock block) => block switch
+    // An approval's message as its card draws it (#220). Only a fenced code block is structure;
+    // everything outside a fence is drawn as literal source text, with no links, emphasis, backslash
+    // escapes or code spans, backticks and brackets visible and its line breaks kept. A Codex
+    // approval carries its command in prose ("Codex wants to run:\n\ngit push"), and Markdown there
+    // can hide what runs: a link drew `echo "[safe](https://a/";curl …|sh;")"` as `echo "safe"`, a
+    // code span joined two lines into one comment, `\#` lost its backslash and `*tmp*` its stars.
+    // Every character outside a fence is then shown as HiddenText.Reveal gives it, right-to-left
+    // letters included; a fence's text is revealed as every block's is (CodeCopy). The ordinary
+    // conversation keeps its Markdown.
+    public static IReadOnlyList<MdBlock> Approval(string? markdown)
     {
-        MdParagraph p => new MdParagraph(Reveal(p.Inlines)),
-        MdHeading h => h with { Inlines = Reveal(h.Inlines) },
-        MdQuote q => new MdQuote(Revealed(q.Blocks)),
-        MdList l => l with { Items = [.. l.Items.Select(Revealed)] },
-        MdTable t => t with { Rows = [.. t.Rows.Select(r => (IReadOnlyList<IReadOnlyList<MdInline>>)[.. r.Select(Reveal)])] },
-        _ => block,
-    };
+        if (string.IsNullOrEmpty(markdown)) { return []; }
+        var source = KeepBareReturns(markdown);
+        var blocks = new List<MdBlock>();
+        var at = 0;
+        foreach (var fence in Markdown.Parse(source, Pipeline).OfType<FencedCodeBlock>())
+        {
+            Literal(source[at..Math.Min(fence.Span.Start, source.Length)], blocks);
+            // The opening line's words after the fence (its info string) are not drawn with the code,
+            // so they are drawn here, as written.
+            var open = source.Split('\n')[fence.Line].TrimEnd('\r');
+            if (open.Trim().TrimStart(fence.FencedChar).Trim().Length > 0) { Literal(open, blocks); }
+            blocks.Add(new MdCode(Lines(fence), null));
+            at = Math.Min(fence.Span.End + 1, source.Length);
+        }
+        Literal(source[at..], blocks);
+        return blocks;
+    }
 
-    static IReadOnlyList<MdInline> Reveal(IReadOnlyList<MdInline> inlines) => [.. inlines.Select(i => i switch
+    static void Literal(string text, List<MdBlock> blocks)
     {
-        MdText t => t with { Text = HiddenText.Reveal(t.Text, rightToLeft: true) },
-        MdLink l => l with { Text = HiddenText.Reveal(l.Text, rightToLeft: true) },
-        _ => i,
-    })];
+        var lines = text.Replace("\r\n", "\n").Trim('\n').Split('\n');
+        if (lines is [""]) { return; }
+        var inlines = new List<MdInline>();
+        foreach (var line in lines)
+        {
+            if (inlines.Count > 0) { inlines.Add(new MdBreak()); }
+            if (line.Length > 0) { inlines.Add(new MdText(HiddenText.Reveal(line, rightToLeft: true))); }
+        }
+        blocks.Add(new MdParagraph(inlines));
+    }
 }
