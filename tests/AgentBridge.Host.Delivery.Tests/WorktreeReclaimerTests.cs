@@ -11,7 +11,8 @@ using Xunit;
 [Trait("Category", "Process")]
 public sealed class WorktreeReclaimerTests : IDisposable
 {
-    readonly string root = Directory.CreateTempSubdirectory("abreclaim-").FullName;
+    readonly string root = Folders.Physical(Directory.CreateTempSubdirectory("abreclaim-").FullName)
+        ?? throw new IOException("could not resolve the reclaimer fixture's temporary directory");
     readonly List<string> logs = [];
     readonly FixedUsage nobody = new(new WorktreeUsage(true, [], ""));
     string work = "";

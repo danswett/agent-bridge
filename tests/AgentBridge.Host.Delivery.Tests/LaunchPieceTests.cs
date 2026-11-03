@@ -13,7 +13,8 @@ using Xunit;
 // launched is the tests' own console echo.
 public sealed class LaunchPieceTests : IDisposable
 {
-    readonly string root = Directory.CreateTempSubdirectory("ablaunch-").FullName;
+    readonly string root = Folders.Physical(Directory.CreateTempSubdirectory("ablaunch-").FullName)
+        ?? throw new IOException("could not resolve the launch fixture's temporary directory");
 
     public void Dispose()
     {
