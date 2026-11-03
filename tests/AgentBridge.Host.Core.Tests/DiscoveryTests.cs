@@ -718,12 +718,40 @@ public class DiscoveryTests
             // a pid above that started after the executable went to another process
             new("codex", 500, t, Native, Parent: 501, Ancestors: [501]),
             new("node", 501, t.AddSeconds(5), Npx),
+            // one whose start cannot be read is not known to have launched anything
+            new("codex", 600, t.AddSeconds(2), Native, Parent: 601, Ancestors: [601]),
+            new("node", 601, null, Npx),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601], observation.Processes.Select(p => p.Id).Order());
         Assert.Equal([103, 201, 302], observation.Launchers.Order());
+    }
+
+    // Found in review (#437): on Windows a parent's pid outlives it. Another waiting Codex's child
+    // took the pid of this executable's exited parent, and the walk went on up to that Codex,
+    // which was then taken for this one's launcher and its hold dropped.
+    [Fact]
+    public void An_executables_ancestry_ends_at_a_process_that_started_after_the_one_below_it()
+    {
+        var t = DateTimeOffset.Parse("2026-11-01T00:54:42Z", System.Globalization.CultureInfo.InvariantCulture);
+        var parents = new Dictionary<int, int> { [2] = 3, [5] = 6, [6] = 7, [7] = 8, [8] = 9, [10] = 11, [11] = 10 };
+        var starts = new Dictionary<int, DateTimeOffset>
+        {
+            [2] = t.AddSeconds(20), // the pid of the executable's exited parent, taken by W's child
+            [3] = t, // W, a Codex waiting on its question
+            [5] = t.AddSeconds(5), [6] = t.AddSeconds(1), [7] = t.AddHours(-1), // a shell, npx, a terminal
+            [9] = t.AddHours(-2), // above one whose start cannot be read
+            [10] = t, [11] = t, // a loop
+        };
+        int[] Walk(int parent, DateTimeOffset? started) => SystemProcessInspector.Ancestors(parent, started,
+            pid => parents.TryGetValue(pid, out var p) ? p : null, pid => starts.TryGetValue(pid, out var s) ? s : null);
+
+        Assert.Empty(Walk(2, t.AddSeconds(10)));
+        Assert.Equal([5, 6, 7], Walk(5, t.AddSeconds(10)));
+        Assert.Empty(Walk(5, null));
+        Assert.Equal([10, 11], Walk(10, t));
     }
 
     [Fact]

@@ -90,7 +90,7 @@ public sealed class SystemProcessInspector : IProcessInspector
                     // for the launchers its pid-less registrations are told apart from (#437).
                     var parent = candidate is "node" or "bun" ? null : AgentBridge.Hooks.Ancestry.ParentOf(id);
                     var ancestors = agent == AgentKind.Codex && parent is { } p
-                        ? AgentBridge.Hooks.Ancestry.Walk(p, MaxAncestors, AgentBridge.Hooks.Ancestry.ParentOf)
+                        ? Ancestors(p, started, AgentBridge.Hooks.Ancestry.ParentOf, StartOf)
                         : null;
                     listing.Add(new(candidate, id, started, CommandLineOf((id, started?.UtcTicks ?? 0)), parent, ancestors));
                 }
@@ -117,7 +117,38 @@ public sealed class SystemProcessInspector : IProcessInspector
     // between it and the executable are three; the hooks read as far.
     const int MaxAncestors = 12;
 
-    // Ancestors: the executable's parent and those above it, nearest first, where the OS says.
+    // An executable's ancestry from its parent up, nearest first, as far as each process started
+    // no later than the one below it. A parent's pid is only a number: on Windows it outlives the
+    // parent, and the process another takes it for, started later, is no ancestor, nor is what is
+    // above it. Followed past one, a waiting Codex above another's reused parent pid was taken for
+    // the launcher of an executable it never started, and its hold dropped (#437). A start that
+    // cannot be read ends the walk there too: not known to be an ancestor, it launched nothing.
+    internal static int[] Ancestors(int parent, DateTimeOffset? started, Func<int, int?> parentOf, Func<int, DateTimeOffset?> startOf)
+    {
+        var chain = new List<int>();
+        var below = started;
+        int? current = parent;
+        while (chain.Count < MaxAncestors && current is { } pid && pid > 0 && !chain.Contains(pid))
+        {
+            if (below is not { } b || startOf(pid) is not { } at || at > b) { break; }
+            chain.Add(pid);
+            below = at;
+            current = parentOf(pid);
+        }
+        return [.. chain];
+    }
+
+    static DateTimeOffset? StartOf(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return new DateTimeOffset(p.StartTime.ToUniversalTime(), TimeSpan.Zero);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or Win32Exception or NotSupportedException) { return null; }
+    }
+
+    // Ancestors: the executable's parent and those above it, nearest first, as Ancestors reads them.
     internal sealed record ListedProcess(string Candidate, int Id, DateTimeOffset? StartedAt, string? CommandLine, int? Parent = null,
         IReadOnlyList<int>? Ancestors = null);
 
@@ -201,7 +232,7 @@ public sealed class SystemProcessInspector : IProcessInspector
             {
                 if (above == child.Id || !foundIds.Contains(above)) { continue; }
                 var launcher = found.First(p => p.Id == above);
-                if (launcher.StartedAt is { } a && child.StartedAt is { } b && a > b) { continue; }
+                if (launcher.StartedAt is not { } a || child.StartedAt is not { } b || a > b) { continue; }
                 launchers.Add(above);
             }
         }
