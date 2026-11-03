@@ -283,8 +283,15 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal((DeliveryState.Done, Deliveries.Held), (held.State, held.Outcome));
         var sink = new Recorder();
         var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromMilliseconds(300) };
-        await responder.HandleAsync("action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite", new Dictionary<string, string>());
+        // As this build's toast draws it (#377): an older toast's button only opens its question,
+        // so without the version it would never reach the offline refusal this checks.
+        var button = $"action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite&{ToastXml.AnswerVersionKey}={ToastXml.AnswerVersion}";
+        await responder.HandleAsync(button, new Dictionary<string, string>());
         Assert.StartsWith("Not sent: the machine is not connected now", ToastText(sink.Shown.Last().Xml));
+        // An older build's button for the same answer opens the question and sends nothing.
+        var shownBefore = sink.Shown.Count;
+        await responder.HandleAsync(button.Replace($"&{ToastXml.AnswerVersionKey}={ToastXml.AnswerVersion}", ""), new Dictionary<string, string>());
+        Assert.Equal(shownBefore, sink.Shown.Count);
 
         await Task.Delay(300);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
