@@ -148,6 +148,30 @@ export class DelegatesBlock {
 
 // The strip (and a phone's chip row): one item per delegate the main agent started, then "N
 // finished", and the finished ones while it is open. The item open in the inspector is pressed.
+// Each delegate's nested count, at any depth: descendants() for every one, in one pass. A parent
+// link that loops (a broken host) counts each delegate once, and never one under itself.
+function nestedCounts(list) {
+  const children = new Map();
+  for (const a of list) {
+    if (!a.parent || a.parent === a.id) { continue; }
+    if (!children.has(a.parent)) { children.set(a.parent, []); }
+    children.get(a.parent).push(a.id);
+  }
+  const counts = new Map();
+  for (const a of list) {
+    const seen = new Set([a.id]);
+    const stack = [...(children.get(a.id) ?? [])];
+    while (stack.length) {
+      const id = stack.pop();
+      if (seen.has(id)) { continue; }
+      seen.add(id);
+      stack.push(...(children.get(id) ?? []));
+    }
+    counts.set(a.id, seen.size - 1);
+  }
+  return counts;
+}
+
 export class DelegateStrip {
   #items = new Map();
   #open = false;
@@ -186,12 +210,14 @@ export class DelegateStrip {
     if (selected && finishedNow.has(selected) && (selected !== was || !this.#finishedIds.has(selected))) { this.#open = true; }
     this.#finishedIds = finishedNow;
     const live = new Set();
-    const els = active.map((r) => this.#item(r, list, now, selected, live));
+    // How many each started, at any depth: one pass over the list, not one per item.
+    const nested = nestedCounts(list);
+    const els = active.map((r) => this.#item(r, nested, now, selected, live));
     if (finished.length) {
       this.fold.querySelector('.strip-name').textContent = `${finished.length} finished`;
       this.fold.setAttribute('aria-expanded', this.#open ? 'true' : 'false');
       els.push(this.fold);
-      if (this.#open) { els.push(...finished.map((r) => this.#item(r, list, now, selected, live))); }
+      if (this.#open) { els.push(...finished.map((r) => this.#item(r, nested, now, selected, live))); }
     }
     // What the host left out of the list (its limit or the session budget) is still said here,
     // where at three panes the Delegates list is not shown.
@@ -206,7 +232,7 @@ export class DelegateStrip {
     for (const id of [...this.#items.keys()]) { if (!live.has(id)) { this.#items.delete(id); } }
   }
 
-  #item(r, list, now, selected, live) {
+  #item(r, nestedCount, now, selected, live) {
     live.add(r.id);
     let it = this.#items.get(r.id);
     if (!it) {
@@ -220,7 +246,7 @@ export class DelegateStrip {
     it.row = r;
     setGlyph(it.g, r.glyph, { size: 14, label: r.words });
     it.name.textContent = r.name;
-    const nested = descendants(r.id, list).length;
+    const nested = nestedCount.get(r.id) ?? 0;
     it.facts.textContent = [delegateTime(r, now), nested ? `${nested} nested` : null].filter(Boolean).join(' · ');
     it.el.title = r.name;
     it.el.setAttribute('aria-pressed', r.id === selected ? 'true' : 'false');
@@ -285,7 +311,7 @@ export class DelegateDetail {
     e.toolsBlock = h('div', { class: 'delegate-tools', hidden: true }, h('h4', { class: 'section-head' }, 'Tools'), e.tools);
     e.nested = h('ul', { class: 'delegate-list' });
     e.nestedBlock = h('div', { class: 'delegate-nested', hidden: true }, h('h4', { class: 'section-head' }, 'Delegates it started'), e.nested);
-    e.ask = h('button', { type: 'button', class: 'button secondary delegate-ask', hidden: true, onclick: () => { if (this.#a) { this.onAsk(askToStopText(this.#a)); } } }, 'Ask main agent to stop it');
+    e.ask = h('button', { type: 'button', class: 'button secondary delegate-ask', hidden: true, onclick: () => { const text = this.#a ? askToStopText(this.#a) : null; if (text) { this.onAsk(text); } } }, 'Ask main agent to stop it');
     this.element = h('section', { class: 'delegate-pane', 'aria-labelledby': `${idBase}-label ${idBase}-title`, hidden: true },
       e.back, e.label, e.title, e.props, e.status, e.taskBlock, e.latestBlock, e.reasoning, e.toolsBlock, e.nestedBlock, e.ask);
   }
