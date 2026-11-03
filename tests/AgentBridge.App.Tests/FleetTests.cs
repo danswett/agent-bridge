@@ -84,6 +84,12 @@ public sealed class FleetTests : IAsyncLifetime
     async Task BothMachinesAsync()
     {
         await Wait.UntilAsync(() => local.State == LinkState.Connected, "this machine's host");
+        // Connected comes with the subscribe's result, ahead of the snapshot it sends. Each
+        // machine's first list goes to the top once it is whole (ui.md §6.1), so this machine's
+        // must be whole before the other's is asked for, as the order these tests expect
+        // (["there", "here"]) says. A slow runner once let the other machine's finish first,
+        // and "here" went on top (#414).
+        await Wait.UntilAsync(() => local.Sessions.Complete, "this machine's whole list");
         // The relay lists this machine's own host too: it is reached over the pipe, not again.
         link.Set(FleetState.Connected, ("host-id", "Test PC"), ("remote-id", "Build server"));
         await Wait.UntilAsync(() => Card("here") is not null && Card("there") is not null, "both machines' cards");
@@ -224,6 +230,7 @@ public sealed class FleetTests : IAsyncLifetime
         var there = Card("there")!;
         var here = Card("here")!;
         var hereLine = TestUi.Read(() => here.StatusText);
+        Assert.Equal(["there", "here"], TestUi.Read(() => main.Sessions.Select(c => c.Id).ToList()));
 
         Leave();
         clock.Advance(TimeSpan.FromSeconds(20));
@@ -283,8 +290,15 @@ public sealed class FleetTests : IAsyncLifetime
         Assert.Equal((DeliveryState.Done, Deliveries.Held), (held.State, held.Outcome));
         var sink = new Recorder();
         var responder = new ToastResponder(key => main.MachineOf(key)?.Deliveries, sink, (_, _) => { }) { MachineWait = TimeSpan.FromMilliseconds(300) };
-        await responder.HandleAsync("action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite", new Dictionary<string, string>());
+        // As this build's toast draws it (#377): an older toast's button only opens its question,
+        // so without the version it would never reach the offline refusal this checks.
+        var button = $"action=answer&machine=remote-id&session=there&question=q1&kind=option&field=answer&value=sqlite&{ToastXml.AnswerVersionKey}={ToastXml.AnswerVersion}";
+        await responder.HandleAsync(button, new Dictionary<string, string>());
         Assert.StartsWith("Not sent: the machine is not connected now", ToastText(sink.Shown.Last().Xml));
+        // An older build's button for the same answer opens the question and sends nothing.
+        var shownBefore = sink.Shown.Count;
+        await responder.HandleAsync(button.Replace($"&{ToastXml.AnswerVersionKey}={ToastXml.AnswerVersion}", ""), new Dictionary<string, string>());
+        Assert.Equal(shownBefore, sink.Shown.Count);
 
         await Task.Delay(300);
         Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
