@@ -253,6 +253,8 @@ public sealed partial class MainViewModel : Observable
         sessions.SnapshotBegun += begun;
         sessions.HeldChanged += OnHeldChanged;
         m.Host.Changed += changed;
+        // After the machine's own handler (Machine, made before it is added) has unconfirmed its rows.
+        m.Host.Gapped += begun;
         unhook[m] = () =>
         {
             sessions.Upserted -= upsert;
@@ -261,6 +263,7 @@ public sealed partial class MainViewModel : Observable
             sessions.SnapshotBegun -= begun;
             sessions.HeldChanged -= OnHeldChanged;
             m.Host.Changed -= changed;
+            m.Host.Gapped -= begun;
         };
         Machines.Add(new MachineChoice(m.Key, m.Name));
         currency[m] = CurrencyOf(m);

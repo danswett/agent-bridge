@@ -83,6 +83,12 @@ public sealed class HostConnection : IAsyncDisposable
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
+    // Raised on the UI thread when this connection's events skip some (a gap), before anything
+    // after the gap is applied: its sessions may be missing changes until the snapshot the recovery
+    // asks for is whole. That snapshot begins only once the recovery has read hello, status, usage
+    // and updates again, so until then the list still reads as complete (#427).
+    public event Action? Gapped;
+
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
 
     // The current connection's gap signal, while there is one.
@@ -346,7 +352,11 @@ public sealed class HostConnection : IAsyncDisposable
                 // A gap means the buffer dropped events while the UI was slow: the sessions
                 // are subscribed again, which resends them all. Each connection numbers its
                 // events from 1, so a first event above 1 is a gap too.
-                if (ev.Seq != last + 1) { gaps.Release(); }
+                if (ev.Seq != last + 1)
+                {
+                    ui.Post(() => Gapped?.Invoke());
+                    gaps.Release();
+                }
                 last = ev.Seq;
                 Apply(ev);
             }

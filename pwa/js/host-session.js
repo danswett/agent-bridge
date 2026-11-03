@@ -22,7 +22,8 @@
 // network blip, and taking its sessions with it made them vanish and come back, grouped by
 // machine, every few minutes. A link whose channel is down for any other reason (this device's
 // relay link dropped, the host restarted) is stale too, as the Windows app treats it: what it
-// last showed may have changed. Nothing is sent to a stale machine (route() is null, the one
+// last showed may have changed. So is one whose channel lost events (a gap, #427), until the
+// snapshot it asks for again is whole. Nothing is sent to a stale machine (route() is null, the one
 // gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
 import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
@@ -128,7 +129,8 @@ export class HostSession {
   // { reason, since }. 'offline': it left presence; since is when it was last seen (the relay's
   // roster says, else when this device saw it go). 'unsupported': in presence, but it says it
   // has no sessions to give; not tried again. 'reconnecting': in presence, and no channel to it
-  // is open. 'confirming': open, and its snapshot has not finished.
+  // is open. 'confirming': open, and its snapshot (a new channel's first, or the one a gap asked
+  // for again) has not finished.
   staleOf(id) {
     const link = this.#links.get(id);
     if (!link || this.route(id)) { return null; }
@@ -446,6 +448,16 @@ export class HostSession {
       // to it again.
       link.stale = true;
       client.on('synced', () => this.#confirm(link, client));
+      // A gap in its events (host-client.js subscribes again on the same channel): the list may be
+      // missing changes, so it is held as a new channel's is until the new snapshot is whole and
+      // confirms it (#427). Before, answers and launches went on against the pre-gap list. A
+      // resubscription that fails can't get there on this channel, so the channel goes and is
+      // reopened rather than held for good.
+      client.on('gap', ({ resync } = {}) => {
+        if (link.client !== client) { return; }
+        if (!link.stale) { link.stale = true; this.#emit(); }
+        resync?.then((ok) => { if (!ok && link.client === client) { client.close(); } });
+      });
       client.on('close', () => {
         if (link.client !== client) { return; }
         // Set up: open, or found not to support sessions (which may change once it restarts).

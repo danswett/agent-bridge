@@ -238,7 +238,9 @@ channel replaces the existing one: the host answers with a new `{revision, count
 a complete snapshot ending in `sessions.synced`, then carries on with live changes. It
 never runs two subscriptions side by side, so each change arrives once. This is how a
 client recovers from a gap. Live upserts sent before the new response are covered by
-the snapshot.
+the snapshot. Until its `sessions.synced` the client's list may be missing changes, so the
+PWA sends that machine nothing meanwhile, and the Windows app no answer, reply or stop for
+another machine's sessions, as with a new channel's first snapshot (#427).
 
 ### Discovery held
 

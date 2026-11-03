@@ -478,6 +478,9 @@ client's own relay link is up on the same account:
   confirmed that the session and its question still exist, never on the copy kept meanwhile. A
   session that ended meanwhile goes to Ended then, and a question that ended never becomes
   answerable. A question notification withdrawn meanwhile comes back silently if still asked.
+- The same hold applies, for a moment, to a machine still connected whose events had a gap (some
+  were lost, so it is asked for its full list again; v1-sessions.md): its rows can be acted on
+  again once that list is whole (#427).
 - After **15 minutes** away its rows go, and the machine is listed as offline (§6.6). It goes at
   once when it is forgotten, when the client is signed out or refused, or when the account changes.
 

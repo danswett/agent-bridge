@@ -285,14 +285,16 @@ export class HostClient {
     if (gap) { this.#resubscribe(m.seq); }
   }
 
+  // 'gap' carries resync, which settles true once the host has taken the new subscription and
+  // false if it never did: a listener holding the list until the new snapshot is whole (#427)
+  // learns that it will never be on this channel.
   #resubscribe(seq) {
     if (this.#resubscribing || this.closed) { return; }
-    this.#emit('gap', { seq });
     // An update lost in the gap is replaced by the current report.
     if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared }).then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
     if (this.#updateSubscribed) { this.subscribeUpdate().then((r) => this.#emit('update', r), (e) => this.#emit('error', e)); }
-    this.#resubscribing = this.subscribe()
-      .catch((e) => this.#emit('error', e))
-      .finally(() => { this.#resubscribing = null; });
+    const resync = this.subscribe().then(() => true, (e) => { this.#emit('error', e); return false; });
+    this.#resubscribing = resync.finally(() => { this.#resubscribing = null; });
+    this.#emit('gap', { seq, resync });
   }
 }
