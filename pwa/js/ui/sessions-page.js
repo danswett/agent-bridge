@@ -338,7 +338,7 @@ export class SessionsPage {
     card.els.titleText.tabIndex = -1;
     card.els.titleText.focus({ preventScroll: true });
     // A question it was opened for is in sight, however far its conversation was scrolled.
-    card.view.querySelector('.question-slot .question')?.scrollIntoView({ block: 'nearest', behavior });
+    card.revealQuestion(behavior);
     return true;
   }
 

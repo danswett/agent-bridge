@@ -95,6 +95,7 @@ export class SessionCard {
   // The question's view the guard covers, and the question it was armed for.
   #guarded = null;
   #guardedId = null;
+  #guardTimer = null;
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
   #menu = new RowMenu();
@@ -427,6 +428,9 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Its question shows now, where a tap or a click may already be headed (a phone's push puts
+    // the view under the finger that opened it): the same wait as a question arriving.
+    if (selected && this.#guarded?.isConnected) { this.#guard(); }
     if (!selected) { this.#menu.close(false); }
     this.layoutChanged();
   }
@@ -625,15 +629,22 @@ export class SessionCard {
     }
     // A question newly drawn where the person can see it: its controls wait before a click counts.
     // Not the same question redrawn (reworded, or its machine's capabilities changed).
+    this.#guarded = view || null;
     if (view && q.id !== this.#guardedId) {
       this.#guardedId = q.id;
       if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
     }
-    this.#guarded = view || null;
     this.#arrived = arrived && view ? view : null;
   }
 
-  #guard() { this.#guardUntil = (globalThis.performance?.now() ?? Date.now()) + QUESTION_ARRIVAL_GUARD_MS; }
+  #guard() {
+    this.#guardUntil = (globalThis.performance?.now() ?? Date.now()) + QUESTION_ARRIVAL_GUARD_MS;
+    // Said on the question while it lasts (data-arriving), so what waits on it can tell.
+    const view = this.#guarded;
+    view?.setAttribute?.('data-arriving', '');
+    clearTimeout(this.#guardTimer);
+    this.#guardTimer = setTimeout(() => view?.removeAttribute?.('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
+  }
 
   // A click from a pointer (detail > 0) on the question's own controls during the guard is
   // dropped before any handler, form or default action sees it: a choice, Approve once, Deny,
@@ -663,13 +674,28 @@ export class SessionCard {
     const sc = this.els.scroll;
     if (view?.isConnected && atEnd && !this.#touches && !this.#pressing && !this.#hovering && this.#selected && this.viewing() && sc.getClientRects().length) {
       view.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
-      // From where it lands, too: a smooth scroll takes the browser's own time. Only this scroll's
-      // end: one the person makes later must not hold the question's buttons back.
-      this.#guard();
-      const ended = new AbortController();
-      sc.addEventListener('scrollend', () => this.#guard(), { once: true, signal: ended.signal });
-      setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
+      this.#guardScroll();
     }
+  }
+
+  // The question brought into sight on purpose (a notification, a Needs you entry): its controls
+  // wait as they do for one that arrives. behavior: the page's smooth scroll, or a jump.
+  revealQuestion(behavior = scrollBehavior()) {
+    const view = this.#guarded?.isConnected ? this.#guarded : null;
+    if (!view) { return; }
+    view.scrollIntoView({ block: 'nearest', behavior });
+    this.#guardScroll();
+  }
+
+  // A scroll to the question under way: the guard runs from now, and again from where it lands,
+  // since a smooth scroll takes the browser's own time. Only this scroll's end: one the person
+  // makes later must not hold the question's buttons back.
+  #guardScroll() {
+    const sc = this.els.scroll;
+    this.#guard();
+    const ended = new AbortController();
+    sc.addEventListener('scrollend', () => this.#guard(), { once: true, signal: ended.signal });
+    setTimeout(() => ended.abort(), 3 * QUESTION_ARRIVAL_GUARD_MS);
   }
 
   // A finger on the conversation holds it until the last finger lifts. Touch events, not pointer

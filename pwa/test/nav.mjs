@@ -44,5 +44,8 @@ export async function open(page, id, hostId = null) {
   await expect(v).toBeVisible();
   // On a phone its content slides in (ui.md §5.3): what a test measures next is where it lands.
   await page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-push' && a.playState === 'running'));
+  // A question it shows takes no click for a moment after it shows (ui.md §5.3, Scroll to a
+  // question): a test that clicks next clicks as a person would, once it has.
+  await expect(v.locator('.question[data-arriving]')).toHaveCount(0);
   return v;
 }

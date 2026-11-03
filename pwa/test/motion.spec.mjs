@@ -723,3 +723,67 @@ test('a click that lands on a question\'s choice as the question appears is igno
   await page.keyboard.press('Enter');
   await expect.poll(answers).toBe(before + 2);
 });
+test('a question already there takes no click for a moment when its session is opened on a phone, or brought into sight from Needs you', async ({ page }) => {
+  await openDemo(page, { width: 390, height: 844 });
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  await page.evaluate(() => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-open', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question });
+  });
+  await expect(page.locator('#needs-you .needs-entry[data-id="019a1b2c-codex-example"]')).toBeVisible();
+  // The tap that opens it, and a second tap where its first choice now is.
+  const tapThrough = (opener) => page.evaluate(async (opener) => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    tap(document.querySelector(opener));
+    await new Promise((r) => setTimeout(r, 0));
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice) { return false; }
+    tap(choice);
+    return true;
+  }, opener);
+  expect(await tapThrough('.session[data-id="019a1b2c-codex-example"] .row-main')).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+  await view(page, CODEX).locator('.session-header .back').click();
+  await expect(row(page, CODEX)).toBeVisible();
+  expect(await tapThrough('#needs-you .needs-entry[data-id="019a1b2c-codex-example"] .needs-title')).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
+test('a question scrolled into sight from Needs you in a session already open takes no click for a moment', async ({ page }) => {
+  await openDemo(page, { height: 600 });
+  const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
+  await page.evaluate((long) => {
+    const d = window.agentBridgeDemo;
+    const t = new Date(Date.now() + 60_000).toISOString();
+    const question = {
+      id: 'q-guard-reveal', kind: 'form', message: 'Which?', askedAt: t,
+      fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+    };
+    const s = d.host.get('019a1b2c-codex-example');
+    d.upsert({ ...s, activity: { ...s.activity, response: long }, status: 'waiting', statusSince: t, updatedAt: t, question });
+  }, long);
+  const v = await open(page, CODEX);
+  await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = 0; });
+  await expect(v.locator('.question-slot .question')).not.toBeInViewport();
+  const answers = () => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+  const before = await answers();
+  const tapped = await page.evaluate(async () => {
+    const tap = (el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    tap(document.querySelector('#needs-you .needs-entry[data-id="019a1b2c-codex-example"] .needs-title'));
+    await new Promise((r) => setTimeout(r, 0));
+    const choice = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot .choice');
+    if (!choice) { return false; }
+    tap(choice);
+    return true;
+  });
+  expect(tapped).toBe(true);
+  await page.waitForTimeout(100);
+  expect(await answers()).toBe(before);
+});
