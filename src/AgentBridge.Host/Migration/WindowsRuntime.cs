@@ -245,7 +245,11 @@ public sealed class LocalMigrationHost(string profileFolder) : IMigrationHost
         }
         catch (Exception e) when (e is IOException or AgentBridge.Local.HostErrorException or TimeoutException) { return e.Message; }
         try { await gone(cancellationToken).WaitAsync(ShutdownTimeout, Time, cancellationToken); }
-        catch (TimeoutException) { return $"it was still stopping after {ShutdownTimeout.TotalMinutes:0} minutes"; }
+        catch (TimeoutException)
+        {
+            var waited = ShutdownTimeout >= TimeSpan.FromMinutes(1) ? $"{ShutdownTimeout.TotalMinutes:0.#} minutes" : $"{ShutdownTimeout.TotalSeconds:0.#} s";
+            return $"it was still stopping after {waited}";
+        }
         return null;
     }
 

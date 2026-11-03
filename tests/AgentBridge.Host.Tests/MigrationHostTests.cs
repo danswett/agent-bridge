@@ -39,7 +39,7 @@ public sealed class MigrationHostTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await server.DisposeAsync();
-        try { Directory.Delete(profile, recursive: true); } catch (IOException) { }
+        try { Directory.Delete(profile, recursive: true); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     LocalMigrationHost Host() => new(profile)
