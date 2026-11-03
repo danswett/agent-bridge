@@ -246,6 +246,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_older_host_that_does_not_know_the_hold_is_stopped_as_before()
     {
         await StartAsync();
@@ -258,6 +259,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_holds_and_waits_for_the_other_profiles_hosts_in_the_package_before_stopping_this_one()
     {
         await StartAsync();
@@ -292,6 +294,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Every_other_profiles_hold_is_renewed_while_another_is_waited_for()
     {
         await StartAsync();
@@ -314,6 +317,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task A_profiles_host_started_while_the_last_hold_waits_is_held_before_the_update_goes_ahead()
     {
         await StartAsync();
@@ -348,6 +352,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Quitting_while_an_update_waits_for_another_profiles_probe_after_stopping_this_host_starts_it_again_at_once()
     {
         await StartAsync();
@@ -385,6 +390,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_stops_nothing_when_a_host_of_the_package_cannot_be_reached()
     {
         await StartAsync();
@@ -400,6 +406,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task An_update_stops_nothing_when_another_profiles_host_cannot_confirm_its_usage_probe_is_done()
     {
         await StartAsync();
@@ -420,6 +427,7 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task Velopacks_hooks_begin_no_stop_they_would_abandon()
     {
         await StartAsync();

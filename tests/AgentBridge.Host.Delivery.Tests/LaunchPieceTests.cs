@@ -268,6 +268,7 @@ public sealed class LaunchPieceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Process")]
     public async Task A_usage_probe_runs_in_its_folder_with_the_profiles_home_set_a_removed_variable_gone_and_nothing_on_its_input()
     {
         var folder = Directory.CreateDirectory(Path.Combine(root, "usage probe")).FullName;

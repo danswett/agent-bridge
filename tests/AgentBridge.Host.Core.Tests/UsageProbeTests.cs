@@ -1299,6 +1299,7 @@ public sealed class UsageProbeTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Network")]
     public async Task The_daemon_route_speaks_WebSocket_and_ends_with_a_close_the_daemon_never_answers()
     {
         var socket = Path.Combine(Path.GetTempPath(), $"abu-{Guid.NewGuid():N}"[..12] + ".sock");
