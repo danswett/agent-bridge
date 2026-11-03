@@ -6,3 +6,5 @@ node_modules/
 TestResults/
 # Spike publish output, installers and release feeds.
 out/
+# bench-micro's reports (quality/perf.md).
+BenchmarkDotNet.Artifacts/

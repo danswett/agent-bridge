@@ -16,6 +16,9 @@
     <InternalsVisibleTo Include="AgentBridge.HomeAssistant.Tests" />
     <!-- The migration finds agent-ha-bridge's processes by command line, as the scanner does. -->
     <InternalsVisibleTo Include="agent-bridge-host" />
+    <!-- bench-micro times transcript tailing and upsert building, which are internal
+         (quality/perf.md). Benchmarks only: nothing shipped references it. -->
+    <InternalsVisibleTo Include="AgentBridge.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>
