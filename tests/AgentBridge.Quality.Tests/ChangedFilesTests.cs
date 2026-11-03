@@ -5,7 +5,7 @@ namespace AgentBridge.Quality.Tests;
 public class ChangedFilesTests
 {
     [Fact]
-    public void Changes_are_the_branch_commits_plus_uncommitted_and_untracked_files_with_moves_at_both_paths()
+    public void Changes_are_the_branch_commits_plus_staged_unstaged_and_untracked_files_with_moves_at_both_paths()
     {
         var root = Fixture.ScratchFolder();
         try
@@ -22,11 +22,15 @@ public class ChangedFilesTests
             Commit(root, "topic");
             Write(root, "edited.txt", "changed");
             Write(root, "pwa/untracked.css");
+            // Staged, then the working tree put back as it was: still a change to commit.
+            Write(root, "kept.txt", "staged");
+            Git(root, "add", "kept.txt");
+            Write(root, "kept.txt", "x");
 
             var (files, mergeBase) = ChangedFiles.Since(root, "main");
             var (committedOnly, _) = ChangedFiles.Since(root, "main", head: "HEAD");
 
-            Assert.Equal(["docs/moved.txt", "edited.txt", "moved.txt", "pwa/untracked.css", "src/committed.cs"], files);
+            Assert.Equal(["docs/moved.txt", "edited.txt", "kept.txt", "moved.txt", "pwa/untracked.css", "src/committed.cs"], files);
             Assert.Equal(["docs/moved.txt", "moved.txt", "src/committed.cs"], committedOnly);
             Assert.Equal(Git(root, "rev-parse", "main").Trim(), mergeBase);
         }

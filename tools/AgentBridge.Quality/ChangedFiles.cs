@@ -19,6 +19,8 @@ static class ChangedFiles
         if (head is null)
         {
             AddLines(files, Git(repoRoot, "diff", "--name-only", "--no-renames", "HEAD"));
+            // The index too: a change staged and then undone in the working tree is still to be committed.
+            AddLines(files, Git(repoRoot, "diff", "--cached", "--name-only", "--no-renames", "HEAD"));
             AddLines(files, Git(repoRoot, "ls-files", "--others", "--exclude-standard"));
         }
         return (files.ToList(), mergeBase);
