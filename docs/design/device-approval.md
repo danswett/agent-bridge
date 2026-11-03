@@ -98,7 +98,7 @@ are, so no end has to serialize JSON identically:
     "id": "<32 hex: first 16 bytes of SHA-256 of dh>",
     "dh": "<65-byte uncompressed P-256 ECDH key, base64url>",
     "sign": "<65-byte uncompressed P-256 ECDSA key, base64url; absent for a host>",
-    "signAlg": "ES256",
+    "signAlg": "p256-sha256-der",
     "kind": "phone",
     "platform": "ios",
     "name": "Travel iPhone"
@@ -118,7 +118,7 @@ are, so no end has to serialize JSON identically:
 | `at` | When the signer says it signed. Shown to people ("added by Desk app at 14:05"); never used to order or expire anything |
 | `device.kind` | **The bound kind**: `host`, `app`, `pwa`, `phone`. `test` is never rostered |
 | `device.platform` | `windows`, `macos`, `linux`, `ios`, `ipados`, `web`. Display only: authorization reads `kind` |
-| `device.signAlg` | With `sign`, and only `ES256` (ECDSA P-256 with SHA-256) in v1. A verifier refuses any other value. It is there so that adding an algorithm later (§4.6) is an explicit, versioned change rather than a guess from the key's length |
+| `device.signAlg` | With `sign`, and only `p256-sha256-der` in v1 (below). The name is this protocol's, not JOSE's `ES256`, which implies raw `r‖s` signatures and JWK keys. A verifier refuses any other value. It is there so that adding an algorithm later (§4.6) is an explicit, versioned change rather than a guess from the key's length |
 | `device.name` | At most 64 Unicode scalar values and 256 UTF-8 bytes. The approver removes every character in the project's hidden-character set (`NeedsYou.HasHidden` and `pwa/js/needs-you.js` `HIDDEN`: format characters including bidi controls and zero-width characters, controls, default-ignorables, private-use, unassigned code points and the line and paragraph separators) before signing. A verifier never alters a signed name: it refuses one over the limits or holding a C0 or C1 control, and shows any other hidden character as a visible escape, as Needs You does, since which code points are unassigned differs between platforms' Unicode versions. Proposed by the new device, editable by the approver, and signed with the rest |
 | `approval` | How the person approved: `code`, `qr`, `grandfather` (§8.2) or `genesis`, and the enrollment transcript hash, so an entry can be traced to the exchange that produced it |
 
@@ -131,13 +131,24 @@ implementation, not to several.
 `add` carries `device`; `remove` carries `device.id` only; `rename` carries `device.id` and
 `device.name`.
 
-The **entry hash** is `SHA-256` over the exact `body` bytes as received (never over re-encoded
-JSON), written as base64url without padding wherever it appears: in `prev`, in the pin (§3.4),
-in `rosterHead`, in `roster.head` and in logs.
+The **entry hash** is `SHA-256` over the body bytes: the base64url-decoded bytes of `body` (the
+UTF-8 JSON as the signer wrote it), never over the base64url text and never over re-encoded
+JSON. It is written as base64url without padding wherever it appears: in `prev`, in the pin
+(§3.4), in `rosterHead`, in `roster.head` and in logs. **An entry's identity is its entry
+hash alone.** Two `sig` values over the same body are the same entry: a verifier or the relay
+that already holds an entry ignores another copy with a different `sig`, and never treats the
+two as competing.
 
-The signature is ECDSA P-256 with SHA-256 over the body bytes, encoded as DER (WebCrypto's
-raw `r‖s` is converted). A verifier checks every public key in an entry is on the curve
-before using it, the requirement S2 added after WebKitGTK accepted an off-curve point.
+The signature is ECDSA P-256 with SHA-256 over those body bytes. `signAlg`
+`p256-sha256-der` names the whole encoding:
+* the public key in `sign` is an uncompressed SEC1 point, 65 bytes (`0x04 ‖ X ‖ Y`), base64url;
+* `sig` is a strict, minimal DER `SEQUENCE { INTEGER r, INTEGER s }`, base64url. WebCrypto's
+  and CryptoKit's raw `r‖s` is converted;
+* `s` is in low-S form (`s ≤ n/2`): a signer normalizes it, and a verifier refuses a high-S
+  or non-minimal DER signature, so each signer produces one encoding.
+
+A verifier checks every public key in an entry is on the curve before using it, the
+requirement S2 added after WebKitGTK accepted an off-curve point.
 
 ### 3.3 Validity
 
@@ -174,8 +185,10 @@ accepted (during a fork, below, one per head), written before it acts on the new
   are a person's approval, so neither is discarded. A fork is resolved by a **`merge`** entry,
   part of the same slice as the chain itself (R1), so the state always has a signed, verifiable
   head:
-  * `merge` has `prev` as the sorted list of the heads it joins and `seq` one more than the
-    highest of them. Each branch must verify on its own from their common ancestor;
+  * `merge` has `prev` as the list of the heads it joins, in **head order** (ascending by the
+    raw 32-byte entry hashes, compared byte by byte; the same order wherever a list of heads
+    appears), and `seq` one more than the highest of them. Each branch must verify on its own
+    from their common ancestor; a `prev` out of head order is refused;
   * its state is deterministic: every device added on either branch, minus every device
     removed on either. A removal wins, so a fork can never keep a removed device trusted.
     If that leaves no person's device, the merge is invalid and only a reset (§5.5) recovers;
@@ -183,7 +196,8 @@ accepted (during a fork, below, one per head), written before it acts on the new
     nothing to choose, and every device announces it with the changes it brought in (§6.3);
   * a verifier that sees a fork before a merge pins both heads, and applies the same merged
     state at once. That is exactly the state the merge will sign, so a host never serves a
-    device that either branch removed. Its `rosterHead` is then the sorted list of heads, and
+    device that either branch removed. Its `rosterHead` is then the list of heads in head
+    order, and
     every device shows "the device list forked; merging", since an honest relay never
     causes a fork.
 * **Generations.** A verifier never moves to a new generation because something remote says
@@ -252,14 +266,22 @@ first and then tries about 10⁶ ephemerals on the other until the codes collide
 also takes nonces in a commit-then-reveal order, the agent-ha-bridge fleet-pairing protocol
 (`docs/fleet-pairing.md` there) with its HA steps replaced by the channel:
 
+Every hash, MAC and signature input below is framed, so no two inputs share bytes:
+`F(x₁, …, xₙ) = L(x₁) ‖ … ‖ L(xₙ)`, where `L(x)` is the length of `x` in bytes as a 4-byte
+big-endian unsigned integer followed by `x`. Labels are their ASCII bytes; `account` is the
+UTF-8 bytes of the account id string as the relay's `ready` gives it; `h` is the 32-byte
+handshake hash; nonces are 32 bytes; `T` is 32 bytes.
+
 1. **N → A: commit.** N picks a 32-byte nonce `nN` and sends
-   `C = SHA-256("agent-bridge enroll commit v1" ‖ h ‖ nN)` with its proposed `kind`,
+   `C = SHA-256(F("agent-bridge enroll commit v1", h, nN))` with its proposed `kind`,
    `platform` and `name`. A person's device also sends its `sign` key and a signature by it
-   over `h`, which proves it holds that key on this channel; a host has no `sign` key.
+   (`p256-sha256-der`) over `F("agent-bridge enroll key v1", h)`, which proves it holds that
+   key on this channel; a host has no `sign` key.
 2. **A → N: offer.** A picks `nA` and sends it. A has not seen `nN`.
 3. **N → A: reveal.** N sends `nN`. A checks it against `C` and abandons the attempt otherwise.
-4. **Both** compute `T = SHA-256("agent-bridge enroll v1" ‖ account ‖ h ‖ nA ‖ nN)` and the
-   code `SAS = (first 4 bytes of SHA-256("sas" ‖ T) as a big-endian integer) mod 10⁶`. The
+4. **Both** compute `T = SHA-256(F("agent-bridge enroll v1", account, h, nA, nN))` and the code
+   `SAS = (first 4 bytes of SHA-256(F("agent-bridge enroll sas v1", T)) as a big-endian
+   unsigned integer) mod 10⁶`. The
    code is always the six-digit decimal string, zero-padded (`000042`), shown as two groups of
    three (`000 042`). N shows it.
 5. **The person types it at A.** A drops spaces from what was typed, refuses anything that is
@@ -288,7 +310,7 @@ Why each piece is there:
 
 On a desktop approver, "Add a phone" shows a QR code carrying A's device id and a fresh
 128-bit secret `q`. The phone scans it, opens a channel to that id, checks the peer's static
-key hashes to it, and sends `HMAC-SHA256(q, h)` with its commit. The high-entropy `q` replaces
+key hashes to it, and sends `HMAC-SHA256(q, F("agent-bridge enroll qr v1", h))` with its commit. The high-entropy `q` replaces
 the code in steps 1-5: A knows the device on this channel is the one that scanned, and the
 phone knows it reached the approver in the QR. The person still confirms the name and kind at
 A. `q` expires with the attempt and is never stored.
@@ -338,7 +360,7 @@ is not that property, since malware running as the user can call the key directl
 | Platform | Key-enforced presence |
 |---|---|
 | Apple | Yes: a Secure Enclave key with `.userPresence` access control (Face ID, Touch ID or passcode) |
-| Windows app | Where available: a TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6 verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in v1; adopting it later would add `RS256` to `signAlg` and define the RSA key and signature encodings, a protocol change of its own |
+| Windows app | Where available: a TPM ECDSA P-256 key with an NCrypt UI protection policy, so Windows itself asks before each use. R4 verifies that the Platform Crypto Provider honours that policy on real TPMs, as S6 verified its ECDH. A Windows Hello (Passport) key credential is RSA-2048, so it is not used in v1; adopting it later would add an RSA value to `signAlg` and define the RSA key and signature encodings, a protocol change of its own |
 | PWA | Not in v1. A later slice (L1) can make a WebAuthn assertion with user verification over the entry hash part of the approval |
 
 A device without key-enforced presence (a PWA, a Windows machine whose TPM or provider does
@@ -642,7 +664,8 @@ Each slice adds its own; together they cover:
 * An entry from another account or generation, a `seq` gap, a `prev` that does not match, a
   re-added removed id, a removal of the last person's device, a second genesis: refused.
 * An off-curve or malformed `dh` or `sign` key: refused before use.
-* A re-encoded (high-S or re-DER'd) signature does not make a second, distinct entry.
+* A high-S or non-minimal DER signature is refused; a second valid copy of an entry with
+  another `sig` is the same entry, not a fork.
 
 **Replay**
 * An old `add` sent again: refused (its `seq`/`prev` place it).
@@ -680,8 +703,9 @@ Each slice adds its own; together they cover:
   join again.
 
 **Interop**
-* Shared vectors for entries, signatures, the chain hash, the code (including one with leading
-  zeros) and the QR MAC, run by C#, the PWA and Swift, as the command MAC's are.
+* Shared vectors for entries, signatures (DER, low-S), the chain hash, the framing `F`, `C`,
+  `T`, the code (including one with leading zeros), the QR MAC and head order, run by C#, the
+  PWA and Swift, as the command MAC's are.
 * A name holding a hidden character: removed by the approver before signing; refused by a
   verifier if it is a control; shown escaped otherwise.
 
