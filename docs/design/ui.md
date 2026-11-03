@@ -514,7 +514,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     place among the tabs shown, the last of the others giving way to it.
   - **A long name** is cut short with "…" at `layout.windows.machineTab` (128 px). A tab's tooltip and
     accessible name are the whole name and the machine's state: "Build server · 3 sessions", with
-    "· View only" for a read-only machine (§6.6) and "connecting…" while it is.
+    "· View only" for a read-only machine (§6.6), "connecting…" while it connects, and "offline"
+    while it is away ("A machine away").
   - **Keyboard:** the arrows move through the tabs shown, Tab goes on to More, and Enter or Space
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
