@@ -156,18 +156,23 @@ static partial class SelfTest
             // The list's own item for the row: a row control just moved can still be in the visual
             // tree, put aside for reuse in another item (SessionsPage.OnRowRecycled), and focus given
             // there is not on any row of the list.
-            if (target?.Card is { } reached && window.Sessions.Rows.ContainerFromItem(reached) is ListViewItem targetItem)
+            if (target?.Card is { } reached && window.Sessions.Rows.ContainerFromItem(reached) is ListViewItem)
             {
                 var openNow = main.Selected;
-                bool OnTarget() => ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot), targetItem);
+                ListViewItem? Item() => window.Sessions.Rows.ContainerFromItem(reached) as ListViewItem;
+                bool OnItem() => Item() is { } item && ReferenceEquals(Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(window.RootElement.XamlRoot), item);
                 // Waited for, rather than read a fixed 300 ms later (#410, x64): a row drawn again
-                // as the list settles can take focus back from the item given it, and then the
-                // arrow key's FollowFocus below had no row to open.
-                var given = await Until(() => OnTarget() || targetItem.Focus(FocusState.Keyboard) && OnTarget(), TimeSpan.FromSeconds(5));
-                var focusedOn = given ? "" : $"; {FocusedName(window)}";
+                // as the list settles can take focus from the item given it, and then the arrow
+                // key's FollowFocus below had no row to open. Asked of the list's item each time,
+                // since the row drawn again may be in another one.
+                Task<bool> Focused() => Until(() => OnItem() || Item() is { } item && item.Focus(FocusState.Keyboard) && OnItem(), TimeSpan.FromSeconds(5));
+                var given = await Focused();
                 // Long enough for selection following focus, were it on, to have chosen the row.
                 await Task.Delay(300);
                 var stayed = main.Selected == openNow;
+                // Again just before the key: focus can have moved during that wait too.
+                given = await Focused() && given;
+                var focusedOn = given ? "" : $"; {FocusedName(window)}";
                 window.Sessions.FollowFocus();
                 var opened = await Until(() => main.Selected == reached, TimeSpan.FromSeconds(5));
                 Check(given && stayed && opened, $"opens nothing for a row only given focus, and the row an arrow key reached (focus alone: {(stayed ? "opened nothing" : "opened its row")}; after the key: {main.Selected?.Id ?? "none"}{focusedOn})");
