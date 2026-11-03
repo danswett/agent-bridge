@@ -43,7 +43,7 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
 | **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs |
-| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever; add devices that take effect during its probation (§3.4). Its removals of devices junior to it are not held, and apply at once |
+| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until a senior device has confirmed it; add devices that take effect during its probation (§3.4). Its removals of devices junior to it are not held, and apply at once |
 | **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window; a relay-maintained partition is the stated exception (§6.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
 | **The local pipe and the HA connector** | Unchanged: same-OS-user trust, and Home Assistant credentials respectively | Out of scope for the roster; see §9.5 |
@@ -82,7 +82,7 @@ cannot change its declared policy, and that is what the presence proof is for. U
 decision 3(a), only devices with `key`, or `webauthn` on a proven platform (§4.6), can approve or do
 person-only actions.
 
-**Approved, non-probationary person's devices sign entries** (multi-approver roster, owner
+**Approved person's devices sign entries** (multi-approver roster, owner
 decision 1), within the seniority rules of §3.4. **Hosts never sign** entries and are never
 approvers. The roster is rooted in a genesis entry made by the first person's device.
 
@@ -148,7 +148,7 @@ bytes.
 | Field | Rules |
 |---|---|
 | `v` | 1. Any other value is refused; a new version is a deliberate protocol change |
-| `op` | `genesis`, `add`, `remove`, `rename`, `merge`. Grants (`set grants` in design.md §5.4) are left for later |
+| `op` | `genesis`, `add`, `remove`, `rename`, `merge`, `confirm` (§3.4). Grants (`set grants` in design.md §5.4) are left for later |
 | `account` | The account id. An entry from another account never verifies |
 | `generation` | Chosen at genesis. A reset (§5.5) is a new generation |
 | `seq` | 0 at genesis; otherwise one more than the highest `seq` among its parents |
@@ -174,6 +174,7 @@ The exact field set per `op`:
 | `add` | `prev`, `device`, `approval` |
 | `remove` | `prev`, `target` (`{ "id": <device id>, "add": <entry hash of the add it revokes> }`), optional `voidGrants` (only ever `true`), optional `cosigner` |
 | `rename` | `prev`, `target` (`{ "id", "add" }`, as for `remove`), `name` |
+| `confirm` | `prev`, `target` (`{ "id", "add" }`, as for `remove`) |
 | `merge` | `prev` (two to four) |
 
 **Strict parsing** (all three implementations, with shared negative vectors in R1). The body
@@ -204,8 +205,9 @@ only if:
   with an attacker's `sign` key is another signer, so nothing signed under it spends or affects
   the real device's budget or standing;
 * `by` (and `cosigner`) are active person's devices in that state; for `genesis`, `by` is the
-  device it adds. Probation is not a validity rule: it delays when a verifier applies an entry
-  (§3.4);
+  device it adds. Probation is not a validity rule: it delays when a verifier applies a grant
+  (§3.4). Confirmation is: a removal that needs a cosigner is valid only if both signers are
+  confirmed in that state (§3.4);
 * every entry needs presence: each signer's presence is proven, by `presence: key` or by
   `presence: webauthn` with that signer's own `uv` on a proven platform (§3.2, §4.6). That
   includes a `merge`, since
@@ -236,9 +238,9 @@ only if:
   its key from coming back through another add. A removal of a fabricated add never touches the
   device a real add made, even with the same id.
   Whether removals leave a person's device is a property of the state, not of one entry (§3.5).
-  `voidGrants: true` voids every add and rename signed by the target, whatever its ancestry
+  `voidGrants: true` voids every grant (add, rename or confirm) signed by the target, whatever its ancestry
   (§3.5), **except the genesis entry**, which is never void: the genesis device's self-removal with
-  the flag voids its adds and renames, and the removal still names the genesis entry as the
+  the flag voids its grants, and the removal still names the genesis entry as the
   add it revokes. It is valid only on a removal without `cosigner`, where the target is `by` itself
   or junior to it. It
   then gives the remover no power it lacks anyway: everything the target added is junior to the
@@ -254,6 +256,9 @@ only if:
   leave more than one, the one with the smallest entry hash wins, in every verifier and delivery
   order, and the Devices page marks the name as changed concurrently. Without a rename, the name
   is the one in its add;
+* `confirm`: the target's add is active in the parents' state, `by` is confirmed there and senior
+  to the target, and the target is not already confirmed there. It needs presence like every
+  entry, and an honest client offers it only after the target's 72 hours by its own clock (§3.4);
 * `merge`: its parents are two to four distinct heads, quarantined ones included, in head order.
   **A merge is never void and never held**, by any rule. Its only effect is adoption (§3.5), and
   adoption is irrevocable: once any valid merge has adopted a branch, every verifier that holds
@@ -267,8 +272,8 @@ only if:
   storage itself is bounded:
   * per generation, at most **512 adds** and **4,096 entries other than removals**, and 64 active
     devices;
-  * per signer (the add that made `by` active, above), at most **64 adds, 64 merges and 64
-    removals** per generation, a cascade counting as one removal (§3.4); and each add may be
+  * per signer (the add that made `by` active, above), at most **64 adds, 64 confirms, 64 merges
+    and 64 removals** per generation, a cascade counting as one removal (§3.4); and each add may be
     renamed at most 8 times.
 
   An entry that would exceed a cap or its signer's budget is refused and reported. **Removals are
@@ -277,9 +282,11 @@ only if:
   approver could fill the roster (with renames, say) and block its own removal. The worst case is
   then fixed: 4,096 entries plus 64 removals for each of at most 512 devices, about 37,000
   entries, plus at most 256 evidence entries for each signer that exceeds a budget (below).
-  Reaching it needs a hostile approver whose adds go unremoved through two 72-hour probations
-  while each one is announced (§6.4); an honest account stays in the hundreds. Nothing accepted
-  is ever dropped to stay inside the bound.
+  Reaching it does **not** need any probation to pass: a device whose grants are held can still
+  sign at once, and its entries are stored and count. So one hostile approver can fill the caps
+  within minutes, every add announced (§6.4), and an honest account stays in the hundreds. What
+  the bound promises is storage, not that filling it is slow. Nothing accepted is ever dropped to
+  stay inside it.
   * Honest devices do not exceed a budget quickly: an honest device signs each entry on a head that
     holds its own previous one, so its entries form a line, and 64 adds or removals is the whole
     active-device limit. Exceeding a budget fast takes a key that signs on many branches, which
@@ -289,27 +296,36 @@ only if:
   * A generation that reaches a cap or a budget honestly, after years of churn, continues with a
     reset (§5.5) until compaction by a signed checkpoint, which is left for a later slice.
   * **Evidence for a removal of an over-budget signer.** A budget limits what a signer's own
-    entries do; it must not let that signer block its own revocation. Otherwise one host takes a
-    hostile approver's 64 sibling adds, the remover signs on a 65th, and the host could not accept
-    the removal's parent. So a removal R is accepted with ancestors over a cap or budget only when
-    all of these hold:
-    * every such ancestor is signed by R's **target** T, and R is signed by a device other than T
-      (a self-removal brings no evidence);
-    * those ancestors number at most 256, a little more than one signer's budgets of 64 adds, 64
-      merges and 64 removals, so one honest removal always has room for a whole budget's worth;
-    * T has not already had 256 evidence entries admitted at this verifier, across all removals of
-      it.
+    entries do; it must not let that signer, or the devices it added, block its revocation.
+    Otherwise one host takes a hostile approver's 64 sibling adds, the remover signs on a 65th,
+    and the host could not accept the removal's parent. Or T, on probation, adds J; J signs 64
+    adds on each of several branches; T gossips one set to host X and another to host Y; and a
+    removal of T signed on a head synced from Y would need, at X, J's entries beyond J's budget. So
+    a removal R is accepted with ancestors over a cap or budget only when all of these hold:
+    * R is signed by a device other than its target T (a self-removal brings no evidence);
+    * every such ancestor is signed by T, or, when R carries `voidGrants`, by a device in T's
+      **subtree**: one whose add was signed by T or, transitively, by a device in T's subtree.
+      `voidGrants` makes every such device's add void (§3.5), so R takes away exactly what its
+      evidence comes from;
+    * R brings at most 256 such entries from each of those signers, and no signer has had more
+      than 256 evidence entries admitted at this verifier, across all removals.
 
     Evidence is stored and gossiped, used only to check R's validity, and never applied itself, as
-    quarantined entries are not. A removal that needs more, or needs over-budget entries of any
-    signer other than its target, is **refused** at that verifier and reported, never a reason to
-    fail closed. That is safe: a signer exceeds a budget only by signing on many branches, which only
-    a compromised key does; the first removal of T that is admitted revokes T, and later ones change
-    only which of T's entries are void. A host that refuses a removal shows on the remover's Devices
-    page as not having confirmed it (§6.3), and the person imports the roster at that machine. The
-    total is bounded at 256 entries for each over-budget signer.
+    quarantined entries are not. A removal that needs more, or needs over-budget entries of a signer
+    outside T and its subtree, is **refused** at that verifier and reported, never a reason to fail
+    closed. The total is bounded at 256 entries for each over-budget signer.
+  * **What the remover's client does.** The cascade with every device ticked is one removal with
+    `voidGrants` (§3.4), which is exactly the removal that can carry the subtree's evidence, so the
+    removal the client offers by default is accepted at every host that holds the target's add,
+    unless a key outside the target's subtree has also exceeded a budget in its ancestry. A
+    cosigned removal of a device that is not junior cannot carry `voidGrants`; if a host refuses
+    one for evidence, the import below is the remedy.
+    When the person unticks devices to keep, the client signs without the flag; if a host then
+    refuses it for evidence, the Devices page shows that host as not having confirmed it (§6.3)
+    and offers the full cascade, which it would accept. An import at the machine (`devices sync`)
+    is a local action, and admits the evidence it carries without the 256-entry limit.
 
-### 3.4 Seniority and probation
+### 3.4 Seniority, probation and confirmation
 
 A new device that turns out to be hostile must not be able to undo the devices that were
 there before it. So:
@@ -321,22 +337,35 @@ there before it. So:
   alone would not do: a relay that hides newer heads from an established approver can have it
   enroll N at `seq` 11 after H was enrolled at 12 on another branch, and N would then outrank a
   device approved before it. A device may `remove` **itself or any device junior to it**.
-  Removing any other device, senior or concurrent, needs a `cosig` from a second active,
-  non-probationary person's device. Neither signer may be senior to the target (or it could
-  remove it alone), and both need their own presence proofs. Their approvals must also be
-  **independent**. A signer's **lineage** is the chain of add entries from its own add up to
-  genesis: its add, the add of the device that signed it, the add of the device that signed that
-  one, and so on. Each signer's lineage is **cut** to leave out the target's add and every add
-  senior to it, and the two cut lineages must not share any add. So neither signer's add may be in
-  the other's lineage (neither added the other, directly or through others), and no add left in
-  both may have led to both. Two devices the target approved itself are independent: their
-  lineages meet only at the target's add, which the cut removes. A hostile device H therefore
-  cannot pair with a device it enrolled, nor pair two devices it enrolled (siblings) or their
-  descendants (cousins). A fabricated copy of a device's key is another add, with its own lineage.
-* **Recovering a lost senior device** therefore needs two surviving approvers whose lineages, cut
-  at the lost device, are disjoint. The usual case is two devices that the lost device approved
-  itself. A person who has, say, only the genesis device and one other cannot remove the genesis
-  device when they lose it: that is a reset (§5.5). So is a person whose surviving devices were
+  Removing any other device, senior or concurrent, needs a `cosig` from a second device, and is
+  valid only if **both signers are confirmed** (below) in the removal's parents' state. Neither
+  signer may be senior to the target (or it could remove it alone), and both need their own
+  presence proofs. Their approvals must also be **independent**. A signer's **lineage** is the
+  chain of add entries from its own add up to genesis: its add, the add of the device that signed
+  it, the add of the device that signed that one, and so on. Each signer's lineage is **cut** to
+  leave out the target's add and every add senior to it, and the two cut lineages must not share
+  any add. So neither signer's add may be in the other's lineage (neither added the other, directly
+  or through others), and no add left in both may have led to both. Two devices the target
+  approved itself are independent: their lineages meet only at the target's add, which the cut
+  removes. A hostile device H therefore cannot pair with a device it enrolled, nor pair two devices
+  it enrolled (siblings) or their descendants (cousins). A fabricated copy of a device's key is
+  another add, with its own lineage.
+* **Confirmation** is the clock-free gate on that power. A device is **confirmed** in a state
+  when the state holds a `confirm` entry naming its add, signed by a confirmed device senior to it.
+  The genesis device is confirmed from genesis. The signer's client offers "Confirm *Kitchen
+  laptop*" only once 72 hours of its own monotonic running time have passed since it accepted the
+  target's add, and the person confirms with the presence check. An unconfirmed device can still
+  drive sessions, remove itself and remove devices junior to it, but cannot cosign or be one of the
+  two signers of a removal of a device that is not junior to it, whatever any clock says. Without
+  this, two newly approved hostile devices A and B could cosign removals of G and of every other
+  device not junior to them within seconds of their approval, and nothing would be left to remove
+  them. With it, they first need a senior device to confirm each of them three days later, which
+  is the person's second chance to notice.
+* **Recovering a lost senior device** therefore needs two surviving **confirmed** approvers whose
+  lineages, cut at the lost device, are disjoint. The usual case is two devices that the lost device
+  approved and later confirmed. A person who has, say, only the genesis device and one other cannot
+  remove the genesis device when they lose it, and nor can one whose devices were not yet confirmed
+  when the senior device went: those are resets (§5.5). So is a person whose surviving devices were
   all approved through one device junior to the lost one. If the lost device is stolen rather than
   lost, its thief can still revoke, once, every device that was active and junior to it on the
   head it holds, including the two that removed it (§3.5); what those two did after removing it
@@ -344,31 +373,31 @@ there before it. So:
   (§5.4). Decision 5 says this.
 * **What that leaves.** One hostile device cannot remove anything above it, alone or with any
   devices it enrolled, however long it waits. Two devices whose approvals came independently from
-  the person's own devices can, which takes two separate approval mistakes, each announced on every
-  device (§6.4). What the 72 hours of notice buys:
-  * **during** probation, removing both stops a **takeover**: their grants are held and then void
-    (concurrent with the removal, or voided by its `voidGrants`), so they never add anyone and
-    gain nothing. A removal they cosigned is not held, so they can still cost the person one
-    device not junior to them, which comes back junior when re-enrolled. With a relay that
-    partitions the account, the grants they make after that removal also survive a removal of
-    them signed by the device they removed (§3.5, "The other side of that rule"), and take effect
-    when their probation ends. A removal of them by any other device still voids them;
-  * **after** probation, unnoticed, they can remove the devices above them and keep going.
+  the person's own devices can, once a senior device has confirmed both, which takes two approval
+  mistakes and two confirmation mistakes, each announced on every device (§6.4). Before that:
+  * removing them stops a **takeover**: their grants are held and then void (concurrent with the
+    removal, or voided by its `voidGrants`), so they never add anyone. Unconfirmed, they cannot
+    cosign, so they cannot remove anything that is not junior to them;
+  * after both are confirmed, unnoticed, they can remove the devices above them and keep going.
+    With a relay that partitions the account, the grants they make after removing a senior device
+    also survive a removal of them signed by that device (§3.5, "The other side of that rule").
   Decision 9 states both.
-* **Probation.** A device added in the last **72 hours** cannot add, rename others, cosign, merge
-  or remove others: an honest client does not let it sign those, and an honest relay refuses to
-  append them by its own clock. A verifier cannot rely on that, and treats what such a device signs
-  in two ways:
+* **Probation.** A device added in the last **72 hours** cannot add, rename others, confirm or
+  merge, and is not confirmed: an honest client does not let it sign those, and an honest relay
+  refuses to append them by its own clock. A verifier cannot rely on that, and treats what such a
+  device signs in three ways:
   * its **grants** (adds and renames) are **held**: they and everything signed by devices they
-    added take effect only when the probation ends by the verifier's clock. Its merges are not
-    held, since a merge only adopts (§3.3);
-  * its **removals, and removals it cosigns, are never held**. Removals never un-apply (§3.5), so
+    added take effect only when the probation ends by the verifier's clock, or earlier when the
+    verifier holds a `confirm` of it. Its merges are not held, since a merge only adopts (§3.3);
+  * its **removals of devices junior to it are never held**. Removals never un-apply (§3.5), so
     holding one would only delay a revocation that is going to happen anyway, and would keep the
-    target served meanwhile. In the activation-delay case below, that was a host back after six
-    weeks holding the cosigned removal of a stolen genesis device for 72 hours while still serving
-    it. So a probationary device's removal applies at once. Alone it can only reach devices junior
-    to it, that is, added by entries that descend from its own add, and every removal is announced.
-  * The time is not the wall clock: each verifier counts **elapsed monotonic time while it runs**,
+    target served meanwhile. Alone it can only reach devices added by entries that descend from its
+    own add, and every removal is announced;
+  * it cannot take part in a cosigned removal at all until confirmed: that is a validity rule,
+    above, not a hold. So a cosigned removal that is valid is never held either. A host back after
+    six weeks applies at once the cosigned removal of a stolen genesis device by two confirmed
+    devices it has never seen before;
+  * the time is not the wall clock: each verifier counts **elapsed monotonic time while it runs**,
     persisted across restarts, from when *it* first accepted the `add`; `at` is never used, and a
     wall-clock jump in either direction counts for nothing. Time a machine spends off does not
     count, so a hold can last longer than 72 hours, never shorter.
@@ -384,20 +413,22 @@ there before it. So:
       remover, which a probationary device almost always is; a cosigned removal of a probationary
       device not junior to either signer gets only the first case.
   * Anything the voided entries added is void too, transitively. What removal during probation
-    guarantees is therefore exactly this: every add by that device, held or not, never takes
-    effect, when the remover is senior to it; otherwise every add concurrent with the removal.
+    guarantees is therefore this: every add by that device, held or not, never takes effect, when
+    the remover is senior to it; otherwise every add concurrent with the removal. The one exception
+    is the cutoff of §3.5: if the remover was itself removed by a removal that the probationary
+    device did not sign, and is so a removed signer acting from an old head, the probationary
+    device's grants that descend from that removal are not voided by it.
   * Holds only delay effects, never change which entries exist or which are void. Every verifier
     therefore reaches the same state once its holds expire.
 * **Where a verifier's clock starts.** A verifier that learns of a device late, such as a host
   coming back after weeks offline, starts that device's 72 hours when it first accepts its add,
-  so it holds that device's grants for up to 72 hours. This is an **activation delay**, required
-  rather than worked around: a device added by a device the late verifier sees as new is not
-  active there until the hold ends. It affects only approvals made by recently seen devices, never
-  removals and never a device's own sessions. Two sources may shorten it, both authenticated by
-  the person rather than by the relay:
+  so it holds that device's grants for up to 72 hours unless it holds a `confirm` of it. This is an
+  **activation delay**: a device added by a device the late verifier sees as new and unconfirmed is
+  not active there until the hold ends. It affects only approvals made by unconfirmed devices,
+  never removals and never a device's own sessions. Besides a `confirm`, two sources may shorten it,
+  both authenticated by the person rather than by the relay:
   * **Enrollment.** With the roster, the approver sends N how much of each device's probation
-    remains by its own clock (§4.2 step 7), and N adopts that. So a device enrolled through an
-    established approver sees the existing devices as established at once.
+    remains by its own clock (§4.2 step 7), and N adopts that.
   * **The local app.** A host adopts the earlier first-acceptance times that its own app reports
     over the pipe.
 * **Cascade.** Removing a device shows the devices it added, ticked by default. When every one
@@ -485,12 +516,13 @@ entries:
   host then refuses all relay devices, and only a reset (§5.5) continues. This needs concurrent
   removals that an honest relay serializes, so it happens only with a dishonest relay or two
   devices acting while partitioned. Keeping a device the person removed would be worse.
-* **Voiding** applies to adds and renames only, never to removals or merges. An add or rename
-  signed by a device whose removal applies is void, unless it is an ancestor of every removal of
-  that device that applies: the device acted concurrently with being removed. Every add and rename
-  the device signed is void if any removal of it that applies carries `voidGrants`, ancestor or
-  not. So is anything a void entry added, and every add and rename signed by those devices,
-  transitively. A removed device's concurrent additions therefore never survive, while its
+* **Voiding** applies to **grants** only (adds, renames and confirms), never to removals or
+  merges. A grant signed by a device whose removal applies is void, unless it is an ancestor of
+  every removal of that device that applies: the device acted concurrently with being removed.
+  Every grant the device signed is void if any removal of it that applies carries `voidGrants`,
+  ancestor or not. So is anything a void entry added, and every grant signed by those devices,
+  transitively. A void `confirm` confirms nothing; a cosigned removal that was valid when signed
+  stays valid, since validity is decided in its own parents' state. A removed device's concurrent additions therefore never survive, while its
   concurrent removals, valid where it signed them, stand.
   * **A removed device's removal does not reach past its own removal.** Let R be a removal signed
     by S on a head from before S's own removal, so that some removal of S applies and R is not an
@@ -508,11 +540,11 @@ entries:
     removed by two honest juniors from an honest senior device removed by two hostile juniors: the
     graphs are the same. So the rule also protects what two hostile devices do after cosigning the
     removal of a senior device, even when, through a partitioning relay, that senior device
-    removes them on another branch during their probation, with `voidGrants`. Their grants made
-    after that removal are not voided by it; they are held until the probation ends, then take
-    effect, and every device announces them. This needs two independent approval mistakes and a
-    relay that partitions the account; the person's other devices senior to them can then remove
-    what they added, and if none are left it is a reset. Decision 9 states it.
+    removes them on another branch with `voidGrants`. Their grants made after that removal are not
+    voided by it, and every device announces them. To cosign at all, both must already be confirmed
+    (§3.4), so this needs two independent approval mistakes, two confirmation mistakes three days
+    later, and a relay that partitions the account. The person's other devices senior to them can
+    then remove what they added, and if none are left it is a reset. Decision 9 states it.
 * **A removal acts on one add, and bars its key.** Each id has at most one add that is neither
   void, subordinate nor conflicted, so "the device" a removal revokes is well defined: the one its
   named add made active. A removal naming an add that is void in the state revokes nothing
@@ -827,8 +859,8 @@ are disjoint (§3.4), typically two devices the lost one approved itself. A pers
 devices are the genesis device plus one other, or whose survivors were all approved through one
 device junior to the lost one, cannot remove it, and that loss means a reset (§5.5). The
 recommended setup is therefore at least three approving devices, two of them approved directly by
-the genesis device: the phone PWA as genesis, say, approving an Apple device and a Windows app on
-a proven platform.
+the genesis device and confirmed by it three days later: the phone PWA as genesis, say, approving
+an Apple device and a Windows app on a proven platform.
 
 **A stolen senior device** is different from a lost one: its thief holds a head from before the
 removal, and can still revoke, once, every device that was active and junior to it there,
@@ -902,7 +934,8 @@ as well as through the relay. Each `remove` names the target's active add, and c
 left every device in the cascade ticked (§3.4). A more senior device
 asks for a second device's cosignature: the
 other device shows "*Desk app* asks to remove *Old laptop*, which is senior to it" and needs its
-own presence check. An honest client does not offer to remove the last person's device; if
+own presence check. Both must be confirmed (§3.4); an unconfirmed device does not offer or accept
+a cosignature. An honest client does not offer to remove the last person's device; if
 concurrent removals leave none anyway, only a reset continues (§3.5).
 
 A device can remove itself ("Remove this device"), which also signs it out.
@@ -1066,7 +1099,7 @@ nonce?, issuedAt, expiresAt, heads }`. `sig` is by `by`'s `sign` key over
 `presence: webauthn`.
 
 A host acts only if:
-* the body parses strictly, and `sig` and the presence proof verify (`presence: none`, and`r
+* the body parses strictly, and `sig` and the presence proof verify (`presence: none`, and
   `webauthn` off a proven platform, never pass under decision 3(a), §4.6);
 * `by` is an active, non-probationary person's device, its kind read from the roster;
 * `target.machine` is this host, and the action and its target match the op;
@@ -1179,7 +1212,9 @@ decision 6): every existing device enrolls with the mutual codes, once, as a new
 3. For each machine, its Windows app shows code 1 and the owner types it on the phone; the phone
    shows code 2 and the owner types it into the app, after checking the fingerprint. One exchange
    covers the app and the host there (§4.7). Then any other PWAs, and the Apple clients when they
-   ship. Each machine starts its 72-hour probation, which only limits what it can approve.
+   ship. Each machine starts its 72-hour probation, which only limits what it can approve. After it,
+   the phone offers "Confirm" for each, so the approving devices among them can later cosign
+   the removal of a lost senior device (§3.4).
 4. Every host in `observe` now reports what it would refuse. After a quiet day, the owner switches
    each host to `enforce` (in the app's Settings, or with
    `agent-bridge-host config set security.roster enforce` at the machine).
@@ -1191,9 +1226,10 @@ About six exchanges for today's fleet. The lighter alternative, decision 6(b), i
 its kind and its **descriptor fingerprint**, in groups of four. The id alone is not enough: it is
 a hash of `dh` only, so a dishonest relay could keep a genuine device's id while substituting its
 own `sign` key and presence declaration. The fingerprint is the first 128 bits of
-`SHA-256(F("agent-bridge device descriptor v1", dh, sign, signAlg, presence, webauthn key and
-credential id, kind))`, with empty fields for what a host lacks, so it covers everything the `add`
-will record. Each device computes and shows its own locally, from its own keys. The owner ticks
+`SHA-256(F("agent-bridge device descriptor v1", dh, sign, signAlg, presence, webauthn rpId,
+credential id and key, attested, kind, platform))`, with empty fields for what a host lacks, so it
+covers every field of the `add` that a verifier reads for a decision. In particular a relay cannot
+relabel a desktop PWA as `android` to put it on a proven platform (§4.6). Each device computes and shows its own locally, from its own keys. The owner ticks
 each one after comparing the whole fingerprint with the one that device shows (a prefix is not
 enough), and the genesis device signs `add` entries with `approval.method: "grandfather"` for
 exactly the descriptor it showed. Nothing is pre-ticked, including ids from
@@ -1333,8 +1369,9 @@ Each slice adds its own. Together they cover:
   missing field, a field from another `op`, a fractional, exponent, negative or string `seq`, wrong
   case in a name or value, invalid UTF-8, a lone surrogate, base64 with padding or the wrong length,
   and an id in uppercase. Each is refused.
-* Bulk grandfather: a relay that keeps a genuine device's id but substitutes its `sign` key or
-  presence declaration changes the descriptor fingerprint, and the comparison fails.
+* Bulk grandfather: a relay that keeps a genuine device's id but substitutes its `sign` key,
+  presence declaration, WebAuthn `rpId` or credential, or relabels its `platform` (a desktop PWA
+  as `android`) changes the descriptor fingerprint, and the comparison fails.
 * `approval` vectors: `code` without `transcript`, `qr` without `shown` or with another value,
   `grandfather` or `genesis` with a `transcript`, an extra member, or `genesis` on an `add`:
   refused. Each valid member set is accepted.
@@ -1344,20 +1381,29 @@ Each slice adds its own. Together they cover:
 **Seniority, probation and forks**
 * A `remove` of a device that is not junior to the signer, without `cosig`, is refused. With a
   cosig from a second device whose lineage of add entries, cut at the target's add, is disjoint
-  from the first's, it stands. Cosigners that are parent and child, siblings (both added by one
-  add left after the cut) or cousins are refused. Two devices the target approved itself are
-  accepted. A fabricated copy of a device's key, made by another signer, has its own lineage and
-  does not stand in for the real device as a cosigner.
+  from the first's, and both signers confirmed in the removal's parents' state, it stands.
+  Cosigners that are parent and child, siblings (both added by one add left after the cut) or
+  cousins are refused. Two devices the target approved and confirmed itself are accepted. A
+  fabricated copy of a device's key, made by another signer, has its own lineage and does not
+  stand in for the real device as a cosigner.
+* **Unconfirmed devices cannot take over.** G approves A and B; within seconds A and B cosign
+  removals of G and of every other device not junior to them: every one is invalid and refused,
+  in every delivery order, whatever any clock says, because A and B are not confirmed. A
+  removal by A alone of a device junior to A applies at once.
+* `confirm` vectors: by a device not senior to the target, by an unconfirmed device, of a device
+  already confirmed there, or naming an add that is not active: refused. A void `confirm` (its
+  signer removed concurrently) confirms nothing, and a cosigned removal that was valid when signed
+  stays applied. A verifier that holds a `confirm` of a device ends that device's hold at once.
 * A removal cosigned by two `presence: webauthn` devices carries two assertions, one per role, each
   verified under its own credential. One assertion, or two from one credential, is refused.
 * A probationary device's add or rename is held until 72 hours of the verifier's persisted
   monotonic running time after it first accepted that device's `add`, whatever `at` says. Moving
   the wall clock forward a week, or back, changes nothing; a verifier switched off for a week holds
   for 72 running hours. A removal of that device applies at once.
-* A probationary device's removal, or a removal it cosigns, is **not** held: it applies at once.
+* A probationary device's removal of a device junior to it is **not** held: it applies at once. A cosigned removal in which either signer is unconfirmed is not held either: it is invalid.
 * A host back after six weeks offline receives the cosigned removal of a stolen genesis device,
-  signed by two devices it sees as new: it applies the removal at once and stops serving the genesis
-  device. The same host holds those two devices' adds (the activation delay) unless its own app
+  signed by two confirmed devices it sees as new: it applies the removal at once and stops serving the genesis
+  device. It does not hold those two devices' adds either, since it holds their `confirm`s; it would hold the adds of a device it sees as new and unconfirmed, unless its own app
   reports earlier times.
 * A device enrolled through an established, non-genesis approver adopts that approver's remaining
   probation for each device, so established devices are not held.
@@ -1372,9 +1418,9 @@ Each slice adds its own. Together they cover:
     and every host refuses relay devices until a reset;
   * a removed device's removal signed on an old head, of a device junior to it that was active
     there: it applies, and it cannot touch a device added later;
-  * two independently approved devices cosign a senior device's removal during probation, and
-    the person removes both: their held adds are void, and the senior device's removal applies at
-    once and stays applied (the stated residual);
+  * two independently approved devices, both confirmed, cosign a senior device's removal, and the
+    person removes both: their concurrent adds are void, and the senior device's removal applies
+    at once and stays applied (the stated residual);
   * **a voided merge cannot undo a removal.** A forced far fork quarantines cosigner P's add; P and
     K remove the stolen senior S; W's merge adopts that branch, so the removal applies. S then
     signs `remove(W)` on a head from before its removal. W is revoked, its merge is not void, the
@@ -1410,8 +1456,9 @@ Each slice adds its own. Together they cover:
   * H adds A's public key on its own branch where A is absent (A and H concurrent) and renames
     that copy eight times: after the merge the copy is subordinate, A's name is unchanged, and A
     can still be renamed eight times;
-  * the genesis approves A and B itself, and is lost: A and B together remove it (their lineages
-    meet only at the genesis, which the cut removes);
+  * the genesis approves and later confirms A and B itself, and is lost: A and B together remove
+    it (their lineages meet only at the genesis, which the cut removes). Lost before confirming
+    them: they cannot, and it is a reset;
   * the genesis device removes itself with `voidGrants`: its adds and renames are void, its merges are not,
     the genesis entry is not, and the removal applies;
   * a host holds a hostile approver's 64 sibling adds; another device removes it on a 65th: the
@@ -1419,8 +1466,7 @@ Each slice adds its own. Together they cover:
   * a probationary device signs 5,000 over-budget adds and then removes itself: the self-removal
     brings no evidence and is refused at a host that lacks them; no host fails closed or stops
     serving other devices. A removal of it by another device brings at most 256 of its entries,
-    and one needing more, or needing another signer's over-budget entries, is refused and shown
-    as unconfirmed on the remover's Devices page;
+    and one needing more is refused and shown as unconfirmed on the remover's Devices page;
   * removals of one target forking from two incomparable points, each concurrent with a different
     add by the target, delivered in both orders: both are kept and both adds are void;
   * a removed H that makes `add(N)` with a replacement device's real key on an old head and then
@@ -1443,9 +1489,16 @@ Each slice adds its own. Together they cover:
 * After C1 and C2 remove the genesis G and enroll replacements R1 and R2, G removes itself on an
   old head with `voidGrants`: G's adds of C1 and C2 are void, but R1, R2 and everything they add
   stay active, and the generation continues through them.
-* With a partitioning relay, probationary A and B cosign the removal of G while G removes both with
-  `voidGrants` on another branch, and A adds X after the removal of G: X is held, then active when
-  the hold ends, and announced (the residual of decision 9).
+* With a partitioning relay, confirmed A and B cosign the removal of G while G removes both with
+  `voidGrants` on another branch, and A adds X after the removal of G: X stays active, and is
+  announced (the residual of decision 9). The same with A or B unconfirmed: the removal of G is
+  invalid, and X is void.
+* **The evidence rule with a subtree.** T, on probation, adds J; J signs 64 adds on each of two
+  branches; host X holds one set and host Y the other. G removes T with `voidGrants` on a head
+  synced from Y: X admits J's entries as evidence and applies the removal, and J's adds are void.
+  The same removal without `voidGrants` is refused at X and shown as unconfirmed, and the client
+  offers the full cascade. A removal whose over-budget ancestors are signed by a device outside the
+  target's subtree is refused.
 * A far fork holding `add(X)` and then `remove(Y)` by an established device: the removal applies,
   `add(X)` stays quarantined and X is not active. A far removal signed by X itself is held until a
   merge adopts that branch.
@@ -1522,10 +1575,12 @@ Each slice adds its own. Together they cover:
 ## 11. Decisions for the owner
 
 1. **Trust root.**
-   (a) Approved, non-probationary, presence-proven person's devices (decision 3) sign roster entries
-   with a new ECDSA key and a presence proof, under seniority (§3.4); hosts never sign. (b) One account root key on the first
-   device. (c) Per-machine approval lists only.
-   **Recommended: (a)**, with seniority and probation (decision 9) and the voiding rules of §3.5.
+   (a) Approved, presence-proven person's devices (decision 3) sign roster entries with a new
+   ECDSA key and a presence proof, under seniority, probation and confirmation (§3.4): a device's
+   grants are held for its first 72 hours, and it can take part in removing a device that is not
+   junior to it only once a senior device has confirmed it. Hosts never sign. (b) One account root
+   key on the first device. (c) Per-machine approval lists only.
+   **Recommended: (a)**, with seniority, probation and confirmation (decision 9) and the voiding rules of §3.5.
    Without them, one hostile device could remove every other. Under (a), the most senior device is
    the most powerful one, and if it is stolen and unlocked the answer is a reset.
 2. **Hosts in the roster.**
@@ -1562,13 +1617,13 @@ Each slice adds its own. Together they cover:
    (b) As (a), plus an optional offline recovery key made at genesis.
    **Recommended: (a).** A recovery key is one more secret that, with the GitHub account, takes the
    account. Total loss is unlikely if the person keeps at least three approving devices, two of them
-   approved directly by the genesis device (§5.4), and enrolls a fresh device straight after removing a
-   stolen senior one (§5.4). Losing a senior device without two such
+   approved and confirmed directly by the genesis device (§5.4), and enrolls a fresh device straight after removing a
+   stolen senior one (§5.4). Losing a senior device without two such confirmed,
    independently approved survivors is also a reset.
 6. **Grandfathering the devices in use now.**
    (a) Enroll each with the mutual codes once (one exchange per machine, about six). Hosts go to
    `observe` first, then `enforce` per host. (b) Bulk-approve the devices online at cutover after
-   comparing whole descriptor fingerprints (covering `dh`, `sign`, presence and kind, not only the
+   comparing whole descriptor fingerprints (covering `dh`, `sign`, presence, kind and platform, not only the
    id), with nothing pre-ticked (not even `remoteFolderTrustDevices` ids, whose names can be
    look-alikes), and each machine confirming the genesis fingerprint locally. (b) has no mutual
    check.
@@ -1583,35 +1638,38 @@ Each slice adds its own. Together they cover:
    press Install. (b) Keep folder trust and update to `app` and `pwa`.
    **Recommended: (a)**, provided person-only actions need presence-proven person commands (§7.2).
    The kind alone does not show that a person acted.
-9. **Seniority and probation.**
+9. **Seniority, probation and confirmation.**
    (a) A device removes only itself or devices junior to it: those whose add descends from its own
-   add. Removing any other device needs two cosigners whose lineages of add entries, cut to leave
-   out the target's add and every add senior to it, share nothing: not parent and child, not
-   siblings or cousins. New devices have 72 hours of probation, counted in each verifier's
-   persisted monotonic running time: their adds and renames are held until it ends. Their merges,
-   removals, and removals they cosign, are not held, because merges only adopt and removals are
-   never held or undone. A verifier that sees a device late holds only that device's adds and
-   renames (the activation delay of §3.4). Removing a device offers to remove the devices it added,
-   as one removal when all are ticked. What (a) still allows:
+   add. Removing any other device needs two signers whose lineages of add entries, cut to leave out
+   the target's add and every add senior to it, share nothing (not parent and child, not siblings
+   or cousins), and who are both **confirmed**: a senior device signed a `confirm` of each, which
+   its client offers only 72 hours after the add and the person confirms with presence. This is a
+   validity rule, so no clock decides it. New devices also have 72 hours of probation, counted in
+   each verifier's persisted monotonic running time: their adds and renames are held until it
+   ends, or until the verifier holds a `confirm` of them. Their removals of devices junior to them
+   apply at once, since removals are never held or undone, and merges are never held, since they
+   only adopt. Removing a device offers to remove the devices it added, as one removal when all are
+   ticked. What (a) still allows:
    * a delayed takeover, by two hostile devices that the person's own devices approved
-     independently, both past probation and not noticed, which can then remove the devices above
-     them. That takes two approval mistakes, each announced on every device;
+     independently and a senior device later confirmed, unnoticed, which can then remove the
+     devices above them. That takes two approval mistakes and two confirmation mistakes, each
+     announced on every device;
    * a hostile device, even on probation, removing at once devices junior to it (added after it),
      each removal announced;
    * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
-     revoke devices that were active and junior to it there. A pair approved independently can also
-     revoke one device senior to both. They never gain trust, a revoked senior device comes back
-     junior, and such a revocation never voids what its target did after the remover's own removal.
-     A stolen senior device whose thief passes its presence check can so revoke the two devices that
-     removed it; what they did afterwards stands, which is why the person enrolls a fresh device
-     right after removing a stolen senior device (§5.4);
+     revoke devices that were active and junior to it there. A confirmed pair approved independently
+     can also revoke one device senior to both. They never gain trust, a revoked senior device comes
+     back junior, and such a revocation never voids what its target did after the remover's own
+     removal. A stolen senior device whose thief passes its presence check can so revoke the two
+     devices that removed it; what they did afterwards stands, which is why the person enrolls a
+     fresh device right after removing a stolen senior device (§5.4);
    * the mirror image of that, since the rule cannot tell the two apart (§3.5): with a relay that
-     partitions the account, two hostile devices approved independently can cosign the removal of
-     a senior device and keep the grants they make after it, even if that device removes them on
-     another branch during their probation. The grants take effect when the probation ends and
-     are announced; devices senior to the two can then remove them, and if none are left it is a
-     reset;
-   * a reset when a senior device is lost without two independently approved survivors.
+     partitions the account, two confirmed hostile devices approved independently can cosign the
+     removal of a senior device and keep the grants they make after it, even if that device
+     removes them on another branch. The grants are announced; devices senior to the two can then
+     remove them, and if none are left it is a reset;
+   * a reset when a senior device is lost without two confirmed, independently approved survivors,
+     including when it is lost within three days of approving them.
    Seniority follows causality (one device's add is an ancestor of the other's), so a relay that
    hides heads cannot make a newer device outrank an older one.
    (b) Seniority without the two-signature removal: a lost senior device then always means a reset.
@@ -1643,11 +1701,11 @@ Each is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Changes behaviour |
 |---|---|---|---|
-| R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, voiding and its limit for removed signers, `voidGrants`, key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule, quarantine, merges that are never void), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
+| R1 | Roster library: strict parser and negative vectors, entries and signing contexts, per-signer presence proofs, the acceptance rule and state (causal seniority over add entries with lineage-independent cosigners, probation holds for grants only on persisted monotonic time, the removal pass, voiding and its limit for removed signers, `voidGrants`, key bars, conflicting adds by seniority, caps, per-signer budgets and the evidence rule with subtrees, quarantine, merges that are never void, `confirm` and the confirmation rule for cosigned removals), the `approval` member sets, `veto`, person commands, head attestations, WebAuthn assertion checks, signing keys (TPM/DPAPI, WebCrypto), shared vectors (C#, JS); protocol spec `docs/protocol/devices.md` | decisions 1, 2, 9 | No |
 | R2 | Relay: store and appends, approved/pending admission with invite hints, nothing for pending devices, bound kinds in presence, generation rules with hold and veto, bound tokens with `token-exchange` (unbound until every app exchanges, then issue bound and accept both, then enforce last), pending limits, `removed` close code, administration reset for a squatted genesis. Staging; production only with the owner's approval | R1, decision 5 | Only for accounts with a roster |
 | R3 | Host: state (with quarantine), gate in `ChannelHub`, gossip, `roster.submit` with per-key limits, freshness (monotonic and wall-clock), `selfAttest` and acknowledgements, person commands, modes `off`/`observe`/`enforce`, enrollment over the pipe and `devices join`/`reset`/`sync` with the genesis fingerprint | R1, decision 10 | Only when the mode is changed |
 | R4 | Windows app: join (mutual codes, fingerprint), Devices, client rule; **proof** that its presence mechanism (Windows WebAuthn/Hello, or a TPM UI policy) cannot be satisfied by same-user code, including `SendInput`, UI Automation and the project's injector, and the same proof for Windows Hello as browsers reach it, which makes `windows` a proven platform for PWAs (§4.6). Only after that does it approve or sign person commands | R2, R3, decision 3 | Only after genesis |
-| R5 | PWA: passkey registration (with attestation where offered), join, approve (codes and both QR directions), Devices, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
+| R5 | PWA: passkey registration (with attestation where offered), join, approve (codes and both QR directions), Devices, confirm after 72 hours, remove, cascade, cosign, person commands, pending screen, client rule | R2, R3, decision 3 | As R4 |
 | R6 | Person-only actions on person commands: transfer, folder trust, update, forget/remove; one `RosterKinds.IsPerson`; usage peers and transfer hosts from the roster; docs for #70, #133, #138, #161 and the HA connector note | R3, R5, decisions 7, 8 | In `enforce` |
 | R7 | Removal end to end: revocation, offline hosts, removed-device experience, Forget/Remove | R5, R6 | Yes |
 | R8 | Owner cutover: runbook and live checks (the issue's "Validate live"), then `enforce` per host | R1-R7, decision 6 | On the owner's machines, with their go-ahead |
