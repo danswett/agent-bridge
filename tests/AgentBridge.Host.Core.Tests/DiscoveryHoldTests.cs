@@ -405,6 +405,10 @@ public class DiscoveryHoldTests
     [InlineData("bun --preload /work/codex.ts /usr/lib/node_modules/@openai/codex/bin/codex.js exec list", false)]
     [InlineData("node --import /work/codex.mjs /work/vendored/codex.js exec list", false)]
     [InlineData("node --require /work/codex.cjs /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    // Found in review: a loader's path in the prompt, and a preload given inline.
+    [InlineData("node --require /work/preload.cjs /usr/local/bin/codex exec \"Review /usr/local/lib/node_modules/@openai/codex/bin/codex.js\"", false)]
+    [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js exec list", false)]
+    [InlineData("node --require=/work/codex.cjs /work/vendored/codex.js", true)]
     public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
     {
         using var f = new Fixture();

@@ -220,9 +220,11 @@ public sealed class SystemProcessInspector : IProcessInspector
             }
             found.Add(new AgentProcess(id, started, commandLine));
         }
-        // A listed process above an interactive Codex executable, and started no later, launched
-        // it (npx, bunx, pnpm dlx, a version manager's shim): its session, if any, is that
-        // executable. A pid above it that started later is another process the pid went to.
+        // A listed wrapper above an interactive Codex executable, and started no later, launched it
+    // (npx, bunx, pnpm dlx under node or bun, or a version manager's shim): its session, if any,
+    // is that executable. Only a wrapper: an interactive Codex can start another through its
+    // shell tool, and the first is still a session, perhaps one whose registration names no
+    // process. A pid above it that started later is another process the pid went to.
         var foundIds = found.Select(p => p.Id).ToHashSet();
         var launchers = new HashSet<int>();
         foreach (var child in kept.Where(p => agent == AgentKind.Codex && p.Candidate is not ("node" or "bun") && foundIds.Contains(p.Id)
@@ -231,8 +233,8 @@ public sealed class SystemProcessInspector : IProcessInspector
             foreach (var above in child.Ancestors!)
             {
                 if (above == child.Id || !foundIds.Contains(above)) { continue; }
-                var launcher = found.First(p => p.Id == above);
-                if (launcher.StartedAt is not { } a || child.StartedAt is not { } b || a > b) { continue; }
+                var launcher = kept.First(p => p.Id == above);
+                if (!IsWrapper(launcher) || launcher.StartedAt is not { } a || child.StartedAt is not { } b || a > b) { continue; }
                 launchers.Add(above);
             }
         }
@@ -254,6 +256,18 @@ public sealed class SystemProcessInspector : IProcessInspector
         return parts.Length >= 2
             && (parts[^1].Equals("copilot.exe", StringComparison.OrdinalIgnoreCase) || parts[^1].Equals("copilot", StringComparison.OrdinalIgnoreCase))
             && parts[^2].Equals("copilot-shim", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // A runtime (what runs npx, bunx or pnpm dlx; npm's own loader is left out above), or a
+    // version manager's shim named codex (Volta's bin, Scoop's, asdf's or mise's shims). Not
+    // one whose command line cannot be read: not known to be a wrapper, it may be the session.
+    static bool IsWrapper(ListedProcess p)
+    {
+        if (p.Candidate is "node" or "bun") { return true; }
+        if (string.IsNullOrWhiteSpace(p.CommandLine) || CommandLine.Split(p.CommandLine) is not [var program, ..]) { return false; }
+        var path = program.Replace('\\', '/').ToLowerInvariant();
+        return path.Contains("/shims/", StringComparison.Ordinal) || path.Contains("/volta/bin/", StringComparison.Ordinal)
+            || path.Contains("/.volta/bin/", StringComparison.Ordinal);
     }
 
     static bool IsRunning(int pid)
@@ -541,11 +555,13 @@ public static partial class CommandLine
     static bool InDaemonFolder(string path) => path.Replace('\\', '/').Contains("/app-server-daemon/", StringComparison.OrdinalIgnoreCase);
 
     // Where Codex's own command line starts. The program itself when it is Codex's executable
-    // (named codex, or a vendored codex-<target> binary). Under node or bun, npm's loader
-    // (.../@openai/codex/bin/codex.js) when it is there, so a preload named codex (`node --require
-    // /work/codex.cjs .../codex.js exec`) is not taken for Codex and its `exec` for a session.
-    // Otherwise the argument named codex (codex.js, npx's @openai/codex), else the first whose
-    // name starts with codex, else the first; never the value of a runtime's own option.
+    // (named codex, or a vendored codex-<target> binary). Under node or bun, the script the
+    // runtime runs, past its own options and their values (`--require x`, `--require=x`), when
+    // that is npm's loader (.../@openai/codex/bin/codex.js) or named codex: a preload named codex
+    // (`node --require /work/codex.cjs .../codex.js exec`) is not Codex, and nor is a loader's
+    // path in a prompt after it. Otherwise the first later argument named codex (npx's
+    // @openai/codex), else the first whose name starts with codex, else the first; never an
+    // option, whose value may name anything.
     internal static int CodexProgram(IReadOnlyList<string> arguments)
     {
         static string File(string path)
@@ -554,26 +570,28 @@ public static partial class CommandLine
             return name[(name.LastIndexOf('/') + 1)..];
         }
         if (arguments.Count == 0 || File(arguments[0]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return 0; }
-        var values = new HashSet<int>();
+        var from = 1;
         if (Path.GetFileNameWithoutExtension(File(arguments[0])).ToLowerInvariant() is "node" or "bun")
         {
-            for (var i = 1; i < arguments.Count; i++)
+            while (from < arguments.Count && arguments[from].StartsWith('-'))
             {
-                if (arguments[i].Replace('\\', '/').EndsWith("/@openai/codex/bin/codex.js", StringComparison.OrdinalIgnoreCase)) { return i; }
+                from += RuntimeValueOptions.Contains(arguments[from]) ? 2 : 1;
             }
-            // The runtime's options come before its script: their values are the runtime's.
-            for (var i = 1; i < arguments.Count && arguments[i].StartsWith('-'); i++)
+            if (from >= arguments.Count) { return 0; }
+            var script = arguments[from];
+            if (script.Replace('\\', '/').EndsWith("/@openai/codex/bin/codex.js", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetFileNameWithoutExtension(File(script)), "codex", StringComparison.OrdinalIgnoreCase))
             {
-                if (RuntimeValueOptions.Contains(arguments[i]) && i + 1 < arguments.Count) { values.Add(++i); }
+                return from;
             }
         }
-        for (var i = 1; i < arguments.Count; i++)
+        for (var i = from; i < arguments.Count; i++)
         {
-            if (!values.Contains(i) && string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            if (!arguments[i].StartsWith('-') && string.Equals(Path.GetFileNameWithoutExtension(File(arguments[i])), "codex", StringComparison.OrdinalIgnoreCase)) { return i; }
         }
-        for (var i = 1; i < arguments.Count; i++)
+        for (var i = from; i < arguments.Count; i++)
         {
-            if (!values.Contains(i) && File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
+            if (!arguments[i].StartsWith('-') && File(arguments[i]).StartsWith("codex", StringComparison.OrdinalIgnoreCase)) { return i; }
         }
         return 0;
     }

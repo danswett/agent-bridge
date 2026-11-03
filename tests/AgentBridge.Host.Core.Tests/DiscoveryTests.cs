@@ -691,7 +691,8 @@ public class DiscoveryTests
     }
 
     // Found in review (#437): npx, bunx, pnpm dlx and a version manager's shim read as an
-    // interactive Codex. Above an interactive executable they launched, they are told apart.
+    // interactive Codex. Above an interactive executable they launched, they are told apart;
+    // a Codex above one, started through its shell tool, is not a wrapper.
     [Fact]
     public void A_launcher_above_an_interactive_codex_executable_is_told_apart_from_its_session()
     {
@@ -721,11 +722,14 @@ public class DiscoveryTests
             // one whose start cannot be read is not known to have launched anything
             new("codex", 600, t.AddSeconds(2), Native, Parent: 601, Ancestors: [601]),
             new("node", 601, null, Npx),
+            // an interactive Codex that started another through its shell tool is still a session
+            new("codex", 700, t.AddSeconds(2), Native, Parent: 701, Ancestors: [701, 702]),
+            new("codex", 702, t, Native, Parent: 9, Ancestors: [9]),
         };
 
         var (observation, _) = SystemProcessInspector.Classify(AgentKind.Codex, "codex", listing, listed: true, windows: true, _ => false);
 
-        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601], observation.Processes.Select(p => p.Id).Order());
+        Assert.Equal([100, 103, 200, 201, 300, 302, 400, 401, 500, 501, 600, 601, 700, 702], observation.Processes.Select(p => p.Id).Order());
         Assert.Equal([103, 201, 302], observation.Launchers.Order());
     }
 
