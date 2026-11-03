@@ -315,6 +315,9 @@ public class DiscoveryHoldTests
     [InlineData("codex.exe \"Explain the app-server protocol\"", true)]
     [InlineData("codex.exe -c k=v mcp-server", false)]
     [InlineData("codex.exe exec \"list the files\"", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"list the files\"", false)]
     public async Task Only_an_interactive_codex_by_its_subcommand_could_be_the_session_a_registration_naming_no_process_is_for(string commandLine, bool holds)
     {
         using var f = new Fixture();

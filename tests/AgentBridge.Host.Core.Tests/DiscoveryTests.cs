@@ -492,6 +492,10 @@ public class DiscoveryTests
     [InlineData("codex.exe review --uncommitted", false)]
     [InlineData("codex.exe migrate-rollouts", false)]
     [InlineData("codex.exe -c model=example app-server --listen stdio://", false)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js", true)]
+    [InlineData("node.exe C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js resume --last", true)]
+    [InlineData("node /usr/lib/node_modules/@openai/codex/bin/codex.js exec \"do it\"", false)]
+    [InlineData("node --no-warnings /usr/lib/node_modules/@openai/codex/bin/codex.js mcp-server", false)]
     [InlineData(null, false)]
     public void A_Codex_terminal_is_the_interactive_CLI_not_a_headless_run_or_a_server(string? commandLine, bool terminal) =>
         Assert.Equal(terminal, CodexLockDiscovery.IsTerminal(commandLine));

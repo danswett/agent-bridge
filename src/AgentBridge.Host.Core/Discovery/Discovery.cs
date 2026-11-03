@@ -505,9 +505,20 @@ internal static class CodexLockDiscovery
         "responses-api-proxy", "stdio-to-uds", "exec-server", "features", "help",
     };
 
+    // Codex's own arguments: after the executable, or, for an npm install run in node or bun,
+    // after the script (codex.js) the runtime runs, the first argument that is not one of its
+    // options, as IsLoaderScript reads it. Read from the runtime, the script's path was the
+    // prompt, and a wrapped `exec` or server was taken for a terminal.
     internal static bool IsInteractive(string commandLine)
     {
-        var args = CommandLine.Split(commandLine).Skip(1).ToList();
+        var all = CommandLine.Split(commandLine).ToList();
+        var skip = 1;
+        if (all.Count > 0 && Path.GetFileNameWithoutExtension(all[0].Replace('\\', '/').Split('/')[^1]).ToLowerInvariant() is "node" or "bun")
+        {
+            while (skip < all.Count && all[skip].StartsWith('-')) { skip++; }
+            skip++;
+        }
+        var args = all.Skip(skip).ToList();
         for (var i = 0; i < args.Count; i++)
         {
             var a = args[i];
