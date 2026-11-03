@@ -45,7 +45,7 @@ public sealed class StandaloneHooks(
         if (active() is { } why) { throw new InvalidOperationException($"agent-ha-bridge is active or cannot be checked ({why}); use Migrate instead"); }
         // Even a stopped legacy install must go through its reversible migration, not
         // acquire a second set of hooks when its task next starts.
-        if (Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge installation exists; use Migrate, not fresh hook setup"); }
+        if (Directory.Exists(legacyHome)) { throw new InvalidOperationException("an agent-ha-bridge directory exists and may retain legacy state; inspect it for migration, not fresh hook setup"); }
         var (state, problem) = IntakeState.Load(profile);
         if (problem is not null) { throw new InvalidOperationException(problem); }
         if (state is { Standalone: false } || File.Exists(Path.Combine(profile, MigrationRecord.FileName)))
@@ -102,7 +102,7 @@ public sealed class StandaloneHooks(
             before = MigrationRecord.Hash(path);
             root = before is null ? new JsonObject() : Read(path);
             if (agent == "copilot" && before is not null && !owned) { throw new InvalidOperationException($"{path} has no ownership record; it was left alone"); }
-            if (agent == "claude" && !owned && root.ToJsonString().Contains("agent-bridge", StringComparison.OrdinalIgnoreCase))
+            if (agent == "claude" && !owned && HasBridgeCommands(root))
             {
                 throw new InvalidOperationException($"{path} already mentions bridge hooks without this profile's ownership record; it was left alone");
             }
@@ -263,6 +263,17 @@ public sealed class StandaloneHooks(
         return parent[key] as JsonObject ?? throw new InvalidDataException($"{key} is not an object; it was left alone");
     }
 
+    static bool HasBridgeCommands(JsonObject root)
+    {
+        if (root["hooks"] is not JsonObject hooks) { return false; }
+        return hooks.Select(p => p.Value).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())
+            .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())
+            .Select(h => h["command"]).OfType<JsonValue>()
+            .Any(v => v.TryGetValue<string>(out var command) && (
+                command.Contains("agent-bridge", StringComparison.OrdinalIgnoreCase)
+                || command.Contains("ha-bridge", StringComparison.OrdinalIgnoreCase)));
+    }
+
     static void Add(JsonObject hooks, string name, JsonObject entry)
     {
         if (hooks[name] is null) { hooks[name] = new JsonArray(); }
@@ -288,7 +299,7 @@ public sealed class StandaloneHooks(
         var result = await codex.RunAsync(executable, args, TimeSpan.FromSeconds(30), ct);
         if (!result.Ran || result.TimedOut || result.ExitCode != 0)
         {
-            throw new InvalidOperationException($"Codex {string.Join(' ', args.Take(3))} failed ({(result.TimedOut ? "timed out" : $"exit {result.ExitCode}")}); setup is incomplete; fix the Codex installation and retry");
+            throw new InvalidOperationException($"Codex {string.Join(' ', args.Take(3))} failed ({(result.TimedOut ? "timed out" : $"exit {result.ExitCode}")}); the hook operation is incomplete; fix the Codex installation and retry");
         }
         return result.Output;
     }

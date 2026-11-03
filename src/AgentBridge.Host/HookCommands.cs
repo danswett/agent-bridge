@@ -83,7 +83,7 @@ public static class HookCommands
         }
         else
         {
-            output.WriteLine(problem ?? "hook intake: off; run hooks install copilot claude codex here for a fresh installation, or migrate an existing agent-ha-bridge installation");
+            output.WriteLine(problem ?? "hook intake: off; fresh setup (Windows only): hooks install copilot claude codex; existing agent-ha-bridge installation: migrate");
         }
 
         var heartbeat = SpoolContract.HeartbeatPath(runtime);

@@ -172,6 +172,32 @@ public sealed class StandaloneHooksTests : IDisposable
     }
 
     [Fact]
+    public async Task Claude_metadata_mentioning_the_bridge_is_not_mistaken_for_unowned_hooks()
+    {
+        Write(Registration("claude"), """{"description":"Working on agent-bridge","hooks":{"SessionStart":[{"hooks":[{"command":"user-hook"}]}]}}""");
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        Assert.Equal("Working on agent-bridge", (string?)Read(Registration("claude"))["description"]);
+        Assert.Equal(2, Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray().Count);
+    }
+
+    [Theory]
+    [InlineData("agent-bridge-host-hook.exe claude register")]
+    [InlineData("pwsh -File C:\\tools\\ha-bridge\\register.ps1")]
+    public async Task Unowned_Claude_bridge_commands_are_refused_even_without_a_legacy_directory(string command)
+    {
+        Write(Registration("claude"), new JsonObject
+        {
+            ["hooks"] = new JsonObject { ["SessionStart"] = new JsonArray(new JsonObject
+            {
+                ["hooks"] = new JsonArray(new JsonObject { ["command"] = command }),
+            }) },
+        }.ToJsonString());
+        var before = Listing();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Setup.InstallAsync("claude", false, TextWriter.Null));
+        Assert.Equal(before, Listing());
+    }
+
+    [Fact]
     public async Task Codex_failure_is_explicit_and_retry_uses_the_owned_marketplace_without_changing_trust()
     {
         var trust = Path.Combine(Homes.Codex, "config.toml");
