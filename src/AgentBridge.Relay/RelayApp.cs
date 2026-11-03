@@ -210,17 +210,21 @@ public static class RelayApp
                     _ => SignInFailed(metrics, error),
                 };
             }
-            using var userReq = new HttpRequestMessage(HttpMethod.Get, $"{options.GitHubApiUrl}/user");
-            userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
-            using var ur = await gh.SendAsync(userReq);
-            if (!ur.IsSuccessStatusCode) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
-            using var userJson = JsonDocument.Parse(await ur.Content.ReadAsStringAsync());
-            var user = userJson.RootElement;
-            if (!Text(user, "login", out var login) || !user.TryGetProperty("id", out var id)
-                || id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var accountId) || accountId <= 0)
-            { return Results.StatusCode(StatusCodes.Status502BadGateway); }
-            var account = new Account(accountId.ToString(), login);
-            await RevokeAsync(gh, githubToken, log);
+            Account account;
+            try
+            {
+                using var userReq = new HttpRequestMessage(HttpMethod.Get, $"{options.GitHubApiUrl}/user");
+                userReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", githubToken);
+                using var ur = await gh.SendAsync(userReq);
+                if (!ur.IsSuccessStatusCode) { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+                using var userJson = JsonDocument.Parse(await ur.Content.ReadAsStringAsync());
+                var user = userJson.RootElement;
+                if (!Text(user, "login", out var login) || !user.TryGetProperty("id", out var id)
+                    || id.ValueKind != JsonValueKind.Number || !id.TryGetInt64(out var accountId) || accountId <= 0)
+                { return Results.StatusCode(StatusCodes.Status502BadGateway); }
+                account = new Account(accountId.ToString(), login);
+            }
+            finally { await RevokeAsync(gh, githubToken, log); }
             var (token, expires) = tokens.Issue(account);
             // No login or id: logs carry no identities (design §5.10).
             metrics.SignedIn("ok");
@@ -264,7 +268,8 @@ public static class RelayApp
                 using var d = await gh.SendAsync(del);
                 if (!d.IsSuccessStatusCode) { log.LogWarning("revoking the GitHub token returned {Status}", (int)d.StatusCode); }
             }
-            catch (HttpRequestException e) { log.LogWarning("revoking the GitHub token failed: {Message}", e.Message); }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+            { log.LogWarning("revoking the GitHub token failed"); }
         }
     }
 

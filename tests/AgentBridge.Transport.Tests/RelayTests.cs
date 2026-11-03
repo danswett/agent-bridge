@@ -27,6 +27,17 @@ public class RelayTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Upstream_token_is_revoked_even_when_account_lookup_fails()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        relay.GitHub.UserStatusOverride = 503;
+        await Assert.ThrowsAnyAsync<Exception>(() => relay.SignInAsync(Octo));
+        Assert.Single(relay.GitHub.Issued);
+        Assert.Equal(relay.GitHub.Issued.Single(), Assert.Single(relay.GitHub.Revoked));
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Sign_in_issues_a_relay_token_and_the_GitHub_token_is_revoked_not_returned()
     {
         await using var relay = await TestRelay.StartAsync();
