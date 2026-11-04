@@ -11,7 +11,8 @@
 
   One issue, labelled area:ops and found by its title, is updated in place, so a problem that lasts
   a week is one issue with a comment a day, not seven. It's closed, with a comment, on the first
-  clean run. The probe masks addresses in every detail it reports, so its output is safe for a
+    clean run; a run whose DNS lookups couldn't complete leaves it open, since that can't confirm a
+    DNS fix. The probe masks addresses in every detail it reports, so its output is safe for a
   public issue.
 
 .EXAMPLE
@@ -34,6 +35,7 @@ $title = 'Ops probe: production relay checks failing'
 $probe = Get-Content $ResultFile -Raw | ConvertFrom-Json
 $results = @($probe.results)
 $actionable = @($results | Where-Object { $_.Status -eq 'FAIL' -or ($_.Status -eq 'WARN' -and $_.Check -eq 'tls certificate') })
+$inconclusive = @($results | Where-Object { $_.Status -eq 'WARN' -and $_.Check -eq 'dns' })
 
 $table = @('| Check | Status | Detail |', '|---|---|---|') + @($results | ForEach-Object { "| $($_.Check) | $($_.Status) | $($_.Detail -replace '\|', '\|') |" })
 $body = @(
@@ -57,6 +59,13 @@ if ($actionable.Count -gt 0) {
         else { gh issue create -R $Repository --title $title --label area:ops --body-file $file; "opened: $what" }
     }
     finally { Remove-Item $file -ErrorAction SilentlyContinue }
+}
+elseif ($open -and $inconclusive.Count -gt 0) {
+    # A DNS lookup that couldn't complete says nothing about whether a missing or stale record
+    # was fixed, so the issue stays open until DNS is actually verified.
+    if ($DryRun) { "would leave #$($open.number) open: dns not verified"; return }
+    gh issue comment $open.number -R $Repository --body "Not closing: the DNS checks couldn't complete at $($probe.at) ([run]($RunUrl)), so a DNS problem can't be confirmed fixed." | Out-Null
+    "left #$($open.number) open: dns not verified"
 }
 elseif ($open) {
     if ($DryRun) { "would close #$($open.number)"; return }

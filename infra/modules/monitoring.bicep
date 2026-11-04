@@ -170,7 +170,7 @@ var metricAlerts = [
     aggregation: 'Average'
     operator: 'GreaterThan'
     threshold: 419430400
-    window: 'PT10M'
+    window: 'PT15M'
     frequency: 'PT5M'
     dimensions: []
   }
@@ -188,15 +188,15 @@ var metricAlerts = [
   }
   {
     // A count, not a rate: metric alerts can't divide. The relay answers 503 to new sockets while
-    // a revision drains, so a deploy produces a few; 20 in 10 minutes is well past that.
+    // a revision drains, so a deploy produces a few; 30 in 15 minutes is well past that. Metric alerts take 1, 5, 15 or 30 minute windows, not 10.
     name: 'A-5XX relay server errors'
-    description: 'More than 20 responses with a 5xx status in 10 minutes. Runbook: ops/runbooks/relay-unavailable.md'
+    description: 'More than 30 responses with a 5xx status in 15 minutes. Runbook: ops/runbooks/relay-unavailable.md'
     severity: 2
     metric: 'Requests'
     aggregation: 'Total'
     operator: 'GreaterThan'
-    threshold: 20
-    window: 'PT10M'
+    threshold: 30
+    window: 'PT15M'
     frequency: 'PT5M'
     dimensions: [{ name: 'statusCodeCategory', operator: 'Include', values: ['5xx'] }]
   }

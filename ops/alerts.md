@@ -40,9 +40,9 @@ Signals:
 | A-REPLICAS | 1 | CA `Replicas` | Maximum < 1 over 5 min | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Built |
 | A-RESTART | 2 | CA `RestartCount` | Maximum > 0 over 15 min. The metric counts restarts since the replica was created, so this means the current replica has restarted, and it clears when a new replica replaces it | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
 | A-CRASHLOOP | 1 | CA `RestartCount` | Maximum > 2 over 15 min: a crash loop | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
-| A-MEM | 2 | CA `WorkingSetBytes` | Average > 400 MiB (78% of 512) over 10 min | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
+| A-MEM | 2 | CA `WorkingSetBytes` | Average > 400 MiB (78% of 512) over 15 min | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
 | A-CPU | 3 | CA `UsageNanoCores` | Average > 200M (80% of 0.25 vCPU) over 15 min | [relay-resources](runbooks/relay-resources.md) | #572 | Built |
-| A-5XX | 2 | CA `Requests` (statusCodeCategory 5xx) | More than 20 in 10 min. A count, because metric alerts can't take a ratio. A deploy's drain produces a few 503s | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Built |
+| A-5XX | 2 | CA `Requests` (statusCodeCategory 5xx) | More than 30 in 15 min. A count, because metric alerts can't take a ratio. A deploy's drain produces a few 503s | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Built |
 | A-AVAIL-ORIGIN, A-READY | 2 | AT | Separate tests on the `azurecontainerapps.io` name and `/readyz` | [relay-unavailable](runbooks/relay-unavailable.md) | #573 | Deferred for cost (about $6.50 a month each). The probe checks both by hand |
 | A-CHANGE | 2 | AL | A write to the production app, its identity or its vault by anyone other than the two deploy principals and the owner's `deploy.ps1` | [security-events](runbooks/security-events.md) | #572 | Planned. An activity-log alert can't exclude callers, so this needs the activity log in Log Analytics (a subscription-level diagnostic setting) and a log query |
 | A-STORM | 2 | LA `reconnect-storm` (then M) | Disconnects per minute > 5× the hour's median for 3 consecutive minutes, ≥ 20/min, and no deploy in the last 15 min | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |

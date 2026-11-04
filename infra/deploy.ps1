@@ -138,6 +138,11 @@ $budget = try {
     $json = az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0]" -o json
     if ($json -and $json -ne 'null') { $json | ConvertFrom-Json } else { $null }
 } catch { $budgetLookupFailed = $true; Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message))"; $null }
+# Guessing this month's date for a budget that began earlier would ask Azure to change an
+# immutable start date and fail the deployment part-way, so a real production run stops here.
+if ($budgetLookupFailed -and $Production -and -not $WhatIf -and $env:RELAY_ALERT_EMAIL) {
+    throw "budget: couldn't confirm the existing budget's start date; re-run once 'az consumption budget list' works"
+}
 $existingStart = if ($budget -and $budget.PSObject.Properties['timePeriod']) { $budget.timePeriod.startDate } else { $null }
 $env:RELAY_BUDGET_START = if ($existingStart) { ([datetime]$existingStart).ToUniversalTime().ToString('yyyy-MM-dd') } else { [datetime]::UtcNow.ToString('yyyy-MM-01') }
 # True only if the stored resources already hold exactly what the template would write for the
