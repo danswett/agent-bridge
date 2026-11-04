@@ -665,7 +665,7 @@ refusals before signing.
 |---|---|---|
 | `driver` | `Session` | `agent`, unchanged (v1-sessions.md:732) |
 | `driverPrincipal` | `Session` | `agent:<machine>/<session>` (§3.1), replacing `homeassistant:<id>` for native agents. HA-connector presses keep theirs |
-| `driverFrom` (new) | `Session` | `{ account?, login?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account` and `login` only when it is another account's (§7) |
+| `driverFrom` (new) | `Session` | `{ account?, login?, repo?, machine, machineName, session, title?, agent, federated?, depth }`: who drives, for display. `machineName` is the **target host's** view of the sender's roster name (signed by a person's device, #391 §3.2), never a name the envelope carries. `title` is the sender's session title as the envelope's issuer gave it (cut to 120 bytes, hidden characters made visible as `NeedsYou.Reveal` does). `account`, `login` and `repo` (the link's repository, §7.11) only when it is another account's (§7) |
 | `activity.userMessageFrom` | `Activity` | `agent` (PR #501), set **only** from a verified agent command or a local agent connection, never from anything the sender's text contains (the #501 security review's requirement) |
 | `activity.userMessageLabel` | `Activity` | `"<title> · <machineName>"`, cut to 64 bytes. Clients show it as "Sent by *Fix the flaky test* on *DESK*" |
 
@@ -751,6 +751,11 @@ side may want to start a session on its own machine in response.
 | (F3) Cross-signing roster roots | A's roster includes B's genesis (or vice versa), so A's hosts trust B's whole roster | Simple verification | Transitive and unscoped: every approval mistake or compromise on B's side becomes A's, and #391's seniority and probation don't compose across people. Revocation of one B device needs A to track B's roster semantics | **Rejected** |
 | (R1) Relay-to-relay peering | RA and RB route frames to each other. Hosts talk through their own relay | Each host keeps one connection | Needs operator-to-operator trust and authentication, a server-to-server protocol, and abuse controls on both. Both operators see the metadata. Fails when either side is LAN-only or self-hosted without peering | **Rejected for v-full**; possible later optimization |
 | (R2) Host-to-host, **guest on the target's relay** | A's host connects to RB as a **guest** admitted by B's link (not by GitHub sign-in to B's account), and opens Noise channels to B's linked hosts | Only RB (the target side's operator) sees the cross-account metadata, and RA sees none. Works when RA == RB with the same mechanism. End to end, as today | A second outbound WSS per linked relay. RB must admit a narrowly scoped guest | **Recommended** |
+| **(F4) Repo-based contributor discovery** (owner direction, 17:19 PT) | Two contributors to the same GitHub repository who both use the bridge are **suggested** to each other in their apps. Identity is proven by the contributor's GitHub-registered signing key, and membership by GitHub's own access check. Both owners accept, and the result is an F1 link **scoped to that repository** | A natural scope (the repo's sessions), audit and revocation tied to repo membership. No out-of-band exchange. Discoverable | Trust is rooted in GitHub accounts, not in a voice-compared code. Needs a GitHub repo, push access and an SSH signing key. Publishing anything has privacy costs | **Recommended as the default way to establish an F1 link.** Every link is repo-scoped. Explicit invitation (F1 with a link code) remains the fallback. §7.11 |
+
+**How F1 and F4 fit together.** F4 changes how a link is *found and proven*. It doesn't change
+what a link *is*: the descriptor, statements, guest admission, scope and revocation of §7.3-§7.7
+are the same either way. §7.11 covers F4 in full.
 
 ### 7.3 The recommended design: links (F1) over guest connections (R2)
 
@@ -823,7 +828,7 @@ A message flows only if **both** owners allowed it: A's **reach** (outbound) and
 | | Default | Owner can set |
 |---|---|---|
 | **Expose: machines** | None | Specific machines of theirs |
-| **Expose: sessions** | **None visible** | Only **shared** sessions: those launched in the link's **workspace** (`expose.workspaces: ["Project X"]`), or explicitly shared by the person ("Share with @alex's agents" on a session card). Everything else is `not-found`, the same as nonexistent |
+| **Expose: sessions** | **None visible** | Only **shared** sessions: those launched in the link's **workspace** (`expose.workspaces: ["Project X"]`), or explicitly shared by the person ("Share with @alex's agents" on a session card). For a repo-scoped link, the link's workspace is every workspace whose git remote resolves to the repo's id, and worktrees of them (§7.11.5). Everything else is `not-found`, the same as nonexistent |
 | **Expose: actions** | None | `read`, `reply`. `launch` opt-in, only into the link's workspace, `ask` only, counted against `launchesPerMachinePerHour` / 4 |
 | **Expose: read projection** | When read is allowed: `id`, `title`, `agent`, `status`, `statusSince`, `activity.response` (≤ 16 KiB), `waiting: bool`, `driverFrom` | Nothing more in v-full. **Never** `cwd`, `userMessage` (it may hold the owner's private instructions), `reasoning`, tool `history`, `subagents`, `question` content, usage, attachments, or `repository`/`branch` unless the link names that repository |
 | **Reach: which of my sessions may send** | **None** | Only sessions launched in the link's workspace, or adopted for the link explicitly. So an agent working in a private repository with access to secrets can't be talked into posting to the collaborator: it has no reach |
@@ -907,7 +912,222 @@ list.
 
 F1: link descriptors, link codes and statements (library and vectors). F2: relay `guest`
 admission. F3: host enforcement, projection and taint. F4: app and PWA link pages and the
-external marker. F5: spaces as named sets of links (optional).
+external marker. F5: spaces as named sets of links (optional). F6: repo discovery (§7.11):
+SSH-signed descriptors, the members-only directory, membership freshness and the suggestion UI.
+F6 depends on F1-F4, because it produces F1 links.
+
+### 7.11 Repo-based contributor discovery
+
+The owner's direction (coordinator, 2026-11-03 17:19 PT):
+
+> When two contributors to the same repository both use the bridge, each one's bridge app should
+> suggest connecting to the other for collaboration. The owner isn't sure, but this might be the
+> **only** way cross-account connections are established.
+
+Suggest-only: both owners must explicitly accept, in their own apps, and the default is no
+connection.
+
+#### 7.11.1 Three questions, answered separately
+
+A file in a repository can answer at most the first of these. Conflating them is the main way
+such a design fails.
+
+| Question | Answered by | Must not be answered by |
+|---|---|---|
+| **Discovery:** who might I connect to, and where is their relay? | §7.11.2 | — |
+| **Identity:** do this relay endpoint and link key belong to GitHub user X? | §7.11.3 | The repo file's contents, the relay's word, a displayed login |
+| **Membership:** is X a contributor to repository R *now*? | §7.11.4 | A list that never shrinks (commit authorship), or a stale check |
+
+The relay account id is already the GitHub numeric user id (`RelayApp.cs:199`), so the cross-account
+identity is the GitHub user id throughout. The login is display text, because logins can be
+renamed and recycled.
+
+#### 7.11.2 Discovery: where each side learns of the other
+
+| Source | Gives | Who can write it | Privacy | Across relays | Verdict |
+|---|---|---|---|---|---|
+| **(D1)** A committed file per contributor, e.g. `.agent-bridge/contributors/<user id>.json` holding the descriptor (relay endpoint, link key) | Endpoint and key | Anyone with push. A drive-by contributor needs a merged PR | **Worst.** Permanent in history, copied to every fork and clone, and scrapeable in public repos (§7.11.7) | Yes | **Not recommended.** Allowed only as an explicit opt-in in a private repo |
+| **(D2)** GitHub's collaborator API, called by each app with its owner's own GitHub token | **Candidates**: logins and user ids with push access. No endpoint or key | GitHub | Nothing published. `GET /repos/{o}/{r}/collaborators` requires the caller to have write access, which is the membership being sought anyway | n/a | **Recommended**, for candidates |
+| **(D3)** A signed statement in the repo, or in the user's own GitHub space (a gist, or `<login>/<login>`) | Endpoint and key, with a proof | The user | Per-user rather than per-repo, but still public | Yes | Rejected as a discovery source. Its *signature* is §7.11.3's proof |
+| **(D4)** A **members-only directory on a relay**, keyed by the repo's immutable id: opted-in members' signed descriptors, visible only to callers who prove push access to that repo | Endpoint and key, for fellow members only | Members, who prove access to the relay with a short-lived GitHub token that is checked and discarded, as at sign-in (design.md §5.4) | Only the directory relay's operator and fellow members learn who uses the bridge on R, and where | Yes, with a **rendezvous relay** (below) | **Recommended**, for endpoints |
+
+**Recommended discovery: D2 for candidates, plus D4 for endpoints.**
+
+1. The app knows its owner's repositories from the approved workspaces and their GitHub remotes.
+   For each one where the owner opted in (§7.11.5), it resolves the repo's immutable numeric
+   id. It asks GitHub, with the owner's own token, for the collaborators with push access.
+2. **Registration.** The app publishes its owner's signed descriptor (§7.11.3) to the D4
+   directory of the **rendezvous relay** for that repo. The directory relay checks the token
+   holder has push access to that repo id (`permissions.push` from `GET /repositories/{id}`),
+   stores the entry keyed by `(repo id, user id)` for at most 30 days, and discards the token.
+3. **Query.** The app asks the same directory for the repo's entries, proving push access the
+   same way, and intersects the result with step 1's candidate list. A directory entry whose user
+   isn't a current collaborator in the app's *own* GitHub check is ignored.
+4. **The rendezvous relay** is the owner's own relay by default. When both owners use the same
+   relay, which is the common case on the project's production relay, nothing else is needed.
+   For teams on different relays, a repo can opt in to **one non-personal file**,
+   `.agent-bridge/rendezvous`, holding only a relay URL (no user, key or endpoint). Members on any
+   relay register there **as directory guests**. That needs no account on that relay, only the
+   GitHub access proof. The repo then reveals only that someone in it uses Agent Bridge with that
+   relay, not who.
+5. The directory is **untrusted for authenticity**. It can hide entries (denial of service), but
+   can't forge one: §7.11.3's proof is checked by the apps, never by the directory.
+
+#### 7.11.3 Identity: proving "this endpoint and key belong to GitHub user X"
+
+The **repo descriptor** is §7.3's link descriptor plus:
+
+```json
+{
+  "github": { "userId": 1234567, "login": "alex" },
+  "repo":   { "id": 987654321, "fullName": "danswett/agent-bridge" },
+  "proof":  { "kind": "ssh", "sig": "-----BEGIN SSH SIGNATURE-----…" }
+}
+```
+
+with `account` equal to `github.userId`, and **a fresh `linkKey` per repository**, so the same
+person is unlinkable across repos by key (§7.11.7).
+
+| Proof | How | Verified by | Strength | Verdict |
+|---|---|---|---|---|
+| **(T1) Signed commit** | The descriptor is committed by X, in a commit GitHub marks *Verified* (X's own registered key, or GitHub's web-flow signature for a web or API commit) | `GET /repos/{o}/{r}/commits/{sha}`: `verification.verified` and `author.id` | GitHub vouches for the author. Requires a commit (D1), and a stolen token with `repo` scope can make one | Fallback only, when D1 is used |
+| **(T2) SSH or GPG signing key published on GitHub** | X's app signs the descriptor's canonical bytes with X's **GitHub-registered SSH signing key** under a dedicated namespace (`ssh-keygen -Y sign -n agent-bridge-link-v1`, through the user's ssh-agent), or with a GPG key | The other app resolves the id's current login (`GET /user/{id}`), fetches `GET /users/{login}/ssh_signing_keys` (or `/gpg_keys`), and verifies offline | As strong as X's GitHub account. The namespace keeps the signature from being a git commit or SSH-auth signature, and vice versa | **Recommended** |
+| **(T3) GitHub OAuth attestation by a relay** | A relay says "this key signed in as GitHub user X" | Nobody independent: relays are untrusted (design.md §5.1) | Only as strong as the relay | **Never sufficient alone.** It may order or decorate suggestions |
+| **(T4) Link code** compared by voice (§7.3) | Both owners compare 64 bits | The people | Independent of GitHub | **Optional upgrade**, offered on every suggestion ("verify with alex"). **Required** when T2 isn't available |
+
+**What changes about trust with F4.** Under F1 with a link code, cross-account trust is
+independent of GitHub. Under F4 with T2, **it is as strong as the other person's GitHub
+account**: whoever controls @alex's GitHub account can register a key and become @alex's bridge
+identity for new links. That matches how the relay account is rooted already (design.md:355,
+"GitHub account: partially trusted"), and each owner can still raise it to T4 per link.
+Existing links pin the key they were made with, so a **changed descriptor key is a new identity**
+("@alex's bridge identity changed. Re-verify?"), never a silent update. That is the
+SSH-host-key rule.
+
+#### 7.11.4 Membership: "contributes to R", now
+
+* **Default: push (write) access now**, from GitHub's collaborator check (D2), by **each side's
+  own app** with its own token. Organization members with team access count, as GitHub reports
+  them. Commit authorship (`/contributors`) is **not** membership: it never shrinks, and includes
+  anyone whose PR was merged once. A per-repo "contributors" mode for open-source projects is
+  possible later (Q22).
+* **Re-checked** at least every 24 h while the app runs, on every suggestion and acceptance, and
+  before any statement version is signed.
+* **Freshness at the hosts.** Hosts don't hold GitHub tokens, so each owner's app sends its hosts
+  a **membership confirmation** for each link: `{link, repoId, peerUserId, confirmedAt}`, signed by
+  the person's device `sign` key. Confirming only *keeps* authority, so it needs no presence. A
+  host whose last confirmation is older than **72 h** suspends the link until one arrives (fail
+  closed if no device of the owner has run). A host treats a confirmation that *narrows* (lost
+  membership) as immediate.
+* **Lost membership** (removed, left, the repo deleted or transferred out of reach, or the peer's
+  user id now mapping elsewhere): the link is **suspended** on that side at once. It is not
+  deleted, so the audit stays. Resuming needs both owners to accept again.
+* **GitHub unavailable:** 24 h of grace, then suspended. Failure never reads as "still a member".
+
+#### 7.11.5 Consent and UX
+
+* **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Agent Bridge
+  on danswett/agent-bridge"). Nothing is registered or queried for a repo until its owner opts in.
+* **A suggestion**, shown only inside the app (a quiet badge on the Collaboration page, never a
+  push or toast), reads:
+
+  > **@alex** also uses Agent Bridge on **danswett/agent-bridge**. ✓ Identity signed with
+  > @alex's GitHub SSH key · write access confirmed today. Connect? Agents in this repo's sessions
+  > could read and reply to each other. [Review and connect] [Not now] [Never for this repo]
+
+* **Accepting** opens §7.4's scope with the repo defaults (below), shows the optional link code,
+  and signs §7.3's link statement with presence. **Nothing connects until both owners have
+  accepted in their own apps.** The other side sees "@danswett accepted. Review and connect?",
+  never an automatic connection.
+* **Repo scope** (the defaults in the dialog):
+  * **expose** only sessions whose working directory is in a workspace whose git remote resolves
+    to *this repo id*, or a worktree of one. Read and reply on, launch off.
+  * **reach** from the same set of sessions only, so an agent in another repo can't post to
+    @alex at all.
+  * The projection, taint and limits of §7.4-§7.5 apply unchanged.
+* **Revocation:** on demand by either owner (one press, unilateral, §7.7). Automatically on lost
+  membership (§7.11.4). Automatically on descriptor expiry (90 days, renewed by the app with a new
+  SSH signature, so the key's continued registration on GitHub is rechecked). And on "Never for
+  this repo".
+* **Audit:** the link history (accepted, verified, suspended, revoked, each with its cause),
+  GitHub's own membership record, and the per-message audit of §5.6.
+
+#### 7.11.6 Repository threats
+
+| Event | Effect | Why |
+|---|---|---|
+| **Repo write access compromised** | An attacker can add or delete the `rendezvous` pointer, which at worst moves or denies discovery. They **can't** create a descriptor for another user | T2 needs that user's registered signing key. Directory entries need that user's GitHub proof |
+| A compromised maintainer **adds an attacker as a collaborator** | The attacker becomes a *suggestion* | Consent is the gate. The suggestion names the account, and accepting is never automatic. Default scope is the repo only, launch off |
+| **Fork** | No effect | Descriptors and directory entries bind the **immutable repo id**. A fork has a different id, and its owner isn't a collaborator upstream. Renames and transfers keep the id |
+| **A contributor leaves** | Suspended within 24 h (their side's check) and 72 h at the latest (host freshness) | §7.11.4 |
+| **@alex's GitHub account compromised** | A new key means a new identity, so a re-verify prompt, never silent. New links with @alex are possible for the attacker | The T2 residual. T4 per link mitigates it |
+| **A login renamed or recycled** | No effect | Bound to the numeric user id |
+| **The directory relay lies** | It can hide entries | It can't forge them (T2 is verified by the apps) |
+| **The repo goes from private to public** | No published personal data (D4 entries are members-only), so nothing new leaks | Unless D1 was used. That is why D1 is private-only |
+
+#### 7.11.7 Privacy
+
+What publishing a relay endpoint or key *in a repository* (D1) would leak, especially in a
+public one:
+* that the GitHub user uses Agent Bridge, and on which repos;
+* their **relay endpoint**. A self-hosted relay's hostname or IP may identify a home network,
+  and becomes a scanning or denial-of-service target;
+* a **stable public key**, which links the person across every repo where it appears;
+* activity timing (commit times);
+* all of it **permanently**, in history, in every fork and clone, and scraped into a list of
+  bridge users and relays.
+
+**Recommended form: indirect and members-only.** Nothing personal is ever committed. The only
+optional repo file is the non-personal `rendezvous` pointer. Descriptors live in the D4
+directory, visible only to callers who prove push access to that repo, and expire after 30
+days. Link keys are per-repo, so they don't link across repos. Hashing the repo id in the
+directory doesn't help, since repo ids are small sequential integers anyone can enumerate, so it
+isn't offered as a privacy measure. What the **directory operator** learns is that GitHub user X
+uses the bridge on repo R, through relay E. For the production relay, that is the project's
+operator. A team that won't accept that uses the invitation path (§7.3).
+
+#### 7.11.8 Repo as the only path?
+
+| | Repo-based only | Explicit pairwise invitation only (F1) |
+|---|---|---|
+| Rules out | Collaborators without a shared **GitHub** repo: Azure DevOps (much of the owner's work), GitLab, local-only projects. Contributors without push access (drive-by open source). Coordination not about a repo. New links while GitHub is down | Nothing, but every link needs an out-of-band exchange and a voice code |
+| Buys | A natural scope (the repo's sessions). Audit and **revocation tied to membership**. No out-of-band step. Discoverability. One mental model: "we both work on R" | Independence from GitHub (T4). Any pair of people |
+| Trust root | The other person's GitHub account (T2), optionally raised to T4 | The voice-compared code |
+
+**Recommended: the repository is the only *scope*, and discovery is the default, but not the only,
+way to establish a link.**
+* **Every link is scoped to exactly one repository.** There is no unscoped, ad-hoc pairing. That
+  keeps everything F4 buys: scope, audit and the right default.
+* **Establishment** is F4 discovery when it can verify (a GitHub repo, push access on both sides,
+  and T2 available). Otherwise it is a **repo-scoped invitation**: F1 with the link code, naming
+  the repository by its normalized remote URL (`dev.azure.com/…`, `gitlab.com/…`). For those, the
+  membership check is unavailable, so revocation is manual, and the dialog says so.
+* If the owner prefers a single *mechanism*, it is F4 only. That excludes Azure DevOps
+  collaborations until an equivalent membership and key check exists there (Q19).
+
+#### 7.11.9 How it fits the roster, principals and envelope
+
+Nothing in §4's envelope or §7.5's verification changes, except that two checks are added. The
+chain B's host walks for an agent command from A's host:
+
+1. Envelope `sig` → A host's `sign` key, listed in **A's peer host statement**, signed by A's
+   `linkKey` (§7.3).
+2. A's `linkKey` → **A's repo descriptor**, whose T2 proof verifies under an SSH signing key that
+   GitHub lists for `github.userId` (checked by B's app at acceptance and each renewal, and
+   recorded in B's link statement).
+3. `envelope.account` == `descriptor.account` == `github.userId` (`RelayApp.cs:199`).
+4. **Membership** fresh: B's own app confirmed A's user still has push access to `repo.id` within
+   72 h (§7.11.4).
+5. **B's own link statement**, presence-signed by B's person's device and verified by B's hosts
+   **against B's own roster (#55)**, names this `linkKey`, this repo id and the scope.
+6. **Scope:** the target session's workspace resolves to `repo.id` (§7.11.5). Then §7.5's
+   projection, taint, rates and prefix, with the prefix naming the repo: `[Agent Bridge · from
+   agent "…" on alex-mbp · external: @alex · danswett/agent-bridge]`.
+
+A's roster is never exported to B. B never trusts A's devices beyond the hosts A's statement
+lists. Each side's #55 roster governs only its own side. A's agent principals are §3's, vouched
+for by A's hosts. B sees them as `driverFrom { account, login, federated: true, repo }` (§6.1, with
+`repo` added).
 
 ---
 
@@ -1100,6 +1320,9 @@ purpose, decommissioning or re-keying older relay deployments that share the acc
   built first**, so the connector's first grant doesn't wait on federation.
 * Federation's read projection (§7.4) may later be a scope offered to connectors as well. It is
   not part of the first grant.
+* Repo-based discovery (§7.11) doesn't change this boundary. It finds and proves *peer
+  accounts' hosts* for links. Connectors are never suggested, listed in the directory, or
+  reachable through a link.
 
 ### 8.9 Ownership: shared versus separate
 
@@ -1136,7 +1359,8 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 
 ### 9.2 Cross-account
 
-All of 9.1, plus §7.8. The essential difference is that the counterpart **owner** is a party
+All of 9.1, plus §7.8, and the repository-specific events of §7.11.6. The essential difference
+is that the counterpart **owner** is a party
 the design must not trust: consent is per side, scope is minimal by default, the projection hides
 what wasn't meant to be shared, external provenance is always visible to both person and agent,
 and revocation is unilateral.
@@ -1182,7 +1406,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
-| F1-F5 | Federation (§7.10) | AP5, owner approval, separate review | Cross-account |
+| F1-F6 | Federation (§7.10), with repo discovery (§7.11) as F6 | AP5, owner approval, separate review | Cross-account |
 
 **Why AP1 first.** It delivers the owner's main ask (native, attributed agent messaging) for
 sessions on one machine, which is where most agent coordination already happens (the owner's VM
@@ -1226,11 +1450,12 @@ Each has a recommendation. None is decided by this note.
    default.
 8. **Q8. MCP over HTTP.** **Recommended:** no agent principal over HTTP in v1. stdio only, since
    HTTP can't be bound to a session by ancestry.
-9. **Q9. Federation trust establishment and transport.** **Recommended:** pairwise links (F1)
-   with a 64-bit link code compared by voice or video, each side recording its own presence-signed
-   statement, a dedicated per-link key, and host-to-host guest connections on the target's relay
-   (R2). Reject cross-signing rosters (F3). Spaces later (F2). A stale peer statement (> 24 h)
-   stops the link entirely, not only writes.
+9. **Q9. Federation trust establishment and transport.** **Recommended:** F1 links, each scoped
+   to one repository and established by repo discovery (F4, §7.11) where it can verify, or by a
+   repo-scoped invitation with the 64-bit link code otherwise. Each side records its own
+   presence-signed statement with a dedicated per-link key. Host-to-host guest connections on the
+   target's relay (R2). Reject cross-signing rosters (F3). Spaces later (F2). A stale peer
+   statement (> 24 h) stops the link entirely, not only writes.
 10. **Q10. Cross-account launch.** **Recommended:** off by default. Per-link opt-in, only into
     the link's workspace, `ask` only, a quarter of the machine's launch budget.
 11. **Q11. Use the trusted-peer floor (#407) as an interim for cross-machine agent messaging?**
@@ -1261,3 +1486,31 @@ Each has a recommendation. None is decided by this note.
 18. **Q18. A connector write grant later** (replying from Home Assistant, say). **Recommended:**
     a separate reviewed design with its own `automation` attribution, never derived from the
     agent policy. Out of scope for the first grant.
+
+Repo-based contributor discovery (§7.11):
+
+19. **Q19. Is the repository the only path to a cross-account connection?** (a) The repository is
+    the only *scope*, with discovery as the default way to establish a link and a repo-scoped
+    invitation (link code) as the fallback. (b) Discovery is the only mechanism, which excludes
+    Azure DevOps, GitLab and contributors without push access. (c) Invitations only.
+    **Recommended: (a)** (§7.11.8).
+20. **Q20. Proof that a descriptor belongs to GitHub user X.** **Recommended:** an SSH or GPG
+    signature by a key X has registered on GitHub, with the namespace `agent-bridge-link-v1`
+    (T2). A relay's OAuth attestation is never sufficient alone. Offer the link code on every
+    suggestion, and require it when T2 isn't available. A changed key is a new identity.
+21. **Q21. Where descriptors are published.** **Recommended:** nowhere public. A members-only
+    directory on a rendezvous relay (D4), gated by GitHub push access and expiring after 30
+    days. The only optional repo file is a non-personal `.agent-bridge/rendezvous` relay pointer.
+    Per-contributor files in the repo (D1) are offered only in private repos, as an explicit
+    opt-in.
+22. **Q22. What counts as a contributor.** **Recommended:** push access now, checked by each
+    side's own app every 24 h and confirmed to its hosts within 72 h. Commit authorship never
+    counts. A per-repo "merged contributors" mode for open source is a later option, off by
+    default.
+23. **Q23. Who operates the directory for the production relay, and is the operator learning
+    "user X uses the bridge on repo R, through relay E" acceptable?** **Recommended:** yes, the
+    production relay hosts it, and that disclosure is stated in the opt-in dialog. A team that
+    objects uses the invitation path, or its own rendezvous relay.
+24. **Q24. Suggestions' reach.** **Recommended:** the app only, as a quiet badge on the
+    Collaboration page: never a push, a toast or a phone notification. Opt-in per repository, with
+    "Never for this repo", and nothing connects until both owners accept.
