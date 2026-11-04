@@ -345,7 +345,8 @@ upsert of the same moment would. The shared vectors check this for C# and the PW
 `SessionPatch` in [vectors/sessions.json](vectors/sessions.json) for each rule, and
 [vectors/session-patches.json](vectors/session-patches.json) for the recorded Copilot, Claude and
 Codex sessions in `tests/fixtures`, patched as a host sends them. C#: `SessionPatches.Diff` and
-`Apply` in `src/AgentBridge.Protocol/SessionPatches.cs`.
+`Apply` in `src/AgentBridge.Protocol/SessionPatches.cs`; the PWA: `applyPatch` in
+`pwa/js/session-patch.js`.
 
 **A patch the client cannot apply** is dropped whole, never applied in part, and the client
 subscribes again, as after a gap in `seq`: one whose `base` is not the `seq` it holds that session

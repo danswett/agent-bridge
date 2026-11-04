@@ -6,6 +6,7 @@
 // app that is an end-to-end Noise channel (channels.js); in demo mode and the unit tests
 // it is an in-process fake. Nothing here knows which.
 import { Events, Ops, readAnswerResult, readAttachmentState, readDiscoveryHeld, readHello, readSession, readStopResult, readSubagent } from './protocol.js';
+import { PatchError, applyPatch, readPatch } from './session-patch.js';
 import { USAGE, readUsage } from './usage.js';
 import { UPDATE, readUpdateState } from './update.js';
 import { LAUNCH, TRUST, readLaunchOptions, readLaunchResult, readTrustResult } from './launch.js';
@@ -40,6 +41,26 @@ export class HostClient {
   // would end the new snapshot with half its sessions.
   #subscribing = null;
   #snapshot = null;
+  // What the subscription asks for: patches (session.patch), and the run of the host (hello's
+  // machine.instance) a reconnect resumes the list of. A subscribe again after a gap asks the same.
+  #patch = false;
+  #instance = null;
+  // Whether the latest answered subscribe resumed (only changed sessions follow, and sessions.synced
+  // names the live ones), and whether the store's revision may move with each patch and removal:
+  // from the sessions.synced that made the list whole, until a gap.
+  #resumed = false;
+  #tracking = false;
+  // Each session as this channel last gave it, the JSON as received and the seq it came with: what
+  // a session.patch applies to. A new subscription starts afresh, since its patches are on its own
+  // events.
+  #raw = new Map();
+  // Whether anything was dropped since the latest subscribe was answered: a snapshot with a session
+  // it could not read is not the whole list, and nothing resumes from it.
+  #dropped = false;
+  // Whether the latest subscribe gave since: a synced naming the live sessions then, its answer not
+  // saying it resumed, can't be told for a full snapshot's, which would drop every session it didn't
+  // send again.
+  #askedSince = false;
   #usageSubscribed = false;
   #usageShared = false;
   #updateSubscribed = false;
@@ -185,10 +206,18 @@ export class HostClient {
   // Starts (or restarts) the subscription. The host answers {revision, count}, then sends
   // one upsert per live session and `sessions.synced`. Upserts are shown as they arrive;
   // on synced, any session from before that the snapshot did not include is dropped.
-  async subscribe() {
+  // patch: ask for live changes as session.patch, of a host that offers sessions.patch; then a
+  // list the store holds whole from that instance of the host is resumed rather than sent again.
+  async subscribe({ patch = this.#patch, instance = this.#instance } = {}) {
+    this.#patch = patch === true;
+    this.#instance = typeof instance === 'string' ? instance : null;
     this.#snapshot = null;
     this.synced = false;
-    const { id, done } = this.#request(Ops.sessionsSubscribe);
+    this.#tracking = false;
+    const since = this.#patch ? this.store?.resumeFrom?.(this.#instance) ?? null : null;
+    this.#askedSince = since !== null;
+    const data = this.#patch ? { patch: true, ...(since ? { since } : {}) } : {};
+    const { id, done } = this.#request(Ops.sessionsSubscribe, data);
     this.#subscribing = id;
     try { return await done; } finally { if (this.#subscribing === id) { this.#subscribing = null; } }
   }
@@ -240,7 +269,12 @@ export class HostClient {
       // after this response is the new subscription's, and none before it.
       if (m.re === this.#subscribing) {
         this.#subscribing = null;
-        if (m.ok === true) { this.#snapshot = new Set(); }
+        if (m.ok === true) {
+          this.#snapshot = new Set();
+          this.#resumed = m.result?.resumed === true;
+          this.#raw.clear();
+          this.#dropped = false;
+        }
       }
       if (m.ok === true) { p.resolve(m.result); }
       else { p.reject(new HostError(p.op, typeof m.error === 'string' ? m.error : 'failed', { fromHost: true })); }
@@ -258,35 +292,70 @@ export class HostClient {
       // the next is always one more than the last, and the first is 1. Taking whatever came first,
       // on a channel or after subscribing again, as the baseline missed events lost just then.
       gap = m.seq !== (this.#lastSeq ?? 0) + 1;
+      // An event numbered again or back (a host that is broken) may carry an older state than the
+      // one held: the list is not whole after it, and is never resumed from.
+      if (gap && m.seq <= (this.#lastSeq ?? 0)) { this.#lost(); }
       this.#lastSeq = m.seq;
+    } else {
+      // An event without a number (a host that is broken) says nothing of what was lost before it:
+      // the revision stops moving, and the list is never resumed from.
+      this.#tracking = false;
+      this.#lost();
     }
     // Before anything of this event is applied or told: the snapshot under way is no longer the
     // whole of anything, so nothing may complete it, not even this event when it is the
     // sessions.synced. Told after, a listener confirmed the list, and resent what waited,
     // before hearing it was not whole (#427).
-    if (gap) { this.#resubscribe(m.seq); }
+    if (gap) {
+      // What came before the gap all arrived, so the store's revision still holds; nothing after
+      // it moves it until a snapshot is whole again.
+      this.#tracking = false;
+      this.#resubscribe(m.seq);
+    }
     const data = m.data !== null && typeof m.data === 'object' ? m.data : {};
     switch (m.ev) {
       case Events.sessionUpsert: {
         const s = this.store?.upsert(data);
-        if (s) { this.#snapshot?.add(s.id); }
+        if (s) {
+          this.#snapshot?.add(s.id);
+          this.#raw.set(s.id, { json: data, seq: m.seq });
+        } else { this.#lost(); }
         break;
       }
+      case Events.sessionPatch:
+        this.#patched(data, m.seq);
+        break;
       case Events.sessionRemove:
+        if (typeof data.id !== 'string') { this.#lost(); break; }
         this.store?.remove(data.id);
         this.#snapshot?.delete(data.id);
+        this.#raw.delete(data.id);
+        this.#advance(data.revision);
         break;
       case Events.sessionsSynced:
         if (this.#snapshot) {
           const snapshot = this.#snapshot;
+          const keep = this.#kept(snapshot, data.live);
+          // Not the whole of anything: subscribed again, without resuming, before anyone is told.
+          if (!keep) {
+            this.#snapshot = null;
+            this.#lost();
+            this.#resubscribe(m.seq);
+            break;
+          }
           // Synced before the store tells anyone: a view drawn from that news reads the live
           // count and the hold only once this is true, and nothing redraws it after.
           this.#snapshot = null;
           this.synced = true;
+          this.#tracking = true;
           if (this.store) {
             this.store.revision = Number.isFinite(data.revision) ? data.revision : this.store.revision;
+            this.store.instance = this.#instance;
+            // A revision it can't read can't be resumed from: the one kept from before may be another
+            // run's, which this one could reach with changes it never sent.
+            this.store.whole = !this.#dropped && Number.isSafeInteger(data.revision);
             this.store.setHeld(readDiscoveryHeld(data.discoveryHeld));
-            this.store.retain(snapshot);
+            this.store.retain(keep);
           }
           this.#emit('synced', data);
         }
@@ -305,6 +374,51 @@ export class HostClient {
         break;
     }
     this.#emit('event', m);
+  }
+
+  // A session.patch, applied to the session as this channel last gave it, then read as an upsert.
+  // One that cannot be read or applied is dropped whole, and the list is no longer the host's, so
+  // it is subscribed again in full, as after a gap: before anything of it is shown.
+  #patched(data, seq) {
+    const patch = readPatch(data);
+    let applied = null;
+    if (patch) {
+      const held = this.#raw.get(patch.id);
+      try { applied = applyPatch(held?.json ?? null, held?.seq ?? null, patch); }
+      catch (e) { if (!(e instanceof PatchError)) { throw e; } }
+    }
+    const s = applied ? (this.store ? this.store.upsert(applied) : readSession(applied)) : null;
+    if (!s) {
+      this.#tracking = false;
+      this.#lost();
+      this.#resubscribe(seq);
+      return;
+    }
+    this.#raw.set(s.id, { json: applied, seq });
+    this.#snapshot?.add(s.id);
+    this.#advance(patch.revision);
+  }
+
+  // The ids a completed snapshot leaves on the list, or null when it can't be whole. A full one is
+  // the sessions it sent. A resumed one is every id in live, each sent since the response or held
+  // from before; one neither, or a live that cannot be read, means the list can't be whole. So
+  // does anything dropped since resuming was asked for, which the host could not know to resend.
+  #kept(snapshot, live) {
+    if (live !== undefined && live !== null && !(Array.isArray(live) && live.every((id) => typeof id === 'string'))) { return null; }
+    if (!this.#resumed) { return this.#askedSince && Array.isArray(live) ? null : snapshot; }
+    if (!Array.isArray(live) || this.store?.whole !== true) { return null; }
+    return live.every((id) => snapshot.has(id) || this.store.has(id)) ? new Set(live) : null;
+  }
+
+  // The store's list is no longer the host's whole list: nothing resumes from it until a full
+  // snapshot makes it whole again.
+  #lost() {
+    this.#dropped = true;
+    if (this.store) { this.store.whole = false; }
+  }
+
+  #advance(revision) {
+    if (this.#tracking && this.store && Number.isSafeInteger(revision)) { this.store.revision = revision; }
   }
 
   // 'gap' carries resync, which settles true once the host has taken the new subscription and

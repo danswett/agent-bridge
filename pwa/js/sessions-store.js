@@ -8,6 +8,10 @@ export class SessionsStore {
   revision = null;
   // What holds the host's discovery ({ reason, agents }), or null.
   held = null;
+  // The run of the host the list came from (hello's machine.instance), and whether the list is its
+  // whole list at revision: what a reconnect to that run resumes from (sessions.subscribe's since).
+  instance = null;
+  whole = false;
 
   onChange(fn) {
     this.#listeners.add(fn);
@@ -21,6 +25,11 @@ export class SessionsStore {
   }
 
   get size() { return this.#sessions.size; }
+
+  // sessions.subscribe's since for that run of the host, or null when the list is not whole from it.
+  resumeFrom(instance) {
+    return this.whole && typeof instance === 'string' && instance === this.instance && Number.isSafeInteger(this.revision) ? { instance, revision: this.revision } : null;
+  }
   get(id) { return this.#sessions.get(id) ?? null; }
   has(id) { return this.#sessions.has(id); }
 
@@ -72,6 +81,8 @@ export class SessionsStore {
     this.#sessions.clear();
     this.revision = null;
     this.held = null;
+    this.instance = null;
+    this.whole = false;
     this.#emit({ type: 'clear' });
   }
 }
