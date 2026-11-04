@@ -376,6 +376,10 @@ public class DriverTests
     [Theory]
     [InlineData("look at this", "@C:\\staged\\shot.png look at this")]
     [InlineData("look at this", "[Image #1] look at this")]
+    // Codex runs its placeholders together.
+    [InlineData("look at these", "[Image #1][Image #2] look at these")]
+    // Delivery types a control character as a space.
+    [InlineData("check\u001bthis", "check this")]
     // A reply whose own words look like an attachment, with and without one before it.
     [InlineData("@README.md explain this", "@README.md explain this")]
     [InlineData("[Image #1] is the old one", "[Image #1] is the old one")]
@@ -439,6 +443,23 @@ public class DriverTests
         d.ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
 
         d.Observe(At(1, SessionStatus.Working, "and the tests too"), Fixture.T0, drivers.Arm);
+
+        Assert.Null(d.PendingAt);
+        Assert.False(d.PromptIsAgents);
+    }
+
+    // Reported after the person's own prompt was seen, a launch whose words that prompt only begins
+    // with: the arm is spent on it, but the prompt is still the person's.
+    [Fact]
+    public void A_launch_reported_after_a_persons_prompt_that_only_begins_like_it_leaves_that_prompt_the_persons()
+    {
+        var drivers = new SessionDrivers();
+        var d = drivers.For(Id);
+        var persons = At(1, SessionStatus.Working, "Fix the build, but do not deploy");
+        d.Observe(persons, Fixture.T0, drivers.Arm);
+        d.ArmLaunch(Fixture.T0, "Fix the build", resumed: false, Principal);
+
+        d.Observe(persons, Fixture.T0, drivers.Arm);
 
         Assert.Null(d.PendingAt);
         Assert.False(d.PromptIsAgents);

@@ -261,9 +261,11 @@ public sealed partial class SessionDriver
                 var head = opening[..Math.Min(80, opening.Length)];
                 if (message.StartsWith(head, StringComparison.Ordinal) || (!openingResumed && full.Activity.TurnCount >= 1))
                 {
-                    // Spent either way, but the prompt is the launch's only when it is the one shown:
-                    // the person may have sent another before the launch was reported.
-                    if (driver == SessionDrivers.Agent && message.StartsWith(head, StringComparison.Ordinal))
+                    // Spent either way, but the prompt is the launch's only when it is the one shown,
+                    // its words exactly: the person may have sent another before the launch was
+                    // reported, and one that only begins like it ("Fix the build, but do not deploy")
+                    // is still theirs.
+                    if (driver == SessionDrivers.Agent && Matches(opening, full.Activity.UserMessage))
                     {
                         (agentPrompt, awaitingAgentPrompt) = (Prompt(full, prompt), false);
                     }
@@ -287,27 +289,50 @@ public sealed partial class SessionDriver
         }
     }
 
-    static string Collapse(string text) => Regex.Replace(text, @"\s+", " ").Trim();
-
-    // Whether the prompt shown is the one the arm expected, when it knows what to expect: the reply's
-    // words exactly, after the attachments delivery puts before them ("@<path>" mentions, Codex's
-    // "[Image #n]" placeholders). Or, where the shown prompt was cut to its limit, their start.
-    bool Sent(Session full)
+    // Words as delivery types them (InjectableText.Collapse, LaunchProtocol.Flatten): a control
+    // character or a line or paragraph separator is a space, a lone surrogate U+FFFD. Then runs of
+    // whitespace are one space and the ends are trimmed. Kept as delivery's, or a reply with an
+    // escape in it is recorded as other words than were expected and shown as the person's.
+    static string Collapse(string text)
     {
-        if (expected is null) { return true; }
-        if (full.Activity.UserMessage is not { } m) { return false; }
-        // The words as they are first: a reply may itself begin with "@README.md" or "[Image #1]".
-        var said = Collapse(m);
-        if (said == expected) { return true; }
-        // Then only what delivery put before them, whole: nothing of the reply's own is taken off.
-        if (said.EndsWith(" " + expected, StringComparison.Ordinal) && Attachments().IsMatch(said[..^(expected.Length + 1)])) { return true; }
-        // Cut to its limit, the shown prompt is the start of what was sent.
-        return System.Text.Encoding.UTF8.GetByteCount(m) >= Limits.UserMessage - 4
-            && (expected.StartsWith(said, StringComparison.Ordinal)
-                || Enumerable.Range(1, said.Length - 1).Any(i => said[i - 1] == ' ' && Attachments().IsMatch(said[..(i - 1)]) && expected.StartsWith(said[i..], StringComparison.Ordinal)));
+        var typed = new System.Text.StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsHighSurrogate(c) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                typed.Append(c).Append(text[++i]);
+                continue;
+            }
+            typed.Append(char.IsSurrogate(c) ? '\uFFFD'
+                : char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Control
+                    or System.Globalization.UnicodeCategory.LineSeparator
+                    or System.Globalization.UnicodeCategory.ParagraphSeparator ? ' ' : c);
+        }
+        return Regex.Replace(typed.ToString(), @"\s+", " ").Trim();
     }
 
-    [GeneratedRegex(@"^(?:@\S+|\[Image #\d+\])(?: (?:@\S+|\[Image #\d+\]))*$")]
+    // Whether the prompt shown is the one the arm expected, when it knows what to expect.
+    bool Sent(Session full) => expected is null || Matches(expected, full.Activity.UserMessage);
+
+    // Whether a prompt shown is these words: exactly, or after the attachments delivery puts before
+    // them ("@<path>" mentions, Codex's "[Image #n]" placeholders, which it runs together). Or,
+    // where the shown prompt was cut to its limit, their start.
+    static bool Matches(string words, string? shown)
+    {
+        if (shown is null) { return false; }
+        // The words as they are first: a reply may itself begin with "@README.md" or "[Image #1]".
+        var said = Collapse(shown);
+        if (said == words) { return true; }
+        // Then only what delivery put before them, whole: nothing of the reply's own is taken off.
+        if (said.EndsWith(" " + words, StringComparison.Ordinal) && Attachments().IsMatch(said[..^(words.Length + 1)])) { return true; }
+        // Cut to its limit, the shown prompt is the start of what was sent.
+        return System.Text.Encoding.UTF8.GetByteCount(shown) >= Limits.UserMessage - 4
+            && (words.StartsWith(said, StringComparison.Ordinal)
+                || Enumerable.Range(1, said.Length - 1).Any(i => said[i - 1] == ' ' && Attachments().IsMatch(said[..(i - 1)]) && words.StartsWith(said[i..], StringComparison.Ordinal)));
+    }
+
+    [GeneratedRegex(@"^(?:@\S+|(?:\[Image #\d+\])+)(?: (?:@\S+|(?:\[Image #\d+\])+))*$")]
     private static partial Regex Attachments();
 
     static string? Prompt(Session full, string? prompt) =>
