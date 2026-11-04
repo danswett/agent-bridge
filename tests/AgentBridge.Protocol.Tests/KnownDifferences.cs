@@ -44,15 +44,6 @@ public static class KnownDifferences
         .. OtherDefaults.Select(v => new KnownDifference(v, 446, "pwa", "read",
             "reads it, the field its type's default",
             "reads it, the field absent or filled in from another")),
-        // #489: who wrote the latest prompt. The PWA does not read the field yet (B's PR follows
-        // this one), so it shows every prompt as the person's, as before the field.
-        .. new[] { "Activity/a-scheduled-prompt", "Activity/a-prompt-an-agent-sent", "Activity/an-unknown-sender-reads-as-other-never-the-person" }
-            .Select(v => new KnownDifference(v, 489, "pwa", "read",
-                "reads userMessageFrom and userMessageLabel, an unknown sender as other",
-                "does not read them yet: the prompt reads as the person's")),
-        new("Activity/a-sender-that-is-not-text", 489, "pwa", "read",
-            "refuses it: userMessageFrom is strict, so the prompt is never shown as the person's",
-            "does not read userMessageFrom yet, so reads the prompt as the person's"),
         new("SessionsSynced/not-a-record", 446, "pwa", "read",
             "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
             "reads it as a synced with no revision, which ends the snapshot"),

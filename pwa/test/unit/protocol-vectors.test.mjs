@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import {
-  readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
+  readActivity, readAnswerResult, readAttachmentState, readBackground, readDiscoveryHeld, readHello, readOwn,
   readQuestion, readSession, readSource, readStopResult, readSubagent, readTool,
 } from '../../js/protocol.js';
 import { checkAnswer } from '../../js/answers.js';
@@ -145,7 +145,7 @@ const READS = {
   Background: { read: readBackground },
   ActivitySource: { read: readSource },
   OwnActivity: { read: readOwn },
-  Activity: { read: (j) => readSession({ id: 'x', activity: j }).activity },
+  Activity: { read: readActivity },
   Subagent: { read: readSubagent },
   Session: { read: readSession },
   DiscoveryHeld: { read: readDiscoveryHeld },

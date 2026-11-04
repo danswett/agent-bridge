@@ -43,6 +43,7 @@ Larger files come next.
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |
 | `js/status.js` | What a session says about itself: [ui.md](../docs/design/ui.md) §2.2's rules, as its glyph, its words, the colour role of the words, and the glyph's accessible name (§9). Rules 1-6 first match wins, 8 refining 4, and 7 (an agent driving) as an overlay. Pure, and tested rule by rule in `test/unit/status.test.mjs` |
 | `js/attribution.js` | Who said what (#176): the main agent's own response and reasoning, never a delegate's (`activity.source` and `activity.own`, [v1-sessions.md](../docs/protocol/v1-sessions.md) Activity), and the delegates as a card lists them: running first, then idle, each under its parent, with its glyph and words, and the finished folded apart; the delegates one started, at any depth; the conversation's "Started N delegates" and "Delegate *name* reported back" lines; the words "Ask main agent to stop it" puts in the reply box; and a host's background counts where it lists none. Pure, and tested in `test/unit/attribution.test.mjs` |
+| `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
 | `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
@@ -516,6 +517,11 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   status/agent/fields/events, a `seq` gap, an upsert leaving every row in place (and moving
   one in Most recent), removal into Ended, fold persistence and
   auto-unfold, truncation notes, tool history via `session.get`, the worker's scope.
+* `test/prompts.spec.mjs`, in demo mode (#489): a scheduled or an agent's prompt as a collapsed
+  line at the column's start in agent colour (clock or diamond), never a bubble; Show prompt by
+  Enter and Space, its name and `aria-expanded`, the full text inside an agent rule; a schedule's
+  repeat folded; the person's bubble unchanged without the field; a hostile label as text; full
+  width on a phone; the Disclosure token, instant under reduced motion; axe in light and dark.
 * `test/order.spec.mjs`, in demo mode (#164): three sessions updating in turn never move a
   row; a new session at the top once; Alt+Up/Down, a drag by the handle (at 900 and 1440
   px), and the row menu from a right-click, Shift+F10 and a long press (at 390 px with

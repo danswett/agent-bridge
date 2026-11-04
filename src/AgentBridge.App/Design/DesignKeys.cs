@@ -107,6 +107,7 @@ static class DesignKeys
         "AbIconAttach",
         "AbIconBack",
         "AbIconChevron",
+        "AbIconClock",
         "AbIconCopy",
         "AbIconDelegate",
         "AbIconInspector",

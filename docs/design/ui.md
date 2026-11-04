@@ -108,7 +108,7 @@ by `tools/design-gen` (#177).
 | Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, the "new activity" dot |
 | Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals |
 | Active | `#4C9AFF` | `#0B63E5` | The `working` and `delegating` glyphs only |
-| Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and nothing else |
+| Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and a prompt an agent or a schedule sent (§6.4), and nothing else |
 | Danger | `#FF6B6B` (text `#FF9494`) | `#C9302C` | Failed, stopped, End session |
 | Neutral | `#8B949E` | `#6E7781` | The `idle`, `done` and `ended` glyphs only |
 
@@ -398,7 +398,7 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list | Opening or closing it | The chevron turns, and the content fades in and settles 4 down. Its space opens at once: nothing below it slides. Closing turns the chevron back and closes the space at once | `disclosure`: standard, decelerate; fast out; nudge | Windows: `Expander`'s own motion where it is one. PWA: the tokens on the chevron and the content | Instant |
 | Arriving and leaving | A session row (also as Needs you shows or hides it), a delegate in the strip | A host adds or removes it; a question is asked or answered; Needs you is turned on or off | The item fades in where it lands. Leaving, its space closes at once and it fades out where it was. Neighbours never slide | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` replaced by this fade, because `AddDeleteThemeTransition` and `RepositionThemeTransition` slide the neighbours. PWA: the tokens on the row; a copy of a leaving row, which nothing can find or tap, fades where it was. Until #253 reaches the PWA, its Needs you entries and an approval's command appear at once and never fade or move: only an entry's mark fades in. Apple: `.transition(.opacity)`. Android: `animateItem` with no placement spec | Cross-fade |
 | Status glyph | A row, the session header, the delegate strip | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour. The words change at once. The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
 | Activity dot | A row's trailing edge (§6.1) | The session updates while its row isn't open; the row is opened | The 6 px dot fades in, and later fades out. It never pulses, grows or repeats. The title's weight changes at once | `activityDot`: standard, decelerate; fast out | The same on every platform | Instant |
@@ -672,6 +672,49 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Your messages:** a bubble at the right edge of the conversation's column (card fill,
   platform radius), at most 85% of the column's width, so a short message beside a short reply
   is still at the right (#255).
+- **A prompt you didn't type** (#489): a schedule's (`activity.userMessageFrom` `schedule`), another
+  agent's (`agent`), or one the host knows only as not yours (`other`, and any other text a
+  client doesn't know). It is **never a bubble**, and never at the right, which is yours only.
+  A prompt from you, and every prompt from a host that doesn't send the field (or sends it
+  null), keeps the bubble. A sender that isn't text is refused with the whole `activity`
+  ([v1-sessions.md](../protocol/v1-sessions.md), strict fields), so no prompt shows at all.
+  - **At the column's start, across it,** like an event line; on a phone, a full-width row.
+  - **A label line in agent colour, with an icon:** a clock (`icons/clock.svg`) and "Scheduled
+    prompt · #4" for a schedule (its `userMessageLabel`: "#" before a number, anything else in
+    quotes); the
+    `driven-badge` diamond and "Sent by an agent" for an agent, with `driverPrincipal` after it in
+    secondary text when the host knows; the diamond and "Automatic prompt" for `other`. Then the
+    age in meta style: when its turn began (`statusSince` when it started running, seen here). The
+    protocol doesn't date a prompt, so one first seen after its turn has no age.
+  - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
+    Disclosure motion (§5.3): the chevron turns and the text settles in, nothing below slides, and
+    it is instant under reduced motion. Open, it reads "Hide prompt" and shows all of it in reading
+    style inside a thin (2 px) agent-colour rule on the leading edge, not a filled card. A new
+    prompt starts collapsed; an update to the same one leaves it as the person left it.
+  - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the
+    same label as drawn (two labels an agent wrote apart but drawn alike are one),
+    the line says "Scheduled prompt · #4 · same as last time" and has no preview; Show prompt still
+    opens it. A session carries only its latest prompt, so the previous one is the one this view
+    saw: a new prompt is one whose words or sender changed, or, with the same words, a finished
+    turn more (`turnCount` while idle) than this view saw once that prompt had settled (been seen
+    idle, its own turn counted); turns that end before then are never put down to it. So a
+    schedule's repeat folds once its turn is done: while it runs it looks like a turn
+    no prompt started (Claude's for a delegate reporting back). A prompt seen for the first time
+    never folds, since a wrong "same as last time" would hide words that changed.
+  - **Its words are an agent's.** The label is cleaned as a delegate's name is (§6.3: nothing hidden
+    or steering, one line, no middle dot of its own, so it can't add a fact such as "same as last
+    time"), cut to 64 bytes at a whole character, and, unless it is a number, in quotes, so no label
+    reads as words of the line's own ("Scheduled prompt · “Main agent”").
+    The prompt's hidden and bidi characters are drawn as escapes (`\u202E`). All of it is text.
+  - **Accessibility:** the label line is read before the prompt. Show prompt is a real button,
+    toggled with Enter or Space, named for whose prompt it is, then its words: "Scheduled prompt 4,
+    Show prompt" or "Prompt sent by an agent, Show prompt", with `aria-expanded` saying collapsed or
+    expanded. The words shown stay in the name (WCAG 2.5.3), and the state is said once.
+  - **High contrast:** the agent role maps to a system colour, and the icon and the words carry
+    the meaning, never the colour alone.
+  - **Lists:** no row shows a prompt (§6.1), so a row is unchanged. Where a card shows the latest
+    prompt, one you didn't type is "Scheduled prompt · #4" or "Sent by an agent" in agent colour
+    with a one-line preview, never a quote of yours.
 - **Main agent:** a label line ("Main agent", then the age in meta style), then reading
   text. Reasoning is behind a "Show reasoning" disclosure, and is always the main agent's
   own. "Main agent" only where the host says whose the words are (`activity.source`, `own`
@@ -941,6 +984,8 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
     follows the word "Delegate", which the main agent's own lines never have.
   - "Needs you".
   - "End session" (not "Stop" for the whole session).
+  - A prompt you didn't type (§6.4): "Scheduled prompt · #4", "Sent by an agent", "Automatic
+    prompt", "same as last time", "Show prompt" and "Hide prompt". Never "your message".
 - **Attention words (#253):** "Needs you · N", "Showing N of M", "N on *machine*", "N more on
   other machines", "Nothing else needs you"; on a question, "Main agent asked", "You
   answered", "No longer waiting" and "Answer at the machine"; in Tools and the delegate

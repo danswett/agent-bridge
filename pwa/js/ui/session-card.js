@@ -10,7 +10,8 @@
 //
 // The view: a header (title; one meta line of glyph · status · machine · repository; Pin,
 // Details, and the inspector's toggle, or on a phone Back and an overflow menu), then the
-// conversation (your last message as a bubble, the main agent's label and reply with its
+// conversation (your last message as a bubble, or a prompt you didn't type as a collapsed line in
+// agent colour (#489), the main agent's label and reply with its
 // reasoning behind "Show reasoning", the question as a Needs you card) over the reply box; and
 // the inspector, with Details (everything the row leaves out, and End session) and Tools. The
 // inspector is a pane of its own at the three-pane width; below it, Tools is a tab beside
@@ -24,7 +25,7 @@
 //
 // Status is a glyph and the words of ui.md §2.2 (js/status.js): no coloured edge or glow (#178).
 import { h } from './dom.js';
-import { designIcon, glyph, setGlyph } from './glyph.js';
+import { designIcon, drivenBadge, glyph, setGlyph } from './glyph.js';
 import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { sessionStatus, statusLabel } from '../status.js';
@@ -39,6 +40,7 @@ import { backgroundCounts, delegateEvents, mainVoice } from '../attribution.js';
 import { delegateOf } from '../needs-you.js';
 import { enter, leave, scrollBehavior, slide, stopTravel } from './motion.js';
 import { UNSUPPORTED_SESSIONS } from '../brand.js';
+import { PromptMemory, disclosureName, promptOrigin } from '../prompt-origin.js';
 
 const AGENT_NAME = { copilot: 'Copilot', claude: 'Claude', codex: 'Codex', unknown: 'Agent' };
 // A tool call's glyph: running turns, as working does; a finished one is done or failed.
@@ -439,6 +441,12 @@ export class SessionCard {
   #delegate = null;
   // Whether the inspector was a pane of its own at the last layout.
   #wasInspector = false;
+  // A prompt the person didn't type (#489): what this view saw of the session's prompts, to fold
+  // a schedule's repeats and date them; whether Show prompt is open, and when the prompt shown
+  // began (null where unknown).
+  #prompts = new PromptMemory();
+  #promptOpen = false;
+  #promptAt = null;
 
   // hostId: the machine the session is on, which everything the view sends goes to.
   // fetchDetail(id) -> Promise<Session|null>, for the tool history (session.get).
@@ -453,7 +461,7 @@ export class SessionCard {
     Object.assign(this, { hostId, fetchDetail, fetchDelegate, machineName, labelled, answering, onSelect, onPin, onBack, layout, viewing });
     this.#stale = stale;
     const n = ++seq;
-    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate` };
+    this.ids = { row: `s${n}-row`, glyph: `s${n}-glyph`, unread: `s${n}-unread`, title: `s${n}-title`, conversation: `s${n}-conversation`, tools: `s${n}-tools`, details: `s${n}-details`, tabC: `s${n}-tab-c`, tabD: `s${n}-tab-d`, tabT: `s${n}-tab-t`, delegates: `s${n}-delegates`, delegate: `s${n}-delegate`, prompt: `s${n}-prompt` };
     this.#buildRow();
     this.#buildView();
     this.update(session);
@@ -526,6 +534,21 @@ export class SessionCard {
     // The conversation (ui.md §6.4): one voice per line, the main agent's.
     e.userText = h('p', { class: 'plain' });
     e.user = h('div', { class: 'user-message', hidden: true }, h('span', { class: 'sr-only' }, 'Your last message: '), h('div', { class: 'bubble' }, e.userText));
+    // A prompt the person didn't type (#489, §6.4): never a bubble. At the column's start, a label
+    // line in agent colour (a clock for a schedule, the driven diamond for an agent), read before
+    // the prompt; then two lines of it, and Show prompt for the rest, inside an agent rule.
+    e.promptIcon = h('span', { class: 'prompt-icon' });
+    e.promptFacts = h('span', { class: 'prompt-facts' });
+    e.promptBy = h('span', { class: 'prompt-by', hidden: true });
+    e.promptAge = h('time', { class: 'prompt-age' });
+    e.promptLabel = h('p', { class: 'prompt-label' }, e.promptIcon, e.promptFacts, e.promptBy, e.promptAge);
+    e.promptPreview = h('p', { class: 'prompt-preview' });
+    e.promptToggleText = h('span', null, 'Show prompt');
+    e.promptToggle = h('button', { type: 'button', class: 'prompt-toggle', 'aria-expanded': 'false', 'aria-controls': this.ids.prompt, onclick: () => this.#setPromptOpen(!this.#promptOpen) },
+      designIcon('chevron', { size: 16, cls: 'prompt-chevron' }), e.promptToggleText);
+    e.promptText = h('p', { class: 'plain' });
+    e.promptFull = h('div', { class: 'prompt-full', id: this.ids.prompt, hidden: true }, e.promptText);
+    e.prompt = h('div', { class: 'prompt-origin', hidden: true }, e.promptLabel, e.promptPreview, e.promptToggle, e.promptFull);
     e.agentAge = h('time', { class: 'speaker-age' });
     // "Main agent" where the host says whose words these are (attribution.js); a host that doesn't
     // may have a delegate's here, so they are only the agent's, by its name.
@@ -548,7 +571,7 @@ export class SessionCard {
     e.agentBlock = h('div', { class: 'agent-block' }, e.speaker, e.reasoning, e.truncated, e.dropped, e.response, e.events, e.tool);
     e.question = h('div', { class: 'question-slot' });
     this.#guardQuestion(e.question);
-    e.stream = h('div', { class: 'stream' }, e.user, e.agentBlock, e.question);
+    e.stream = h('div', { class: 'stream' }, e.user, e.prompt, e.agentBlock, e.question);
     e.reply = h('div', { class: 'reply-slot' });
     e.scroll = h('div', { class: 'stream-scroll' }, e.stream);
     this.#watchHold(e.scroll);
@@ -703,8 +726,10 @@ export class SessionCard {
     const echoed = (s.activity.userMessage ?? '') !== e.userText.textContent;
     e.user.hidden = !s.activity.userMessage;
     e.userText.textContent = s.activity.userMessage ?? '';
-    // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place.
-    if (!first && echoed && s.activity.userMessage) { enter(e.user, 'acknowledge', { dy: 1 }); }
+    this.#renderPrompt(s);
+    // Send acknowledged (ui.md §5.3): your message, back from the machine, rises into place; a
+    // prompt you didn't type is no bubble of yours and never rises.
+    if (!first && echoed && !e.user.hidden) { enter(e.user, 'acknowledge', { dy: 1 }); }
 
     if (this.#changed('facts', [s.agent, s.model, s.repository, s.branch, s.cwd, this.machineName, s.startedAt, s.activity.turnCount, s.activity.compactions, s.activity.background, s.processId])) {
       this.#renderFacts(s);
@@ -809,6 +834,54 @@ export class SessionCard {
     if (!this.#reply) { return; }
     if (!this.layout().inspector) { this.setTab('conversation'); }
     this.#reply.prefill(text);
+  }
+
+  // The session's latest prompt, when the person didn't type it (#489, ui.md §6.4): in place of
+  // the bubble, its label line, two lines of it and Show prompt. Every word of an agent's is
+  // text (prompt-origin.js has cleaned the label and escaped what hides).
+  #renderPrompt(s) {
+    const e = this.els;
+    const seen = this.#prompts.observe(s);
+    // A new prompt starts collapsed; an update to the same one keeps it as the person left it.
+    if (seen.fresh) { this.#promptOpen = false; }
+    this.#promptAt = seen.at;
+    const origin = promptOrigin(s, { repeat: seen.repeat });
+    e.prompt.hidden = !origin;
+    if (!origin) { return; }
+    e.user.hidden = true;
+    e.userText.textContent = '';
+    e.prompt.dataset.from = origin.from;
+    e.prompt.toggleAttribute('data-repeat', origin.repeat);
+    if (this.#changed('promptLabel', [origin.icon, origin.facts, origin.by])) {
+      e.promptIcon.replaceChildren(origin.icon === 'clock' ? designIcon('clock', { size: 16 }) : drivenBadge());
+      setFacts(e.promptFacts, origin.facts);
+      e.promptBy.textContent = origin.by ?? '';
+      e.promptBy.hidden = !origin.by;
+    }
+    // A repeat says so instead: its words are the same as the last, which the person has seen.
+    e.promptPreview.textContent = origin.repeat ? '' : origin.preview;
+    e.promptPreview.hidden = origin.repeat;
+    e.promptText.textContent = origin.text;
+    e.promptAge.hidden = !this.#promptAt;
+    if (this.#promptAt) {
+      e.promptAge.dateTime = this.#promptAt;
+      e.promptAge.title = localTime(this.#promptAt);
+      e.promptAge.textContent = ago(this.#promptAt);
+    }
+    this.#setPromptOpen(this.#promptOpen);
+  }
+
+  // Show prompt (ui.md §6.4, §9): a real button, named for the prompt and its state. Its space
+  // opens and closes at once; app.css turns the chevron and settles the text in (Disclosure).
+  #setPromptOpen(open) {
+    const e = this.els;
+    this.#promptOpen = open;
+    const origin = promptOrigin(this.#s);
+    e.promptFull.hidden = !open;
+    e.prompt.toggleAttribute('data-open', open);
+    e.promptToggle.setAttribute('aria-expanded', String(open));
+    e.promptToggleText.textContent = open ? 'Hide prompt' : 'Show prompt';
+    if (origin) { e.promptToggle.setAttribute('aria-label', disclosureName(origin, open)); }
   }
 
   // Details (ui.md §6.2): everything the row leaves out, as a property list.
@@ -1372,6 +1445,7 @@ export class SessionCard {
     }
     e.rowAge.textContent = ago(s.updatedAt, now);
     e.agentAge.textContent = ago(mainVoice(s).at ?? s.updatedAt, now);
+    if (this.#promptAt) { e.promptAge.textContent = ago(this.#promptAt, now); }
     this.delegates.refreshTimes(now);
     this.strip.refreshTimes(now);
     this.detail.refreshTimes(now);

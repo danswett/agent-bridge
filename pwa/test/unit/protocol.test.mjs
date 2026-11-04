@@ -63,6 +63,24 @@ test('sub-agents are read tolerantly: unknown kinds are tasks, unknown statuses 
   assert.deepEqual([none.subagents, none.subagentsMore, none.waitingOn, none.question.agent], [null, 0, null, null]);
 });
 
+test('a prompt is the person\'s when the host doesn\'t say who sent it, and a sender this client doesn\'t know is still not theirs', () => {
+  const from = (v) => readSession({ id: 'x', activity: { userMessage: 'hi', userMessageFrom: v, userMessageLabel: '4' } }).activity.userMessageFrom;
+  // An older host sends no userMessageFrom at all (#489).
+  assert.equal(readSession({ id: 'x', activity: { userMessage: 'hi' } }).activity.userMessageFrom, 'person');
+  assert.deepEqual([from('person'), from('schedule'), from('agent'), from('other')], ['person', 'schedule', 'agent', 'other']);
+  assert.deepEqual([from(undefined), from(null)], ['person', 'person']);
+  // Text this client doesn't know, empty text too, is still a sender that isn't the person.
+  assert.deepEqual([from(''), from('cron')], ['other', 'other']);
+  // A sender that isn't text is refused with the whole activity, as the host's reader does
+  // (v1-sessions.md, strict): the session keeps an empty one, so no prompt shows, never as theirs.
+  for (const v of [4, true, {}, ['schedule']]) {
+    const a = readSession({ id: 'x', activity: { userMessage: 'hi', userMessageFrom: v, response: 'Done.', turnCount: 3 } }).activity;
+    assert.deepEqual([a.userMessage, a.response, a.turnCount, a.userMessageFrom], [null, null, null, 'person'], JSON.stringify(v));
+  }
+  assert.equal(readSession({ id: 'x', activity: { userMessageLabel: 4 } }).activity.userMessageLabel, null);
+  assert.equal(readSession({ id: 'x', activity: { userMessageLabel: '4' } }).activity.userMessageLabel, '4');
+});
+
 test('a session is the person\'s unless the host says an agent drives it, and only then has a principal', () => {
   // An older host sends no driver at all.
   assert.deepEqual([readSession({ id: 'x' }).driver, readSession({ id: 'x' }).driverPrincipal], ['person', null]);
