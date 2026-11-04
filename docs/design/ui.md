@@ -1053,6 +1053,99 @@ never its text. A card with it shows "Driven by an external agent · @*login*" o
 sessions and one line, "Collaborators' sessions: in the Slipgates app". No card approves a held
 message.
 
+### 6.11 Settings › Agents: one readiness state per agent (#783)
+
+Decided by the owner on 2026-11-04 (D1–D7, each option A). This builds on #705, which adds
+per-row names and one verb per state. It refines how Settings (§6.9, #384) draws the agents on
+this machine and the host. The check rows of Readiness (§6.8, #384) are unchanged. Until #384's
+sections land, this section applies to the Windows app's current Settings page.
+
+Today each agent is about eight lines of equal weight with no mark, and every card carries Set
+up / Repair and Remove connection. You can't tell whether anything is needed. Now each agent has
+**one state, one mark, one headline and at most one verb**, and everything else is in Details.
+
+**The roll-up state** (D1, D2). Each installed agent's card shows exactly one of these:
+
+| State | Mark (§2.1) | Headline | Verb |
+|---|---|---|---|
+| Ready | `done` in `ready` | "Ready · last hook 3:01 PM" (or "· test session passed 3:01 PM") | None |
+| Not tested yet | `idle`, Neutral | "Set up · not tested yet" | **Test session** (#716). Until it ships: no button, and the hint "Start a session in it to confirm" |
+| Not set up | `needs` | "Not set up" | **Set up** |
+| Needs repair | `failed`, Danger | Names what failed ("Hooks changed outside Slipgates") | **Repair hooks** |
+| Managed elsewhere | `failed`, Danger | Names the owner ("Hooks managed by policy") | None |
+| Setting up (while it runs) | `working`, Active | "Setting up…" | Hidden while it runs |
+| Not installed | None | One quiet line in text3: "*Agent* · not installed" (D7) | None |
+
+- **Ready needs evidence** (D2), the same rule as §6.8's Working. An agent is Ready when either:
+  - a hook from that agent was handled by the host's current run after the agent's last Set up
+    or Repair; or
+  - a test session passed (#716).
+
+  Agency shares Copilot CLI's hooks, so its hooks prove nothing about Agency. Agency is Ready
+  only from a passed test session.
+- **The other states also need evidence.** A bridge setup record with nothing heard yet is Not
+  tested yet, never Needs repair, so a healthy machine never shows Repair on its rows. No setup
+  record is Not set up. Repair is offered only when the host reports the hooks failed or changed.
+- **Sign-in and trust** are never shown as checked until the host can observe them. They stay
+  neutral rows in Details and don't affect the roll-up.
+
+**The `ready` colour** (D1; partly amends #384 decision 1, "No success colour"). There is one
+green role, `ready`:
+- dark #3FB950, with words in #56D364;
+- light #1A7F37;
+- WindowText in high contrast.
+
+It colours only the roll-up mark of each agent and of the host (Running). It is never used on
+a check row, a count, a badge or a notification. It is always beside its word ("Ready",
+"Running"), never colour alone. Check rows in Details keep §6.8's neutral Working. The role
+joins `tokens.json` with the implementation, measured like the other roles (§3).
+
+**The card.**
+- The first line is the mark, the agent's name and the headline, and the verb on the right if
+  there is one.
+- **Details** (§5.3; D4) is collapsed when the agent is Ready and open otherwise. It holds:
+  - the executable's path and version (the version shown once);
+  - the agent's home;
+  - the neutral check rows (hooks, sign-in, trust, last hook);
+  - **Test session**, when Ready (as a secondary button);
+  - at its foot, **Remove bridge integration…** (D5).
+- **Remove bridge integration…** is a subtle button in Danger's text colour. It asks for
+  confirmation, naming the agent and saying what stays (the CLI, its sign-in and its sessions).
+  Cancel is the default. "Remove connection" is no longer on the card.
+- No verb is drawn disabled: a verb that doesn't apply is hidden.
+
+**The host** (D6) is a card spanning the full width above the agents:
+
+| State | Mark | Verbs |
+|---|---|---|
+| Running | `done` in `ready`, "Running · since 2:58 PM" | **Restart**, **Stop…** |
+| Stopped | `idle`, Neutral, "Stopped" | **Start** |
+| Starting or stopping | `working`, Active | Hidden while it runs |
+
+- **Stop…** asks for confirmation (sessions on this machine stop reporting). Cancel is the default.
+- The process id, the version and the profile move into the host card's Details.
+
+**Reflow** (D3). The page fills its window, and isn't a fixed column:
+
+| Window width | Layout |
+|---|---|
+| ≥ 1280 | Settings' section pane (240) and the page: the host card spanning the full width, then agent cards in a grid of up to three columns, each at least 340 wide (three at 2000, two at 1280) |
+| 760–1279 | Section pane (208) and the page: the grid falls to two columns, then one |
+| < 760 | The sections as a pivot at the top; one column |
+
+- The grid gap is 16 (§5.1).
+- Prose inside a card keeps to about 75 characters a line.
+- Cards in a row share a height only up to their first line; an open Details grows its own card.
+
+**Accessibility** (§9.1).
+- Each card is a group named "*Agent*, *state*, *headline*" (for example "Copilot CLI, Ready, last
+  hook 3:01 PM").
+- Each button names its agent ("Set up Claude Code", "Test session, Agency", "Remove bridge
+  integration, Codex").
+- Details is a button with `aria-expanded` (UIA ExpandCollapse).
+- A state change is a polite per-row announcement ("Claude Code, Ready"), never an alert.
+- Every confirmation's default is Cancel.
+
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
