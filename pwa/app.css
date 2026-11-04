@@ -1200,11 +1200,29 @@ summary {
   content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%;
   border: 2px solid var(--ab-bridge); border-right-color: transparent; animation: spin 1s linear infinite;
 }
-.answer-status.progress, .answer-receipt.progress { color: var(--ab-bridge); }
+/* The receipt (ui.md §6.5, #600, #617): in-flight words in text2 beside the Bridge ring, so
+   Delivered, in Bridge with its check badge, stands out as the one good outcome. A request held
+   on this device for a machine that isn't connected has its ring still, in text3: nothing moves. */
+.answer-status.progress, .answer-receipt.progress { color: var(--ab-text2); }
+.answer-status.held::before, .answer-receipt.held::before { border-color: var(--ab-text3); border-right-color: transparent; animation: none; }
 .answer-status.ok, .answer-receipt.ok { color: var(--ab-bridge); }
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
+/* Its first 400 ms say nothing (Send's ring covers them), and keep the line's height, so the
+   words that follow don't move what is below. */
+.answer-status.quiet:empty { display: flex; visibility: hidden; min-height: 1.4em; }
+.receipt-badge { width: 14px; height: 14px; flex: none; color: var(--ab-bridge); }
+/* You answered · value: the value in text2. */
+.answer-status.ok .receipt-more, .answer-receipt.ok .receipt-more { color: var(--ab-text2); }
+@media (forced-colors: active) {
+  /* Words say every state, so they are all CanvasText; the ring and the badge are Highlight, the
+     check knocked out to Canvas, and a still ring GrayText, so a held request never looks active. */
+  .answer-status.progress, .answer-receipt.progress, .answer-status.ok, .answer-receipt.ok { color: CanvasText; }
+  .answer-status.progress::before, .answer-receipt.progress::before { forced-color-adjust: none; border-color: Highlight; border-right-color: transparent; }
+  .answer-status.held::before, .answer-receipt.held::before { border-color: GrayText; border-right-color: transparent; }
+  .receipt-badge { forced-color-adjust: none; color: Highlight; --ab-glyph-knockout: Canvas; }
+}
 .question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {

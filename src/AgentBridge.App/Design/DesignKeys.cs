@@ -97,6 +97,7 @@ static class DesignKeys
 
     public static readonly string[] Glyphs =
     [
+        "AbGlyphCheck",
         "AbGlyphDelegating",
         "AbGlyphDone",
         "AbGlyphDrivenBadge",

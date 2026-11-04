@@ -74,7 +74,7 @@ test.describe('on a phone', () => {
     // Delivered: the host's upsert takes the question away, and the card says what happened.
     await expect(q).toHaveCount(0);
     const receipt = card(page, CODEX).locator('.answer-receipt');
-    await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
+    await expect(receipt).toHaveText('You answered · SQLite');
     await expect(receipt).toHaveAttribute('data-answer', 'delivered');
     const [sent] = await log(page);
     expect(sent).toEqual({ id: CODEX, question: 'q-choice', request: expect.stringMatching(UUID), fields: { answer: 'sqlite' }, progress: true });
@@ -82,19 +82,20 @@ test.describe('on a phone', () => {
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
   });
 
-  test('an answer shows Sent, then Typed once the question has gone, then Delivered, where the machine says (#600)', async ({ page }) => {
+  test('an answer shows Sent, then Passed to the agent once the question has gone, then You answered with its value, where the machine says (#600)', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, choice());
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.holdBefore('typing'); h.holdBefore('result'); });
     await q.locator('.choice[data-value="pg"]').tap();
-    await expect(q.locator('.answer-status')).toHaveText('Sent. The machine is typing it…');
+    await expect(q.locator('.answer-status')).toHaveText('Sent');
     await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('typing'));
     // Typed: the host's upsert takes the question away, and the card says how far the answer has got.
     await expect(q).toHaveCount(0);
     const receipt = card(page, CODEX).locator('.answer-receipt');
-    await expect(receipt).toHaveText('Your answer: Typed. Waiting for the session to take it…');
+    await expect(receipt).toHaveText('Your answer: Passed to the agent');
     await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
-    await expect(receipt).toHaveText('Your answer: Delivered. The session has your answer.');
+    await expect(receipt).toHaveText('You answered · PostgreSQL (Recommended)');
+    await expect(receipt.locator('svg.receipt-badge use')).toHaveAttribute('href', 'design/sprite.svg#glyph-check');
     const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
     expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
@@ -225,7 +226,8 @@ test.describe('on a phone', () => {
     await expect(q.locator('.field[data-field="urgent"] .toggle[aria-pressed="true"]')).toHaveText('No');
     await expect(q.locator('.field')).toHaveCount(5);
     await q.getByRole('button', { name: 'Send answer' }).tap();
-    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
+    // A form of several fields has no one value to say.
+    await expect(card(page, COPILOT).locator('.answer-receipt')).toHaveText('You answered');
     expect((await log(page))[0].fields).toEqual({ plan: 'go', urgent: false });
   });
 
@@ -385,8 +387,8 @@ test.describe('outcomes', () => {
     await script(page, { outcome: 'delivered', drop: true });
     const q = await ask(page, choice());
     await q.locator('.choice[data-value="pg"]').click();
-    await expect(q.locator('.answer-status')).toHaveText(/Sending|Sent\. The machine is typing it|Typed\. |Waiting for the connection/);
-    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 10000 });
+    await expect(q).toHaveAttribute('data-answer', /^(sending|waiting)$/);
+    await expect(card(page, CODEX).locator('.answer-receipt')).toHaveText('You answered · PostgreSQL (Recommended)', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);

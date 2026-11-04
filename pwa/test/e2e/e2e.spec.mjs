@@ -215,7 +215,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await open(page, 'ask-1');
   await expect(q1.locator('.choice[data-value]').first()).toHaveText('B (Recommended)');
   await q1.locator('.choice[data-value="a"]').click();
-  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 15000 });
+  await expect(card(page, 'ask-1').locator('.answer-receipt')).toHaveText('You answered · A', { timeout: 15000 });
   await expect(q1).toHaveCount(0);
   expect(sentFor('ask-1')).toEqual([{ id: 'ask-1', question: 'q1', request: expect.stringMatching(UUID), fields: { answer: 'a' } }]);
   expect(typedFor('ask-1')).toHaveLength(1);
@@ -230,7 +230,7 @@ test('a phone answers a question through the relay, and an answer in flight when
   await q2.locator('.choice[data-value="b"]').click();
   await expect.poll(() => sentFor('ask-2').length, { timeout: 10000 }).toBe(1);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.', { timeout: 30000 });
+  await expect(card(page, 'ask-2').locator('.answer-receipt')).toHaveText('You answered · B (Recommended)', { timeout: 30000 });
   const sent = sentFor('ask-2');
   expect(sent).toHaveLength(2);
   expect(sent[1].request).toBe(sent[0].request);
@@ -264,7 +264,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await expect(input).toBeEnabled({ timeout: 30000 });
   await input.fill('Ship it.\nThen tag v0.2 – 🚀');
   await reply.getByRole('button', { name: 'Send' }).click();
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 15000 });
+  await expect(reply.locator('.reply-status')).toHaveText('Delivered', { timeout: 15000 });
   await expect(input).toHaveValue('');
   expect(sentFor('reply-1')).toEqual([{ id: 'reply-1', request: expect.stringMatching(UUID), text: 'Ship it.\nThen tag v0.2 – 🚀' }]);
   expect(typedFor('reply-1').map((r) => r.said)).toEqual(['Ship it. Then tag v0.2 – 🚀']);
@@ -277,7 +277,7 @@ test('a phone replies to a session through the relay, and a reply in flight when
   await reply.getByRole('button', { name: 'Send' }).click();
   await expect.poll(() => sentFor('reply-1').length, { timeout: 10000 }).toBe(2);
   for (const ws of sockets.splice(0)) { await ws.close({ code: 4000, reason: 'test drop' }); }
-  await expect(reply.locator('.reply-status')).toHaveText('Delivered. The session has your reply.', { timeout: 30000 });
+  await expect(reply.locator('.reply-status')).toHaveText('Delivered', { timeout: 30000 });
   const sent = sentFor('reply-1');
   expect(sent).toHaveLength(3);
   expect(sent[2].request).toBe(sent[1].request);
