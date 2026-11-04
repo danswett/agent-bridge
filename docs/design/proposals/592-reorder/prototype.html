@@ -169,9 +169,9 @@ button { font: inherit; color: inherit; }
 
 .rm .slot.lifted .face { transform: none; box-shadow: none; outline: 2px solid var(--bridge); outline-offset: -2px; background: var(--card); }
 .rm .slot.sinking .face { transform: none; }
-.hc .slot.lifted .face, .hc .slot.sel .face { box-shadow: none; outline: 2px solid var(--hl); outline-offset: -2px; transform: scale(var(--lift-scale)); }
+.hc .slot.lifted .face, .hc .slot.sel .face { box-shadow: none; outline: 2px solid var(--hl); outline-offset: -2px; }
+.hc .slot.lifted .face { transform: scale(var(--lift-scale)); }
 .rm.hc .slot.lifted .face { transform: none; }
-.hc .slot.sel .face { transform: none; }
 .hc .slot.sel .face::before { background: var(--hl); }
 .hc .chip { background: transparent; outline: 1px solid var(--hl); color: var(--text); }
 
@@ -537,6 +537,7 @@ $('#haptic').addEventListener('change', (e) => { cfg.haptic = e.target.checked; 
 mqReduce.addEventListener?.('change', applyCfg);
 $('#theme').addEventListener('click', () => { cfg.theme = cfg.theme === 'dark' ? 'light' : 'dark'; applyCfg(); });
 $('#reset').addEventListener('click', () => {
+  cancelDrag(true);
   Object.assign(cfg, DEFAULTS); applyCfg(); measure(); relayout(true);
   try { localStorage.removeItem(HINT_SEEN); } catch { /* storage blocked */ }
 });
@@ -585,6 +586,7 @@ function showToast(text) {
 // ---- Gesture --------------------------------------------------------------------------
 let g = null;           // the gesture in progress
 let suppressClick = false;   // swallows the click that ends a lift, a hold or a grip tap
+let lastPointer = '';   // the type of the latest press, for events that don't carry one
 let rehit = null;       // the card a press during the settle resolved to; its click goes there
 
 // The card whose committed place is under a point, and whether the point is on its grip (the
@@ -731,9 +733,14 @@ document.addEventListener('contextmenu', (e) => {
   const hit = rehit && content.contains(e.target) ? rehit : null;
   rehit = null;
   const li = hit ? hit.li : e.target.closest && e.target.closest('.slot');
-  if (g || (li && (e.pointerType === 'touch' || matchMedia('(pointer: coarse)').matches))) { e.preventDefault(); return; }
+  // Touch is judged from the gesture: a touch-first device with a mouse attached still reports
+  // (pointer: coarse), and its right-click must open the menu. The query is only a last resort.
+  const type = e.pointerType || lastPointer;
+  const touch = type ? type === 'touch' : matchMedia('(pointer: coarse)').matches;
+  if (g || (li && touch)) { e.preventDefault(); return; }
   if (li) { e.preventDefault(); openMenu(li.dataset.key, e.clientX, e.clientY); }
 });
+document.addEventListener('pointerdown', (e) => { lastPointer = e.pointerType; }, true);
 content.addEventListener('dragstart', (e) => e.preventDefault());
 content.addEventListener('click', (e) => {
   if (suppressClick) { suppressClick = false; rehit = null; e.preventDefault(); e.stopPropagation(); return; }
@@ -807,7 +814,14 @@ function endSession(key) {
   }
   // Ends queued during the drag leave with the held card, in the same relayout, so its gap
   // still closes with reorder rather than being snapped by their instant ones.
-  for (const k of [key, ...deferred]) {
+  removeKeys([key, ...deferred]);
+  syncDom();
+  relayout(!held);
+  if (held) say(`${title} ended. Move cancelled.`);
+}
+
+function removeKeys(keys) {
+  for (const k of keys) {
     if (!items[k]) continue;
     const el = els.get(k);
     order = order.filter((x) => x !== k);
@@ -817,9 +831,6 @@ function endSession(key) {
     setTimeout(() => el.remove(), 120);
   }
   if (selected && !items[selected]) selected = order[0];
-  syncDom();
-  relayout(!held);
-  if (held) say(`${title} ended. Move cancelled.`);
 }
 
 function placeSocket(instant) {
@@ -926,6 +937,10 @@ function drop(cancel) {
       items[g.key].pinned = g.candidate.gid === 'pinned';
     } else order = gs[0].keys;
   }
+  // Sessions that ended during the drag leave now, before the target is measured, so the card
+  // settles where it stays instead of jumping again when they go.
+  removeKeys(g.deferred || []);
+  g.deferred = [];
   // The settle aims at the final layout: an emptied Pinned closes, and its header and the drag's
   // placeholders go, so the card and its neighbours arrive where they stay.
   headersShown = anyPinned();
@@ -947,7 +962,6 @@ function drop(cancel) {
 }
 
 function finish(cancelled, holdOnly, p, moved) {
-  const deferred = g.deferred || [];
   const li = g.li, key = g.key, cand = g.candidate, origin = g.origin;
   li.style.transition = 'none';
   li.classList.remove('settling');
@@ -962,7 +976,6 @@ function finish(cancelled, holdOnly, p, moved) {
   document.body.classList.remove('dragging');
   relayout(false);
   if (focused && focused !== document.activeElement && document.contains(focused)) focused.focus({ preventScroll: true });
-  for (const k of deferred) endSession(k);
   if (holdOnly) { openMenu(key); return; }
   const at = locate(groupsNow(), key, headersShown);
   if (cancelled || !moved) say(`${cancelled ? 'Cancelled. ' : ''}Back at position ${at.i + 1} of ${at.n}.`);
