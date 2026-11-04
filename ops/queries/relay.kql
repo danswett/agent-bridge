@@ -1,0 +1,130 @@
+// Saved queries for the relay's Log Analytics workspace (log-agent-bridge-relay-wus2).
+//
+// The Container Apps environment sends console output to the workspace's
+// ContainerAppConsoleLogs_CL table (infra/main.bicep, appLogsConfiguration). With
+// Logging__Console__FormatterName=json, each relay line is one JSON object in Log_s:
+//   {"EventId":0,"LogLevel":"Information","Category":"AgentBridge.Relay.RelayHub",
+//    "Message":"connect 1a2b3c4d host; 2 online in account",
+//    "State":{"Conn":"1a2b3c4d","Kind":"host","Count":2,"{OriginalFormat}":"connect {Conn} {Kind}; ..."}}
+// The relay logs no identity (design §5.10): Conn is a random per-socket tag. Keep it that way;
+// none of these queries needs one.
+//
+// Each query starts with a "// ==== <id>:" line. ops/alerts.md names the ids its log alerts use.
+// Run one by pasting it into the workspace's Logs blade, or:
+//   az monitor log-analytics query -w <workspace id> --analytics-query "<query>"
+// Times are UTC in the workspace; the portal shows local time.
+
+// ==== relay-lines: every relay line, parsed (the base the others repeat inline)
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "agent-bridge-relay"
+| extend j = parse_json(Log_s)
+| project TimeGenerated, RevisionName_s, Level = tostring(j.LogLevel), Category = tostring(j.Category),
+          Template = tostring(j.State["{OriginalFormat}"]), Message = tostring(j.Message), State = j.State
+| order by TimeGenerated desc
+
+// ==== warnings: warnings and errors by category and message template, last 24 h
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(24h) and ContainerAppName_s == "agent-bridge-relay"
+| extend j = parse_json(Log_s)
+| extend Level = tostring(j.LogLevel)
+| where Level in ("Warning", "Error", "Critical")
+| summarize Count = count(), Last = max(TimeGenerated) by Level, Category = tostring(j.Category), Template = tostring(j.State["{OriginalFormat}"])
+| order by Count desc
+
+// ==== connections: connects by device kind and disconnects by how they ended, per 5 min
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(24h) and ContainerAppName_s == "agent-bridge-relay"
+| extend j = parse_json(Log_s)
+| extend Template = tostring(j.State["{OriginalFormat}"])
+| where Template startswith "connect " or Template startswith "disconnect "
+| extend Series = iff(Template startswith "connect ", strcat("connect ", tostring(j.State.Kind)), strcat("disconnect ", tostring(j.State.End)))
+| summarize Count = count() by bin(TimeGenerated, 5m), Series
+| render timechart
+
+// ==== reconnect-storm: per-minute disconnects against the previous hour's median (A-STORM)
+// A deploy disconnects everyone once (1012); that minute alone is expected. Several minutes in a
+// row at many times the baseline, outside a deploy, is a storm.
+let window = 1h;
+let counts = ContainerAppConsoleLogs_CL
+    | where TimeGenerated > ago(window + 10m) and ContainerAppName_s == "agent-bridge-relay"
+    | where Log_s contains "\"disconnect "
+    | summarize Disconnects = count() by Minute = bin(TimeGenerated, 1m);
+// Every minute of the window, quiet ones included: a median over only the active minutes would
+// make one deploy minute the baseline, and hide a real storm under it.
+let disconnects = range Minute from bin(ago(window + 10m), 1m) to bin(now(), 1m) step 1m
+    | join kind=leftouter counts on Minute
+    | project Minute, Disconnects = coalesce(Disconnects, 0);
+let baseline = toscalar(disconnects | where Minute <= ago(10m) | summarize percentile(Disconnects, 50));
+disconnects
+| where Minute > ago(10m)
+| extend Baseline = baseline, Ratio = todouble(Disconnects) / max_of(todouble(baseline), 1.0)
+| order by Minute desc
+
+// ==== session-lengths: how long sockets last, by how they ended (short ones mean a client loop)
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(24h) and ContainerAppName_s == "agent-bridge-relay"
+| where Log_s contains "\"disconnect "
+| extend j = parse_json(Log_s)
+| summarize Count = count(), p50 = percentile(todouble(j.State.Seconds), 50), p90 = percentile(todouble(j.State.Seconds), 90),
+            Under10s = countif(todouble(j.State.Seconds) < 10) by End = tostring(j.State.End)
+
+// ==== dependencies: roster, blob store and push failures per 15 min (A-ROSTER, A-BLOB, A-PUSH)
+// The roster logs only failures, so its FailedPct is always 100; read its Failed count.
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(24h) and ContainerAppName_s == "agent-bridge-relay"
+| extend j = parse_json(Log_s)
+| extend Template = tostring(j.State["{OriginalFormat}"])
+| where Template startswith "roster " or Template startswith "blob " or Template startswith "push to "
+| extend Dependency = tostring(split(Template, " ")[0]),
+         Failed = Template has "failed" or (Template startswith "push to " and toint(j.State.Status) >= 500)
+| summarize Total = count(), Failed = countif(Failed) by bin(TimeGenerated, 15m), Dependency
+| extend FailedPct = round(100.0 * Failed / Total, 1)
+| order by TimeGenerated desc
+
+// ==== push-outcomes: push service answers by status (410 means a subscription is gone; hosts drop it)
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(7d) and ContainerAppName_s == "agent-bridge-relay"
+| where Log_s contains "\"push to "
+| extend j = parse_json(Log_s)
+| summarize Count = count() by Day = bin(TimeGenerated, 1d), Status = tostring(j.State.Status), Host = tostring(j.State.Host)
+| order by Day desc, Count desc
+
+// ==== signins: completed device-flow sign-ins per hour
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(7d) and ContainerAppName_s == "agent-bridge-relay"
+| where Log_s contains "sign-in completed"
+| summarize SignIns = count() by bin(TimeGenerated, 1h)
+| render columnchart
+
+// ==== revisions: revision lifecycle, restarts, probe failures and OOM kills from the platform (A-RESTART)
+ContainerAppSystemLogs_CL
+| where TimeGenerated > ago(7d) and ContainerAppName_s == "agent-bridge-relay"
+| project TimeGenerated, RevisionName_s, Reason_s, Type_s, Log_s
+| order by TimeGenerated desc
+
+// ==== deploys: when each revision first and last logged (the version is in /healthz and the deploy summary, not the logs)
+ContainerAppConsoleLogs_CL
+| where TimeGenerated > ago(30d) and ContainerAppName_s == "agent-bridge-relay"
+| summarize First = min(TimeGenerated), Last = max(TimeGenerated), Lines = count() by RevisionName_s
+| order by First desc
+
+// ==== ingestion: ingestion in the current quota period against the 0.1 GB daily cap (A-LOGCAP)
+// The cap resets at a workspace-specific hour (Usage and estimated costs > Daily cap), not
+// necessarily midnight UTC. Set resetHourUtc to it. The cap is shared by every table, so the
+// percentage is of the workspace's total; the rows break that total down by table.
+let resetHourUtc = 0;
+let todayReset = startofday(now()) + resetHourUtc * 1h;
+let periodStart = iff(now() >= todayReset, todayReset, todayReset - 1d);
+let capMB = 100.0;
+Usage
+| where TimeGenerated >= periodStart and IsBillable == true
+| summarize MB = round(sum(Quantity), 2) by DataType
+| extend TotalMB = toscalar(Usage | where TimeGenerated >= periodStart and IsBillable == true | summarize sum(Quantity))
+| extend WorkspaceCapPct = round(100.0 * TotalMB / capMB, 1), ShareOfTotalPct = round(100.0 * MB / TotalMB, 1)
+| order by MB desc
+
+// ==== cap-hit: the workspace stopped collecting because the daily cap was reached (A-LOGCAP)
+_LogOperation
+| where TimeGenerated > ago(7d) and Category == "Ingestion"
+| where Detail has "OverQuota" or Operation has "Data collection"
+| project TimeGenerated, Operation, Level, Detail

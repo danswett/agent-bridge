@@ -1,0 +1,76 @@
+# Alert catalog
+
+*Part of the [SRE plan](plan.md) §5. Severities and routing are in plan §5.1.*
+
+Every alert has an id, a runbook and an issue that builds it. **None is live yet** (2026-11-03):
+`infra/` defines no alert rules or action groups. The Status column moves to "Live" in the PR
+that deploys each one. Thresholds are first estimates for one 0.25 vCPU / 0.5 GiB replica,
+with tens of devices. Revisit them after two weeks of data, and when capacity changes (CAP-1).
+
+Signals: **AT** = Application Insights availability test; **CA** = Container Apps platform
+metric; **LA** = Log Analytics query ([queries/relay.kql](queries/relay.kql)); **M** = relay
+metric (OBS-1); **AL** = activity log; **B** = budget.
+
+## Production relay
+
+| Id | Sev | Signal | Fires when | Runbook | Issue | Status |
+|---|---|---|---|---|---|---|
+| A-AVAIL | 1 | AT | `/healthz` on `relay.bad-duck.com` fails from ≥ 3 of 5 locations for 10 min | [relay-unavailable](runbooks/relay-unavailable.md) | #573 | Planned |
+| A-AVAIL-ORIGIN | 2 | AT | `/healthz` on the `azurecontainerapps.io` name fails from ≥ 3 of 5 for 10 min. With A-AVAIL green, read it as a test fault; with A-AVAIL red too, the app is down | [relay-unavailable](runbooks/relay-unavailable.md) | #573 | Planned |
+| A-READY | 2 | AT | `/readyz` 503 for 10 min (stuck draining: new sockets refused) | [relay-unavailable](runbooks/relay-unavailable.md) | #573 | Planned |
+| A-CERT | 2 | AT | TLS certificate has < 21 days left (renewal should happen about 30 days ahead) | [certificate-dns](runbooks/certificate-dns.md) | #573 | Planned |
+| A-REPLICAS | 1 | CA `Replicas` | < 1 for 5 min | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Planned |
+| A-RESTART | 2 | CA `RestartCount` | Increases by ≥ 1 in 15 min (Sev 1 at ≥ 3: a crash loop) | [relay-resources](runbooks/relay-resources.md) | #572 | Planned |
+| A-MEM | 2 | CA `WorkingSetBytes` | > 400 MiB (78% of 512) for 10 min | [relay-resources](runbooks/relay-resources.md) | #572 | Planned |
+| A-CPU | 3 | CA `UsageNanoCores` | > 200M (80% of 0.25 vCPU) for 15 min | [relay-resources](runbooks/relay-resources.md) | #572 | Planned |
+| A-5XX | 2 | CA `Requests` | 5xx > 5% of requests, with ≥ 20 requests, over 10 min | [relay-unavailable](runbooks/relay-unavailable.md) | #572 | Planned |
+| A-CHANGE | 2 | AL | A write to the production app, its identity or its vault by anyone other than the two deploy principals and the owner's `deploy.ps1` | [security-events](runbooks/security-events.md) | #572 | Planned |
+| A-STORM | 2 | LA `reconnect-storm` (then M) | Disconnects per minute > 5× the hour's median for 3 consecutive minutes, ≥ 20/min, and no deploy in the last 15 min | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
+| A-REFUSALS | 3 | M `relay.refusals` only: the relay logs no refusals, so this waits for OBS-1 | Refusals (4000 bad hello, 4001 token, 4003 proof, 4029 too many devices, 403 origin) > 10× the day's hourly median in an hour, ≥ 50 | [reconnect-storm](runbooks/reconnect-storm.md) | #574, after #569 | Planned |
+| A-RATELIMIT | 3 | LA `connections` (disconnect outcome `rate limited`), then M `relay.disconnects` | Admitted sockets closed with 4008 for exceeding the frame limit: ≥ 20 in an hour | [reconnect-storm](runbooks/reconnect-storm.md) | #574 | Planned |
+| A-ROSTER | 3 | LA `dependencies` | ≥ 5 roster failures in 15 min (Sev 2 at ≥ 50) | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-BLOB | 3 | LA `dependencies` | ≥ 5 blob store failures in 15 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-PUSH | 3 | LA `dependencies` | Push failures (5xx or exceptions) > 20% of ≥ 10 pushes in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-SIGNIN | 3 | M `relay.signins` | `refused` > 50% of ≥ 10 sign-ins in 30 min | [relay-dependencies](runbooks/relay-dependencies.md) | #574 | Planned |
+| A-CANARY | 2 | AT (canary results) | 2 consecutive canary failures (S2) | [relay-unavailable](runbooks/relay-unavailable.md) | #576 | Planned |
+| A-CANARY-SLOW | 3 | AT | Canary p95 round trip > 500 ms for 30 min (S3) | [relay-resources](runbooks/relay-resources.md) | #576 | Planned |
+| A-FORWARD | 3 | M `relay.forward.duration` | p99 > 5 ms for 30 min (S4) | [relay-resources](runbooks/relay-resources.md) | #569 | Planned |
+| A-SOCKETS | 3 | M `relay.connections` | > 60% of `MaxConnections` (6,000) for 1 h; Sev 2 at 80% | [relay-resources](runbooks/relay-resources.md) | #585 | Planned |
+| A-BAKE | 2 | relay.yml production job | The post-deploy bake failed and rolled back on its own (DEP-1) | [relay-bad-deploy](runbooks/relay-bad-deploy.md) | #577 | Planned |
+
+## Stamp-wide
+
+| Id | Sev | Signal | Fires when | Runbook | Issue | Status |
+|---|---|---|---|---|---|---|
+| A-LOGCAP | 2 | LA `ingestion`, `cap-hit` | Today's ingestion > 80% of the daily cap, or collection stopped (OverQuota) | [log-cap](runbooks/log-cap.md) | #571 | Planned |
+| A-BUDGET | 3 | B | The resource group's month at 50%, 80% or 100% of budget, or forecast over 100% (Sev 2 at 100%) | [cost](runbooks/cost.md) | #575 | Planned |
+
+## Staging and PPE
+
+Staging has the same rules at **Sev 3, email only**, except A-REPLICAS and A-SOCKETS
+(staging scales to zero). Its main job is to prove each rule fires: every new rule is first
+tripped on staging, with a lowered threshold, and the PR that adds it says so.
+
+PPE (#590), once it exists, gets **every** production rule (it's always on) at Sev 3, with its
+own availability tests and canary. Its alerts are also promotion evidence: a PPE alert since the nightly cut holds back that cut's
+offer to production (plan §6.0).
+
+## Clients and releases
+
+There's no telemetry from machines (design §5.10 keeps it opt-out and aggregated, and it
+isn't built), so client health is read on the relay:
+
+| Id | Sev | Signal | Fires when | Runbook | Issue | Status |
+|---|---|---|---|---|---|---|
+| A-RELEASE | 2 | M connects and refusals by `version` (OBS-2) | The Dev build has refusals or disconnects per device > 3× the Beta build's. This also blocks its promotion (plan §6.3) | [windows-release](runbooks/windows-release.md) | #451, #570 | Planned |
+| A-PAGES | 3 | pages.yml | The Pages deploy fails, or its post-deploy hash check fails (REL-4) | [pwa](runbooks/pwa.md) | #582 | Planned |
+
+## Rules for adding an alert
+
+1. It has a runbook that says what to do, not only what it means.
+2. Sev 1 is only for symptoms users feel now. Anything else starts at Sev 3 and moves up with
+   evidence.
+3. It fires once on staging before it goes to production.
+4. Its query and labels hold to design §5.10: no account, device, address or name. Alert
+   payloads go to email and phones, so they must be just as clean.
+5. An alert that fired and needed no action twice in a month is retuned or removed.

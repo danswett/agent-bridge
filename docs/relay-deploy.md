@@ -1,5 +1,8 @@
 # Deploying the relay
 
+How the relay is watched once it's deployed (SLOs, alerts, runbooks, incidents, the read-only
+probe) is in [ops/](../ops/README.md).
+
 The relay runs on Azure Container Apps (Linux, consumption) as one regional **stamp**
 (design §5.8, size `lean`). `infra/` describes the stamp in Bicep; `.github/workflows/relay.yml`
 builds an image per commit, rolls it onto **staging**, smoke-tests it there, and offers it to
