@@ -25,7 +25,7 @@ const MARKS = [
   ['mark-idle', 'neutral', 'idle'], ['mark-finished', 'neutral', 'finished'], ['mark-failed', 'danger', 'failed'],
   ['mark-ended', 'neutral', 'ended'], ['mark-working', 'agent', 'working + driven', 'mark-driven-badge'],
   ['mark-finished', 'neutral', 'finished + driven', 'mark-finished-badge', 'agent'], ['mark-background', 'active', 'background'],
-  ['mark-offline', 'neutral', 'offline'], ['mark-connecting', 'active', 'connecting'],
+  ['mark-offline', 'neutral', 'offline'], ['mark-connecting', 'neutral', 'connecting'],
 ];
 
 export function previewHtml(root = repoRoot) {
