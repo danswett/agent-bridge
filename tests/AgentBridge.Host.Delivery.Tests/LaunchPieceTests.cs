@@ -119,6 +119,29 @@ public sealed class LaunchPieceTests : IDisposable
 
     [WindowsFact]
     [Trait("Category", "Process")]
+    public async Task A_probe_resolves_a_new_runtime_from_its_fresh_child_PATH_without_changing_the_host()
+    {
+        var runtime = Out("new-runtime-\u03bb");
+        Directory.CreateDirectory(runtime);
+        File.WriteAllText(Path.Combine(runtime, "fixture-runtime.cmd"), "@echo fixture version 1.2.3\r\n");
+        var shim = Out("fresh-cli.cmd");
+        File.WriteAllText(shim, "@echo off\r\ncall fixture-runtime.cmd\r\n");
+        var inherited = Environment.GetEnvironmentVariable("PATH");
+        IReadOnlyDictionary<string, string?> environment = new Dictionary<string, string?>();
+        var runner = new VersionCommandRunner(() => environment);
+        environment = new Dictionary<string, string?> { ["PATH"] = runtime };
+
+        var result = await runner.RunAsync(shim, ["--help"], TimeSpan.FromSeconds(15));
+
+        Assert.True(result.Ran);
+        Assert.False(result.TimedOut);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("fixture version 1.2.3", result.Output);
+        Assert.Equal(inherited, Environment.GetEnvironmentVariable("PATH"));
+    }
+
+    [WindowsFact]
+    [Trait("Category", "Process")]
     public Task Cancelling_a_version_probe_terminates_its_orphaned_grandchild_before_returning() => ProbeDescendant(false, true);
 
     [WindowsFact]
