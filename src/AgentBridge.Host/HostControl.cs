@@ -65,6 +65,7 @@ public sealed class HostControlOptions
     public AgentInstallService? AgentInstall { get; init; }
     // Host-only seam for graceful departures; it is not exposed as a pipe/relay operation.
     public LifecycleCoordinator? Lifecycle { get; init; }
+    public AgentSignInService? AgentSignIn { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -133,6 +134,7 @@ public sealed class HostControl
     public bool HasAgentReadiness => options.Agents is not null;
     public bool HasAgentSetup => options.AgentSetup is not null;
     public bool HasAgentInstall => options.AgentInstall is not null;
+    public bool HasAgentSignIn => options.AgentSignIn is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -204,6 +206,9 @@ public sealed class HostControl
                     ?? throw new ArgumentException("CLI installation needs an agent and explicit consent."));
             case HostOps.AgentsInstallCancel when options.AgentInstall is not null:
                 return new { cancellationRequested = options.AgentInstall.Cancel() };
+            case HostOps.AgentsSignIn when options.AgentSignIn is not null:
+                return await options.AgentSignIn.OpenAsync(Read<AgentSignInRequest>(data)
+                    ?? throw new ArgumentException("CLI sign-in needs an agent and explicit confirmation."));
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:

@@ -68,6 +68,7 @@ public sealed class SettingsTests : IAsyncLifetime
         host.StopsWhenAsked();
         host.Capabilities.Add(HostOps.AgentSetupCapability);
         host.Capabilities.Add(HostOps.AgentInstallCapability);
+        host.Capabilities.Add(HostOps.AgentSignInCapability);
         host.Start();
         connection = host.Connect(ui);
         // Start and stop timeouts on a clock that never moves, as in AutoUpdaterTests: they wait
@@ -146,6 +147,33 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.Empty(host.Sent(HostOps.Restart));
         Assert.Empty(host.Sent(HostOps.AgentsSetup));
         Assert.Empty(host.Sent(HostOps.SignIn));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CLI_sign_in_sends_person_confirmation_but_does_not_mark_authentication_or_trust_verified(bool opened)
+    {
+        await Connected();
+        host.Status = host.Status with { Agents = Readiness("1.2.3") };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Agents.Count == 1, "agent readiness");
+        Assert.True(Assert.Single(settings.Agents).CanSignIn);
+        host.On(HostOps.AgentsSignIn, d =>
+        {
+            var request = d.Deserialize<AgentSignInRequest>(ProtocolJson.Options)!;
+            Assert.Equal("claude", request.Agent);
+            Assert.True(request.Confirmed);
+            return new AgentSignInResult(opened, "Fixture sign-in window outcome; account access remains unverified.");
+        });
+        await settings.SignInAgentAsync("claude");
+        Assert.Contains("account access remains unverified", settings.AgentSignInStatus);
+        Assert.Equal(!opened, settings.HasError);
+        Assert.Contains("Sign-in has not been verified", Assert.Single(settings.Agents).Checks);
+        Assert.Empty(host.Sent(HostOps.SignIn));
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.False(settings.Busy);
     }
 
     [Fact]

@@ -100,6 +100,13 @@ up…", "Repairing…", "Removing…") and result stay on its own row (`AgentSta
 live region named for its agent ("Copilot CLI: Setting up…") and raised again as each is drawn,
 once per status: a raise for a status the row has moved on from is skipped. A failure is in Danger. Successful changes refresh
 readiness evidence, and restart remains a separate person's action. No CLI sign-in, hook trust or workspace approval is implied.
+**Sign in / Switch account** separately confirms opening the supported CLI's own browser/
+terminal login flow. It preserves the same agent home and Claude configuration mode as
+future sessions; the refreshed child PATH also includes newly installed runtimes.
+Complete or cancel in that terminal. Credentials stay with the CLI, and opening or closing
+its window never marks account access, entitlement, hooks or trust verified. Older CLI
+versions without a documented standalone login command require an update or direct login.
+Agency sign-in remains organization-managed. Bridge relay sign-in is separate.
 Older hosts explain that an update
 and restart are needed, and disconnected hosts show no stale agent rows. See
 [agent readiness evidence](protocol/local-pipe.md#agent-readiness-evidence) for the contract.
