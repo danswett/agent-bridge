@@ -489,7 +489,9 @@ test('with reduced motion an app banner leaving only cross-fades, and its space 
   const t = await tokens(page);
   const out = await bannerLeaving(page);
   expect(out.hiddenAtOnce).toBe(true);
-  expect(out.keyframes.every((k) => !k.transform || k.transform === 'none')).toBe(true);
+  expect(out.moved).toBe(true);
+  expect(out.duration).toBeGreaterThan(0);
+  expect(out.keyframes).toEqual([{ opacity: 1, transform: null }, { opacity: 0, transform: null }]);
   expect(out.duration).toBeLessThanOrEqual(t.crossFade);
   expect(out.gone).toBe(true);
 });
