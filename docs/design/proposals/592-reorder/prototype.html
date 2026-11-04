@@ -919,7 +919,12 @@ function tick(t) {
   }
   g.raf = requestAnimationFrame(tick);
 }
-list.addEventListener('scroll', () => { if (g && g.phase === 'lifted') pick(); }, { passive: true });
+// A settle aims at a viewport position fixed at the drop; once the list scrolls it would land off
+// the gap and jump, so it finishes at once (the order is already committed; the settle is only drawn).
+list.addEventListener('scroll', () => {
+  if (g && g.phase === 'lifted') pick();
+  else if (g && g.phase === 'settling') settleNow();
+}, { passive: true });
 
 function drop(cancel) {
   if (!g || g.phase !== 'lifted') return;
