@@ -236,7 +236,7 @@
                 <ListView.Header>
                     <!-- Needs you · N (§6.1, #165), the list's first section: moved here from the Sessions page's
                          cards as it was, its approval logic untouched (NeedsYou.cs); the grid only spaces it. -->
-                    <Grid Padding="12,0,12,8">
+                    <Grid x:Name="ListHeader" Padding="12,0,12,8">
                         <!-- Needs you · N (#165): every pending question on every machine, oldest first. It
                              refers to the cards below and never moves them. -->
                         <Border

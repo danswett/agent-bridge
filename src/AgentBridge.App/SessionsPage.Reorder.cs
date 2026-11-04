@@ -46,13 +46,14 @@ public sealed partial class SessionsPage
 
     sealed class Press
     {
-        public required Pointer Pointer { get; init; }
+        // None for the self-test's hold (Hold).
+        public Pointer? Pointer { get; init; }
         public required SessionRow Row { get; init; }
         public required SessionCardViewModel Card { get; init; }
         public required ListViewItem Item { get; init; }
         public required Point Start { get; init; }
         public required bool Grip { get; init; }
-        public PointerDeviceType Kind => Pointer.PointerDeviceType;
+        public required PointerDeviceType Kind { get; init; }
         public Microsoft.UI.Dispatching.DispatcherQueueTimer? Timer { get; set; }
         public long Pressed { get; } = Stopwatch.GetTimestamp();
     }
@@ -118,6 +119,13 @@ public sealed partial class SessionsPage
         List.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnCardReleased), true);
         List.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCardCanceled), true);
         List.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCardCaptureLost), true);
+        // Needs you, the list's header, changing height (a question arriving or answered) moves every card
+        // under a held one: it stays under the still pointer, and the gap and headers go with the cards.
+        ListHeader.SizeChanged += (_, _) =>
+        {
+            if (drag is { } d) { Follow(d.At); }
+            else if (settling.Count > 0) { PlaceLayer(); }
+        };
     }
 
     // The main view model's changes that end a drag: the sort leaving Your order, another machine's
@@ -150,11 +158,16 @@ public sealed partial class SessionsPage
         var p = point.Properties;
         if (kind != PointerDeviceType.Touch && (!p.IsLeftButtonPressed || p.IsRightButtonPressed || p.IsBarrelButtonPressed || p.IsEraser)) { return; }
         var grip = Motion.Within(e.OriginalSource as DependencyObject, row.GripHit);
-        press = new Press { Pointer = e.Pointer, Row = row, Card = card, Item = item, Start = point.Position, Grip = grip };
+        press = new Press { Pointer = e.Pointer, Kind = kind, Row = row, Card = card, Item = item, Start = point.Position, Grip = grip };
         if (grip && kind != PointerDeviceType.Touch) { Lift(press, point.Position, byHold: false); return; }
         if (kind != PointerDeviceType.Touch) { return; }
-        // A touch: held still long enough, it lifts. On the card, it sinks while it waits.
-        var waiting = press;
+        Wait(press);
+    }
+
+    // A touch: held still long enough, it lifts. On the card, it sinks while it waits.
+    void Wait(Press waiting)
+    {
+        var (grip, item) = (waiting.Grip, waiting.Item);
         waiting.Timer = DispatcherQueue.CreateTimer();
         waiting.Timer.IsRepeating = false;
         waiting.Timer.Interval = grip ? GripHold : LongPress;
@@ -172,7 +185,7 @@ public sealed partial class SessionsPage
             Follow(e.GetCurrentPoint(List).Position);
             return;
         }
-        if (press is not { } p || e.Pointer.PointerId != p.Pointer.PointerId) { return; }
+        if (press is not { } p || e.Pointer.PointerId != p.Pointer?.PointerId) { return; }
         var at = e.GetCurrentPoint(List);
         var far = Distance(at.Position, p.Start);
         if (p.Kind == PointerDeviceType.Touch)
@@ -193,7 +206,7 @@ public sealed partial class SessionsPage
             Release();
             return;
         }
-        if (press is { } p && e.Pointer.PointerId == p.Pointer.PointerId)
+        if (press is { } p && e.Pointer.PointerId == p.Pointer?.PointerId)
         {
             if (p.Kind == PointerDeviceType.Touch && p.Grip) { Hint(p.Row); }
             Unpress();
@@ -204,7 +217,7 @@ public sealed partial class SessionsPage
     void OnCardCanceled(object sender, PointerRoutedEventArgs e)
     {
         if (drag is { } d && e.Pointer.PointerId == d.Pointer?.PointerId) { Cancel(say: true); }
-        else if (press is { } p && e.Pointer.PointerId == p.Pointer.PointerId) { Unpress(); }
+        else if (press is { } p && e.Pointer.PointerId == p.Pointer?.PointerId) { Unpress(); }
     }
 
     // Only the list's own capture: the list item's, which it gives up as the list takes the pointer,
@@ -245,14 +258,16 @@ public sealed partial class SessionsPage
     {
         press = null;
         p.Timer?.Stop();
-        if (viewModel is null || List.ItemsPanelRoot is null || List.ContainerFromItem(p.Card) is not ListViewItem item || item.ContentTemplateRoot is not SessionRow row)
+        // Still a card a drag can move, in a list on screen: a hold's wait may have outlasted either (the
+        // sort changed, the list went for the session).
+        if (viewModel is null || p.Card.Row?.CanDrag != true || Layout is not { ShowList: true, OnScreen: true } || List.ItemsPanelRoot is null || List.ContainerFromItem(p.Card) is not ListViewItem item || item.ContentTemplateRoot is not SessionRow row)
         {
             Unsink(p.Item);
             return;
         }
         // The touch is the card's from here: the list's pan lets it go, and the list holds it.
         if (p.Kind == PointerDeviceType.Touch) { item.CancelDirectManipulations(); }
-        if (!List.CapturePointer(p.Pointer))
+        if (p.Pointer is { } pointer && !List.CapturePointer(pointer))
         {
             Unsink(item);
             return;
@@ -267,6 +282,18 @@ public sealed partial class SessionsPage
         Begin(card, item, row, at, null, PointerDeviceType.Mouse, byHold: false);
         return drag is not null;
     }
+
+    // The self-test's touch held on a card, without a finger: it lifts when its wait ends, as a touch's.
+    internal void Hold(SessionCardViewModel card)
+    {
+        if (drag is not null || press is not null || List.ContainerFromItem(card) is not ListViewItem { ContentTemplateRoot: SessionRow row } item) { return; }
+        var at = item.TransformToVisual(List).TransformPoint(new Point(item.ActualWidth / 2, item.ActualHeight / 2));
+        Wait(press = new Press { Kind = PointerDeviceType.Touch, Row = row, Card = card, Item = item, Start = at, Grip = false });
+    }
+
+    // How far the held card is drawn from where the pointer holds it.
+    internal double? HeldDrift => drag is { } d && List.ItemsPanelRoot is { } panel ? List.TransformToVisual(panel).TransformPoint(d.At).Y - d.Grab - d.ItemTop - d.Translation : null;
+    internal FrameworkElement ListHeaderView => ListHeader;
 
     internal void MoveTo(Point at) { if (drag is not null) { Follow(at); } }
     internal void LetGo() { if (drag is not null) { Release(); } }

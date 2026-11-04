@@ -22,9 +22,10 @@ static partial class SelfTest
         window.ShowPage("sessions");
         var page = window.Sessions;
         var list = page.Rows;
-        // The window, the machine tab and the session open as the checks before left them, given back
-        // to the checks after.
+        // The window, the machine tab, the sort and the session open as the checks before left them,
+        // given back to the checks after.
         var size = window.AppWindow.Size;
+        var sort = main.SortIndex;
         var machine = main.SelectedMachine;
         var open = main.Selected;
         main.SelectedMachine = main.Machines[0];
@@ -40,6 +41,7 @@ static partial class SelfTest
         {
             check(false, $"finds four sessions to move and one to pin ({Order()})");
             main.SelectedMachine = machine;
+            main.SortIndex = sort;
             main.Selected = open;
             window.AppWindow.Resize(size);
             return;
@@ -180,6 +182,47 @@ static partial class SelfTest
             await Task.Delay(300);
         }
 
+        // Needs you, the list's header, growing under a held card (a question arriving): the card stays
+        // under the still pointer.
+        {
+            await Fit();
+            var at = Grab(held);
+            page.Begin(held, at);
+            page.MoveTo(new Point(at.X, at.Y + 6));
+            await Task.Delay(200);
+            var header = page.ListHeaderView;
+            var min = header.MinHeight;
+            header.MinHeight = header.ActualHeight + 40;
+            await Task.Delay(300);
+            var drift = page.HeldDrift;
+            header.MinHeight = min;
+            await Task.Delay(200);
+            var back = page.HeldDrift;
+            page.PutBack();
+            await Task.Delay(400);
+            check(drift is { } grown && Math.Abs(grown) < 1 && back is { } shrunk && Math.Abs(shrunk) < 1,
+                $"keeps a held card under the pointer as the Needs you lane above the list grows and shrinks ({drift:0.#} and {back:0.#} px off)");
+        }
+
+        // A touch's hold outlasting Your order (the sort changed while the finger waits) lifts nothing;
+        // one that doesn't, lifts.
+        {
+            page.Hold(held);
+            await Task.Delay(700);
+            var lifts = page.Dragging;
+            page.PutBack();
+            await Task.Delay(400);
+            page.Hold(held);
+            await Task.Delay(100);
+            main.SortIndex = (int)SessionSort.Recent;
+            await Task.Delay(700);
+            var liftedAnyway = page.Dragging;
+            if (liftedAnyway) { page.PutBack(); }
+            main.SortIndex = (int)SessionSort.Yours;
+            await Task.Delay(400);
+            check(lifts && !liftedAnyway, $"lifts a card held by touch, and nothing once the sort leaves Your order during the hold ({(lifts ? "lifts" : "did not lift")}; {(liftedAnyway ? "lifted after the sort changed" : "nothing after the sort changed")})");
+        }
+
         // With animation effects off: the card still follows, but nothing lifts, slides or settles.
         {
             Motion.Forced = false;
@@ -245,6 +288,7 @@ static partial class SelfTest
             for (var i = 0; i < cards.Count; i++) { cards[i].Row?.MoveTo(group.Key, i); }
         }
         main.SelectedMachine = machine;
+        main.SortIndex = sort;
         main.Selected = open;
         window.AppWindow.Resize(size);
         await Task.Delay(400);
