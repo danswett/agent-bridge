@@ -9,6 +9,7 @@ import { tapState, prepareAnswer } from '../answers.js';
 import { BUSY_PAUSE_MS, answerControls, answerState, describeAnswer } from './question-view.js';
 import { ReceiptClock, ReceiptTiming, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import { duration, localTime } from './time.js';
+import { whileVisible } from './ticker.js';
 import { renderMarkdown } from '../markdown.js';
 
 // An entry whose question the machine cleared while its answer was still on its way (typed, before
@@ -35,7 +36,7 @@ export class NeedsYouLane {
     this.head = container.querySelector('.needs-you-head');
     this.list = container.querySelector('.needs-you-list');
     sessions.onChange(() => this.schedule());
-    this.ticker = setInterval(() => this.refreshTimes(), 15000);
+    this.ticker = whileVisible(() => this.refreshTimes(), 15000);
     this.render();
   }
 

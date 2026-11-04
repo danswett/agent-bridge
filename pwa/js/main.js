@@ -45,6 +45,7 @@ import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { cameBack, watchFocusRing } from './ui/focus.js';
+import { whileVisible } from './ui/ticker.js';
 import { RelayBlobs } from './blobs.js';
 import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
@@ -589,6 +590,9 @@ function begin(account) {
     onRendered: () => focusLinked(),
   });
   const { answers, replies, stops, launches } = page;
+  // The relay connection rests while the app is out of sight (connection.js), but not with
+  // anything on its way: that finishes first.
+  connection.busy = () => [answers, replies, stops, launches].some((s) => s.busy) || hosts.busy || connection.relay?.busy === true;
 
   // ---- notifications ----
   const worker = () => new Promise((resolve, reject) => {
@@ -687,8 +691,8 @@ function begin(account) {
   fleet.start();
   // "last seen 5m ago" moves on with nothing else to redraw the list: every machine may be offline.
   // So does "checked 5m ago" under a machine's updates.
-  setInterval(() => {
-    if (document.visibilityState !== 'hidden' && (connection.known?.length || connection.presence.some((d) => fleet.update(d.id)))) { page.drawMachines(); }
+  whileVisible(() => {
+    if (connection.known?.length || connection.presence.some((d) => fleet.update(d.id))) { page.drawMachines(); }
   }, 30000);
 
   connection.on('presence', () => {
@@ -713,6 +717,8 @@ function begin(account) {
       // machine's list will be another by the time it is back.
       case 'reconnecting': if (linked?.shown) { setLinked(null); } page.refresh(); return setPill('Reconnecting…', 'warn');
       case 'replaced': if (linked?.shown) { setLinked(null); } return setPill('Paused', 'warn');
+      // Out of sight (connection.js): nobody reads the pill, and coming back connects at once.
+      case 'resting': return undefined;
       case 'signed-out': return undefined;
       default: return setPill(state);
     }

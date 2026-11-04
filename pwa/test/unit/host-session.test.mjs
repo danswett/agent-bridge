@@ -903,3 +903,48 @@ test('the demo machine times a repeated reply from the repeat\'s own arrival', a
   await until(() => results().length === 2, 'the repeat\'s outcome');
   assert.deepEqual(results()[1], { outcome: 'delivered', timings: { typed: 0, recorded: 0, confirmed: 0 } });
 });
+
+test('a machine asked to say when its hello changes is asked for it again when it says so, on the same channel', async () => {
+  const connection = fakeConnection([{ id: 'a', kind: 'host' }]);
+  const asked = [];
+  const events = [];
+  const hosts = new HostSession({
+    connection, store: new SessionsStore(), storage: null,
+    makeClient: (ch) => {
+      const c = fakeClient(ch);
+      c.on = (type, fn) => { if (type === 'event') { events.push(fn); } };
+      c.hello = async (options) => {
+        asked.push(options);
+        return { protocol: 1, machine: { name: 'a', readOnly: asked.length > 1 ? 'agent-ha-bridge is running for this user' : null }, capabilities: ['sessions.read', 'hello.changed'] };
+      };
+      return c;
+    },
+  });
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  assert.deepEqual(asked, [{ changes: true }]);
+
+  for (const fn of events) { fn({ ev: 'session.upsert', seq: 1, data: {} }); }
+  await flush();
+  assert.equal(asked.length, 1, 'only hello.changed asks again');
+  for (const fn of events) { fn({ ev: 'hello.changed', seq: 2, data: {} }); }
+  await flush();
+  assert.deepEqual(asked, [{ changes: true }, { changes: true }]);
+  assert.equal(hosts.link('a').machine.readOnly, 'agent-ha-bridge is running for this user');
+  assert.equal(connection.opens.length, 1);
+});
+
+test('a relay connection put to rest says so on each machine shown, rather than that it dropped', async () => {
+  const { connection, hosts } = session([{ id: 'a', kind: 'host' }]);
+  hosts.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  await flush();
+  assert.equal(hosts.phase, 'open');
+  connection.emit('lost', { code: 1000, reason: 'resting', resting: true });
+  assert.equal(hosts.link('a').stale, true);
+  assert.equal(hosts.link('a').error, 'Paused while the app is in the background.');
+});

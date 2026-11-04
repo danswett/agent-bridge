@@ -26,7 +26,7 @@
 // snapshot it asks for again is whole. Nothing is sent to a stale machine (route() is null, the one
 // gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
-import { Capabilities, Ops, PROTOCOL_VERSION } from './protocol.js';
+import { Capabilities, Events, Ops, PROTOCOL_VERSION } from './protocol.js';
 import { SessionsStore } from './sessions-store.js';
 import { UNSUPPORTED_SESSIONS } from './brand.js';
 
@@ -97,7 +97,7 @@ export class HostSession {
     Object.assign(this, { connection, me, storage, makeClient, makeStore, maxOpening, retryMs, reopenMs, maxRetryMs, keepOfflineMs, now });
     connection.on('ready', () => this.#pump());
     connection.on('presence', () => this.#onPresence());
-    connection.on('lost', () => this.#detachAll('The relay connection dropped; reconnecting.'));
+    connection.on('lost', (e) => this.#detachAll(e?.resting ? 'Paused while the app is in the background.' : 'The relay connection dropped; reconnecting.'));
     // The sessions on screen, from every machine shown, as one list.
     const self = this;
     this.sessions = {
@@ -111,6 +111,12 @@ export class HostSession {
   }
 
   onChange(fn) { this.#listeners.add(fn); return () => this.#listeners.delete(fn); }
+
+  // Whether a request to any machine shown awaits its response.
+  get busy() {
+    for (const link of this.#links.values()) { if (link.client?.pending > 0) { return true; } }
+    return false;
+  }
 
   // Calls fn(hostId) each time a channel to a machine shown is open, subscribed and its snapshot
   // whole: whatever waits to be resent to that machine can go.
@@ -189,12 +195,13 @@ export class HostSession {
 
   // Asks a machine shown for its hello again, on the channel open to it: what it offers, and
   // whether it is read-only and why, change without a new channel when agent-ha-bridge starts
-  // or stops there. Listeners hear only of a change.
+  // or stops there. A machine that offers hello.changed says when; others are asked now and then
+  // (fleet.js). Listeners hear only of a change.
   async refresh(id = this.targetId) {
     const link = this.#links.get(id);
     const client = link?.client;
     if (!link || link.phase !== 'open' || !client) { return; }
-    const hello = await client.hello();
+    const hello = await client.hello({ changes: true });
     if (link.client !== client || link.phase !== 'open') { return; }
     const machine = { ...hello.machine, name: hello.machine.name ?? link.machine?.name ?? null };
     const key = (m, c) => JSON.stringify([m?.name, m?.hostVersion, m?.dev, m?.readOnly ?? null, m?.signIn ?? [], c]);
@@ -474,7 +481,12 @@ export class HostSession {
         // failed handshake, so the backoff is not advanced.
         this.#later(link, this.reopenMs, { failed: false });
       });
-      const hello = await client.hello().catch((e) => {
+      // What it says changes without a new channel; a machine that can says when (hello.changed),
+      // and is then asked again, rather than every minute on the chance (#610).
+      client.on('event', (m) => {
+        if (m?.ev === Events.helloChanged && link.client === client) { this.refresh(link.id).catch(() => {}); }
+      });
+      const hello = await client.hello({ changes: true }).catch((e) => {
         // Hosts from before this protocol (the S4 demo host) answer "unknown op". Only such
         // an answer means unsupported; a timeout or a dropped channel is retried below.
         throw Object.assign(e, { unsupported: e.fromHost === true });

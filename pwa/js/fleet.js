@@ -2,18 +2,28 @@
 // (docs/protocol/v1-usage.md):
 //   * each machine shown (the one chosen, or every one with All): its hello, its live session
 //     count, and a usage subscription on the channel already open to it;
-//   * every other online machine: a short channel (hello, usage.get, close) once a minute
+//   * every other online machine: a short channel (hello, usage.get, close) every five minutes
 //     each while the app is in front, and never more often, so the list says
 //     "3 sessions · 0.1.0 (dev)" for each and usage is merged across machines as
 //     agent-ha-bridge's card merged them. With every machine shown there are none of these:
 //     one channel per machine is all it takes.
 // And each machine's updates (#51, docs/protocol/v1-update.md), the same ways: followed on the
-// channel of a machine shown, and read with the once-a-minute look at the others, which comes
-// every few seconds instead while an update there is under way.
+// channel of a machine shown, and read with the look at the others every five minutes, which
+// comes every few seconds instead while an update there is under way.
+//
+// Five minutes, not one (#610): each look opened a channel and a handshake to every other
+// machine, and asked each for a hello it answers with a check of its own, every minute the app
+// was open; a phone's radio was never let rest. What changes there in between is a session
+// count and a usage figure. A machine shown is asked for its hello again on its own channel as
+// often, if it says when that changes (hello.changed); one that doesn't is asked every minute,
+// as before, so its turning read-only (agent-ha-bridge starting there) still shows within one.
 import { HostClient } from './host-client.js';
-import { Ops } from './protocol.js';
+import { Capabilities, Ops } from './protocol.js';
 import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
+
+export const PROBE_EVERY_MS = 5 * 60 * 1000;
+export const REFRESH_EVERY_MS = 60 * 1000;
 
 export class FleetStatus {
   #listeners = new Set();
@@ -43,8 +53,13 @@ export class FleetStatus {
 
   // hosts: a HostSession (host-session.js): links() for the machines shown, link(id), shows(id)
   // and refresh(id).
-  constructor({ connection, hosts, book, me, probeEveryMs = 60000, fastMs = 10000, now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch) }) {
-    Object.assign(this, { connection, hosts, book, me, probeEveryMs, fastMs, now, doc, makeClient });
+  // probeEveryMs: how often each machine is looked at. refreshEveryMs: how often a machine shown
+  // that doesn't say when its hello changes is asked for it again.
+  constructor({
+    connection, hosts, book, me, probeEveryMs = PROBE_EVERY_MS, refreshEveryMs = REFRESH_EVERY_MS, fastMs = 10000,
+    now = () => Date.now(), doc = globalThis.document, makeClient = (ch) => new HostClient(ch),
+  }) {
+    Object.assign(this, { connection, hosts, book, me, probeEveryMs, refreshEveryMs, fastMs, now, doc, makeClient });
     connection.on('presence', () => { this.probe(); this.#retime(); });
     connection.on('ready', () => this.probe());
     hosts.onChange(() => this.#onHosts());
@@ -57,8 +72,9 @@ export class FleetStatus {
     });
   }
 
-  // Looks again every probeEveryMs while the app is in front: presence changes only when a
-  // device comes or goes, so a machine left alone would otherwise never be looked at again.
+  // Looks again while the app is in front, at whatever is due (probeEveryMs, refreshEveryMs):
+  // presence changes only when a device comes or goes, so a machine left alone would otherwise
+  // never be looked at again.
   start() {
     this.#started = true;
     this.#startTimer();
@@ -66,7 +82,7 @@ export class FleetStatus {
 
   #startTimer() {
     if (!this.#started || this.#timer || this.doc?.visibilityState === 'hidden') { return; }
-    this.#timer = setInterval(() => this.probe(), this.probeEveryMs);
+    this.#timer = setInterval(() => this.probe(), Math.min(this.probeEveryMs, this.refreshEveryMs));
   }
 
   #stopTimer() {
@@ -242,10 +258,12 @@ export class FleetStatus {
   // a time: a phone opening the app should not start a handshake with every machine at once.
   probe() {
     if (!this.connection.ready || this.doc?.visibilityState === 'hidden') { return; }
-    // Each machine shown is asked again on its own channel, as often: it may have become
-    // read-only, or stopped being, with nothing else to say so.
+    // Each machine shown is asked again on its own channel: it may have become read-only, or
+    // stopped being. One that says when (hello.changed) is asked only now and then, in case it
+    // was missed; one that doesn't, every refreshEveryMs.
     for (const link of this.hosts.links()) {
-      if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < this.probeEveryMs) { continue; }
+      const every = link.capabilities?.includes(Capabilities.helloChanged) ? this.probeEveryMs : Math.min(this.probeEveryMs, this.refreshEveryMs);
+      if (link.phase !== 'open' || !link.client || this.now() - (this.#viewedAt.get(link.id) ?? 0) < every) { continue; }
       this.#viewedAt.set(link.id, this.now());
       this.hosts.refresh?.(link.id)?.catch(() => {});
       this.#followUpdates(link);
@@ -296,7 +314,7 @@ export class FleetStatus {
       this.#retime();
     } catch {
       if (forgotten()) { return; }
-      // Not retried before the minute is up, whatever went wrong.
+      // Not retried before its next look is due, whatever went wrong.
       const old = this.#machines.get(id);
       this.#machines.set(id, { ...(old ?? { hostVersion: null, dev: false, sessions: null }), at: this.now() });
     } finally {

@@ -130,8 +130,10 @@ export class HostClient {
     return { id, done };
   }
 
-  async hello() {
-    const hello = readHello(await this.request(Ops.hello));
+  // changes: asks a host that offers hello.changed to say when what hello says changes, for as
+  // long as this channel is open (v1-sessions.md, hello); one that doesn't ignores it.
+  async hello({ changes = false } = {}) {
+    const hello = readHello(await this.request(Ops.hello, changes ? { changes: true } : {}));
     this.capabilities = hello.capabilities;
     return hello;
   }
@@ -147,6 +149,9 @@ export class HostClient {
     const flagged = { ...data, progress: true };
     return fits(flagged) ? flagged : data;
   }
+
+  // Requests awaiting their response.
+  get pending() { return this.#pending.size; }
 
   // Every page of sessions.list. Not used by the live view, which subscribes instead (pages
   // can overlap or miss a session if anything changes between them), but kept for one-shot

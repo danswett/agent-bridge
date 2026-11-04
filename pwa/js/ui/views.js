@@ -5,6 +5,7 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
+import { whileVisible } from './ticker.js';
 import { enter, leave, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
 
@@ -56,8 +57,8 @@ export class SessionListView {
       }
       this.schedule();
     });
-    // Relative times move on without any event from the host.
-    this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
+    // Relative times move on without any event from the host, while anyone can see them.
+    this.ticker = whileVisible(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
     // What a move did, said to a screen reader.
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);

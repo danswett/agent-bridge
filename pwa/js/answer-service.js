@@ -89,6 +89,16 @@ export class AnswerService {
 
   get(hostId, sessionId, questionId) { return this.#snapshot(this.#entries.get(AnswerService.key(hostId, sessionId, questionId))); }
 
+  // Whether any is on its way now: a request out (files going first), or one about to be resent
+  // on its own, its response lost or the machine still delivering the first copy. One waiting for
+  // a channel to its machine has no timer, and waits as well with the app at rest.
+  get busy() {
+    for (const entry of this.#entries.values()) {
+      if (entry.state === 'sending' || (entry.state === 'waiting' && entry.timer !== null)) { return true; }
+    }
+    return false;
+  }
+
   // Calls fn(entry) whenever the answer to this question changes.
   watch(hostId, sessionId, questionId, fn) {
     const key = AnswerService.key(hostId, sessionId, questionId);
