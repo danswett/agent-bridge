@@ -83,7 +83,7 @@ static class ReportCommand
               nodes {
                 {{PrFields}}
                 mergeable
-                reviewThreads(first: 100) { nodes { isResolved } }
+                reviewThreads(first: 100) { totalCount nodes { isResolved } }
                 commits(last: 1) { nodes { commit { status { context(name: "merge-rule") { state description } } } } }
               }
             }
@@ -105,8 +105,8 @@ static class ReportCommand
         }
         """;
 
-    // The hunt's tallies are in an issue's body and its comments; the newest 30 are enough for a
-    // week of nightly runs.
+    // The hunt's tallies are in an issue's body and its comments: the newest 100 (GitHub's most per
+    // page) hold over three months of nightly runs; an issue with more is marked partial.
     const string IssueQuery = """
         query($owner: String!, $name: String!, $cursor: String, $states: [IssueState!], $since: DateTime) {
           rateLimit { cost remaining }
@@ -115,7 +115,7 @@ static class ReportCommand
               pageInfo { hasNextPage endCursor }
               nodes {
                 number title state createdAt closedAt body author { login }
-                comments(last: 30) { nodes { author { login } createdAt body } }
+                comments(last: 100) { totalCount nodes { author { login } createdAt body } }
               }
             }
           }
@@ -153,7 +153,7 @@ static class ReportCommand
             var flaky = FlakyIssues();
             var (mainRuns, mainRedNow, mainFailedJobs) = MainRuns();
             var prRuns = PrRuns();
-            var (failures, logsRead, failedJobs) = TestFailures(mainFailedJobs);
+            var (failures, logsRead, logsUnread, failedJobs) = TestFailures(mainFailedJobs);
             return new ReportFacts
             {
                 Now = now,
@@ -166,6 +166,7 @@ static class ReportCommand
                 PrRuns = prRuns,
                 TestFailures = failures,
                 LogsRead = logsRead,
+                LogsUnread = logsUnread,
                 FailedTestJobs = failedJobs,
                 RunUrl = runUrl,
                 Cost = $"GraphQL {points} point(s){(remaining is { } left ? $" ({left} left this hour)" : "")} and {restCalls} REST call(s)",
@@ -328,10 +329,10 @@ static class ReportCommand
         /// The tests the logs of failed CI test jobs name: main's first, then pull requests' (the
         /// newest 50 failed runs), newest first, up to --max-logs logs split between them.
         /// </summary>
-        (IReadOnlyList<CiTestFailure>, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs)
+        (IReadOnlyList<CiTestFailure>, int, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs)
         {
             if (maxLogs == 0)
-                return ([], 0, mainJobs.Count);
+                return ([], 0, 0, mainJobs.Count);
             var prRuns = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=failure&created=%3E%3D{Since}", "workflow_runs", perPage: 50, maxPages: 1)
                 .Select(r => (r.GetProperty("node_id").GetString()!, Time(r, "created_at"))).ToList();
             var prJobs = FailedTestJobs(prRuns).OrderByDescending(j => j.At).ToList();
@@ -342,6 +343,7 @@ static class ReportCommand
             var queue = mainJobs.Take(mainQuota).Select(j => (j.Job, OnMain: true)).Concat(prJobs.Take(prQuota).Select(j => (j.Job, OnMain: false))).DistinctBy(j => j.Job).ToList();
             var failures = new List<CiTestFailure>();
             var read = 0;
+            var unread = 0;
             foreach (var (job, onMain) in queue)
             {
                 string log;
@@ -351,13 +353,14 @@ static class ReportCommand
                 }
                 catch (InvalidOperationException)
                 {
-                    // An expired or missing log costs one job's tests, not the report.
+                    // An expired or missing log costs one job's tests, not the report; the report says how many.
+                    unread++;
                     continue;
                 }
                 read++;
                 failures.AddRange(WeeklyReport.FailedTests(log).Select(t => new CiTestFailure(t, onMain)));
             }
-            return (failures, read, mainJobs.Count + prJobs.Count);
+            return (failures, read, unread, mainJobs.Count + prJobs.Count);
         }
 
         /// <summary>The last 50 completed pull request runs of ci.yml that passed or failed, with their jobs' times.</summary>
@@ -388,7 +391,14 @@ static class ReportCommand
         DateTimeOffset? ready = pr.TryGetProperty("timelineItems", out var timeline)
             ? timeline.GetProperty("nodes").EnumerateArray().Select(n => OptionalTime(n, "createdAt")).LastOrDefault(t => t is not null)
             : null;
-        var threads = pr.TryGetProperty("reviewThreads", out var t) ? t.GetProperty("nodes").EnumerateArray().Count(n => !n.GetProperty("isResolved").GetBoolean()) : 0;
+        // Threads past the first 100 aren't read, so they count as unresolved: unread can't pass.
+        var threads = 0;
+        if (pr.TryGetProperty("reviewThreads", out var t))
+        {
+            var nodes = t.GetProperty("nodes").EnumerateArray().ToList();
+            threads = nodes.Count(n => !n.GetProperty("isResolved").GetBoolean())
+                + (t.TryGetProperty("totalCount", out var total) ? Math.Max(0, total.GetInt32() - nodes.Count) : 0);
+        }
         string? state = null, description = null;
         if (pr.TryGetProperty("commits", out var commits)
             && commits.GetProperty("nodes").EnumerateArray().LastOrDefault() is { ValueKind: JsonValueKind.Object } last
@@ -427,10 +437,14 @@ static class ReportCommand
         var tallies = new List<FlakeTally>();
         if (Trusted(issue, owner) && WeeklyReport.Tally(body, created) is { } first)
             tallies.Add(first);
+        var partial = false;
         if (issue.TryGetProperty("comments", out var comments))
+        {
+            partial = comments.TryGetProperty("totalCount", out var total) && total.GetInt32() > comments.GetProperty("nodes").GetArrayLength();
             foreach (var comment in comments.GetProperty("nodes").EnumerateArray())
                 if (Trusted(comment, owner) && WeeklyReport.Tally(comment.GetProperty("body").GetString() ?? "", Time(comment, "createdAt")) is { } tally)
                     tallies.Add(tally);
+        }
         return new FlakyIssue(
             issue.GetProperty("number").GetInt32(),
             issue.GetProperty("title").GetString() ?? "",
@@ -438,7 +452,8 @@ static class ReportCommand
             issue.GetProperty("state").GetString() == "OPEN",
             created,
             OptionalTime(issue, "closedAt"),
-            tallies);
+            tallies,
+            partial);
     }
 
     internal static IReadOnlyList<(string Name, TimeSpan Duration)> ParseJobTimes(JsonElement run)

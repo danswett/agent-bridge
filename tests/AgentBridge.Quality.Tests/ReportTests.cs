@@ -113,6 +113,15 @@ public sealed class ReportTests
     }
 
     [Fact]
+    public void A_branch_prefix_with_merges_this_week_and_none_open_still_has_its_row()
+    {
+        var report = WeeklyReport.Render(Facts(prs: [Merged(1, openedHoursAgo: 10, mergedHoursAgo: 7, head: "docs/a")]));
+
+        Assert.Contains("_No open pull request._", report);
+        Assert.Contains("| `docs/` | 0 | 0 | 0 | 1 | 3.0 h |", report);
+    }
+
+    [Fact]
     public void Throughput_gives_the_median_and_90th_percentile_from_open_and_from_ready_and_names_pull_requests_open_over_a_week()
     {
         var report = WeeklyReport.Render(Facts(prs:
@@ -163,7 +172,7 @@ public sealed class ReportTests
     }
 
     [Fact]
-    public void A_flaky_issue_counts_only_tallies_from_the_hunt_or_the_owner_and_takes_its_test_from_the_hunts_marker()
+    public void A_flaky_issue_counts_only_tallies_from_the_hunt_or_the_owner_takes_its_test_from_the_hunts_marker_and_marks_its_total_partial_when_comments_go_unread()
     {
         var table = "| OS | Failed | Runs |\n|---|---|---|\n| ubuntu-latest | 2 | 10 |\n";
         var issue = JsonSerializer.Serialize(new
@@ -177,6 +186,7 @@ public sealed class ReportTests
             author = new { login = "github-actions" },
             comments = new
             {
+                totalCount = 150,
                 nodes = new[]
                 {
                     new { author = new { login = "danswett" }, createdAt = "2026-11-05T10:00:00Z", body = table.Replace("| 2 |", "| 3 |", StringComparison.Ordinal) },
@@ -190,23 +200,26 @@ public sealed class ReportTests
         Assert.Equal("FleetTests.Offline", parsed.Test);
         Assert.True(parsed.Open);
         Assert.Equal([2, 3], parsed.Tallies.Select(t => t.Failed));
+        // 150 comments, 2 read: the oldest tallies are missing, so the total is a floor.
+        Assert.True(parsed.Partial);
+        Assert.Contains("| 5 / ≥5 |", WeeklyReport.Render(Facts(flaky: [parsed])));
     }
 
     [Fact]
-    public void A_pull_request_is_read_with_when_it_left_draft_its_unresolved_threads_and_its_merge_rule_status()
+    public void A_pull_request_is_read_with_when_it_left_draft_its_unresolved_threads_counting_those_past_the_first_100_and_its_merge_rule_status()
     {
         const string json = """
             {"number": 7, "state": "OPEN", "isDraft": false, "createdAt": "2026-11-08T10:00:00Z", "mergedAt": null, "closedAt": null,
              "updatedAt": "2026-11-09T10:00:00Z", "headRefName": "quality/a", "baseRefName": "main", "mergeable": "CONFLICTING",
              "timelineItems": {"nodes": [{"createdAt": "2026-11-08T12:00:00Z"}]},
-             "reviewThreads": {"nodes": [{"isResolved": true}, {"isResolved": false}]},
+             "reviewThreads": {"totalCount": 102, "nodes": [{"isResolved": true}, {"isResolved": false}]},
              "commits": {"nodes": [{"commit": {"status": {"context": {"state": "FAILURE", "description": "Draft: mark it ready for review"}}}}]}}
             """;
 
         var pr = ReportCommand.ParsePullRequest(JsonDocument.Parse(json).RootElement);
 
         Assert.Equal(new DateTimeOffset(2026, 11, 8, 12, 0, 0, TimeSpan.Zero), pr.ReadyAt);
-        Assert.Equal(1, pr.UnresolvedThreads);
+        Assert.Equal(101, pr.UnresolvedThreads);
         Assert.Equal(("failure", "Draft: mark it ready for review", "CONFLICTING"), (pr.MergeRuleState, pr.MergeRuleDescription, pr.Mergeable));
     }
 
@@ -255,12 +268,22 @@ public sealed class ReportTests
         Assert.Contains("| `PrTests.Broke` | 0 | 1 | 0 |", output.ToString());
     }
 
+    [Fact]
+    public void A_log_that_cant_be_read_is_counted_and_said_rather_than_read_as_no_failures()
+    {
+        var output = new StringWriter();
+
+        Assert.Equal(0, ReportCommand.Run(["--slug", "o/r", "--max-logs", "2"], output, new FakeGitHub(failPrLog: true), Now));
+
+        Assert.Contains("CI's logs of 1 of the 2 failed test job(s) found (main's and pull requests', newest first); **1 more couldn't be read**", output.ToString());
+    }
+
     /// <summary>
     /// A week on GitHub: one open pull request; a merged one, then one that changed before the
     /// window with more pages promised (which mustn't be read); one red main run and one red pull
     /// request run, each with a failed product job.
     /// </summary>
-    sealed class FakeGitHub : IGitHub
+    sealed class FakeGitHub(bool failPrLog = false) : IGitHub
     {
         public List<string> Queries { get; } = [];
         public List<string> Logs { get; } = [];
@@ -298,6 +321,8 @@ public sealed class ReportTests
         public string RestText(string path)
         {
             Logs.Add(path);
+            if (failPrLog && path.Contains("601", StringComparison.Ordinal))
+                throw new InvalidOperationException("gh: HTTP 410: the log has expired");
             return path.Contains("501", StringComparison.Ordinal) ? "2026-11-08T10:05:00.0Z   Failed MainTests.Broke [1 s]" : "2026-11-08T10:05:00.0Z   Failed PrTests.Broke [1 s]";
         }
 

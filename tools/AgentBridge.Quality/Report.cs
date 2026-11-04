@@ -23,8 +23,11 @@ sealed record FlakeTally(DateTimeOffset At, IReadOnlyList<(string Os, int Failed
     public int Failed => ByOs.Sum(o => o.Failed);
 }
 
-/// <summary>A flaky issue: open now, or closed in the window. Test is "Class.Method" when the hunt filed it.</summary>
-sealed record FlakyIssue(int Number, string Title, string? Test, bool Open, DateTimeOffset CreatedAt, DateTimeOffset? ClosedAt, IReadOnlyList<FlakeTally> Tallies);
+/// <summary>
+/// A flaky issue: open now, or closed in the window. Test is "Class.Method" when the hunt filed it.
+/// Partial: it has more comments than were read, so its oldest tallies are missing from the total.
+/// </summary>
+sealed record FlakyIssue(int Number, string Title, string? Test, bool Open, DateTimeOffset CreatedAt, DateTimeOffset? ClosedAt, IReadOnlyList<FlakeTally> Tallies, bool Partial = false);
 
 /// <summary>
 /// One of main's CI runs: its latest attempt's conclusion, and for a run attempted more than once,
@@ -58,6 +61,8 @@ sealed record ReportFacts
     public required IReadOnlyList<PrCiRun> PrRuns { get; init; }
     public required IReadOnlyList<CiTestFailure> TestFailures { get; init; }
     public int LogsRead { get; init; }
+    /// <summary>Logs asked for that couldn't be read (expired, or gh refused): said, so a gap isn't read as no failures.</summary>
+    public int LogsUnread { get; init; }
     public int FailedTestJobs { get; init; }
     public string? RunUrl { get; init; }
     public string? Cost { get; init; }
@@ -104,14 +109,14 @@ static class WeeklyReport
         sb.AppendLine();
         if (open.Count > 0)
         {
-            sb.AppendLine("| Issue | Test | Failed (7 d / all) | OS | Last seen |");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"| Issue | Test | Failed ({f.Days} d / all) | OS | Last seen |");
             sb.AppendLine("|---|---|---|---|---|");
             foreach (var (issue, week, all) in open.Take(MaxRows))
             {
                 var failing = issue.Tallies.Where(t => t.Failed > 0).ToList();
                 var oses = failing.SelectMany(t => t.ByOs).Where(o => o.Failed > 0).Select(o => o.Os).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
                 var last = failing.Count > 0 ? FlakeReport.Pacific(failing.Max(t => t.At)) : "-";
-                sb.AppendLine(CultureInfo.InvariantCulture, $"| #{issue.Number} | {Cell(issue.Test ?? issue.Title)} | {week} / {all} | {Cell(string.Join(", ", oses).DefaultIfBlank("-"))} | {last} |");
+                sb.AppendLine(CultureInfo.InvariantCulture, $"| #{issue.Number} | {Cell(issue.Test ?? issue.Title)} | {week} / {(issue.Partial ? "≥" : "")}{all} | {Cell(string.Join(", ", oses).DefaultIfBlank("-"))} | {last} |");
             }
             More(sb, open.Count);
             sb.AppendLine();
@@ -150,7 +155,7 @@ static class WeeklyReport
             tests[name] = t with { Hunt = t.Hunt + week };
         }
         var top = tests.OrderByDescending(t => t.Value.Main + t.Value.Prs).ThenByDescending(t => t.Value.Hunt).ThenBy(t => t.Key, StringComparer.Ordinal).Take(5).ToList();
-        sb.AppendLine(CultureInfo.InvariantCulture, $"The tests that failed most: CI's logs of {f.LogsRead} of the {f.FailedTestJobs} failed test job(s) found (main's and pull requests', newest first), and the flake hunt's tallies this week.");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"The tests that failed most: CI's logs of {f.LogsRead} of the {f.FailedTestJobs} failed test job(s) found (main's and pull requests', newest first){(f.LogsUnread > 0 ? $"; **{f.LogsUnread} more couldn't be read**" : "")}, and the flake hunt's tallies this week.");
         sb.AppendLine();
         if (top.Count == 0)
             sb.AppendLine("_No test failure found._");
@@ -205,17 +210,17 @@ static class WeeklyReport
         sb.AppendLine();
         var open = f.PullRequests.Where(p => p.Open).ToList();
         if (open.Count == 0)
-        {
             sb.AppendLine("_No open pull request._");
-            sb.AppendLine();
-            return;
+        else
+        {
+            sb.AppendLine("| Stuck on (merge-rule's first missing item) | PRs |");
+            sb.AppendLine("|---|---|");
+            foreach (var g in open.GroupBy(p => StuckOn(p, f.Base, f.MainRedNow)).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
+                sb.AppendLine(CultureInfo.InvariantCulture, $"| {Cell(g.Key)} | {g.Count()} |");
         }
-        sb.AppendLine("| Stuck on (merge-rule's first missing item) | PRs |");
-        sb.AppendLine("|---|---|");
-        foreach (var g in open.GroupBy(p => StuckOn(p, f.Base, f.MainRedNow)).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
-            sb.AppendLine(CultureInfo.InvariantCulture, $"| {Cell(g.Key)} | {g.Count()} |");
         sb.AppendLine();
 
+        // Prefixes with merges this week and none open still say how fast that kind of work lands.
         var depth = StackDepths(open, f.Base);
         var merged = f.PullRequests.Where(p => p.Merged && p.MergedAt >= f.Since).ToList();
         var prefixes = open.Select(p => Prefix(p.HeadRef)).Concat(merged.Select(p => Prefix(p.HeadRef))).Distinct(StringComparer.Ordinal);
@@ -226,7 +231,9 @@ static class WeeklyReport
             return (Prefix: prefix, Open: mine.Count, Stacked: mine.Count(p => p.BaseRef != f.Base), Deepest: mine.Count == 0 ? 0 : mine.Max(p => depth[p.Number]),
                 Merged: landed.Count, Median: landed.Count == 0 ? "-" : Duration(Percentile(landed, 50)));
         }).OrderByDescending(r => r.Open).ThenByDescending(r => r.Merged).ThenBy(r => r.Prefix, StringComparer.Ordinal).ToList();
-        sb.AppendLine("| Branch prefix | Open | Stacked | Deepest stack | Merged (7 d) | Median open → merge |");
+        if (rows.Count == 0)
+            return;
+        sb.AppendLine(CultureInfo.InvariantCulture, $"| Branch prefix | Open | Stacked | Deepest stack | Merged ({f.Days} d) | Median open → merge |");
         sb.AppendLine("|---|---|---|---|---|---|");
         foreach (var r in rows.Take(MaxRows))
             sb.AppendLine(CultureInfo.InvariantCulture, $"| {Cell(r.Prefix)} | {r.Open} | {r.Stacked} | {r.Deepest} | {r.Merged} | {r.Median} |");

@@ -42,8 +42,19 @@ sealed class GhCli : IGitHub
 
     public JsonDocument Rest(string path) => JsonDocument.Parse(Run(["api", path]));
 
-    // A job's log holds the runner's colour codes, which gh refuses to print without this.
-    public string RestText(string path) => Run(["api", "--allow-escape-sequences", path]);
+    // A job's log holds the runner's colour codes, which newer gh versions refuse to print without
+    // this flag; older ones don't know it, and print them anyway.
+    public string RestText(string path)
+    {
+        try
+        {
+            return Run(["api", "--allow-escape-sequences", path]);
+        }
+        catch (InvalidOperationException e) when (e.Message.Contains("unknown flag", StringComparison.Ordinal))
+        {
+            return Run(["api", path]);
+        }
+    }
 
     public void PostStatus(string slug, string sha, string state, string context, string description, string? targetUrl)
     {
