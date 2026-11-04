@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #620: one phone frame of the session header, at rest or collapsed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+.p620f, .p620f * { box-sizing: border-box; }
+.p620f { display: flex; flex-direction: column; gap: 14px; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; font-size: 14px; line-height: 20px; }
+.p620f-dev { position: relative; overflow: hidden; }
+.p620f-scr { position: absolute; left: 0; top: 0; transform-origin: 0 0; display: flex; flex-direction: column; overflow: hidden; font-size: 16px; line-height: 24px; }
+.p620f-sys { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; font-size: 15px; font-weight: 600; }
+.p620f-hdr { flex: none; position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; column-gap: 8px; align-items: start; overflow: hidden; }
+.p620f-ib { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 6px; }
+.p620f-title { margin: 0; font-weight: 600; overflow: hidden; }
+.p620f-meta { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; margin-top: 4px; font-size: 13px; line-height: 18px; }
+.p620f-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.p620f-bt { flex: 1; min-width: 0; font-size: 17px; line-height: 22px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p620f-strip { flex: none; display: flex; gap: 8px; padding: 8px 16px; overflow: hidden; }
+.p620f-chip { flex: none; display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; border-radius: 22px; font-size: 13px; line-height: 18px; white-space: nowrap; }
+.p620f-tabs { flex: none; display: flex; gap: 20px; padding: 0 16px; align-items: stretch; }
+.p620f-tab { position: relative; display: flex; align-items: center; font-size: 15px; line-height: 20px; white-space: nowrap; }
+.p620f-conv { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+.p620f-flow { position: absolute; left: 0; right: 0; top: 0; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.p620f-bub { align-self: flex-end; max-width: 82%; padding: 10px 14px; border-radius: 8px; }
+.p620f-who { font-size: 13px; line-height: 18px; }
+.p620f-ev { display: flex; gap: 10px; align-items: center; font-size: 13px; line-height: 18px; }
+.p620f-q { border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.p620f-opt { height: 44px; border-radius: 8px; display: flex; align-items: center; padding: 0 14px; }
+.p620f-slot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 16px 12px; }
+.p620f-held { font-size: 15px; line-height: 21px; }
+.p620f-box { position: relative; border-radius: 8px; display: flex; }
+.p620f-send { width: 44px; height: 44px; border-radius: 6px; display: grid; place-items: center; flex: none; }
+.p620f-ms { position: absolute; width: 4px; border-radius: 2px; }
+.p620f-ml { position: absolute; transform: translateY(-50%); font-size: 12px; line-height: 15px; font-weight: 700; white-space: nowrap; }
+.p620f-cap { font-size: 12px; line-height: 17px; }
+.p620f-cap b { display: block; font-size: 13px; line-height: 18px; margin-bottom: 4px; }
+.p620f-cap p { margin: 4px 0 0; }
+.p620f-chipl { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 16px; font-weight: 600; margin-right: 6px; }
+.p620f-sr { margin-top: 6px; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 16px; display: flex; gap: 6px; align-items: flex-start; }
+</style>
+</helmet>
+<!-- A proposal awaiting the owner's decision: docs/design/proposals/620-compact-header.md. Heights are the PWA's, measured with Playwright (the md's table). -->
+<div class="p620f" style="width: {{outerW}}px">
+  <div style="position: relative; width: {{outerW}}px; height: {{fh}}px">
+  <div class="p620f-dev" style="width: {{fw}}px; height: {{fh}}px; border-radius: {{radius}}px; background: {{t.shell}}; border: {{bezel}}">
+    <div class="p620f-scr" style="width: {{sw}}px; height: {{sh}}px; transform: scale({{k}}); background: {{t.shell}}; color: {{t.text}}">
+      <div class="p620f-sys" style="height: {{sysTop}}px; color: {{t.text}}"><span>{{clock}}</span><span style="letter-spacing: 2px">●●● ▮</span></div>
+      <div style="flex: none; position: relative; overflow: hidden; height: {{rideH}}">
+      <div style="transform: translateY(-{{ride}}px)">
+      <sc-if value="{{rest}}">
+        <div class="p620f-hdr" style="height: {{hdrH}}px; padding: 8px 16px 12px; border-bottom: 1px solid {{t.stroke2}}; outline: {{hdrOutline}}">
+          <div class="p620f-ib" style="margin-left: -12px; color: {{t.text}}; outline: {{focusBack}}; outline-offset: -2px"><dc-import name="Icon" icon="back" size="22" hint-size="22px,22px"></dc-import></div>
+          <div style="min-width: 0">
+            <h2 class="p620f-title" style="font-size: {{titleSize}}px; line-height: {{titleLine}}px; max-height: {{titleMax}}px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: {{clamp}}">{{title}}</h2>
+            <div class="p620f-meta" style="color: {{t.text2}}">
+              <svg viewBox="0 0 48 48" width="16" height="16" style="margin-top: 1px; color: {{glyph.c}}"><sc-if value="{{glyph.bg}}"><circle cx="24" cy="24" r="23" fill="currentColor"/></sc-if><path d="{{glyph.p1}}" fill="{{glyph.f1}}"/><path d="{{glyph.p2}}" fill="currentColor" fill-opacity="{{glyph.o2}}"/></svg>
+              <span style="white-space: {{metaWrap}}; overflow: hidden; text-overflow: ellipsis"><span style="color: {{glyph.words}}">{{statusText}}</span> · <span style="color: {{t.text}}">Demo machine</span> · danswett/agent-bridge</span>
+            </div>
+          </div>
+          <div class="p620f-ib" style="color: {{t.text}}"><dc-import name="Icon" icon="more" size="22" hint-size="22px,22px"></dc-import></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{compact}}">
+        <div class="p620f-bar" style="height: 48px; border-bottom: 1px solid {{t.stroke2}}; outline: {{hdrOutline}}">
+          <div class="p620f-ib" style="color: {{t.text}}; outline: {{focusBack}}; outline-offset: -2px"><dc-import name="Icon" icon="back" size="22" hint-size="22px,22px"></dc-import></div>
+          <svg viewBox="0 0 48 48" width="18" height="18" style="flex: none; color: {{glyph.c}}"><sc-if value="{{glyph.bg}}"><circle cx="24" cy="24" r="23" fill="currentColor"/></sc-if><path d="{{glyph.p1}}" fill="{{glyph.f1}}"/><path d="{{glyph.p2}}" fill="currentColor" fill-opacity="{{glyph.o2}}"/></svg>
+          <h2 class="p620f-bt">{{title}}</h2>
+          <div class="p620f-ib" style="color: {{t.text}}"><dc-import name="Icon" icon="more" size="22" hint-size="22px,22px"></dc-import></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{showStrip}}">
+        <div class="p620f-strip" style="height: 61px; border-bottom: 1px solid {{t.stroke2}}">
+          <sc-for list="{{chips}}" as="c">
+            <div class="p620f-chip" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}">
+              <svg viewBox="0 0 48 48" width="16" height="16" style="color: {{c.color}}"><path d="{{c.p1}}" fill="currentColor"/><path d="{{c.p2}}" fill="currentColor" fill-opacity="{{c.o2}}"/></svg>
+              <span style="font-weight: 600">{{c.name}}</span><span style="color: {{t.text2}}">{{c.facts}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{showTabs}}">
+        <div class="p620f-tabs" style="height: 45px; border-bottom: 1px solid {{t.stroke2}}">
+          <sc-for list="{{tabs}}" as="tb">
+            <div class="p620f-tab" style="color: {{tb.color}}; font-weight: {{tb.weight}}; outline: {{tb.focus}}; outline-offset: 2px">{{tb.text}}<sc-if value="{{tb.sel}}"><span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.bridge}}"></span></sc-if></div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{combo}}">
+        <div class="p620f-tabs" style="height: 53px; gap: 16px; border-bottom: 1px solid {{t.stroke2}}; overflow: hidden">
+          <sc-for list="{{tabs}}" as="tb">
+            <div class="p620f-tab" style="color: {{tb.color}}; font-weight: {{tb.weight}}">{{tb.text}}<sc-if value="{{tb.sel}}"><span style="position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: {{t.bridge}}"></span></sc-if></div>
+          </sc-for>
+          <sc-for list="{{chips}}" as="c">
+            <div class="p620f-chip" style="align-self: center; background: {{t.card}}; border: 1px solid {{t.stroke2}}">
+              <svg viewBox="0 0 48 48" width="16" height="16" style="color: {{c.color}}"><path d="{{c.p1}}" fill="currentColor"/><path d="{{c.p2}}" fill="currentColor" fill-opacity="{{c.o2}}"/></svg>
+              <span style="font-weight: 600">{{c.name}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      </div>
+      <sc-if value="{{riding}}">
+        <div class="p620f-bar" style="position: absolute; left: 0; right: 0; top: 0; height: 48px; background: {{t.shell}}; border-bottom: 1px solid {{t.stroke2}}">
+          <div class="p620f-ib" style="color: {{t.text}}"><dc-import name="Icon" icon="back" size="22" hint-size="22px,22px"></dc-import></div>
+          <svg viewBox="0 0 48 48" width="18" height="18" style="flex: none; color: {{glyph.c}}; opacity: {{barOp}}"><sc-if value="{{glyph.bg}}"><circle cx="24" cy="24" r="23" fill="currentColor"/></sc-if><path d="{{glyph.p1}}" fill="{{glyph.f1}}"/><path d="{{glyph.p2}}" fill="currentColor" fill-opacity="{{glyph.o2}}"/></svg>
+          <div class="p620f-bt" style="opacity: {{barOp}}">{{title}}</div>
+          <div class="p620f-ib" style="color: {{t.text}}"><dc-import name="Icon" icon="more" size="22" hint-size="22px,22px"></dc-import></div>
+        </div>
+      </sc-if>
+      </div>
+      <div class="p620f-conv">
+        <div class="p620f-flow" style="transform: translateY(-{{offset}}px)">
+          <div class="p620f-bub" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}">Run the suite and check the witness logic, both in the background.</div>
+          <div class="p620f-who" style="color: {{t.text2}}"><b style="color: {{t.text}}">Main agent</b>&#160;&#160;17m ago</div>
+          <div class="p620f-who" style="color: {{t.text2}}; font-weight: 600">▸ Show reasoning</div>
+          <div>Started 2 background agents: one runs the full suite, one reads the witness logic. I’ll report back when both are done.</div>
+          <div class="p620f-ev" style="color: {{t.text2}}"><span style="color: {{t.active}}">◎</span>Started 3 delegates · 17m</div>
+          <div class="p620f-ev" style="color: {{t.text2}}"><span style="color: {{t.danger}}">⊗</span>Delegate <u style="color: {{t.bridge}}">Lint the PWA</u> failed · 14m</div>
+          <div>The suite came back: 412 passed and 1 failed, <code style="font-size: 14px">FollowsLatestReply</code>. The witness keeps the first reply of a turn, so a resume restarts the timer from the wrong one.</div>
+          <div>I’ve a fix that reads the latest reply instead. It passes locally, with the new test.</div>
+          <div class="p620f-q" style="background: {{t.needsFill}}; border: {{qEdge}}">
+            <div style="font-weight: 700; color: {{t.needsHead}}">Main agent asks</div>
+            <div>Push the fix to the <b>witness</b> branch now?</div>
+            <div class="p620f-opt" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}">Yes, push</div>
+            <div class="p620f-opt" style="background: {{t.card}}; border: 1px solid {{t.stroke2}}">Not yet</div>
+          </div>
+        </div>
+      </div>
+      <div class="p620f-slot" style="border-top: 1px solid {{t.stroke2}}">
+        <sc-if value="{{heldToday}}"><div class="p620f-held" style="color: {{t.needsText}}">The session is waiting for an answer to its question. Answer that first, then reply.</div></sc-if>
+        <sc-if value="{{heldOne}}"><div class="p620f-held" style="color: {{t.needsText}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Answer its question first. <u style="color: {{t.bridgeText}}; font-weight: 600">Go to the question</u></div></sc-if>
+        <sc-if value="{{boxTall}}">
+          <div class="p620f-box" style="height: {{boxH}}px; flex-direction: column; justify-content: space-between; padding: 8px 8px 8px 16px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; border-bottom: 2px solid {{t.bridge}}">
+            <div style="color: {{draftColor}}; padding-top: 2px; font-size: 16px; line-height: 24px">{{draft}}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center"><span style="color: {{t.text2}}; margin-left: 4px"><dc-import name="Icon" icon="attach" size="20" hint-size="20px,20px"></dc-import></span><div class="p620f-send" style="background: {{t.bridge}}; color: {{t.onBridge}}; opacity: {{sendOp}}"><dc-import name="Icon" icon="send" size="20" hint-size="20px,20px"></dc-import></div></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{boxOne}}">
+          <div class="p620f-box" style="min-height: 52px; align-items: flex-end; gap: 4px; padding: 3px 3px 3px 4px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; border-bottom: 2px solid {{t.bridge}}">
+            <div class="p620f-send" style="color: {{t.text2}}"><dc-import name="Icon" icon="attach" size="20" hint-size="20px,20px"></dc-import></div>
+            <div style="flex: 1; min-width: 0; padding: 10px 0; font-size: 16px; line-height: 24px; color: {{draftColor}}; max-height: {{growMax}}px; overflow: hidden">{{draft}}</div>
+            <div class="p620f-send" style="background: {{t.bridge}}; color: {{t.onBridge}}; opacity: {{sendOp}}"><dc-import name="Icon" icon="send" size="20" hint-size="20px,20px"></dc-import></div>
+          </div>
+        </sc-if>
+      </div>
+      <div style="flex: none; height: {{sysBot}}px; display: grid; place-items: center"><span style="width: 134px; height: 5px; border-radius: 3px; background: {{t.text}}; opacity: .8"></span></div>
+    </div>
+  </div>
+    <sc-if value="{{measure}}">
+      <sc-for list="{{marks}}" as="m">
+        <div class="p620f-ms" style="left: {{msX}}px; top: {{m.top}}px; height: {{m.h}}px; background: {{m.color}}"></div>
+        <div class="p620f-ml" style="left: {{mlX}}px; top: {{m.mid}}px; color: {{m.color}}">{{m.text}}<br><span style="font-weight: 400">{{m.sub}}</span></div>
+      </sc-for>
+    </sc-if>
+  </div>
+  <div class="p620f-cap" style="color: {{capT.text}}">
+    <b><span class="p620f-chipl" style="color: {{capT.bridge}}; background: {{capT.tag}}">{{at}}</span>{{label}}</b>
+    <sc-for list="{{notes}}" as="n"><p style="color: {{capT.text2}}">{{n}}</p></sc-for>
+    <sc-if value="{{sr}}">
+      <div class="p620f-sr" style="background: {{capT.tag2}}; color: {{capT.text}}">
+        <svg viewBox="0 0 16 16" width="14" height="14" style="flex: none; margin-top: 1px; color: {{capT.bridge}}"><path d="M2 6h3l4-3v10l-4-3H2zM11.5 5.5a3.5 3.5 0 0 1 0 5M13.2 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+        <span>{{sr}}</span>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"f":{"editor":"json","default":{}},"$preview":{"width":300,"height":900}}'>
+// The S glyph family from the Slipgates brand spec (PR #558, not yet on main), on a 48 grid.
+const TOP = 'M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z';
+const BOT = 'M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z';
+const NEEDS_S = 'M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z';
+const DARK = {
+  shell: '#202225', card: '#2F3338', stroke2: 'rgba(255,255,255,.12)', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)',
+  bridge: '#2DD4BF', bridgeText: '#2DD4BF', onBridge: '#062621', active: '#4C9AFF', danger: '#FF6B6B',
+  needsText: '#FFD27A', needsHead: '#FFB224', needsFill: 'rgba(255,178,36,0.10)', needsEdge: 'rgba(255,178,36,0.75)', bezel: '#3A3F45', focus: '#FFFFFF',
+};
+const LIGHT = {
+  shell: '#EEF0F2', card: '#FFFFFF', stroke2: 'rgba(0,0,0,.12)', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)',
+  bridge: '#0B7A6E', bridgeText: '#0B7A6E', onBridge: '#FFFFFF', active: '#0B63E5', danger: '#C9302C',
+  needsText: '#7A4600', needsHead: '#8F5300', needsFill: '#FFF2D6', needsEdge: '#E8C27A', bezel: '#C9CDD2', focus: '#1A1A1A',
+};
+// Windows contrast themes as forced colours resolve them: Night sky (dark) and Desert (light).
+const NIGHT_SKY = {
+  shell: '#000000', card: '#000000', stroke2: '#FFFFFF', text: '#FFFFFF', text2: '#FFFFFF', text3: '#A6A6A6',
+  bridge: '#D6B4FD', bridgeText: '#8EE3F0', onBridge: '#2B2B2B', active: '#D6B4FD', danger: '#FFFFFF',
+  needsText: '#FFFFFF', needsHead: '#FFFFFF', needsFill: '#000000', needsEdge: '#FFFFFF', bezel: '#FFFFFF', focus: '#D6B4FD',
+};
+const DESERT = {
+  shell: '#FFFAEF', card: '#FFFAEF', stroke2: '#3D3D3D', text: '#3D3D3D', text2: '#3D3D3D', text3: '#676767',
+  bridge: '#903909', bridgeText: '#1C5E75', onBridge: '#FFF5E3', active: '#903909', danger: '#3D3D3D',
+  needsText: '#3D3D3D', needsHead: '#3D3D3D', needsFill: '#FFFAEF', needsEdge: '#3D3D3D', bezel: '#3D3D3D', focus: '#903909',
+};
+const CAP = {
+  dark: { text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', bridge: '#2DD4BF', needs: '#FFB224', tag: 'rgba(45,212,191,.14)', tag2: 'rgba(255,255,255,.06)' },
+  light: { text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', bridge: '#0B7A6E', needs: '#8F5300', tag: 'rgba(11,122,110,.12)', tag2: 'rgba(0,0,0,.05)' },
+};
+// The PWA's measured heights (pt), today: the header with a two-line title (meta on 3 lines up to
+// 390 wide, 2 lines from 412), the chip row, the tabs and the reply area with the held notice.
+const VP = {
+  se: { w: 375, h: 667, hdr: 151, ios: true, clock: '9:41' },
+  i15: { w: 390, h: 844, hdr: 151, ios: true, clock: '9:41' },
+  max: { w: 430, h: 932, hdr: 133, ios: true, clock: '9:41' },
+  android: { w: 412, h: 915, hdr: 133, ios: false, clock: '9:41' },
+};
+const TITLE = 'Fix the witness timer after a resume';
+const LONG = 'Fix the witness timer after a resume so it follows the latest reply of each turn, not the first';
+class Component extends DCLogic {
+  renderVals() {
+    const f = this.props.f || {};
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const t = f.hc ? (theme === 'light' ? DESERT : NIGHT_SKY) : (theme === 'light' ? LIGHT : DARK);
+    const v = VP[f.vp || 'i15'];
+    const k = f.k || 0.7;
+    const sysTop = v.ios ? 44 : 28, sysBot = v.ios ? 20 : 18;
+    const compact = f.state === 'compact';
+    const top = f.top || 'today';
+    const long = !!f.long;
+    // A clamp of two lines at the today size, or at 20/26 (D3's options).
+    const titleSize = top === 'small' ? 20 : 24, titleLine = top === 'small' ? 26 : 32;
+    const lines = long && top === 'today' ? 4 : 2;
+    const clamp = top === 'today' ? 'none' : '2';
+    let hdrH = v.hdr + (lines - 2) * titleLine;
+    const metaSave = v.hdr === 151 ? 36 : 18;
+    if (top === 'small') { hdrH = v.hdr - 12 - metaSave; }
+    if (top === 'oneline') { hdrH = v.hdr - metaSave; }
+    const showStrip = !compact && top !== 'intab' && top !== 'onerow';
+    const combo = !compact && top === 'onerow';
+    const showTabs = !compact && !combo;
+    const bottom = f.bottom || 'today';
+    const heldToday = f.held !== false && (bottom === 'today' || bottom === 'one');
+    const heldOne = f.held !== false && (bottom === 'notice' || bottom === 'both' || bottom === 'grown');
+    const boxOne = bottom === 'one' || bottom === 'both' || bottom === 'grown';
+    const boxH = 128;
+    const slotH = 8 + 12 + (heldToday ? 42 + 6 : 0) + (heldOne ? 21 + 6 : 0) + (boxOne ? (bottom === 'grown' ? 52 + 120 : 52) : boxH);
+    const hdrUsed = compact ? 48 : hdrH;
+    const stripH = showStrip ? 61 : 0, tabsH = showTabs ? 45 : (combo ? 53 : 0);
+    // Near the top the header rides up with the conversation under the pinned bar (iOS's large title).
+    const fullH = hdrUsed + stripH + tabsH;
+    const ride = compact ? 0 : Math.min(f.ride || 0, fullH - 48);
+    const convH = v.h - (fullH - ride) - slotH;
+    const glyphKind = f.glyph || 'needs';
+    const needs = glyphKind === 'needs';
+    const g = needs
+      ? { p1: NEEDS_S, p2: '', o2: 1, c: t.needsHead, bg: true, f1: f.hc ? t.shell : '#14100A', words: t.needsText }
+      : { p1: TOP, p2: BOT, o2: 0.3, c: t.active, bg: false, f1: 'currentColor', words: t.text };
+    const chipsWork = { p1: TOP, p2: BOT, o2: 0.3, color: t.active };
+    const chips = [
+      { ...chipsWork, name: 'Read witness s…', facts: '17m · 2 nested' },
+      { ...chipsWork, name: 'Run full test suite', facts: '16m' },
+    ];
+    const tabNames = top === 'intab' ? ['Conversation', 'Delegates · 3', 'Tools'] : ['Conversation', 'Delegates', 'Tools'];
+    const tabs = tabNames.map((text, i) => ({ text, sel: i === 0, color: i === 0 ? t.text : t.text2, weight: i === 0 ? 600 : 400, focus: f.focus === 'tab' && i === 1 ? `2px solid ${t.focus}` : 'none' }));
+    const sw = v.w, sh = sysTop + v.h + sysBot;
+    const fw = Math.round(sw * k) + 12, fh = Math.round(sh * k) + 12;
+    const dpct = (n) => `${Math.round((n / v.h) * 100)}%`;
+    // Measurement marks on the frame's right edge, in frame pixels; labels in pt.
+    const y0 = 6 + sysTop * k;
+    const capT = CAP[theme];
+    const marks = [];
+    let y = y0;
+    const chrome = fullH - ride;
+    marks.push({ top: y, h: chrome * k, mid: y + (chrome * k) / 2, text: `${chrome} pt`, sub: 'chrome', color: capT.needs });
+    y += chrome * k;
+    marks.push({ top: y, h: convH * k, mid: y + (convH * k) / 2, text: `${convH} pt`, sub: dpct(convH), color: capT.bridge });
+    y += convH * k;
+    marks.push({ top: y, h: slotH * k, mid: y + (slotH * k) / 2, text: `${slotH} pt`, sub: 'reply', color: capT.text2 });
+    const draft = f.draft || '';
+    return {
+      t, capT, k, outerW: fw + (f.measure ? 60 : 0), msX: fw + 6, mlX: fw + 14, sw, sh, fw, fh, sysTop, sysBot, clock: v.clock,
+      radius: v.ios ? 34 : 26, bezel: `6px solid ${t.bezel}`,
+      rest: !compact, compact, hdrH, titleSize, titleLine, titleMax: (clamp === 'none' ? lines : 2) * titleLine, clamp,
+      title: long ? LONG : TITLE,
+      metaWrap: top === 'oneline' || top === 'small' ? 'nowrap' : 'normal',
+      statusText: needs ? 'Waiting on you · 3 delegates still running' : 'Working · 3 delegates still running',
+      glyph: g, chips, tabs, showStrip, showTabs, combo,
+      offset: compact ? (f.offset ?? 300) : (f.offset ?? 0),
+      qEdge: `${f.hc ? 2 : 1}px solid ${t.needsEdge}`,
+      heldToday, heldOne, boxTall: !boxOne, boxOne, boxH,
+      draft: draft || 'Message the main agent', draftColor: draft ? t.text : t.text3, sendOp: draft ? 1 : 0.55, growMax: 144,
+      hdrOutline: f.focus === 'header' ? `2px solid ${t.focus}` : 'none',
+      focusBack: f.focus === 'back' ? `2px solid ${t.focus}` : 'none',
+      measure: !!f.measure, marks,
+      ride, rideH: ride ? `${fullH - ride}px` : 'auto', riding: ride > 0, barOp: Math.max(0, Math.min(1, (ride - 24) / 40)),
+      at: f.at || '', label: f.label || '', notes: f.notes || [], sr: f.sr || '',
+    };
+  }
+}
+</script>
+</body>
+</html>

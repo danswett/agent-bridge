@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Proposal #620 · collapsing session header · prototype</title>
+<!--
+  Proposal #620 · awaits owner decision. docs/design/proposals/620-compact-header.md.
+  A self-contained sketch of the PWA's phone session header collapsing on scroll: no dependencies,
+  no network. Open it on a phone, or in a desktop browser (a 390 × 844 frame). Demo names only.
+-->
+<style>
+  :root {
+    --shell: #EEF0F2; --card: #FFFFFF; --stroke: rgba(0,0,0,.12); --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
+    --bridge: #0B7A6E; --on-bridge: #FFFFFF; --active: #0B63E5; --danger: #C9302C;
+    --needs-text: #7A4600; --needs-head: #8F5300; --needs-fill: #FFF2D6; --needs-edge: #E8C27A; --needs-ink: #14100A; --focus: #1A1A1A;
+    --bar: 48px; --full: 257px; --ty: 0px;
+    --dur: 167ms; --ease: cubic-bezier(.33, 0, .67, 1); --xfade: 83ms;
+    --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --shell: #202225; --card: #2F3338; --stroke: rgba(255,255,255,.12); --text: #FFFFFF; --text2: rgba(255,255,255,.72); --text3: rgba(255,255,255,.54);
+      --bridge: #2DD4BF; --on-bridge: #062621; --active: #4C9AFF; --danger: #FF6B6B;
+      --needs-text: #FFD27A; --needs-head: #FFB224; --needs-fill: rgba(255,178,36,.10); --needs-edge: rgba(255,178,36,.75); --focus: #FFFFFF;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--shell); color: var(--text); }
+  body { overflow: hidden; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+  /* The device: the whole viewport on a phone, a 390 × 844 frame on a wider screen. */
+  .phone { position: fixed; inset: 0; overflow: hidden; background: var(--shell); }
+  @media (min-width: 560px) and (min-height: 700px) {
+    body { display: grid; place-items: center; background: #8A9096; }
+    .phone { position: relative; width: 390px; height: min(844px, 100vh - 32px); border-radius: 28px; box-shadow: 0 0 0 6px #3A3F45; }
+  }
+  .screen { position: absolute; left: 0; right: 0; top: var(--safe-top); bottom: 0; display: flex; flex-direction: column; }
+  .stage { position: relative; flex: 1; min-height: 0; overflow: hidden; overflow: clip; }
+
+  /* The conversation scrolls under the header, which floats over its top: collapsing never moves it. */
+  .scroller { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; padding: var(--full) 16px 16px; scroll-padding-top: calc(var(--covered, var(--full)) + 8px); }
+  .head { position: absolute; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none; }
+  .full { pointer-events: auto; background: var(--shell); border-bottom: 1px solid var(--stroke); transform: translateY(var(--ty)); will-change: transform; }
+  .animating .full { transition: transform var(--dur) var(--ease); }
+  .bar { position: absolute; left: 0; right: 0; top: 0; z-index: 3; height: var(--bar); display: flex; align-items: center; gap: 6px; padding: 0 4px; pointer-events: none; }
+  .bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: var(--shell); border-bottom: 1px solid var(--stroke); opacity: 0; transition: opacity var(--xfade) linear; }
+  .ib { pointer-events: auto; flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 8px; }
+  .bt { pointer-events: auto; flex: 1; min-width: 0; height: 44px; display: flex; align-items: center; gap: 8px; text-align: left; font-size: 17px; line-height: 22px; font-weight: 600; opacity: 0; visibility: hidden; transition: opacity var(--xfade) linear, visibility 0s linear var(--xfade); }
+  .bt span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  [data-solid] .bar::before { opacity: 1; }
+  [data-titled] .bt { opacity: 1; visibility: visible; transition: opacity var(--xfade) linear; }
+
+  /* The at-rest header: today's, unchanged. */
+  .top { display: grid; grid-template-columns: 1fr; padding: 8px 52px 12px; min-height: 151px; }
+  h2 { margin: 0; font-size: 24px; line-height: 32px; font-weight: 700; letter-spacing: -.01em; }
+  .meta { display: flex; gap: 6px; margin-top: 6px; font-size: 13px; line-height: 18px; color: var(--text2); }
+  .meta b { color: var(--needs-text); font-weight: 600; }
+  .meta i { font-style: normal; color: var(--text); }
+  .chips { display: flex; gap: 8px; padding: 12px 16px; overflow-x: auto; border-top: 1px solid var(--stroke); scrollbar-width: none; }
+  .chip { flex: none; display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 18px; background: var(--card); border: 1px solid var(--stroke); font-size: 13px; }
+  .chip span { color: var(--text2); }
+  .tabs { display: flex; gap: 20px; padding: 0 16px; height: 45px; border-top: 1px solid var(--stroke); }
+  .tab { position: relative; height: 44px; font-size: 14px; color: var(--text2); }
+  .tab[aria-selected="true"] { color: var(--text); font-weight: 600; }
+  .tab[aria-selected="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px; border-radius: 2px; background: var(--bridge); }
+  .glyph { flex: none; }
+  .needs { color: var(--needs-head); }
+
+  /* The conversation. */
+  .conv { font-size: 16px; line-height: 24px; display: grid; gap: 12px; padding-top: 12px; }
+  .conv p { margin: 0; }
+  .you { justify-self: end; max-width: 84%; padding: 10px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--stroke); }
+  .who, .ev { font-size: 13px; line-height: 18px; color: var(--text2); }
+  .who b { color: var(--text); }
+  .ev u { color: var(--bridge); }
+  code { font-size: 14px; }
+  .q { display: grid; gap: 10px; padding: 14px 16px; border-radius: 10px; background: var(--needs-fill); border: 1px solid var(--needs-edge); }
+  .q h3 { margin: 0; font-size: 14px; color: var(--needs-head); }
+  .opt { text-align: left; height: 44px; padding: 0 14px; border-radius: 8px; background: var(--card); border: 1px solid var(--stroke); }
+
+  /* The reply area: today's, unchanged. */
+  .slot { flex: none; padding: 8px 16px calc(12px + var(--safe-bottom)); border-top: 1px solid var(--stroke); background: var(--shell); }
+  .held { margin: 0 0 6px; font-size: 13px; line-height: 18px; color: var(--needs-text); }
+  .box { display: grid; grid-template-rows: auto auto; padding: 8px 8px 8px 16px; border-radius: 6px; background: var(--card); border: 1px solid var(--stroke); border-bottom: 2px solid var(--bridge); }
+  textarea { resize: none; border: 0; background: none; color: var(--text); font: inherit; font-size: 16px; line-height: 24px; padding: 2px 0; min-height: 72px; }
+  textarea::placeholder { color: var(--text3); }
+  textarea:focus { outline: none; }
+  .box:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  .send { width: 32px; height: 32px; border-radius: 6px; display: grid; place-items: center; background: var(--bridge); color: var(--on-bridge); opacity: .55; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* Reduced motion: nothing travels; the header cross-fades in and out. */
+  @media (prefers-reduced-motion: reduce) {
+    .animating .full { transition: none; animation: xfade var(--xfade) linear; }
+    @keyframes xfade { from { opacity: 0; } to { opacity: 1; } }
+  }
+  @media (forced-colors: active) {
+    .full, .bar::before, .slot { background: Canvas; border-color: CanvasText; }
+    .bar::before { border-bottom: 1px solid CanvasText; }
+    .tab[aria-selected="true"]::after { background: Highlight; }
+    .q, .chip, .you, .opt, .box { border-color: CanvasText; }
+  }
+</style>
+</head>
+<body>
+<div class="phone" id="phone">
+  <div class="screen">
+    <div class="stage" id="stage">
+      <div class="head" id="head">
+        <div class="bar" id="bar">
+          <button class="ib" type="button" aria-label="Back to sessions"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="bt" id="bt" type="button" tabindex="-1" aria-hidden="true">
+            <svg class="glyph needs" viewBox="0 0 48 48" width="18" height="18"><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>
+            <span>Fix the witness timer after a resume</span>
+          </button>
+          <button class="ib" type="button" aria-label="More" style="margin-left: auto"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg></button>
+        </div>
+        <header class="full" id="full">
+          <div class="top">
+            <h2 id="title">Fix the witness timer after a resume</h2>
+            <div class="meta">
+              <svg class="glyph needs" viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="margin-top: 1px"><circle cx="24" cy="24" r="23" fill="currentColor"/><path fill="var(--needs-ink)" d="M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z"/></svg>
+              <span id="meta"><b>Waiting on you</b> · 3 delegates still running · <i>Demo machine</i> · demo/agent-bridge</span>
+            </div>
+          </div>
+          <div class="chips" aria-label="Delegates" role="group">
+            <button class="chip" type="button"><svg viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="color: var(--active)"><path fill="currentColor" d="M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z"/><path fill="currentColor" fill-opacity=".3" d="M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z"/></svg><b>Read witness logic</b><span>17m · 2 nested</span></button>
+            <button class="chip" type="button"><svg viewBox="0 0 48 48" width="16" height="16" aria-hidden="true" style="color: var(--active)"><path fill="currentColor" d="M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z"/><path fill="currentColor" fill-opacity=".3" d="M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z"/></svg><b>Run full test suite</b><span>16m</span></button>
+          </div>
+          <div class="tabs" role="tablist" aria-label="Session">
+            <button class="tab" role="tab" type="button" aria-selected="true">Conversation</button>
+            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1">Delegates</button>
+            <button class="tab" role="tab" type="button" aria-selected="false" tabindex="-1">Tools</button>
+          </div>
+        </header>
+      </div>
+      <div class="scroller" id="scroller" tabindex="-1">
+        <div class="conv" id="conv"></div>
+      </div>
+    </div>
+    <div class="slot">
+      <p class="held">The session is waiting for an answer to its question. Answer that first, then reply.</p>
+      <div class="box">
+        <label class="sr" for="reply">Message the main agent</label>
+        <textarea id="reply" rows="2" placeholder="Message the main agent"></textarea>
+        <div class="row">
+          <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" style="color: var(--text2); margin-left: 2px"><path d="M16.5 6.5l-8 8a2.5 2.5 0 003.5 3.5l8.5-8.5a4.5 4.5 0 00-6.4-6.4L5.6 11.6a6.5 6.5 0 009.2 9.2l6.7-6.7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <button class="send" type="button" aria-label="Send" aria-disabled="true"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  'use strict';
+  // The proposal's numbers (pt): fold away after 32 down, come back after 64 up, both counted in one direction.
+  const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40, SOLID = 4;
+  const $ = (id) => document.getElementById(id);
+  const phone = $('phone'), scroller = $('scroller'), full = $('full'), conv = $('conv'), bt = $('bt');
+
+  const turns = [
+    ['you', 'Can you find out why the witness timer restarts after a resume? It happened twice this morning.'],
+    ['who', 'Main agent', '41m ago'],
+    ['p', 'Looking at it. The timer is armed by the witness when a reply arrives, and a resume replays the turn’s replies in order.'],
+    ['p', 'The witness keeps the first reply it sees for each turn. After a resume that is an old one, so the timer is measured from the wrong moment and fires early.'],
+    ['ev', 'Read <code>witness.js</code> and <code>resume.js</code> · 38m'],
+    ['p', 'I can confirm it with a test that resumes a session mid-turn and checks which reply the witness holds.'],
+    ['you', 'Run the suite and check the witness logic, both in the background.'],
+    ['who', 'Main agent', '17m ago'],
+    ['p', 'Started 2 background agents: one runs the full suite, one reads the witness logic. I’ll report back when both are done.'],
+    ['ev', '◎ Started 3 delegates · 17m'],
+    ['ev', '⊗ Delegate <u>Lint the PWA</u> failed · 14m'],
+    ['p', 'The suite came back: 412 passed and 1 failed, <code>FollowsLatestReply</code>. The witness keeps the first reply of a turn, so a resume restarts the timer from the wrong one.'],
+    ['p', 'The lint delegate failed on an unrelated rule in a file nobody touched today; I left it alone.'],
+    ['p', 'I’ve a fix that reads the latest reply instead. It passes locally, with the new test, and the full suite is green again.'],
+    ['p', 'The change is eleven lines in the witness and a forty-line test. Nothing else reads the field, so nothing else should notice.'],
+    ['q'],
+  ];
+  conv.innerHTML = turns.map(([k, a, b]) => {
+    if (k === 'you') return `<p class="you">${a}</p>`;
+    if (k === 'who') return `<p class="who"><b>${a}</b>&nbsp;&nbsp;${b}</p>`;
+    if (k === 'ev') return `<p class="ev">${a}</p>`;
+    if (k === 'q') return '<section class="q" id="question" aria-labelledby="qh"><h3 id="qh">Main agent asks</h3><p>Push the fix to the <b>witness</b> branch now?</p><button class="opt" type="button">Yes, push</button><button class="opt" type="button">Not yet</button></section>';
+    return `<p>${a}</p>`;
+  }).join('');
+
+  let fullH = 257, room = fullH - BAR;      // room: how far the header can slide before only the bar is left
+  let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0;
+
+  const measure = () => {
+    fullH = full.offsetHeight;
+    room = Math.max(0, fullH - BAR);
+    phone.style.setProperty('--full', `${fullH}px`);
+    render();
+  };
+
+  const animate = () => {
+    phone.classList.add('animating');
+    clearTimeout(animTimer);
+    animTimer = setTimeout(() => phone.classList.remove('animating'), 260);
+  };
+
+  const setReturned = (v) => {
+    if (returned === v) return;
+    returned = v; run = 0;
+    animate(); render();
+  };
+
+  // Near the top the header rides up with the conversation (iOS's large title); past that it is compact,
+  // and comes back over the conversation on 64 pt up (Material's enterAlways), going again on 32 pt down.
+  function render() {
+    const s = last;
+    const ty = returned ? 0 : -Math.min(s, room);
+    phone.style.setProperty('--ty', `${ty}px`);
+    phone.style.setProperty('--covered', `${Math.max(BAR, fullH + ty)}px`);
+    const hidden = -ty;
+    phone.toggleAttribute('data-solid', hidden > SOLID);
+    phone.toggleAttribute('data-titled', hidden >= TITLE_IN);
+    phone.dataset.state = hidden === 0 ? (s > 0 ? 'returned' : 'rest') : hidden >= room ? 'compact' : 'riding';
+  }
+
+  function onScroll() {
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    const s = Math.min(Math.max(scroller.scrollTop, 0), Math.max(max, 0)); // ignore rubber-band overscroll
+    const d = s - last;
+    last = s;
+    if (programmatic || d === 0) { render(); return; }
+    const nd = d > 0 ? 1 : -1;
+    if (nd !== dir) { dir = nd; run = 0; }
+    run += Math.abs(d);
+    if (s <= 0) { returned = false; run = 0; }
+    else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
+    else if (!returned && dir < 0 && run >= UP && s > room) setReturned(true);
+    render();
+  }
+
+  scroller.addEventListener('scroll', onScroll, { passive: true });
+  bt.addEventListener('click', () => setReturned(true));
+  // Focus is never hidden: reaching anything in the header brings the header back first, and holds it.
+  full.addEventListener('focusin', () => { focusInside = true; if (last > 0) setReturned(true); });
+  full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) focusInside = false; });
+  if ('ResizeObserver' in window) new ResizeObserver(measure).observe(full); else addEventListener('resize', measure);
+
+  // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
+  const scrollProgrammatically = (target) => {
+    const wasFull = phone.dataset.state === 'rest' || phone.dataset.state === 'returned';
+    programmatic = true;
+    returned = wasFull;   // hold the header as it was while the scroll happens: no flash
+    const top = target(wasFull ? fullH : BAR);
+    scroller.scrollTop = top;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      last = Math.max(0, scroller.scrollTop);
+      returned = wasFull && last > 0;
+      dir = 0; run = 0; programmatic = false;
+      render();
+    }));
+  };
+  window.proto620 = {
+    state: () => phone.dataset.state,
+    get room() { return room; },
+    get fullHeight() { return fullH; },
+    scrollToQuestion: () => scrollProgrammatically((covered) => $('question').offsetTop - covered - 8),
+  };
+  measure();
+})();
+</script>
+</body>
+</html>
