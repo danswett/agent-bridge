@@ -221,3 +221,37 @@ test('an event numbered again may be an older state than the one held, so the li
   assert.equal(t.requests('sessions.subscribe').length, 2);
   assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true });
 });
+
+test('a snapshot whose synced has no revision it can read is never resumed from, even with one kept from before', async () => {
+  const store = new SessionsStore();
+  // Another run's, which this one could reach with changes it never sent.
+  store.revision = 9;
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1') });
+  t.host({ ev: 'sessions.synced', seq: 2, data: {} });
+
+  assert.equal(store.resumeFrom('run-1'), null);
+});
+
+test('a synced naming the live sessions after an answer that does not say it resumed is not taken for a full snapshot', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('kept') });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 4 } });
+
+  const again = fakeTransport();
+  const client = new HostClient(again, { store, timeoutMs: 500 });
+  const p = client.subscribe({ patch: true, instance: 'run-1' });
+  await flush();
+  again.host({ re: again.lastRequest('sessions.subscribe').id, ok: true, result: { revision: 4, count: 0, resumed: 'true' } });
+  await p;
+  again.host({ ev: 'sessions.synced', seq: 1, data: { revision: 4, live: ['kept'] } });
+  await flush();
+
+  assert.ok(store.has('kept'));
+  assert.equal(client.synced, false);
+  assert.equal(again.requests('sessions.subscribe').length, 2);
+  assert.deepEqual(again.lastRequest('sessions.subscribe').data, { patch: true });
+});

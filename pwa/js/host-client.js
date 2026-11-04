@@ -57,6 +57,10 @@ export class HostClient {
   // Whether anything was dropped since the latest subscribe was answered: a snapshot with a session
   // it could not read is not the whole list, and nothing resumes from it.
   #dropped = false;
+  // Whether the latest subscribe gave since: a synced naming the live sessions then, its answer not
+  // saying it resumed, can't be told for a full snapshot's, which would drop every session it didn't
+  // send again.
+  #askedSince = false;
   #usageSubscribed = false;
   #usageShared = false;
   #updateSubscribed = false;
@@ -211,6 +215,7 @@ export class HostClient {
     this.synced = false;
     this.#tracking = false;
     const since = this.#patch ? this.store?.resumeFrom?.(this.#instance) ?? null : null;
+    this.#askedSince = since !== null;
     const data = this.#patch ? { patch: true, ...(since ? { since } : {}) } : {};
     const { id, done } = this.#request(Ops.sessionsSubscribe, data);
     this.#subscribing = id;
@@ -341,7 +346,9 @@ export class HostClient {
           if (this.store) {
             this.store.revision = Number.isFinite(data.revision) ? data.revision : this.store.revision;
             this.store.instance = this.#instance;
-            this.store.whole = !this.#dropped;
+            // A revision it can't read can't be resumed from: the one kept from before may be another
+            // run's, which this one could reach with changes it never sent.
+            this.store.whole = !this.#dropped && Number.isSafeInteger(data.revision);
             this.store.setHeld(readDiscoveryHeld(data.discoveryHeld));
             this.store.retain(keep);
           }
@@ -393,7 +400,7 @@ export class HostClient {
   // does anything dropped since resuming was asked for, which the host could not know to resend.
   #kept(snapshot, live) {
     if (live !== undefined && live !== null && !(Array.isArray(live) && live.every((id) => typeof id === 'string'))) { return null; }
-    if (!this.#resumed) { return snapshot; }
+    if (!this.#resumed) { return this.#askedSince && Array.isArray(live) ? null : snapshot; }
     if (!Array.isArray(live) || this.store?.whole !== true) { return null; }
     return live.every((id) => snapshot.has(id) || this.store.has(id)) ? new Set(live) : null;
   }
