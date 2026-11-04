@@ -17,6 +17,7 @@ are generated.
 | `update.json` | `update.get`, `update.state`, `update.check` and `update.install` |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse |
+| `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
 
 ## Shape
@@ -101,7 +102,7 @@ replay until its entry goes.
 
 The C# records generate the files: `ProtocolVectors.cs` and `KnownDifferences.cs` in
 `tests/AgentBridge.Protocol.Tests`, `SignedCommandVectorTests.cs` in `tests/AgentBridge.Host.Tests`,
-and `PatchReplayTests.cs` in `tests/AgentBridge.Host.Core.Tests`. A test in each project fails when the committed files differ
+`PatchReplayTests.cs` in `tests/AgentBridge.Host.Core.Tests`, and `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests`. A test in each project fails when the committed files differ
 from what they generate. After a deliberate change to a record, a limit, a check's words or the
 vectors themselves, write them again:
 
@@ -110,6 +111,7 @@ $env:UPDATE_PROTOCOL_VECTORS = '1'
 dotnet test tests/AgentBridge.Protocol.Tests --filter "FullyQualifiedName~The_committed_vectors"
 dotnet test tests/AgentBridge.Host.Tests --filter "FullyQualifiedName~The_committed_signed_command_vectors"
 dotnet test tests/AgentBridge.Host.Core.Tests --filter "FullyQualifiedName~The_committed_patch_sequences"
+dotnet test tests/AgentBridge.Transport.Tests --filter "FullyQualifiedName~The_IK_handshake_and_transport_messages"
 Remove-Item Env:UPDATE_PROTOCOL_VECTORS
 ```
 

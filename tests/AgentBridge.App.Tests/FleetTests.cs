@@ -1708,6 +1708,38 @@ public sealed class RelayFleetLinkTests
         Assert.Equal(BlobFormat.Base64Url(phone.Public), command.By);
     }
 
+    // #603: the app reconnecting after sleep opened each machine's channel with XX and then asked
+    // hello, two round trips before anything. To a machine it has had a channel to, hello is
+    // answered in the IK handshake, as HostConnection asks it.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_machine_the_app_has_had_a_channel_to_answers_its_hello_in_the_handshake_of_the_next()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(7, "octo");
+        await using var host = await relay.ConnectAsync(token, "Build server", "host");
+        // Whether the channel was open when each hello ran: not yet, for one answered early.
+        var hellos = new System.Collections.Concurrent.ConcurrentQueue<bool>();
+        host.Hub.JsonOptions = ProtocolJson.Options;
+        host.Hub.EarlyOps = [Ops.Hello];
+        host.Hub.Handler = (ch, op, _) =>
+        {
+            if (op != Ops.Hello) { return Task.FromResult<object?>(null); }
+            hellos.Enqueue(ch.IsOpen);
+            return Task.FromResult<object?>(new HelloResult(1, new MachineInfo(host.Id, "Build server", "windows", "0.1.0"), [Capabilities.SessionsRead]));
+        };
+        await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
+        link.Start();
+        await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);
+
+        await using (var first = await link.OpenAsync(host.Id, default)) { Assert.Equal(host.Id, (await first.HelloAsync(changes: true)).Machine.Id); }
+        await using var second = await link.OpenAsync(host.Id, default);
+        var hello = await second.HelloAsync(changes: true);
+
+        Assert.Equal("Build server", hello.Machine.Name);
+        Assert.Equal(new[] { true, false }, hellos);
+    }
+
     [Fact]
     [Trait("Category", "Network")]
     public async Task A_host_whose_introduction_is_malformed_is_offline_for_now_not_the_end_of_trying()
@@ -1716,7 +1748,7 @@ public sealed class RelayFleetLinkTests
         var token = relay.TokenFor(7, "octo");
         await using var host = await relay.ConnectAsync(token, "Build server", "host");
         // A peer that introduces itself without a name or kind.
-        typeof(ChannelHub).GetField("intro", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(host.Hub, "{}"u8.ToArray());
+        foreach (var field in new[] { "name", "kind" }) { typeof(ChannelHub).GetField(field, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.SetValue(host.Hub, null); }
         await using var link = new RelayFleetLink(_ => Task.FromResult<RelayAccount?>(new RelayAccount(relay.Url.ToString(), token, "7", "octo")), P256KeyPair.Generate(), Product.DeviceName("Test PC"));
         link.Start();
         await Wait.UntilAsync(() => link.Hosts.Any(h => h.Id == host.Id), "the other machine in presence", Patience);

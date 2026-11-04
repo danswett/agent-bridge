@@ -1,8 +1,10 @@
 // Noise_XX_P256_AESGCM_SHA256 on WebCrypto alone: no WASM, no libraries. It runs in
 // browsers (including Safari) and in Node 20+ (globalThis.crypto.subtle). It mirrors
 // dotnet/Noise.cs line for line, and the comment there defines the P-256 DH function.
+// IKHandshake below is IK with the same suite, for a host whose key an earlier XX taught (#603).
 
 export const PROTOCOL_NAME = 'Noise_XX_P256_AESGCM_SHA256';
+export const IK_PROTOCOL_NAME = 'Noise_IK_P256_AESGCM_SHA256';
 const HASHLEN = 32, PUBLEN = 65, TAGLEN = 16, MAX_MESSAGE = 65535;
 const subtle = globalThis.crypto.subtle;
 const enc = new TextEncoder();
@@ -197,6 +199,85 @@ export class XXHandshake {
   async advance() {
     this.step++;
     if (this.step === 3) {
+      const [c1, c2] = await this.ss.split();
+      [this.send, this.receive] = this.initiator ? [c1, c2] : [c2, c1];
+    }
+  }
+}
+
+// Noise_IK_P256_AESGCM_SHA256, as src/AgentBridge.Transport/Noise.cs's IKHandshake:
+//   <- s
+//   ...
+//   -> e, es, s, ss
+//   <- e, ee, se
+// The first message is encrypted only to the responder's static key and can be replayed, so only
+// what the responder said it takes early goes in it (channels.js).
+export class IKHandshake {
+  static async create(initiator, staticKey, prologue, responderStatic = null, fixedEphemeral = null) {
+    const hs = new IKHandshake();
+    hs.initiator = initiator; hs.s = staticKey; hs.e = fixedEphemeral; hs.re = null;
+    hs.remoteStatic = null; hs.step = 0; hs.send = null; hs.receive = null;
+    if (initiator) {
+      if (!responderStatic) { throw new Error("IK needs the responder's static key"); }
+      assertOnCurve(responderStatic);
+      hs.remoteStatic = responderStatic;
+    }
+    hs.ss = await SymmetricState.create(IK_PROTOCOL_NAME);
+    await hs.ss.mixHash(prologue);
+    // The pre-message (<- s): both sides hash the responder's static key.
+    await hs.ss.mixHash(initiator ? responderStatic : staticKey.public);
+    return hs;
+  }
+  get handshakeHash() { return this.ss.h; }
+  get isComplete() { return this.step === 2; }
+  myTurn() { return this.initiator ? this.step === 0 : this.step === 1; }
+
+  async writeMessage(payload) {
+    if (!this.myTurn() || this.isComplete) { throw new Error("not this side's turn"); }
+    const ss = this.ss;
+    this.e ??= await P256KeyPair.generate();
+    const parts = [this.e.public];
+    await ss.mixHash(this.e.public);
+    if (this.step === 0) {
+      await ss.mixKey(await this.e.dh(this.remoteStatic));
+      parts.push(await ss.encryptAndHash(this.s.public));
+      await ss.mixKey(await this.s.dh(this.remoteStatic));
+    } else {
+      await ss.mixKey(await this.e.dh(this.re));
+      await ss.mixKey(await this.e.dh(this.remoteStatic));
+    }
+    parts.push(await ss.encryptAndHash(payload));
+    const msg = concat(...parts);
+    if (msg.length > MAX_MESSAGE) { throw new Error('message too long'); }
+    await this.advance();
+    return msg;
+  }
+
+  async readMessage(message) {
+    if (this.myTurn() || this.isComplete) { throw new Error("not the peer's turn"); }
+    let at = 0;
+    const take = (n) => {
+      if (message.length - at < n) { throw new Error('short handshake message'); }
+      const r = message.slice(at, at + n); at += n; return r;
+    };
+    const ss = this.ss;
+    this.re = take(PUBLEN); await ss.mixHash(this.re);
+    if (this.step === 0) {
+      await ss.mixKey(await this.s.dh(this.re));
+      this.remoteStatic = await ss.decryptAndHash(take(PUBLEN + TAGLEN));
+      await ss.mixKey(await this.s.dh(this.remoteStatic));
+    } else {
+      await ss.mixKey(await this.e.dh(this.re));
+      await ss.mixKey(await this.s.dh(this.re));
+    }
+    const payload = await ss.decryptAndHash(message.slice(at));
+    await this.advance();
+    return payload;
+  }
+
+  async advance() {
+    this.step++;
+    if (this.step === 2) {
       const [c1, c2] = await this.ss.split();
       [this.send, this.receive] = this.initiator ? [c1, c2] : [c2, c1];
     }

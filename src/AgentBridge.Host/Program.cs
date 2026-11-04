@@ -603,6 +603,9 @@ async Task<int> ServeAsync(HostHandover handover)
             {
                 JsonOptions = ProtocolJson.Options,
                 Handler = trustedPeers.Handler(service),
+                // Answered from an IK first message (#603), which a relay can replay: hello only
+                // reads, so running it again changes nothing.
+                EarlyOps = [Ops.Hello],
             };
             trustedPeers.Attach(hub);
             hub.Accepted += ch => Log($"channel from {HostConfigFile.CleanName(ch.PeerName)} ({HostConfigFile.CleanName(ch.PeerKind)}, {ch.PeerId[..8]})");

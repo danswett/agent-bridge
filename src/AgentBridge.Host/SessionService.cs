@@ -340,11 +340,15 @@ public sealed class SessionService
             using var once = G5?.Hold();
             foreach (var (channel, watch) in helloWatches)
             {
-                if (!channel.IsOpen)
+                if (channel.Closed.IsCompleted)
                 {
                     helloWatches.TryRemove(channel, out _);
                     continue;
                 }
+                // Not open yet: a hello answered in an IK handshake (#603) watches the channel a
+                // moment before it opens. Looked at from the next tick, rather than told a change
+                // now that could not be sent.
+                if (!channel.IsOpen) { continue; }
                 // Not HelloFor: a look needs no copy of the session list, only what Said compares.
                 var said = Said(ReadOnly?.Invoke(), Offered(channel));
                 lock (watch)
