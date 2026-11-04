@@ -351,6 +351,39 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_oversized_saved_workspace_list_blocks_launch_edits_without_losing_a_draft_or_other_Settings_access()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        settings.WorkspaceLabel = "Draft";
+        settings.WorkspaceFolder = Path.Combine(app, "draft");
+        settings.AddWorkspace();
+        var draft = Assert.Single(settings.Workspaces);
+        const string problem = "The configured workspace list is too large. Edit config.json, then reload.";
+        await ConnectedWith(host.Status with { Settings = host.Status.Settings with { Launch = null, LaunchProblem = problem } });
+
+        Assert.True(settings.HostRunning);
+        Assert.False(settings.CanEditLaunchSettings);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.Equal(problem, settings.LaunchSettingsState);
+        await settings.ReloadLaunchSettingsAsync();
+        Assert.Equal(problem, settings.Error);
+        Assert.Equal(draft, Assert.Single(settings.Workspaces));
+        Assert.Empty(host.Sent(HostOps.Settings));
+
+        Saves(d => host.Status.Settings with { Name = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!.Name });
+        settings.MachineName = "Still editable";
+        await settings.SaveNameAsync();
+        Assert.False(settings.HasError, settings.Error);
+        Assert.Equal("Still editable", host.Status.Settings.Name);
+
+        await ConnectedWith(host.Status with { Settings = host.Status.Settings with { Launch = HostLaunchSettings.Default, LaunchProblem = null } });
+        await settings.ReloadLaunchSettingsAsync();
+        Assert.False(settings.HasError, settings.Error);
+        Assert.True(settings.CanEditLaunchSettings);
+        Assert.Empty(settings.Workspaces);
+    }
+
+    [Fact]
     public async Task Removing_a_workspace_does_not_clear_another_workspaces_default_label_that_matches_its_path()
     {
         var removedPath = Path.Combine(app, "removed");

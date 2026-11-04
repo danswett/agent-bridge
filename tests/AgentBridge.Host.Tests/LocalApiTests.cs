@@ -208,6 +208,42 @@ public sealed class LocalApiTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Oversized_existing_workspaces_do_not_break_subscription_or_unrelated_settings_or_erase_authorizations()
+    {
+        var workspaces = Enumerable.Range(0, LaunchProtocol.MaxWorkspaces).Select(i => new ApprovedWorkspace($"Repo{i}",
+            Path.Combine([profile, $"repo{i}", .. Enumerable.Repeat(new string('x', 100), 10)]))).ToList();
+        var root = new JsonObject
+        {
+            ["launch"] = new JsonObject { ["workspaces"] = JsonSerializer.SerializeToNode(workspaces, ProtocolJson.Options) },
+        };
+        var path = Path.Combine(profile, HostSettings.FileName);
+        File.WriteAllText(path, root.ToJsonString());
+        var ch = await ConnectAsync();
+
+        var subscribed = await ch.CallAsync<HostStatus>(HostOps.Subscribe);
+        Assert.Null(subscribed.Settings.Launch);
+        Assert.Contains("too large", subscribed.Settings.LaunchProblem);
+        var conflict = await ch.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(
+            Launch: HostLaunchSettings.Default, LaunchBaseline: HostLaunchSettings.Default.Baseline, LaunchConfirmed: true));
+        Assert.True(conflict.Conflict);
+        Assert.Equal(subscribed.Settings.LaunchProblem, conflict.Settings.LaunchProblem);
+        var saved = await ch.CallAsync<SettingsResult>(HostOps.Settings, new SettingsRequest(Name: "Still editable"));
+        Assert.Equal("Still editable", saved.Settings.Name);
+        Assert.Null(saved.Settings.Launch);
+        Assert.Equal(subscribed.Settings.LaunchProblem, saved.Settings.LaunchProblem);
+        var pushed = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
+        Assert.Equal(saved.Settings, pushed.Settings);
+        Assert.Equal(workspaces, LaunchSettingsEditor.View(HostSettings.Load(profile).Settings.Launch).Workspaces);
+
+        root["launch"]!["workspaces"] = JsonSerializer.SerializeToNode(workspaces.Take(1), ProtocolJson.Options);
+        File.WriteAllText(path, root.ToJsonString());
+        control.Refresh();
+        var recovered = (await NextAsync(ch)).Data.Deserialize<HostStatus>(ProtocolJson.Options)!;
+        Assert.Null(recovered.Settings.LaunchProblem);
+        Assert.Equal(workspaces.Take(1), recovered.Settings.Launch!.Workspaces);
+    }
+
+    [Fact]
     public async Task An_app_refreshes_readiness_and_the_same_report_is_published_in_host_status()
     {
         var ch = await ConnectAsync();

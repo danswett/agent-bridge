@@ -77,16 +77,17 @@ public sealed record SignInStatus(SignInState State, string? UserCode = null, st
 // them; null when none is.
 // DevBoxKeepAwake: devBox.keepAwake, keeping this Dev Box from hibernating on disconnect.
 public sealed record HostSettingsView(bool RemoteApproval, string? Name = null, bool RemoteFolderTrust = false, IReadOnlyList<string>? RemoteFolderTrustDevices = null,
-    bool DevBoxKeepAwake = false, HostLaunchSettings? Launch = null)
+    bool DevBoxKeepAwake = false, HostLaunchSettings? Launch = null, string? LaunchProblem = null)
 {
     // By the devices in it, not the list object, so a restart is not asked for because two reads
     // of the same file made two lists.
     public bool Equals(HostSettingsView? other) =>
         other is not null && RemoteApproval == other.RemoteApproval && Name == other.Name && RemoteFolderTrust == other.RemoteFolderTrust
         && (RemoteFolderTrustDevices ?? []).SequenceEqual(other.RemoteFolderTrustDevices ?? [], StringComparer.Ordinal)
-        && DevBoxKeepAwake == other.DevBoxKeepAwake && (Launch ?? HostLaunchSettings.Default) == (other.Launch ?? HostLaunchSettings.Default);
+        && DevBoxKeepAwake == other.DevBoxKeepAwake && (Launch ?? HostLaunchSettings.Default) == (other.Launch ?? HostLaunchSettings.Default)
+        && LaunchProblem == other.LaunchProblem;
 
-    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake, Launch ?? HostLaunchSettings.Default);
+    public override int GetHashCode() => HashCode.Combine(RemoteApproval, Name, RemoteFolderTrust, RemoteFolderTrustDevices?.Count ?? 0, DevBoxKeepAwake, Launch ?? HostLaunchSettings.Default, LaunchProblem);
 }
 
 public sealed record ApprovedWorkspace(string Label, string Path, bool Isolate = false);
@@ -99,9 +100,12 @@ public sealed record HostLaunchSettings(IReadOnlyList<ApprovedWorkspace> Workspa
     [JsonIgnore]
     public string Baseline => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(this, ProtocolJson.Options)));
 
+    [JsonIgnore]
+    public bool FitsMessage => JsonSerializer.SerializeToUtf8Bytes(new { workspaces = Workspaces }, ProtocolJson.Options).Length <= LaunchProtocol.MaxOptionsBytes;
+
     public void CheckMessageBudget()
     {
-        if (JsonSerializer.SerializeToUtf8Bytes(new { workspaces = Workspaces }, ProtocolJson.Options).Length > LaunchProtocol.MaxOptionsBytes)
+        if (!FitsMessage)
         {
             throw new ArgumentException("The workspace list is too large for launch settings. Choose fewer folders or shorter labels and paths; nothing was saved.");
         }

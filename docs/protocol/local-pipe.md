@@ -215,6 +215,13 @@ normalization, leaving room for defaults, the request envelope, baseline token a
 settings/status fields within the pipe's frame limit. Defaults do not consume the workspace
 budget. Oversized proposals fail explicitly without writing;
 paths and labels are never silently truncated, and accepted lists remain editable.
+Existing CLI/manual configurations can exceed that budget. In status and settings results,
+`settings.launch` is then absent and `settings.launchProblem` explains that the full list
+could not be loaded and must be reduced in this profile's `config.json` before reloading.
+The host retains all authorizations and computes restart requirements from the full
+configuration; it does not truncate or rewrite it. The app keeps the connection and other
+Settings available, preserves any draft, and blocks launch edits instead of treating the
+missing snapshot as an empty list.
 
 The existing local-App authorization boundary applies to the whole request; this grants
 no relay or agent-session management access. App settings and config/workspace CLI edits

@@ -66,6 +66,10 @@ permission mode in a cancel-default confirmation. No folder, permission bypass, 
 or restart is implicit. Another window's changes block stale saves until the person
 discards the draft and reloads. Editing and reload remain disabled until all in-flight
 Settings actions finish, even if an overlapping preference change completes first.
+Workspace lists use a serialized-byte budget so accepted lists remain editable. An
+oversized existing CLI/manual list is reported as unavailable, not an empty authorization
+list: launch edits stay blocked until the profile's `config.json` is reduced and reloaded.
+Other Settings remain available, drafts are preserved, and no authorization is truncated.
 Unavailable/read-only/older hosts cannot save. This editor
 is also the shared operation for first-run; it is not the guided setup or its health gate.
 

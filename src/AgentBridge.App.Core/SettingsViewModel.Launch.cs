@@ -16,13 +16,14 @@ public sealed partial class SettingsViewModel
     bool showingLaunchSettings;
 
     public bool CanEditLaunchSettings => HostRunning && host.Can(HostOps.LaunchSettingsCapability) && launchDraft is not null
-        && !Busy && Status?.ReadOnly is null && Status?.AgentHaBridge is null;
+        && !Busy && Status?.ReadOnly is null && Status?.AgentHaBridge is null && Status?.Settings.LaunchProblem is null;
     public bool CanReloadLaunchSettings => HostRunning && host.Can(HostOps.LaunchSettingsCapability) && !Busy;
     public bool CanSaveLaunchSettings => CanEditLaunchSettings && launchDraft != launchWas && !LaunchChangedElsewhere;
     public bool LaunchChangedElsewhere => launchConflict || launchWas is not null && Status?.Settings.Launch is { } current && current != launchWas;
     public string LaunchSettingsState => !HostRunning ? "Connect to this machine's host to edit workspaces and defaults."
         : !host.Can(HostOps.LaunchSettingsCapability) ? "This host does not support launch settings. Update the app and restart the host."
         : Status?.ReadOnly is not null || Status?.AgentHaBridge is not null ? $"Launch settings are unavailable while this host is read-only: {Status.ReadOnly ?? Status.AgentHaBridge}."
+        : Status?.Settings.LaunchProblem is { } problem ? problem
         : LaunchChangedElsewhere ? "Launch settings changed elsewhere. Reload and review before saving; your draft has not been applied."
         : "Launch or resume in the exact approved folders, or their managed isolated worktrees. Subfolders need separate approval. Changes apply after a host restart.";
     public string LaunchSettingsStatus { get => launchSettingsStatus; private set => Set(ref launchSettingsStatus, value); }
@@ -74,7 +75,7 @@ public sealed partial class SettingsViewModel
 
     void InitializeLaunchSettings()
     {
-        if (launchWas is null && HostRunning && host.Can(HostOps.LaunchSettingsCapability) && Status?.Settings.Launch is { } saved)
+        if (launchWas is null && HostRunning && host.Can(HostOps.LaunchSettingsCapability) && Status?.Settings.LaunchProblem is null && Status?.Settings.Launch is { } saved)
         {
             ShowLaunchSettings(saved);
         }
@@ -160,7 +161,7 @@ public sealed partial class SettingsViewModel
         return RunAsync(async () =>
         {
             await host.RefreshStatusAsync();
-            ShowLaunchSettings(Status?.Settings.Launch ?? throw new InvalidOperationException("The host did not report its launch settings."));
+            ShowLaunchSettings(Status?.Settings.Launch ?? throw new InvalidOperationException(Status?.Settings.LaunchProblem ?? "The host did not report its launch settings."));
             LaunchSettingsStatus = "Loaded the host's current launch settings. Any previous draft was discarded.";
         });
     }
@@ -184,7 +185,7 @@ public sealed partial class SettingsViewModel
                 RaiseLaunchSettings();
                 throw new InvalidOperationException("Launch settings changed elsewhere. Reload and review them before saving.");
             }
-            ShowLaunchSettings(result.Settings.Launch ?? throw new InvalidOperationException("The host did not confirm the launch settings."));
+            ShowLaunchSettings(result.Settings.Launch ?? throw new InvalidOperationException(result.Settings.LaunchProblem ?? "The host did not confirm the launch settings."));
             LaunchSettingsStatus = "Launch settings saved. Restart the host when you are ready; nothing was restarted or trusted automatically.";
             await host.RefreshStatusAsync();
         });

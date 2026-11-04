@@ -137,7 +137,7 @@ public sealed class HostControl
             SignIn = signIn,
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),
-            Settings = now,
+            Settings = ForPipe(now),
             RestartRequired = now != running || options.AgentSetup?.RestartRequired == true,
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
@@ -157,6 +157,14 @@ public sealed class HostControl
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
         new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null,
             settings.DevBox.KeepAwake, LaunchSettingsEditor.View(settings.Launch));
+
+    static HostSettingsView ForPipe(HostSettingsView settings) => settings.Launch is { FitsMessage: false }
+        ? settings with
+        {
+            Launch = null,
+            LaunchProblem = "The configured workspace list is too large to load in the app. No launch settings were changed. Edit this profile's config.json to use fewer folders or shorter labels and paths, then reload.",
+        }
+        : settings;
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -258,7 +266,7 @@ public sealed class HostControl
             if (request.LaunchBaseline != launchBefore.Launch!.Baseline)
             {
                 log("settings not changed by the app: launch settings changed meanwhile");
-                return new SettingsResult(launchBefore, launchBefore != Volatile.Read(ref running), Conflict: true);
+                return new SettingsResult(ForPipe(launchBefore), launchBefore != Volatile.Read(ref running), Conflict: true);
             }
             launch = LaunchSettingsEditor.Check(asked, launchBefore.Launch!);
         }
@@ -268,7 +276,7 @@ public sealed class HostControl
             && !(before.RemoteFolderTrustDevices ?? []).ToHashSet(StringComparer.Ordinal).SetEquals(was.Where(d => d is not null)))
         {
             log("settings not changed by the app: the devices approved for folder trust changed meanwhile");
-            return new SettingsResult(before, before != Volatile.Read(ref running), Conflict: true);
+            return new SettingsResult(ForPipe(before), before != Volatile.Read(ref running), Conflict: true);
         }
         // The keep-awake is applied to the running service as well as saved, so what is saved must
         // read back as asked: a file the host rejects for another setting reads as all defaults,
@@ -317,7 +325,7 @@ public sealed class HostControl
         var now = Configured();
         if (launch is not null) { log("launch workspaces and defaults changed by the app; restart required"); }
         Changed();
-        return new SettingsResult(now, now != Volatile.Read(ref running));
+        return new SettingsResult(ForPipe(now), now != Volatile.Read(ref running));
     }
 
     // Only ever with the relay that issued the account, so the app never sends the token
