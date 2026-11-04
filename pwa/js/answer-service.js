@@ -44,6 +44,13 @@ const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
 const STAGE_ORDER = { received: 1, typed: 2, queued: 2 };
 
+// Marks 'sent' for a call just made, if it went: one on a channel already closed is refused
+// before anything is sent, and is no send.
+export function sent(client, entry, call) {
+  if (!client.closed) { marked(entry.request, 'sent'); }
+  return call;
+}
+
 export class AnswerService {
   #entries = new Map();
   #listeners = new Map();
@@ -51,7 +58,7 @@ export class AnswerService {
 
   // send(client, data, entry, progress, stage): the op, which may call progress(anything) as it
   // goes, and passes stage to the client as its onProgress for the host's progress frames. It
-  // marks 'sent' (timing.js) as the request itself goes, after anything sent ahead of it.
+  // marks 'sent' (timing.js) once the request itself has gone, after anything sent ahead of it.
   // payload(entry): its request data. final(entry): whether a settled outcome stands, so that
   // giving the answer again sends nothing.
   constructor({
@@ -62,7 +69,7 @@ export class AnswerService {
     giveUpMs = 9 * 60 * 1000,
     // How long one entry may go on being resent, when some ops take longer than others.
     giveUpFor = null,
-    send = (client, data, entry, progress, stage) => { marked(entry.request, 'sent'); return client.answer(data, { onProgress: stage }); },
+    send = (client, data, entry, progress, stage) => sent(client, entry, client.answer(data, { onProgress: stage })),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
@@ -180,7 +187,8 @@ export class AnswerService {
     const stage = ({ stage: s, working }) => {
       if (token !== entry.token || entry.state !== 'sending' || !ProgressStages.includes(s)) { return; }
       const next = s === 'typed' && working ? 'queued' : s;
-      if ((STAGE_ORDER[next] ?? 0) < (STAGE_ORDER[entry.stage] ?? 0) || next === entry.stage) { return; }
+      // Only forward: typed and queued share a rank, so frames alternating between them move nothing.
+      if ((STAGE_ORDER[next] ?? 0) <= (STAGE_ORDER[entry.stage] ?? 0)) { return; }
       // Marked only when the stage moves on: a repeat replaying the stages so far, or a host
       // saying the same again, adds nothing to the timing record.
       if (this.marks) { marked(entry.request, next); }

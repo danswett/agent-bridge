@@ -11,6 +11,8 @@
 // One delivery is named by its request, which a resend keeps, so every attempt of one reply is
 // one record.
 
+import { Outcomes } from './protocol.js';
+
 const KEEP = 50;
 const PREFIX = 'agent-bridge';
 
@@ -68,9 +70,12 @@ export function finished(request, outcome, host = null) {
     const old = kept.shift();
     for (const [what] of old.client) { try { p?.clearMeasures(name(old, what)); } catch { /* as above */ } }
   }
+  // The line says only what the protocol names, never a host's own text as it came: one with a
+  // line break in it would forge a line of its own. Its timings are already only the ones it
+  // names (readAnswerResult).
   const client = record.client.map(([what, ms]) => `${what} ${ms} ms`).join(', ');
   const fromHost = host ? `; host: ${Object.entries(host).map(([what, ms]) => `${what} ${ms} ms`).join(', ')}` : '';
-  console.debug(`${PREFIX} ${run.kind} ${run.request.slice(0, 8)} ${outcome}: ${client}${fromHost}`);
+  console.debug(`${PREFIX} ${run.kind} ${run.request.slice(0, 8)} ${Outcomes.includes(outcome) ? outcome : 'other'}: ${client}${fromHost}`);
 }
 
 // The last deliveries' records, oldest first: { kind, request, outcome, at, client: [[mark, ms
