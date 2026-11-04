@@ -1,11 +1,14 @@
 # Proposal #519: cross-account collaborators in the UI
 
-> **Proposal · awaits owner decision. Not spec.** [ui.md](../ui.md) is unchanged and still
-> wins wherever this page and it disagree. If the owner approves, the approved parts move
-> into ui.md in a follow-up PR (§11 lists exactly what would change) before any collaborator
-> UI is built.
+> **Decided 2026-11-03.** The owner approved the recommended option (a) for all 12
+> decisions in §12 (recorded on
+> [#566](https://github.com/danswett/agent-bridge/pull/566)). The decisions are promoted into
+> [ui.md](../ui.md) (§2, §3, §6.1, §6.4, §6.5, the new §6.7 Collaborators, §7, §8, §9 and
+> §10), and the External role into design/tokens.json. The External tint (§4.2) is decided
+> but pending a design-gen change. This page stays as the record of why; ui.md wins wherever
+> the two disagree.
 
-*Written as a draft for the owner, from the design track.* Issues and specs:
+*Written for the owner, from the design track.* Issues and specs:
 [#519](https://github.com/danswett/agent-bridge/issues/519) (cross-account collaboration),
 the draft design in [#522](https://github.com/danswett/agent-bridge/pull/522)
 (`docs/design/agent-principals.md`, especially §5.7 per-message approval, §6.2 and §6.3
@@ -251,15 +254,22 @@ orchid sits between violet and red but is far enough from both, and it reads as 
 else" without reading as an alarm. It's never used for counts, badges, Needs you or
 notifications.
 
-### 4.2 Proposed tokens (doc only)
+### 4.2 Tokens
 
-These are **proposed** values. design/tokens.json is unchanged until the owner approves.
+Decided 2026-11-03. The graphic, text and track values are in design/tokens.json as
+`color.role.external` and generated into tokens.css (`--ab-external*`) and the Windows
+resources (`AbExternal`, `AbExternalText`, `AbExternalTrack`). The tint is **decided but
+pending**: design-gen measures every `fill*` value as a question-card surface for every role
+and text colour, and light Bridge text (4.02:1) and Danger text fail on it, although no
+question card ever uses this tint. It goes into tokens.json once design-gen can mark a fill
+as a decorative tint.
 
-| Token | Dark | Light | Forced colours |
-|---|---|---|---|
-| `color.role.external` (graphic: glyphs, diamonds, outlines) | `#F769CF` | `#A3177F` | `CanvasText` + outline + word |
-| `color.role.external.text` (@login, "External") | `#FBA8E4` | `#A3177F` | `CanvasText` |
-| `color.role.external.fill` (tag and card tint) | `rgba(247,105,207,.10)` | `rgba(163,23,127,.08)` | none (`Canvas`) |
+| Token | Dark | Light | Forced colours | Status |
+|---|---|---|---|---|
+| `color.role.external` (graphic: glyphs, diamonds, outlines) | `#F769CF` | `#A3177F` | `CanvasText` + outline + word | In tokens.json |
+| `color.role.external` `text` (@login, "External") | `#FBA8E4` | `#A3177F` | `CanvasText` | In tokens.json |
+| `color.role.external` `track` (glyph track) | `#5B3A56` | `#E3C1DB` | `GrayText` | In tokens.json |
+| External tint (tag and card tint) | `rgba(247,105,207,.10)` | `rgba(163,23,127,.08)` | none (`Canvas`) | Pending design-gen |
 
 Track and row composites, for the glyph's background track: dark row 60% `#A4508F`, track
 25% `#5B3A56`, fill 10% `#3C303E`; light row 60% `#C571B0`, track 25% `#E3C1DB`, fill 10%
@@ -340,7 +350,7 @@ The card is gated so older cards degrade safely: CARD_VERSION today (1.41.0), or
 ## 7. Every board
 
 9 boards plus the [contact sheet](519-collaborators/contact-sheet.png), each labelled
-"Proposal #519 · awaits owner decision":
+"Proposal #519 · decided 2026-11-03":
 
 1. [Palette](519-collaborators/proposal-519-1-palette.png): External in dark, light and
    forced colours, its marks, and the colour-vision table.
@@ -386,8 +396,8 @@ are emulated, not captured; Mica is drawn as flat surfaces.
 
 ## 9. Wording to coordinate with Agent Bridge UI
 
-The strings below are the proposal's; Agent Bridge UI owns them in implementation and should
-agree them once, in ui.md §8, before slices build:
+The strings below are now in ui.md §6.7 and §8. Agent Bridge UI owns them in implementation
+and changes them there, not here:
 
 - Person and filter: **Mine**, **Everyone**, **Show sessions from**, **Manage
   collaborators…**, **External** (tag), *WS-LAPTOP · their name*.
@@ -418,9 +428,9 @@ agree them once, in ui.md §8, before slices build:
 - HA: *A message from an external agent is waiting. Open Slipgates to review it.*;
   *Collaborators' sessions: in the Slipgates app*.
 
-## 10. Slices, if approved
+## 10. Slices
 
-1. ui.md changes (§11), in their own PR.
+1. ui.md changes (§11): done in #566.
 2. External token and the person level in the list, behind the `collaborators` feature.
 3. Read-only external session view.
 4. Provenance marks and the "Involving external agents" filter.
@@ -428,9 +438,10 @@ agree them once, in ui.md §8, before slices build:
 6. External-message approval in Needs you.
 7. Revocation handling and the HA card.
 
-## 11. Proposed changes to ui.md
+## 11. Changes to ui.md
 
-If approved, exactly these would change in [ui.md](../ui.md):
+Made in #566 after the decisions. These are the changes to [ui.md](../ui.md), most of them
+gathered in its new §6.7 Collaborators:
 
 - **§2.1 Glyphs:** External sessions use the same S glyphs in External; an external waiting
   state is the outlined S tile, never the filled Needs you tile.
@@ -439,7 +450,7 @@ If approved, exactly these would change in [ui.md](../ui.md):
   badge seat, *Driven by an external agent · @login*).
 - **§3 Colour:** a new **External** role with the §4.2 tokens and the rule "never alone,
   never for counts, Needs you, badges or notifications"; the matching entries in
-  tokens.json.
+  tokens.json, with the tint pending (§4.2).
 - **§6.1 Session list:** the person level (Mine, then collaborators by verified login, with
   machines nested); the Show sessions from filter per shell; the "Involving external
   agents" filter and its empty state; external items excluded from Needs you, except the
@@ -457,43 +468,45 @@ If approved, exactly these would change in [ui.md](../ui.md):
 - **New:** a Settings › Collaboration section (discovery, links, link dialog, history).
 - **§10 Mock-up index:** the nine boards.
 
-## 12. Open owner decisions
+## 12. Owner decisions
 
-Each lists the recommended option first.
+**Decided 2026-11-03: the owner chose (a), the recommended option, for all 12.** The options
+are kept as the record. Decision 12 is a request to the #522 spec, not a UI change; until
+#522 adds the logins, line 2 shows kinds only.
 
-1. **External hue.** (a) **Recommended:** orchid, `#F769CF` dark / `#A3177F` light. (b) No
+1. **External hue.** (a) **Chosen (recommended):** orchid, `#F769CF` dark / `#A3177F` light. (b) No
    hue: neutral outlines and words only. (c) Plum, a darker purple. (a) is distinct from
    every existing role in normal vision and passes contrast everywhere; (b) is safest but
    loses at-a-glance scanning; (c) sits too close to agent violet.
-2. **Forced-colour mapping.** (a) **Recommended:** `CanvasText` plus outline and the word.
+2. **Forced-colour mapping.** (a) **Chosen (recommended):** `CanvasText` plus outline and the word.
    (b) `Highlight`. (b) would look like a selected row.
-3. **External row glyph.** (a) **Recommended:** the state's own S shape in External, waiting
+3. **External row glyph.** (a) **Chosen (recommended):** the state's own S shape in External, waiting
    as an outlined tile. (b) One neutral glyph for every external session. (a) keeps "is
    their agent busy?" readable without implying it's yours to answer.
-4. **Person filter control.** (a) **Recommended:** chips on Windows, a menu on PWA desktop
+4. **Person filter control.** (a) **Chosen (recommended):** chips on Windows, a menu on PWA desktop
    and a sheet on the phone. (b) A menu everywhere. (c) Tabs per person. Chips are one tap
    where there's room; tabs don't scale past three people.
-5. **Driven-by-external badge.** (a) **Recommended:** outlined ◇ in External plus words.
+5. **Driven-by-external badge.** (a) **Chosen (recommended):** outlined ◇ in External plus words.
    (b) Words only. (a) matches the provenance mark and survives truncation of line 2.
-6. **"Involving external agents" default window.** (a) **Recommended:** 24 h. (b) 1 h.
+6. **"Involving external agents" default window.** (a) **Chosen (recommended):** 24 h. (b) 1 h.
    (c) 7 days. 24 h covers a working day without becoming a history view.
-7. **Approval allow-window default.** (a) **Recommended:** nothing pre-selected. (b) 15
+7. **Approval allow-window default.** (a) **Chosen (recommended):** nothing pre-selected. (b) 15
    minutes pre-selected. Agent-principals §5.7 treats a window as a deliberate grant; a
    default makes it the easy path.
-8. **External sessions in search.** (a) **Recommended:** a separate "Collaborators" group
+8. **External sessions in search.** (a) **Chosen (recommended):** a separate "Collaborators" group
    after your own results. (b) Excluded. (c) Mixed in. (a) finds them without implying
    they're yours.
-9. **Home Assistant.** (a) **Recommended:** collaborators' sessions app-only in v1;
+9. **Home Assistant.** (a) **Chosen (recommended):** collaborators' sessions app-only in v1;
    gated cards show external provenance on your own sessions; older cards get a pointer
    only. (b) Hide all external information on every card. (c) Show collaborators' sessions
    on gated cards. Dashboards are often shared screens; (a) keeps other people's work off
    them.
-10. **Where Collaboration lives.** (a) **Recommended:** Settings › Collaboration. (b) A
+10. **Where Collaboration lives.** (a) **Chosen (recommended):** Settings › Collaboration. (b) A
     top-level page in the app rail. Links change rarely; a rail entry would invite
     attention discovery shouldn't ask for.
-11. **External-message approval in Needs you.** (a) **Recommended:** counted and notified
+11. **External-message approval in Needs you.** (a) **Chosen (recommended):** counted and notified
     like any approval, with its own title and layout. (b) Counted but not notified. A held
     message expires in five minutes; without a notification most would expire unseen.
-12. **Logins on `Session.external`.** (a) **Recommended:** ask #522 to add the sender's
+12. **Logins on `Session.external`.** (a) **Chosen (recommended):** ask #522 to add the sender's
     verified login(s), so line 2 can read *External agents: @welshofer sent · 2 min*.
     (b) Keep kinds only, as drawn. (a) answers "who?" without opening the session.

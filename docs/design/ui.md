@@ -11,7 +11,10 @@ iOS and Android apps.
 same day (status.md §5). Two light-theme tokens are corrected for contrast in #183. Motion
 (§5.3) was added in #232 and signed off by the owner on 2026-11-02. Attention (one row and one
 question, #253) replaced the Needs you lane with a filter, signed off by the owner on
-2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).* The
+2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).
+Collaborators (#519: the External colour, its marks, the person filter, the external filter and
+the held message) were decided by the owner on 2026-11-03 and added here (§6.7); the reasoning
+and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -54,6 +57,11 @@ people.
 | `failed` | ring with × | danger | A delegate aborted, a launch failed, or a host is unreachable |
 | `ended` | dotted ring | neutral | The session has gone; shown only in the Ended group |
 | `driven-badge` | small diamond, bottom right | agent | Added to any glyph while an agent drives the session; the active colour becomes violet |
+| `external-badge` | small **outlined** diamond, bottom right | external | Takes `driven-badge`'s seat while an external agent (a collaborator's, #519) drives your session; `working` and `delegating` still turn agent violet |
+
+A collaborator's session (§6.7) draws its state's glyph in External. When it waits on its owner,
+it draws the `needs` shape **outlined** in External, never the filled `needs` glyph: the
+question is theirs, not yours.
 
 Motion: `working` turns once per 1.2 s, and `delegating`'s satellites drift once per 8 s.
 Both are still under reduced motion. Nothing else animates on its own: every other motion
@@ -67,8 +75,8 @@ is a quiet fill plus the Bridge accent, never a status colour.
 
 Applies to the row, the session header, notifications and the Home Assistant card alike.
 
-Rules 1–6 are first match wins. Rule 8 refines rule 4. Rule 7 is not a row of its own: it is
-an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
+Rules 1–6 are first match wins. Rule 8 refines rule 4. Rules 7 and 9 are not rows of their own:
+they are overlays applied after rules 1–6 (or 8) have picked the glyph and the words.
 
 | # | When | Glyph | Status text |
 |---|---|---|---|
@@ -78,8 +86,9 @@ an overlay applied after rules 1–6 (or 8) have picked the glyph and the words.
 | 4 | Main agent idle, background agents running | `delegating` | "Delegating to N agents", N from `background.agents` (a nested delegate counts once, under its parent, and a list cut short still counts them all) |
 | 5 | Main agent idle, only background commands | `delegating` | "N background commands" |
 | 6 | Nothing running | `idle` | "Idle" |
-| 7 | **Overlay.** Any of the above while an agent drives | the same glyph plus `driven-badge`; `working` and `delegating` turn from active to agent | The same words, in agent colour, with "Driven by an agent" on rows |
+| 7 | **Overlay.** Any of the above while an agent drives | the same glyph plus `driven-badge`; `working` and `delegating` turn from active to agent | The same words, in agent colour, with "Driven by an agent" on rows. When the driver is an external agent (#519): `external-badge` in place of `driven-badge`, and "Driven by an external agent · @*login*" on rows (phone: "External agent · @*login*") |
 | 8 | **Refines rule 4.** The agent can't list its sub-agents (a host older than `subagents`, or an agent whose transcript counts its delegates without saying which they are): `background.agents` counts them but neither `subagents` nor `subagentsMore` lists any | `delegating` | "Delegating to N agents · details not reported". Nothing is ever wrongly attributed |
+| 9 | **Overlay, #519.** A collaborator's session (§6.7) | the same shape in External; rules 1–2 become the outlined `needs` shape | The state's words plus "· read-only" ("Working · read-only"); rules 1–2 read "Waiting for @*login*". Never counted, never in Needs you. Rule 7 doesn't apply: whoever drives it, it stays in External |
 
 While the host ends a session (`status: ending`), none of rules 1–6 apply: the row shows the
 `ended` glyph and "Ending session…" in secondary text, and rule 7's overlay still applies.
@@ -90,6 +99,10 @@ longer be so. It shows the `failed` glyph (a host unreachable, §2.1) and, in se
 while it is listed but its link is down; rule 7's overlay does not apply. A row's line 2 is
 "Offline · *machine*". Nothing on it can be acted on (§6.1, "A machine away").
 
+A message from an external agent held for you (§6.7) is a pending question on its target
+session: rule 1 applies, Needs you counts it, and the status reads "Waiting on you · message
+from an external agent".
+
 N is a number before its noun, singular for one ("1 delegate", "1 agent", "1 background
 command"). A glyph's accessible name is the row read aloud (§9).
 
@@ -99,18 +112,19 @@ named after these rules (`pwa/test/unit/status.test.mjs`, `SessionStatusTests`).
 
 ## 3. Colour
 
-Six roles, each with a dark value, a light value and a high-contrast mapping, defined in
+Seven roles, each with a dark value, a light value and a high-contrast mapping, defined in
 [`tokens.json`](../../design/tokens.json) under `color.role`, and generated into each client
 by `tools/design-gen` (#177).
 
 | Role | Dark | Light | Used for |
 |---|---|---|---|
-| Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, the "new activity" dot |
-| Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals |
+| Bridge | `#2DD4BF` | `#0B7A6E` | Primary actions, selection, focus, the mark, the "new activity" dot, an active collaborator link's dot (§6.7) |
+| Needs you | `#FFB224` | `#B87700` (text `#7A4600`) | Questions and approvals; a suspended collaborator link's dot and word (§6.7), which it can fix |
 | Active | `#4C9AFF` | `#0B63E5` | The `working` and `delegating` glyphs only |
 | Agent | `#A78BFA` | `#6D4AE0` | Driven by an agent, and nothing else |
 | Danger | `#FF6B6B` (text `#FF9494`) | `#C9302C` | Failed, stopped, End session |
-| Neutral | `#8B949E` | `#6E7781` | The `idle`, `done` and `ended` glyphs only |
+| Neutral | `#8B949E` | `#6E7781` | The `idle`, `done` and `ended` glyphs, and a revoked collaborator link's hollow dot (§6.7) |
+| External | `#F769CF` (text `#FBA8E4`) | `#A3177F` | A collaborator's session or an external agent (#519), and nothing else |
 
 Secondary and tertiary text are the text colour at reduced opacity: `text2` and `text3`,
 white at 0.72 and 0.54 in dark, black at 0.62 and 0.58 in light. `text3` is not used on
@@ -122,6 +136,15 @@ Rules:
   dark card). Text in a role uses Bridge or the role's own text colour (Needs you's,
   Agent's and Danger's): dark Danger is 3.72:1 on the Needs you fill, so its words are
   `#FF9494`.
+- **External is never alone** (#519): it always sits beside the outlined diamond, the word
+  "External" or a verified @login, because under deuteranopia it nears Bridge and Neutral. It
+  is never used for counts, Needs you, count badges, notifications or controls. In high contrast it
+  maps to CanvasText (its track to GrayText), and the outline and the word carry it. Its tint
+  (10% dark, 8% light, for the External tag and the provenance card) is decided but **pending**:
+  `tools/design-gen` measures every role `fill` as a question-card surface, and light Bridge
+  text (4.02:1) and Danger text would fail on it, though no question ever sits on it. Until the
+  generator can mark a tint as decorative, clients draw the tag and the card with an External
+  outline and no tint.
 - **Surfaces and text come from the platform.** Mica and layer fills on Windows, window and
   sidebar materials on macOS, system grouped backgrounds on iOS, and a Material 3 scheme
   seeded from Bridge on Android. Dynamic colour may restyle Android surfaces but never the
@@ -495,6 +518,9 @@ Sections, top to bottom:
 2. **Pinned.**
 3. **Sessions,** in your order (#164).
 4. **Ended · N,** collapsed.
+5. **Collaborators** (#519), once you have a link: one group per collaborator, by verified
+   @login, with their machines nested, after your own sessions (§6.7). Needs you's N never
+   counts their items, and its filter never shows them.
 
 **Order (#164).** Rules the clients share; the PWA and the Windows app keep the order in
 their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
@@ -738,6 +764,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   the lines it wraps into, and not the whitespace-only lines a block may end with (pasted, they
   would run the last line; #429). Needs you offers no answer (§6.1): an approval is approved on
   its card, below. The Windows app does this since #296, and the PWA since #429 (#415).
+- **Who sent a message** (#519): your own agent's message has the filled Agent diamond and
+  "Sent by copilot on *machine*"; an external agent's has the **outlined** External diamond, a
+  dashed External outline and "external · Sent by an agent on *machine* · **@login**" (§6.7).
+  A message from an external agent held for you has its own card (§6.7), unlike an approval's.
 - **An approval's card** (#220): **an approval's message is drawn exactly as written, fence
   markers included, in the code face; nothing in it is read as Markdown.** It is one block, read
   left to right with its line breaks kept, and escaped as every code block is (hidden characters,
@@ -770,6 +800,8 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Width:** the conversation's column, the pane's width up to the reading measure (§4.2), whatever
   has been typed (#294), and centred under it in the pane, as the PWA's is (§6.4).
 - **Placeholder:** "Message the main agent". Replies only ever go to the main agent.
+- **A collaborator's session has none** (#519): the reply box is absent, and the read-only line
+  stands in its place (§6.7).
 - **Controls:** Attach, then Send (Bridge, icon only, with a tooltip naming the shortcut:
   Ctrl+Enter, or ⌘↩ on Apple).
 - **Platform styling:**
@@ -797,6 +829,115 @@ machine, online ones first, then the account's offline machines (#213):
   2), with Forget, both while its rows are kept and after they have gone. A client whose relay
   keeps no roster lists it so only while its rows are kept.
 
+### 6.7 Collaborators (#519)
+
+A collaborator is another GitHub account linked to yours (`agent-principals.md`, #522). Their
+sessions are theirs: you can see them, never act on them. Decided 2026-11-03; the boards and the
+reasons are in [proposals/519-collaborators.md](proposals/519-collaborators.md).
+
+**Identity.** Every name here comes from verified fields only: the bold @login is
+`principal.login`. A collaborator's machine name is theirs, so it is shown as "*WS-LAPTOP* ·
+their name" on headers and in italics elsewhere. A sender's session title is secondary, quoted
+after "Their session:", one line with an ellipsis, and whole in the tooltip.
+
+**Person, then machine.** The list gains a person level: **Mine** first, then each
+collaborator by @login, alphabetical, with their machines nested under them. A collaborator's
+header has the person glyph and an outlined-diamond **External** tag. The filter is "Show sessions
+from": Everyone (the default), Mine, and one entry per collaborator. It never shows counts.
+- **Windows:** chips under the list header (Everyone · Mine · @*login* …); past three
+  collaborators the rest fold into "More".
+- **PWA desktop:** a "Show sessions from" menu button in the list header, ending with "Manage
+  collaborators…".
+- **PWA phone:** one chip showing the choice, which opens a bottom sheet with the same list.
+- **Search** finds their sessions too, in a separate **Collaborators** group after your own
+  results.
+
+**Read-only.** A collaborator's row follows §2.2 rule 9. Opening it shows only what the link's
+read projection carries: the title, the status, the **latest response** ("Latest response · 2
+min ago") and whether it waits. Never their prompts, questions, reasoning, tool history or
+delegates' words. The header reads "@*login* · *machine* (their name) · *status*" with the
+External tag. The reply box, the action bar, Stop, Transfer, Launch here and every swipe and
+menu verb are **absent**, not disabled. In the reply box's place, one line: "Read-only ·
+@*login*'s session. Only @*login* can reply, approve or stop it." While it waits, an outlined
+External card says "@*login*'s agent is waiting for @*login*." and "Only @*login* can see what it
+asked and answer it.", with no question and no buttons.
+
+**External-agent provenance** (on your own sessions' messages):
+
+| Sender | Mark | Label |
+|---|---|---|
+| You | none | none |
+| Your own agent | filled Agent diamond, Agent left edge | "Sent by copilot on *DESK*" |
+| An external agent | **outlined** External diamond, dashed External outline, no filled edge | "**external** · Sent by an agent on *WS-LAPTOP* · **@welshofer**", then "Their session: “…”" |
+
+**Involving external agents.** A filter chip in the list header (in "More filters" on a phone),
+with the outlined diamond, and a window of **1 h · 24 h · 7 days**, 24 h by default. It shows
+your own sessions whose `Session.external.lastAt` is inside the window, and their line 2 reads
+"External agents: sent, read · 2 min" from `Session.external.kinds` (logins join it once #522
+carries them). Empty: "No external agents in the last hour" (or day, or 7 days), "None sent to,
+read or were refused by your sessions.", and [Show 24 hours] (the next window; absent at 7 days)
+and [Clear filter].
+
+**A message from an external agent, held for you.** With a link's "Ask me before each message"
+opt-in, a message from its agents to an allow-all session, or to one whose mode is unknown, is
+held for 5 minutes (`agent-principals.md` §5.7); without it, such a message is refused. It is
+the one collaborator item that is yours: a pending question on its target session, counted in
+N and notified with Open only, like an approval (§7). Its card is unlike an approval's:
+- the title "Message from an external agent", the outlined diamond, and "Held · 4:12 left";
+- a From / To block: *From* "external · an agent on *machine* (their name) · **@login**", their
+  session title quoted below; *To* your session, its agent, machine and mode;
+- the **whole** message in the code face, escaped and never read as Markdown, exactly as an
+  approval's (§6.4), in a scrolling box with a visible scrollbar, under "Shown exactly as sent, N
+  characters. Not formatted.";
+- one consequence line: "Approving makes this **your** instruction to an allow-all session. It
+  can run commands on *machine* without asking.", or for an unknown mode "Approving makes this
+  **your** instruction. Slipgates can't tell whether this session asks before it runs commands on
+  *machine*.";
+- **Deny**, **Approve once**, **Allow @*login* here for… ▾** (5, 15, 30 or 60 minutes, nothing
+  chosen), in that order, all secondary: no Bridge primary makes any of them the easy one;
+- after the hold, "Expired · not delivered", and it leaves Needs you;
+- while a window is open, a quiet strip on the session: "Allowing @*login*'s agent here", "11 min
+  left · 3 messages delivered" and [Stop allowing @*login*].
+
+**Revocation and suspension.** When a link ends or is suspended, the collaborator's group is
+replaced **at once** (no fade, in every motion setting) by one quiet line, "@*login*'s sessions
+are hidden", with the reason and Details (the link's history). An open session of theirs
+becomes "This session is no longer shared", the reason, "What you saw of it was removed from this
+device." and [Back to sessions]. It is never a notification and never in Needs you.
+
+| Cause | Reason |
+|---|---|
+| They revoked the link | Revoked by @*login* |
+| You revoked it | Revoked by you |
+| GitHub write access lost | Link suspended: write access removed |
+| A pinned workspace's remote changed | Link suspended: a pinned workspace's remote changed |
+| The descriptor expired (90 days) | Link expired: @*login* hasn't renewed it |
+| Their read grant removed | @*login* stopped sharing read |
+| Collaboration paused on this machine | Collaboration paused on *machine* |
+
+**Settings › Collaboration**, after Devices:
+- **Discovery** is opt-in ("Find collaborators who use Slipgates on *repo*"). A suggestion is a
+  grey dot on the Collaboration item and a card on the page, with [Review and connect] [Not now]
+  [Never for this repo]; never a push, a toast or a count.
+- **Links:** each collaborator and repository, what each side shares, and the status in words
+  and shape: Active (filled Bridge dot), Suspended (filled Needs you dot, the reason and its one
+  fix, [Re-confirm workspaces]), Revoked (hollow Neutral dot, the date and who ended it). Opened,
+  a link shows its history (accepted, verified, renewed, suspended, revoked, each with its cause
+  and device), [Message audit] and [Revoke…].
+- **The link dialog:** "What @*login* can do": Read, Reply and Launch, nothing ticked; the two
+  allow-all opt-ins, each with its warning; "Workspaces (pinned now)"; "Who can end this link",
+  which asks for a device other than this machine ("Add a device that can end this link") before
+  it can be accepted; an optional "Link code (optional, stronger)" read aloud; and "Accept with
+  Windows Hello" (or the platform's presence check), off until a scope, a workspace and that
+  device exist.
+
+**Home Assistant card.** Gated on the `collaborators` feature (CARD_VERSION, or
+`hello.features`). A card without it is never sent collaborators' sessions, and a held message
+reaches it only as "A message from an external agent is waiting. Open Slipgates to review it.",
+never its text. A card with it shows "Driven by an external agent · @*login*" on your own
+sessions and one line, "Collaborators' sessions: in the Slipgates app". No card approves a held
+message.
+
 ## 7. Platform shells
 
 **Notifications, on every client (#253):** a question still pending after 2 s is notified
@@ -815,6 +956,9 @@ question, as choosing its row does.
   of a single choice, or a text box and Send. Each still checks, before sending, that the
   question is the one shown.
 - The count each platform shows is Needs you's N (§6.1).
+- **Collaborators (#519):** their sessions are never notified, badged or counted. A message
+  from an external agent held for you is notified as an approval is, with Open only, as
+  "A message from an external agent is waiting for your approval".
 
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
@@ -951,7 +1095,15 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Numbers before nouns:** "3 delegates", "1 background command".
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
-- **No sentences explaining the UI,** no exclamation marks, and no emoji.
+- **No sentences explaining the UI,** no exclamation marks, and no emoji. The one exception is
+  a collaborator's read-only lines (§6.7), which say whose session it is and who can act on it,
+  because a control that is absent can't carry a tooltip.
+- **Collaborator words (#519):** "Mine", "Everyone", "Show sessions from", "Manage
+  collaborators…", "External", "*machine* · their name", "· read-only", "Waiting for @*login*",
+  "Driven by an external agent · @*login*", "External agent · @*login*" (narrow), "Involving
+  external agents", "Message from an external agent", "Approve once", "Allow @*login* here
+  for…", "Expired · not delivered", "Stop allowing @*login*", and the reason lines (§6.7). The
+  product name in them is Slipgates. Never "gate" in a status or error line.
 - **What Copy copies is what is on screen** (§6.4, #220): a code block's escapes, right-to-left
   letters' included, are copied as drawn, so the text pasted is never different from the text read.
   Reading Hebrew or Arabic in code and in approvals is the harder for it, by the owner's choice (#253).
@@ -985,6 +1137,18 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   pressed (#256). Needs you · N is a toggle in the tab order after the machine tabs and before
   the list. Space or Enter toggles it, and Enter on a waiting row puts focus on its question's
   heading.
+- **Collaborators (#519):**
+  - A collaborator's row reads "External session, @*login*, *machine*, their name, *title*,
+    working, read-only". A person header is a group named "@*login*, external collaborator, 2
+    machines", with its machines as nested groups.
+  - The read-only line is the pane's description, read once when it opens. An external
+    message's name starts "External agent message from @*login* on *machine*".
+  - A held message is announced as Needs you items are, title first ("Message from an external
+    agent, from @*login*, held, 4 minutes left"); its text is a focusable scrolling region named
+    "Message text, N characters".
+  - Revocation is announced once, politely ("@*login*'s sessions are hidden. Revoked by
+    @*login*."), never as an alert.
+  - The person chips and sheet, and the window segments ("Window"), are radio groups.
 - **Needs you (#253):**
   - The toggle reports its pressed state, and is named for its count and scope: "Needs you, 3
     on every machine", or "Needs you, 1 on ULTRA, 3 on every machine" with a machine chosen.
@@ -1013,6 +1177,9 @@ canvas, each platform board has a light/dark switch.
 | Android Sessions / Session · light / dark | List with the Needs you chip and FAB; a session waiting on you while delegates run |
 | PWA phone / phone session · dark / light | Windows-styled phone list and session |
 | Status rules | The table in §2.2, drawn |
+
+The collaborator surfaces (#519) are drawn on the Proposal #519 boards
+([proposals/519-collaborators/](proposals/519-collaborators/)).
 
 The states #253 added (the toggle's states, rows, the question card's forms, Tools and the
 delegate inspector) are drawn on the Proposal #253 boards, which stay on the canvas as their
