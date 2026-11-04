@@ -123,7 +123,7 @@ button { font: inherit; color: inherit; }
 }
 .grip {
   grid-column: 1; grid-row: 1 / span 2; align-self: stretch; display: flex; align-items: center; justify-content: center;
-  margin: -8px 0 -8px -4px; padding-left: 4px; width: 20px; color: var(--text3); cursor: grab; touch-action: none;
+  margin: -8px -4px -8px -4px; padding: 0 4px; width: 24px; color: var(--text3); cursor: grab; touch-action: none;
 }
 .grip svg { width: 8px; height: 14px; }
 @media (hover: hover) and (pointer: fine) {
@@ -236,7 +236,7 @@ body.dragging, body.dragging * { cursor: grabbing !important; -webkit-user-selec
 .tune .btn {
   min-height: 36px; padding: 0 12px; border-radius: 4px; border: 1px solid var(--stroke2); background: var(--layer); cursor: pointer;
 }
-.tune .btn.primary { background: var(--bridge); color: #062621; border-color: transparent; font-weight: 600; }
+.tune .btn.primary { background: var(--bridge); color: var(--bridge-on); border-color: transparent; font-weight: 600; }
 .tune textarea { width: 100%; margin-top: 8px; font: 12px/16px ui-monospace, Consolas, monospace; color: var(--text); background: var(--layer); border: 1px solid var(--stroke2); border-radius: 4px; }
 </style>
 </head>
@@ -774,12 +774,13 @@ function lift() {
 
 // A host ending a session (ui.md §6.1 Cancel). If it is the held card, the move is cancelled: the
 // card fades out where it is and the others close the gap with reorder (instant when reduced).
+// Any other departure is the list's own update, so its neighbours jump (§5.3 Arriving and leaving).
 function endSession(key) {
   if (!items[key]) return;
   if (g && g.phase === 'settling') settleNow();
   if (g && g.phase === 'pending') abort();
   const held = !!(g && g.phase === 'lifted' && g.key === key);
-  const li = els.get(key), title = items[key].title;
+  const title = items[key].title;
   let deferred = [];
   if (held) {
     deferred = g.deferred || [];
@@ -794,15 +795,20 @@ function endSession(key) {
     (g.deferred ||= []).push(key);
     return;
   }
-  order = order.filter((k) => k !== key);
-  delete items[key];
-  els.delete(key);
-  if (selected === key) selected = order[0];
-  li.classList.add('ending');
-  setTimeout(() => li.remove(), 120);
+  // Ends queued during the drag leave with the held card, in the same relayout, so its gap
+  // still closes with reorder rather than being snapped by their instant ones.
+  for (const k of [key, ...deferred]) {
+    if (!items[k]) continue;
+    const el = els.get(k);
+    order = order.filter((x) => x !== k);
+    delete items[k];
+    els.delete(k);
+    el.classList.add('ending');
+    setTimeout(() => el.remove(), 120);
+  }
+  if (selected && !items[selected]) selected = order[0];
   syncDom();
-  relayout(false);
-  for (const k of deferred) endSession(k);
+  relayout(!held);
   if (held) say(`${title} ended. Move cancelled.`);
 }
 
