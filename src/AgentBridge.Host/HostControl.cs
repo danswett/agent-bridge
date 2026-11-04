@@ -155,7 +155,8 @@ public sealed class HostControl
     }
 
     public static HostSettingsView Settings(HostSettings settings, string? name) =>
-        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null, settings.DevBox.KeepAwake);
+        new(settings.RemoteApproval, name, settings.Launch.RemoteFolderTrust, settings.Launch.RemoteFolderTrustDevices is { Count: > 0 } d ? d : null,
+            settings.DevBox.KeepAwake, LaunchSettingsEditor.View(settings.Launch));
 
     // The relay loop reports each change of its connection here.
     public void SetRelay(RelayState state, string? detail = null)
@@ -228,13 +229,39 @@ public sealed class HostControl
         if (devices is { Count: > LaunchProtocol.MaxChoices }) { throw new ArgumentException($"at most {LaunchProtocol.MaxChoices} devices can be approved"); }
         // One change at a time, saved and applied together: two at once could save off and then
         // apply the other's on, leaving devices able to answer that the file says may not.
-        lock (settingsGate) { return SettingsLocked(request, devices); }
+        lock (settingsGate)
+        {
+            using var write = HostConfigFile.Lock(options.Folder);
+            return SettingsLocked(request, devices);
+        }
     }
 
     readonly object settingsGate = new();
 
     SettingsResult SettingsLocked(SettingsRequest request, List<string>? devices)
     {
+        HostLaunchSettings? launch = null;
+        if (request.Launch is { } asked)
+        {
+            if (!request.LaunchConfirmed || request.LaunchWas is null) { throw new ArgumentException("Review and confirm the launch settings before saving."); }
+            var why = (options.ReadOnlyNow ?? options.ReadOnly)() ?? options.AgentHaBridge();
+            if (why is not null)
+            {
+                throw new InvalidOperationException($"Launch settings are unavailable while this host is read-only: {why}");
+            }
+            var (configured, problem) = HostSettings.Load(options.Folder);
+            if (problem is not null || configured.SectionProblems.Any())
+            {
+                throw new InvalidOperationException($"Launch settings were not changed: {problem ?? string.Join("; ", configured.SectionProblems)}; fix config.json first.");
+            }
+            var launchBefore = Settings(configured, HostConfigFile.ReadName(options.Folder));
+            if (request.LaunchWas != launchBefore.Launch)
+            {
+                log("settings not changed by the app: launch settings changed meanwhile");
+                return new SettingsResult(launchBefore, launchBefore != Volatile.Read(ref running), Conflict: true);
+            }
+            launch = LaunchSettingsEditor.Check(asked, launchBefore.Launch!);
+        }
         // Made from a list that is no longer the one saved: nothing is changed, and the caller
         // reads the list again and makes its change from that.
         if (devices is not null && request.RemoteFolderTrustDevicesWas is { } was && Configured() is var before
@@ -253,7 +280,20 @@ public sealed class HostControl
             if (problem is not null) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {problem}; fix config.json first"); }
             if (saved.DevBox.KeepAwake != want) { throw new InvalidOperationException($"Dev Box keep-awake was not changed: {path} would not read back as {(want ? "on" : "off")}; fix its devBox section first"); }
         } : null;
-        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check);
+        if (launch is not null)
+        {
+            var checkKeepAwake = check;
+            check = (path, text) =>
+            {
+                checkKeepAwake?.Invoke(path, text);
+                var (saved, problem) = HostSettings.Parse(text, path);
+                if (problem is not null || saved.SectionProblems.Any() || LaunchSettingsEditor.View(saved.Launch) != launch)
+                {
+                    throw new InvalidOperationException($"Launch settings were not changed: {problem ?? string.Join("; ", saved.SectionProblems)}; the proposed file must read back exactly.");
+                }
+            };
+        }
+        HostConfigFile.Patch(options.Folder, request.RemoteApproval, request.Name, request.RemoteFolderTrust, devices, request.DevBoxKeepAwake, check, launch);
         // Answering folder-trust questions from devices applies at once, so it can be allowed
         // while a question waits; the rest when the host restarts.
         if (request.RemoteFolderTrust is { } trust && options.ApplyRemoteFolderTrust is { } apply)
@@ -275,6 +315,7 @@ public sealed class HostControl
         }
         log($"settings changed by the app{(request.RemoteApproval is { } r ? $": remote approval {(r ? "on" : "off")}" : "")}{(request.RemoteFolderTrust is { } t ? $"; folder trust from devices {(t ? "on" : "off")}" : "")}{(devices is not null ? $"; devices approved for folder trust: {(devices.Count == 0 ? "none" : string.Join(", ", devices.Select(d => d[..8])))}" : "")}{(request.DevBoxKeepAwake is { } k ? $"; Dev Box keep-awake {(k ? "on" : "off")}" : "")}{(request.Name is not null ? "; machine name changed" : "")}");
         var now = Configured();
+        if (launch is not null) { log("launch workspaces and defaults changed by the app; restart required"); }
         Changed();
         return new SettingsResult(now, now != Volatile.Read(ref running));
     }

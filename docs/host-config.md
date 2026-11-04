@@ -234,6 +234,24 @@ enrollment and production enablement remain separately gated.
 
 ## Approving a workspace at the machine
 
+The Windows app's Settings **Workspaces and launch defaults** provides the same explicit
+approval boundary: choose a folder, label and optional git isolation, then review and save.
+The draft is not an approval until confirmed. Approvals cover exact folders (or their
+managed isolated worktrees), not arbitrary subfolders, CLI folder trust or hook trust.
+No folder is preapproved. Standard permission prompts are the default; bypass requires
+an explicit choice and warning. Default agent, default workspace and launch enablement
+are editable here too. Saving never restarts the host or trusts an agent automatically.
+
+The app compares the saved launch settings with the draft's baseline; another editor's
+change refuses the entire request, not just its workspace fields. Reload and review rather
+than restoring a revoked folder from a stale draft. App settings and config/workspace CLI
+writes hold the profile's `config.write.lock` across reading, validation and replacement;
+a competing write reports failure rather than interleaving. Manual file editors do not
+participate in that lock and should not save concurrently. Unknown configuration fields
+and metadata on retained workspace objects are preserved. Previously approved unavailable
+folders can be retained or removed; new approvals must exist and pass physical-path and
+system-folder checks. Changes take effect after a separate host restart.
+
 ```
 agent-bridge-host workspace list
 agent-bridge-host workspace add C:\Users\me\repos\bridge --label Bridge --isolate

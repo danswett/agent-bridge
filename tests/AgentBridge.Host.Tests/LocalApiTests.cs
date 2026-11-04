@@ -137,6 +137,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         Assert.Equal("Test host", hello.Machine.Name);
         Assert.Contains(Capabilities.SessionsRead, hello.Capabilities);
         Assert.Contains(HostOps.Capability, hello.Capabilities);
+        Assert.Contains(HostOps.LaunchSettingsCapability, hello.Capabilities);
         Assert.DoesNotContain(Capabilities.Push, hello.Capabilities);
     }
 
@@ -431,14 +432,17 @@ public sealed class LocalApiTests : IAsyncLifetime
     {
         File.WriteAllText(Path.Combine(profile, "config.json"), """{ "launch": { "workspaces": ["C:\\src"] } }""");
         var ch = await ConnectAsync();
-        Assert.False((await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrust);
+        var before = await ch.CallAsync<HostStatus>(HostOps.Status);
+        Assert.False(before.Settings.RemoteFolderTrust);
 
         var result = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrust = true });
 
         Assert.True(result.Settings.RemoteFolderTrust);
         // Applied to the running host at once, so it can be allowed while a question waits.
         Assert.Equal([true], applied);
-        Assert.False(result.RestartRequired);
+        // The workspace file changed after this fixture host started; applying trust at once
+        // must not add or clear its existing launch-config restart requirement.
+        Assert.Equal(before.RestartRequired, result.RestartRequired);
         var saved = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "config.json")))!;
         Assert.Equal("C:\\src", saved["launch"]!["workspaces"]![0]!.GetValue<string>());
         Assert.True(HostSettings.Load(profile).Settings.Launch.RemoteFolderTrust);
@@ -454,7 +458,7 @@ public sealed class LocalApiTests : IAsyncLifetime
         var devices = await ch.CallAsync<SettingsResult>(HostOps.Settings, new { remoteFolderTrustDevices = new[] { phone, phone } });
         Assert.Equal([phone], devices.Settings.RemoteFolderTrustDevices!);
         Assert.Equal([phone], Assert.Single(approved));
-        Assert.False(devices.RestartRequired);
+        Assert.Equal(before.RestartRequired, devices.RestartRequired);
         Assert.Equal([phone], HostSettings.Load(profile).Settings.Launch.RemoteFolderTrustDevices);
         Assert.Equal([phone], (await ch.CallAsync<HostStatus>(HostOps.Status)).Settings.RemoteFolderTrustDevices!);
     }

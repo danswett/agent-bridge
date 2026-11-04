@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Local;
+using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
@@ -11,6 +13,11 @@ namespace AgentBridge.Host;
 public static class HostConfigFile
 {
     public const int MaxName = 64;
+
+    // Both the app and config/workspace CLI take this before reading and editing, so a
+    // workspace revoked by one cannot be restored by the other's stale read/write cycle.
+    public static IDisposable Lock(string folder) =>
+        new FileStream(Path.Combine(folder, "config.write.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
     // The name this machine is shown by, if one was chosen. Unreadable or absent is none.
     public static string? ReadName(string folder)
@@ -42,7 +49,7 @@ public static class HostConfigFile
     // replaced by one that has lost whatever the person meant it to say. check, if given, sees the
     // text about to be written and throws to refuse it, leaving the file as it was.
     public static void Patch(string folder, bool? remoteApproval, string? name, bool? remoteFolderTrust = null, IReadOnlyList<string>? remoteFolderTrustDevices = null,
-        bool? devBoxKeepAwake = null, Action<string, string>? check = null)
+        bool? devBoxKeepAwake = null, Action<string, string>? check = null, HostLaunchSettings? launchSettings = null)
     {
         var path = Path.Combine(folder, HostSettings.FileName);
         JsonObject root;
@@ -70,7 +77,7 @@ public static class HostConfigFile
             }
             permissions["remoteApproval"] = approve;
         }
-        if (remoteFolderTrust is not null || remoteFolderTrustDevices is not null)
+        if (remoteFolderTrust is not null || remoteFolderTrustDevices is not null || launchSettings is not null)
         {
             if (root["launch"] is not JsonObject launch)
             {
@@ -79,6 +86,24 @@ public static class HostConfigFile
             }
             if (remoteFolderTrust is { } trust) { launch["remoteFolderTrust"] = trust; }
             if (remoteFolderTrustDevices is { } devices) { launch["remoteFolderTrustDevices"] = new JsonArray([.. devices.Select(d => (JsonNode)JsonValue.Create(d))]); }
+            if (launchSettings is { } settings)
+            {
+                launch["enabled"] = settings.Enabled;
+                launch["defaultAgent"] = settings.DefaultAgent;
+                launch["permissions"] = settings.Permissions;
+                if (settings.DefaultWorkspace is { } workspace) { launch["defaultWorkspace"] = workspace; }
+                else { launch.Remove("defaultWorkspace"); }
+                launch["workspaces"] = new JsonArray([.. settings.Workspaces.Select(w =>
+                {
+                    var existing = (launch["workspaces"] as JsonArray)?.OfType<JsonObject>().FirstOrDefault(n =>
+                        n["path"] is JsonValue v && v.TryGetValue<string>(out var path) && Folders.Expand(path) is { } full && Folders.Same(full, w.Path));
+                    var entry = existing?.DeepClone() as JsonObject ?? new JsonObject();
+                    entry["label"] = w.Label;
+                    entry["path"] = w.Path;
+                    entry["isolate"] = w.Isolate;
+                    return (JsonNode)entry;
+                })]);
+            }
         }
         if (devBoxKeepAwake is { } keepAwake)
         {

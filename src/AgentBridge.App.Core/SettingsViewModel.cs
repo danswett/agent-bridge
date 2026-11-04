@@ -31,7 +31,7 @@ public interface IAppAtSignIn
 // The Settings page: this machine's host (running, version, start at sign-in, start, stop,
 // restart, its log), its relay sign-in and name, what it lets other devices do, and the app's
 // own preferences and updates.
-public sealed class SettingsViewModel : Observable
+public sealed partial class SettingsViewModel : Observable
 {
     readonly HostConnection host;
     readonly HostManager manager;
@@ -393,7 +393,7 @@ public sealed class SettingsViewModel : Observable
     public bool Busy
     {
         get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); } }
+        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseLaunchSettings(); } }
     }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
@@ -416,6 +416,7 @@ public sealed class SettingsViewModel : Observable
             agentInstallInProgress = status.AgentInstallation?.InProgress == true;
             if (status.AgentInstallation is { } installation) { AgentInstallStatus = installation.Detail; }
         }
+        InitializeLaunchSettings();
         if (!nameEdited) { machineName = Status?.Settings.Name ?? Status?.Machine.Name ?? ""; }
         if (Volatile.Read(ref pendingEdits) == 0) { trustWanted = null; }
         CaughtUp();
