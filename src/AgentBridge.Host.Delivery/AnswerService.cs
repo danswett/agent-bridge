@@ -20,7 +20,8 @@ public interface ISessionAnswerer
     // denied from other devices here (permissions.remoteApproval on).
     bool ApprovesPermissions => false;
 
-    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default);
+    // watch: hears the delivery's stages as it goes (DeliveryWatch), for a caller that reports them.
+    Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null);
 }
 
 public sealed class AnswerOptions
@@ -112,17 +113,17 @@ public sealed class AnswerService : ISessionAnswerer
 
     public bool ApprovesPermissions => Available && options.CopilotRemoteApproval;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default)
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, () => DeliverAsync(request, key), result =>
+        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "answer", key, log), t => DeliverAsync(request, key, t), result =>
             log($"answer {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
-    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key)
+    async Task<AnswerResult> DeliverAsync(AnswerRequest request, Guid key, DeliveryTimeline timeline)
     {
         try
         {
@@ -148,10 +149,10 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 return session.Agent switch
                 {
-                    AgentKind.Claude => await ClaudeAsync(session, question, request),
-                    AgentKind.Codex => await CodexAsync(session, question, request),
-                    _ when permission => await CopilotPermissionAsync(session, question, request),
-                    _ => await CopilotAsync(session, question, request),
+                    AgentKind.Claude => await ClaudeAsync(session, question, request, timeline),
+                    AgentKind.Codex => await CodexAsync(session, question, request, timeline),
+                    _ when permission => await CopilotPermissionAsync(session, question, request, timeline),
+                    _ => await CopilotAsync(session, question, request, timeline),
                 };
             }
             finally { gate.Release(session.Id, key); }
@@ -168,7 +169,7 @@ public sealed class AnswerService : ISessionAnswerer
         ? $"{Name(agent)} permission prompts can only be answered at the machine"
         : $"this {Name(agent)} prompt can only be answered at the machine";
 
-    async Task<AnswerResult> CopilotAsync(Session session, Question question, AnswerRequest request)
+    async Task<AnswerResult> CopilotAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
@@ -179,7 +180,9 @@ public sealed class AnswerService : ISessionAnswerer
         // One answer typed at a time, across sessions, and the slot is taken before the last
         // checks: an answer that waited behind another must find its question still asked,
         // and agent-ha-bridge still stopped, when its own turn comes, not when it arrived.
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         CopilotPlan plan;
         long from;
         InjectionResult typed;
@@ -212,19 +215,19 @@ public sealed class AnswerService : ISessionAnswerer
             (plan, from) = (planned, call.ScannedTo);
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            typed = await TypeAsync(pid, plan.Keys);
+            typed = await TypeAsync(pid, plan.Keys, timeline);
         }
         finally { gate.DoneTyping(); }
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt) is { } settled) { return settled; }
-        try { return await ConfirmAsync(transcript, question.Id, from, plan); }
+        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        try { return await ConfirmAsync(transcript, question.Id, from, plan, timeline); }
         catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
     }
 
     // Watches the transcript, from where it stood before the keys went, for the answer to
     // this tool call.
-    async Task<AnswerResult> ConfirmAsync(string transcript, string toolCallId, long from, CopilotPlan plan)
+    async Task<AnswerResult> ConfirmAsync(string transcript, string toolCallId, long from, CopilotPlan plan, DeliveryTimeline timeline)
     {
         var started = options.Time.GetTimestamp();
         TimeSpan? firstSeen = null;
@@ -243,8 +246,9 @@ public sealed class AnswerService : ISessionAnswerer
                     && ((record.HumanContent is null && plan.Text is null) || (!record.Completed && grace));
                 if (!wait)
                 {
+                    timeline.Recorded(record.At);
                     var (matched, reason) = CopilotVerifier.Check(plan, record);
-                    return matched ? new AnswerResult(AnswerOutcome.Delivered) : Unconfirmed($"{reason}; check at the machine");
+                    return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine");
                 }
             }
             else if (state.SessionEnded) { return Unconfirmed("the session ended before it recorded an answer; check at the machine"); }
@@ -266,7 +270,7 @@ public sealed class AnswerService : ISessionAnswerer
     //     still reads so when it is typed (the worker checks it in the same attach);
     //   * delivered only when the transcript records that request approved, or denied with no
     //     message; anything else is unconfirmed. Never retried.
-    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request)
+    async Task<AnswerResult> CopilotPermissionAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
     {
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Refused("the session's id is not a Copilot session id"); }
         if (CopilotPermissionPrompt.ParseQuestionId(question.Id) is not { } parsed) { return Refused("this Copilot permission prompt can only be answered at the machine"); }
@@ -277,7 +281,9 @@ public sealed class AnswerService : ISessionAnswerer
         var pid = session.ProcessId!.Value;
         var decision = approve ? "approve" : "deny";
 
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         KeyPlan keys;
         long from;
         InjectionResult typed;
@@ -315,17 +321,17 @@ public sealed class AnswerService : ISessionAnswerer
             from = after.ScannedTo;
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            typed = await TypeAsync(pid, keys);
+            typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
 
         log($"typed {decision} into {Short(session.Id)} (pid {pid}) for permission {Short(requestId)}: {keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt) is { } settled) { return settled; }
-        try { return await ConfirmPermissionAsync(transcript, requestId, from, approve); }
+        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        try { return await ConfirmPermissionAsync(transcript, requestId, from, approve, timeline); }
         catch (Exception e) { return Unconfirmed($"the {decision} was typed but could not be checked ({e.Message}); check at the machine"); }
     }
 
-    async Task<AnswerResult> ConfirmPermissionAsync(string transcript, string requestId, long from, bool approve)
+    async Task<AnswerResult> ConfirmPermissionAsync(string transcript, string requestId, long from, bool approve, DeliveryTimeline timeline)
     {
         var started = options.Time.GetTimestamp();
         while (true)
@@ -335,7 +341,7 @@ public sealed class AnswerService : ISessionAnswerer
             {
                 if (approve ? kind == "approved" : (kind == "denied-interactively-by-user" && !result.Feedback) || (kind == "cancelled" && result.StoppedAfter))
                 {
-                    return new AnswerResult(AnswerOutcome.Delivered);
+                    return Delivered(timeline);
                 }
                 // A cancel is a denial only once the person's abort of the turn follows it, which
                 // Copilot writes a few milliseconds later; until then, look again.
@@ -361,13 +367,15 @@ public sealed class AnswerService : ISessionAnswerer
             : null;
 
     // Claude Code's AskUserQuestion, keyed by its tool_use id in the session's transcript.
-    async Task<AnswerResult> ClaudeAsync(Session session, Question question, AnswerRequest request)
+    async Task<AnswerResult> ClaudeAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
     {
         if (source.Files(session.Id)?.Transcript is not { Length: > 0 } transcript) { return Refused("the session's transcript is not known; answer at the machine"); }
         if (Target(session, AgentKind.Claude) is { } unfit) { return unfit; }
         var pid = session.ProcessId!.Value;
 
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         ClaudePlan plan;
         long from;
         InjectionResult typed;
@@ -390,13 +398,13 @@ public sealed class AnswerService : ISessionAnswerer
             (plan, from) = (planned, call.ScannedTo);
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            typed = await TypeAsync(pid, plan.Keys);
+            typed = await TypeAsync(pid, plan.Keys, timeline);
         }
         finally { gate.DoneTyping(); }
 
         log($"typed into {Short(session.Id)} (pid {pid}): {plan.Keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt) is { } settled) { return settled; }
-        try { return await ConfirmClaudeAsync(session.Id, pid, transcript, question.Id, from, plan); }
+        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
+        try { return await ConfirmClaudeAsync(session.Id, pid, transcript, question.Id, from, plan, timeline); }
         catch (Exception e) { return Unconfirmed($"the answer was typed but could not be checked ({e.Message}); check at the machine"); }
     }
 
@@ -404,7 +412,7 @@ public sealed class AnswerService : ISessionAnswerer
     // that needs one more Enter, so a question still unanswered after ClaudeReviewAfter gets
     // exactly one, as agent-ha-bridge presses it: never a second, and never once anything
     // has been recorded for the call.
-    async Task<AnswerResult> ConfirmClaudeAsync(string sessionId, int pid, string transcript, string toolUseId, long from, ClaudePlan plan)
+    async Task<AnswerResult> ConfirmClaudeAsync(string sessionId, int pid, string transcript, string toolUseId, long from, ClaudePlan plan, DeliveryTimeline timeline)
     {
         var started = options.Time.GetTimestamp();
         var reviewed = false;
@@ -415,7 +423,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (state.Answer is { } record)
             {
                 var (matched, reason) = ClaudeVerifier.Check(plan, record);
-                return matched ? new AnswerResult(AnswerOutcome.Delivered) : Unconfirmed($"{reason}; check at the machine");
+                return matched ? Delivered(timeline) : Unconfirmed($"{reason}; check at the machine");
             }
             if (state.Interrupted) { return Unconfirmed("the question was interrupted at the machine before Claude recorded an answer; check at the machine"); }
             if (elapsed >= options.ConfirmTimeout)
@@ -453,7 +461,7 @@ public sealed class AnswerService : ISessionAnswerer
     // A Codex approval, keyed by the generation agent-ha-bridge's hook wrote into its
     // marker (DecisionId). The marker is the gate, read afresh immediately before typing:
     // the same generation, readable, and never already attempted by agent-ha-bridge.
-    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request)
+    async Task<AnswerResult> CodexAsync(Session session, Question question, AnswerRequest request, DeliveryTimeline timeline)
     {
         if (question.Kind != QuestionKind.Approval) { return Refused("this Codex prompt can only be answered at the machine"); }
         if (source.Files(session.Id)?.Registration is not { Length: > 0 } registration) { return Refused("the session's approval record is not known; answer at the machine"); }
@@ -462,7 +470,9 @@ public sealed class AnswerService : ISessionAnswerer
         var (keys, decision, problem) = CodexApproval.Plan(request.Fields);
         if (keys is null) { return Refused(problem!); }
 
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         InjectionResult typed;
         var attempt = AttemptLedger.Key("codex", session.Id, question.Id);
         try
@@ -480,12 +490,12 @@ public sealed class AnswerService : ISessionAnswerer
             if (marker.Attempted) { return Refused("agent-ha-bridge has already typed an answer into this approval, and it is never typed again; check at the machine"); }
 
             if (ledger.Claim(attempt) is { } claimed) { return Refused(claimed); }
-            typed = await TypeAsync(pid, keys);
+            typed = await TypeAsync(pid, keys, timeline);
         }
         finally { gate.DoneTyping(); }
 
         log($"typed {decision} into {Short(session.Id)} (pid {pid}): {keys.Describe()} -> {typed.Status} {typed.Detail}");
-        if (Settle(typed, attempt) is { } settled) { return settled; }
+        if (Settle(typed, attempt, timeline) is { } settled) { return settled; }
         return Unconfirmed($"typed {decision}, but Codex records nothing that says how an approval was answered, so it cannot be confirmed; check at the machine");
     }
 
@@ -497,18 +507,20 @@ public sealed class AnswerService : ISessionAnswerer
         return guard.Refuse(pid) is { } refused ? Refused(refused) : null;
     }
 
-    async Task<InjectionResult> TypeAsync(int pid, KeyPlan keys)
+    async Task<InjectionResult> TypeAsync(int pid, KeyPlan keys, DeliveryTimeline? timeline = null)
     {
+        timeline?.InjectStart();
         try { return await injector.InjectAsync(pid, keys); }
         catch (Exception e)
         {
             return new InjectionResult(InjectionStatus.Interrupted, $"the injector failed while typing ({e.Message})");
         }
+        finally { timeline?.InjectEnd(); }
     }
 
     // What typing came to, when that is already the outcome: nothing typed (refused, and the
     // prompt may be answered again) or keys that may have landed (unconfirmed).
-    AnswerResult? Settle(InjectionResult typed, string attempt)
+    AnswerResult? Settle(InjectionResult typed, string attempt, DeliveryTimeline timeline)
     {
         switch (typed.Status)
         {
@@ -518,8 +530,16 @@ public sealed class AnswerService : ISessionAnswerer
             case InjectionStatus.Interrupted:
                 return Unconfirmed($"{typed.Detail}; part of the answer may have reached the session, so check at the machine");
             default:
+                // A question holds the session, so it was not working.
+                timeline.Typed(false);
                 return null;
         }
+    }
+
+    static AnswerResult Delivered(DeliveryTimeline timeline)
+    {
+        timeline.Confirmed();
+        return new AnswerResult(AnswerOutcome.Delivered);
     }
 
     static string Name(AgentKind agent) => agent switch
@@ -543,6 +563,6 @@ public sealed class UnsupportedPlatformAnswerer : ISessionAnswerer
 {
     public bool Available => false;
 
-    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default) =>
+    public Task<AnswerResult> AnswerAsync(AnswerRequest request, CancellationToken cancellationToken = default, DeliveryWatch? watch = null) =>
         Task.FromResult(new AnswerResult(AnswerOutcome.Refused, "answering is not supported on this platform yet; answer at the machine"));
 }

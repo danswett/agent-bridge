@@ -8,8 +8,9 @@ public sealed record CopilotInputState(bool Readable, bool Asking, long ScannedT
 
 // A prompt the person gave: a main-agent user.message with no other source, the offset its
 // line starts at, which identifies it, and the paths of the files Copilot attached to it
-// (data.attachments[].path: one for each @<path> it took).
-public sealed record CopilotPrompt(long Offset, string Content, IReadOnlyList<string>? Attachments = null);
+// (data.attachments[].path: one for each @<path> it took). At is the event's own timestamp,
+// for timings only: a prompt is never matched by time.
+public sealed record CopilotPrompt(long Offset, string Content, IReadOnlyList<string>? Attachments = null, DateTimeOffset? At = null);
 
 public sealed record CopilotPromptsSince(IReadOnlyList<CopilotPrompt> Prompts, bool SessionEnded, long ScannedTo);
 
@@ -116,7 +117,7 @@ public static class CopilotPrompts
                 if (e.Type == "session.shutdown") { ended = true; return; }
                 if (e.Type != "user.message" || e.Data.ValueKind != JsonValueKind.Object) { return; }
                 if (Str(e.Data, "source") is { Length: > 0 }) { return; }
-                if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content, AttachedPaths(e.Data))); }
+                if (Str(e.Data, "content") is { } content) { prompts.Add(new CopilotPrompt(start, content, AttachedPaths(e.Data), Jsonl.Timestamp(e.Doc.RootElement))); }
             }
         }
     }

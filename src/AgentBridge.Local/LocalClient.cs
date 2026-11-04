@@ -97,9 +97,10 @@ public static class LocalClient
         }
     }
 
-    // Sends a request and returns its result, or throws HostError with the host's reason.
-    public static async Task<JsonElement> CallAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        Result(await channel.RequestAsync(op, data ?? new { }, timeout, ct));
+    // Sends a request and returns its result, or throws HostError with the host's reason. progress:
+    // as IClientChannel.RequestAsync.
+    public static async Task<JsonElement> CallAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) =>
+        Result(await channel.RequestAsync(op, data ?? new { }, timeout, ct, progress));
 
     // The same, with where the response came among the events (IClientChannel.RequestOrderedAsync).
     public static async Task<(JsonElement Result, long EventsBefore)> CallOrderedAsync(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
@@ -117,15 +118,15 @@ public static class LocalClient
         throw new HostErrorException(response.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String ? error.GetString()! : "the host failed the request");
     }
 
-    public static async Task<T> CallAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public static async Task<T> CallAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
-        var result = await channel.CallAsync(op, data, timeout, ct);
+        var result = await channel.CallAsync(op, data, timeout, ct, progress);
         return result.Deserialize<T>(ProtocolJson.Options) ?? throw new HostErrorException($"{op} returned nothing");
     }
 
     // A host record, read as a client reads one (Received, v1-sessions.md "Malformed records").
-    public static async Task<T> ReadAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) where T : class =>
-        Received.Read<T>(await channel.CallAsync(op, data, timeout, ct));
+    public static async Task<T> ReadAsync<T>(this IClientChannel channel, string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) where T : class =>
+        Received.Read<T>(await channel.CallAsync(op, data, timeout, ct, progress));
 
     // hello, the first request on every connection. A host that refused this process closes
     // the pipe after saying why; that reason is what the caller gets.

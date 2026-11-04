@@ -126,6 +126,60 @@ public class ChannelTests
     }
 
     [Fact]
+    public async Task Progress_a_handler_gives_reaches_the_callers_listener_in_order_ahead_of_the_response_and_never_completes_the_call()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        var go = new TaskCompletionSource();
+        host.Hub.Handler = async (_, _, _) =>
+        {
+            var served = ServedRequest.Current!;
+            served.Progress(new { stage = "received" });
+            await go.Task;
+            served.Progress(new { stage = "typed" });
+            return new { done = true };
+        };
+        var ch = await app.Hub.OpenAsync(host.Id);
+        var heard = new List<string>();
+        void Hear(JsonElement p) { lock (heard) { heard.Add(p.GetProperty("stage").GetString()!); } }
+
+        var call = ch.RequestAsync("work", new { }, progress: Hear);
+        // Without a listener, the same frames are passed over and the call waits for its response.
+        var unheard = ch.RequestAsync("work", new { });
+        await Wait.UntilAsync(() => { lock (heard) { return heard.Count == 1; } }, "the first progress frame");
+        await Task.Delay(200);
+        Assert.False(call.IsCompleted);
+        Assert.False(unheard.IsCompleted);
+
+        go.SetResult();
+        Assert.True((await call).GetProperty("result").GetProperty("done").GetBoolean());
+        Assert.True((await unheard).GetProperty("ok").GetBoolean());
+        Assert.Equal(["received", "typed"], heard);
+    }
+
+    [Fact]
+    public async Task Progress_given_once_the_response_is_on_its_way_is_dropped_so_nothing_follows_a_response()
+    {
+        var frames = new List<string>();
+        var served = new ServedRequest(7, o => JsonSerializer.SerializeToUtf8Bytes(o), b =>
+        {
+            lock (frames) { frames.Add(Encoding.UTF8.GetString(b)); }
+            return Task.CompletedTask;
+        });
+        var responded = new List<bool>();
+        served.OnResponded(responded.Add);
+
+        served.Progress(new { stage = "received" });
+        await served.CloseAsync();
+        served.Progress(new { stage = "typed" });
+        served.Responded(true);
+        served.Progress(new { stage = "typed" });
+
+        Assert.Equal(["""{"re":7,"progress":{"stage":"received"}}"""], frames);
+        Assert.Equal([true], responded);
+    }
+
+    [Fact]
     public async Task A_response_too_large_for_one_Noise_message_comes_back_as_an_error_and_the_channel_keeps_working()
     {
         var (relay, host, app) = await PairAsync();

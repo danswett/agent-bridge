@@ -57,7 +57,7 @@ public sealed class HaRunning : IAsyncDisposable
         // Answers from the cards go through the host's own delivery, as an app's do; a host that
         // cannot type into sessions here serves no answer controls rather than dead ones.
         Func<AgentBridge.Protocol.AnswerRequest, CancellationToken, Task<AgentBridge.Protocol.AnswerResult>>? answer =
-            answers is null or UnsupportedPlatformAnswerer ? null : answers.AnswerAsync;
+            answers is null or UnsupportedPlatformAnswerer ? null : (request, ct) => answers.AnswerAsync(request, ct);
         Func<AgentBridge.Protocol.StopRequest, CancellationToken, Task<AgentBridge.Protocol.StopResult>>? stop =
             stops is null or UnsupportedPlatformStopper ? null : stops.StopAsync;
         // Launches from the card go through the host's own launcher, as an app's do (its checks,

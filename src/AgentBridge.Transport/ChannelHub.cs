@@ -254,6 +254,8 @@ public sealed class ChannelHub
     {
         byte[] reply;
         Func<IProtocolChannel, Task>? then = null;
+        var served = new ServedRequest(id, ch.Serialize, b => ch.SendAsync(b));
+        ServedRequest.Enter(served);
         try
         {
             RequirePeer(ch);
@@ -273,8 +275,17 @@ public sealed class ChannelHub
             reply = ch.Serialize(new { re = id, ok = false, error = e.Message });
             then = null;
         }
-        try { await ch.SendAsync(reply); }
+        ServedRequest.Enter(null);
+        // Any progress the handler gave goes first: a client takes the response as the end.
+        await served.CloseAsync();
+        var sent = false;
+        try
+        {
+            await ch.SendAsync(reply);
+            sent = true;
+        }
         catch (Exception e) when (e is IOException or MessageTooLargeException) { return; }
+        finally { served.Responded(sent); }
         if (then is null) { return; }
         // Then owns its errors; there is no request left to report them on.
         try { await then(ch); }

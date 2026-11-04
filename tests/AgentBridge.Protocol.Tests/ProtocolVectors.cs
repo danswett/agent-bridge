@@ -294,6 +294,14 @@ public static class ProtocolVectors
             .Valid("delivered", new ReplyResult(AnswerOutcome.Delivered))
             .Valid("busy", new ReplyResult(AnswerOutcome.Busy, "an answer to this session is being typed"))
             .Reads("an-unknown-outcome-reads-as-unconfirmed", """{"outcome":"typed"}""");
+        // session.reply and session.answer with progress: true (sessions.progress).
+        f.Record<DeliveryProgress>(Host)
+            .Valid("received", new DeliveryProgress(DeliveryProgress.Received))
+            .Valid("typed-into-a-working-session", new DeliveryProgress(DeliveryProgress.Typed, true))
+            .Valid("typed-into-an-idle-session", new DeliveryProgress(DeliveryProgress.Typed, false));
+        f.Record<DeliveryTimings>(Host)
+            .Valid("delivered", new DeliveryTimings { Typed = 352, Recorded = 1190, Confirmed = 1361 })
+            .Valid("typed-and-not-recorded", new DeliveryTimings { Typed = 352 });
 
         f.Record<StopRequest>(Client, VectorChecks.Stops)
             .Valid("first-press", new StopRequest { Id = SessionId, Request = Request })

@@ -239,16 +239,33 @@ public sealed class SessionService
         // that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.answer needs an id, a question and a request"); }
         var request = data.Deserialize<AnswerRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.answer needs an id, a question and a request");
+        var (watch, progress) = Watch(request.Progress);
         if (answers is null) { return new AnswerResult(AnswerOutcome.Refused, "this host does not take answers; answer at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await answers.AnswerAsync(request);
+        var result = await answers.AnswerAsync(request, watch: watch);
         // Typed from this device: it needs no notification that the question was answered.
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed)
         {
             push?.Answered(channel.PeerId, request.Id, request.Question);
             TakeBack(takeBack, answer: true);
         }
-        return result;
+        return progress ? result with { Timings = watch.Timings } : result;
+    }
+
+    // What a caller of session.reply or session.answer hears as the delivery goes. With progress
+    // asked for (and a channel that can carry it), received at once, before any check, and typed
+    // once the keys have gone (v1-sessions.md, Channel framing); without, nothing on the wire
+    // changes. Either way the host's timing line learns when the result went.
+    static (DeliveryWatch Watch, bool Progress) Watch(bool? asked)
+    {
+        var served = ServedRequest.Current;
+        var progress = asked == true && served is not null;
+        if (progress) { served!.Progress(new DeliveryProgress(DeliveryProgress.Received)); }
+        var watch = new DeliveryWatch(
+            progress ? working => served!.Progress(new DeliveryProgress(DeliveryProgress.Typed, working)) : null,
+            sendsResult: served is not null);
+        served?.OnResponded(watch.ResultSent);
+        return (watch, progress);
     }
 
     List<string> Offered(IProtocolChannel channel)
@@ -257,6 +274,7 @@ public sealed class SessionService
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
+        if (answers?.Available == true || replies?.Available == true) { offered.Add(Capabilities.SessionsProgress); }
         if (attachments is not null && replies?.TakesAttachments == true) { offered.Add(Capabilities.SessionsAttach); }
         // Large files come through the blob store of the relay this channel came through; an app on
         // this machine has no use for it, and sends them in chunks over its own pipe instead.
@@ -285,11 +303,12 @@ public sealed class SessionService
         // anything that can be read gets an outcome.
         if (data.ValueKind != JsonValueKind.Object) { throw new ArgumentException("session.reply needs an id, a request and text"); }
         var request = data.Deserialize<ReplyRequest>(ProtocolJson.Options) ?? throw new ArgumentException("session.reply needs an id, a request and text");
+        var (watch, progress) = Watch(request.Progress);
         if (replies is null) { return new ReplyResult(AnswerOutcome.Refused, "this host does not take replies; reply at the machine"); }
         var takeBack = BeginTakeBack(request.Id, request.Request);
-        var result = await replies.ReplyAsync(request, channel.PeerId);
+        var result = await replies.ReplyAsync(request, channel.PeerId, watch: watch);
         if (result.Outcome is AnswerOutcome.Delivered or AnswerOutcome.Unconfirmed) { TakeBack(takeBack, answer: false); }
-        return result;
+        return progress ? result with { Timings = watch.Timings } : result;
     }
 
     // Only this machine's own pipe is direct: anything through the relay keeps the 256 KiB cap

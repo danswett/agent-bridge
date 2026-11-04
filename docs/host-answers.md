@@ -246,6 +246,13 @@ In order, for every answer:
    `x`, `x ` and `pick=x` apart. A different record, an error, a skip, the session
    ending, or nothing is `unconfirmed` with the reason. Claude and Codex as above.
 
+Progress and timings work as for replies ([host-replies.md](host-replies.md#progress-and-timings)):
+`received` before step 1, `typed` (never `working`: a question holds the session) once step
+7's keys have all gone, and one `answer <id> timings (ms after …)` log line per answer.
+`recorded` is the agent's timestamp on Copilot's `human_response.recorded` (or the call's
+completion) for an `ask_user`; other prompts' records have none the host reads yet, so it is
+absent for them.
+
 ## agent-ha-bridge (design G5)
 
 While agent-ha-bridge's daemon is active for this user the host offers no `sessions.answer`

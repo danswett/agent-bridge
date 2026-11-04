@@ -16,6 +16,7 @@ public sealed class LocalChannel : IClientChannel
     readonly Stream stream;
     readonly SemaphoreSlim sendLock = new(1, 1);
     readonly ConcurrentDictionary<long, TaskCompletionSource<(JsonElement, long)>> pending = new();
+    readonly ConcurrentDictionary<long, Action<JsonElement>> listeners = new();
     readonly Channel<ChannelEvent> events;
     readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource stop = new();
@@ -58,22 +59,27 @@ public sealed class LocalChannel : IClientChannel
 
     internal void Start() => reader = Task.Run(ReadLoopAsync);
 
-    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        (await RequestOrderedAsync(op, data, timeout, ct)).Response;
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) =>
+        (await RequestOrderedAsync(op, data, timeout, ct, progress)).Response;
 
-    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         ThrowIfClosed();
         var id = Interlocked.Increment(ref nextRequest);
         var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = tcs;
+        if (progress is not null) { listeners[id] = progress; }
         try
         {
             ThrowIfClosed();
             await SendAsync(Serialize(new { id, op, data }), ct);
             return await tcs.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), ct);
         }
-        finally { pending.TryRemove(id, out _); }
+        finally
+        {
+            pending.TryRemove(id, out _);
+            listeners.TryRemove(id, out _);
+        }
     }
 
     public async Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default)
@@ -143,7 +149,9 @@ public sealed class LocalChannel : IClientChannel
                 // peer and is ignored, as on the relay.
                 if (message.TryGetProperty("re", out var re))
                 {
-                    if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult((message.Clone(), lastReceivedSeq)); }
+                    // Progress is never the response (SecureChannel.Complete).
+                    if (message.TryGetProperty("progress", out var progress)) { SecureChannel.Report(listeners, re.GetInt64(), progress); }
+                    else if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult((message.Clone(), lastReceivedSeq)); }
                 }
                 else if (message.TryGetProperty("ev", out var ev))
                 {
@@ -168,6 +176,8 @@ public sealed class LocalChannel : IClientChannel
     {
         byte[] reply;
         Func<IProtocolChannel, Task>? then = null;
+        var served = new ServedRequest(id, Serialize, b => SendAsync(b, default));
+        ServedRequest.Enter(served);
         try
         {
             var result = await handler!(this, op, data);
@@ -184,8 +194,17 @@ public sealed class LocalChannel : IClientChannel
             reply = Serialize(new { re = id, ok = false, error = e.Message });
             then = null;
         }
-        try { await SendAsync(reply, default); }
+        ServedRequest.Enter(null);
+        // As on a relay channel (ChannelHub.ServeAsync): progress first, then the response.
+        await served.CloseAsync();
+        var sent = false;
+        try
+        {
+            await SendAsync(reply, default);
+            sent = true;
+        }
         catch (Exception e) when (e is IOException or MessageTooLargeException or ObjectDisposedException) { return; }
+        finally { served.Responded(sent); }
         if (then is null) { return; }
         try { await then(this); }
         catch (Exception) { }

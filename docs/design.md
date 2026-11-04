@@ -219,7 +219,8 @@ HA image store.
   `machine.update.install`, `machine.update.check`, `machine.forget`,
   `machine.setDetail`, `pairing.*`.
 * **Results.** Every command gets `accepted` → `progress*` → `completed|refused|failed`
-  with a reason. This closes the "no acknowledgement" gap that
+  with a reason (built so far for `session.reply` and `session.answer`, as
+  `sessions.progress`: [v1-sessions.md](protocol/v1-sessions.md#progress)). This closes the "no acknowledgement" gap that
   `cross-machine-resume.md` and `control-authorization.md` both call out, and replaces
   the "Last launch" sensor and the snapshot-and-poll answer-reading in AGENTS.md.
 * **Capabilities.** `hello{protocolVersion, hostVersion, features[]}` replaces

@@ -14,8 +14,9 @@ public sealed record CopilotCallState(
     long ScannedTo);
 
 // HumanContent is response.content of human_response.recorded; otherwise the call's
-// tool.execution_complete, with its result text or its failure.
-public sealed record CopilotAnswerRecord(JsonElement? HumanContent, bool Completed, bool Succeeded, string? ResultText);
+// tool.execution_complete, with its result text or its failure. At is that record's own
+// timestamp, for timings only.
+public sealed record CopilotAnswerRecord(JsonElement? HumanContent, bool Completed, bool Succeeded, string? ResultText, DateTimeOffset? At = null);
 
 // Reads a session's events.jsonl for one tool call, by its id, never by time: the start
 // that asked, and whatever answered it. Only reads (FileShare.ReadWrite | Delete, the CLI
@@ -50,6 +51,7 @@ public static class CopilotTranscript
         JsonElement? arguments = null;
         var main = true;
         JsonElement? human = null;
+        DateTimeOffset? humanAt = null;
         CopilotAnswerRecord? completed = null;
         var ended = false;
         var started = !requireStart;
@@ -61,7 +63,7 @@ public static class CopilotTranscript
         {
             return new CopilotCallState(null, true, null, false, from);
         }
-        var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText) : completed;
+        var answer = human is { } h ? new CopilotAnswerRecord(h, completed is not null, completed?.Succeeded ?? true, completed?.ResultText, humanAt) : completed;
         return new CopilotCallState(arguments, main, started ? answer : null, started && ended, scannedTo);
 
         void Line(ReadOnlySpan<byte> bytes, long start)
@@ -101,12 +103,13 @@ public static class CopilotTranscript
                     case "human_response.recorded" when started && human is null:
                         human = data.TryGetProperty("response", out var r) && r.ValueKind == JsonValueKind.Object && r.TryGetProperty("content", out var c)
                             ? c.Clone() : JsonSerializer.SerializeToElement<object?>(null);
+                        humanAt = Jsonl.Timestamp(e);
                         break;
                     case "tool.execution_complete" when started && completed is null:
                         {
                             var ok = !(data.TryGetProperty("success", out var s) && s.ValueKind == JsonValueKind.False) && !data.TryGetProperty("error", out _);
                             var text = data.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object ? Str(result, "content") : null;
-                            completed = new CopilotAnswerRecord(null, true, ok, text);
+                            completed = new CopilotAnswerRecord(null, true, ok, text, Jsonl.Timestamp(e));
                             break;
                         }
                 }

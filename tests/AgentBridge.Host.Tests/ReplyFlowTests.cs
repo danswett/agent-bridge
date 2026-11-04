@@ -252,6 +252,137 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.Equal(("delivered", (string?)null), await ReplyAsync(ch, "also run the e2e tests"));
     }
 
+    // ---- progress (sessions.progress) ----
+
+    // The frames a request heard before its result, as sent, and the result.
+    static async Task<(List<string> Heard, System.Text.Json.JsonElement Result)> HearAsync(SecureChannel ch, string op, object data)
+    {
+        var heard = new List<string>();
+        var response = await ch.RequestAsync(op, data, progress: p => { lock (heard) { heard.Add(p.GetRawText()); } });
+        Assert.True(response.GetProperty("ok").GetBoolean(), response.GetRawText());
+        lock (heard) { return ([.. heard], response.GetProperty("result")); }
+    }
+
+    // A transcript line as Copilot writes it now, rather than at the fixture's fixed time, so its
+    // timestamp falls after the request.
+    static string Now(string line)
+    {
+        var node = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+        node["timestamp"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", System.Globalization.CultureInfo.InvariantCulture);
+        return node.ToJsonString();
+    }
+
+    const string Received = """{"stage":"received"}""";
+
+    [Fact]
+    public async Task A_reply_without_progress_hears_nothing_before_its_result_and_gets_the_result_it_always_did()
+    {
+        var ch = await OpenAsync();
+
+        var (heard, result) = await HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "as before" });
+
+        Assert.Empty(heard);
+        Assert.Equal("""{"outcome":"delivered"}""", result.GetRawText());
+    }
+
+    [Fact]
+    public async Task A_reply_asking_for_progress_hears_received_then_typed_then_its_result_with_each_stages_milliseconds()
+    {
+        injector.OnInject = plan => Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
+        var ch = await OpenAsync();
+        Assert.Contains(Capabilities.SessionsProgress, await CapabilitiesAsync(ch));
+
+        var (heard, result) = await HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "go on", progress = true });
+
+        Assert.Equal([Received, """{"stage":"typed","working":false}"""], heard);
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        var timings = result.GetProperty("timings");
+        var typed = timings.GetProperty("typed").GetInt64();
+        Assert.InRange(timings.GetProperty("recorded").GetInt64(), 0, 10_000);
+        Assert.InRange(timings.GetProperty("confirmed").GetInt64(), typed, 10_000);
+    }
+
+    [Fact]
+    public async Task A_reply_typed_into_a_working_session_says_so_the_client_can_show_it_queued()
+    {
+        Fixture.Append(events, Prompt("next task"), Copilot.TurnStart(second++), Copilot.ToolStart("t1", "powershell", new { command = "dotnet test" }, second++));
+        await source.RefreshAsync();
+        injector.OnInject = plan => Fixture.Append(events, Prompt(plan.Sends[0].Text, "steering"));
+        var ch = await OpenAsync();
+
+        var (heard, _) = await HearAsync(ch, Ops.SessionReply, new { id = Id, request = Guid.NewGuid().ToString(), text = "and the e2e tests", progress = true });
+
+        Assert.Equal([Received, """{"stage":"typed","working":true}"""], heard);
+    }
+
+    [Fact]
+    public async Task A_repeat_of_a_reply_still_being_delivered_hears_the_stages_its_first_send_has_reached()
+    {
+        // Typed, and not yet recorded: the first send waits on the transcript.
+        injector.OnInject = null;
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+        var data = new { id = Id, request, text = "once", progress = true };
+        var first = HearAsync(ch, Ops.SessionReply, data);
+        await Wait.UntilAsync(() => injector.Plans.Count == 1, "the reply to be typed", Patience);
+
+        var heard = new List<string>();
+        var repeat = (await OpenAsync()).RequestAsync(Ops.SessionReply, data, progress: p => { lock (heard) { heard.Add(p.GetRawText()); } });
+        await Wait.UntilAsync(() => { lock (heard) { return heard.Count == 2; } }, "the repeat to hear the stages reached", Patience);
+        Assert.False(repeat.IsCompleted);
+        Fixture.Append(events, Prompt("once"));
+
+        var answer = await repeat;
+        Assert.Equal("delivered", answer.GetProperty("result").GetProperty("outcome").GetString());
+        Assert.Equal([Received, """{"stage":"typed","working":false}"""], heard);
+        // Its timings count from its own arrival: typed before it came.
+        Assert.Equal(0, answer.GetProperty("result").GetProperty("timings").GetProperty("typed").GetInt64());
+        Assert.Equal([Received, """{"stage":"typed","working":false}"""], (await first).Heard);
+        Assert.Single(injector.Plans);
+    }
+
+    [Fact]
+    public async Task An_answer_asking_for_progress_hears_received_then_typed_then_its_result_with_timings()
+    {
+        Fixture.Append(events, Ask("q1", second++));
+        await source.RefreshAsync();
+        injector.OnInject = _ => Fixture.Append(events, Now(Copilot.Event("human_response.recorded",
+            new { toolCallId = "q1", requestId = "r", actor = "human_response", response = new { responseKind = "ask_user", content = new { pick = "b" } } }, second++)));
+        var ch = await OpenAsync();
+
+        var (heard, result) = await HearAsync(ch, Ops.SessionAnswer, new { id = Id, question = "q1", request = Guid.NewGuid().ToString(), fields = new { pick = "b" }, progress = true });
+
+        Assert.Equal([Received, """{"stage":"typed","working":false}"""], heard);
+        Assert.Equal("delivered", result.GetProperty("outcome").GetString());
+        Assert.True(result.GetProperty("timings").TryGetProperty("recorded", out _));
+        Assert.True(result.GetProperty("timings").TryGetProperty("confirmed", out _));
+    }
+
+    [Fact]
+    public async Task Each_reply_logs_one_line_of_its_stages_in_milliseconds_after_receipt_once_its_result_has_gone()
+    {
+        var logged = new List<string>();
+        Serve(Answerer(), new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            ConfirmTimeout = TimeSpan.FromSeconds(2),
+            PollInterval = TimeSpan.FromMilliseconds(25),
+        }, m => { lock (logged) { logged.Add(m); } }, gate));
+        injector.OnInject = plan => Fixture.Append(events, Now(Prompt(plan.Sends[0].Text)));
+        var ch = await OpenAsync();
+        var request = Guid.NewGuid().ToString();
+
+        Assert.Equal("delivered", (await ReplyAsync(ch, "timed", request)).Outcome);
+        Assert.Equal("delivered", (await ReplyAsync(ch, "timed", request)).Outcome);
+
+        static bool Timing(string m) => m.Contains(" timings ", StringComparison.Ordinal);
+        await Wait.UntilAsync(() => { lock (logged) { return logged.Any(Timing); } }, "the timing line", Patience);
+        await Task.Delay(200);
+        var line = Assert.Single(logged, Timing);
+        Assert.Matches($@"^reply {request[..8]} timings \(ms after \d\d:\d\d:\d\d\.\d\d\d\): checked \d+, turn \d+, inject \d+-\d+, typed \d+, recorded \d+, confirmed \d+, settled \d+, sent \d+$", line);
+    }
+
     [Fact]
     public async Task A_prompt_that_is_not_the_reply_or_none_at_all_is_unconfirmed_never_delivered()
     {

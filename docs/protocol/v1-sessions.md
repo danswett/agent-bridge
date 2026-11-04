@@ -146,6 +146,7 @@ Inside a channel, as in S4:
 | client → host | `{"id": 7, "op": "sessions.list", "data": {...}}` | A request. `id` is a positive integer unique on this channel |
 | host → client | `{"re": 7, "ok": true, "result": {...}}` | Its response |
 | host → client | `{"re": 7, "ok": false, "error": "unknown op"}` | A failed request |
+| host → client | `{"re": 7, "progress": {...}}` | How far a request that asked for progress has got, before its response. It has `re` and no `ok`, and never ends the request ([Progress](#progress)) |
 | host → client | `{"ev": "session.upsert", "seq": 42, "data": {...}}` | **New:** an event the client subscribed to. It has no `id` or `re` |
 
 `seq` belongs to the channel, not to a subscription. It goes up by one for each event the
@@ -178,6 +179,7 @@ Request `data`: `{}`. Result:
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
+| `sessions.progress` | `session.reply` and `session.answer` take `"progress": true`, and then report `received` and `typed` before their result, which carries `timings` ([Progress](#progress)). Offered with `sessions.reply` or `sessions.answer` |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
 | `sessions.attach.blob` | `attachment.start` takes a `blob`: files over 256 KiB, up to 100 MiB, through the relay's blob store ([Large files](#large-files-through-the-blob-store)). Offered with `sessions.attach` on a channel through a relay, while the host is connected to one that has a blob store. Without it a client keeps to 256 KiB |
 | `sessions.attach.direct` | `attachment.chunk` takes files up to 100 MiB, not only 256 KiB. Offered with `sessions.attach` on the local pipe only ([local-pipe.md](local-pipe.md)), where the bytes cost the relay nothing |
@@ -327,6 +329,7 @@ Answers a session's pending question. Request `data`:
 | `request` | A fresh UUID per answer the person gives. A host remembers the outcome of each request, **whatever it was** (`stale`, `busy` and `refused` included), for at least 10 minutes and returns it again for a repeat, typing nothing more. A repeat that arrives while the first copy is still being delivered waits for it and gets the same outcome, never `busy`. A client resending after a lost response or a reconnect therefore never answers twice. After `busy` or `refused`, a client that tries again uses a new `request` |
 | `fields` | One value per field, by `name` (below). Omit a field to leave it unanswered; `required` fields must be present |
 | `text` | Instead of `fields`, for a question with no fields: the free-text answer |
+| `progress` | Optional, `true` from a client that saw `sessions.progress`: it hears the answer's progress before its result ([Progress](#progress)). Absent, nothing changes |
 
 A field's value, by type:
 
@@ -346,7 +349,8 @@ default-ignorables such as U+3164, marks with no base; see `session.reply`) is e
 `Answers.Check` in C# is the validation every host applies before typing anything.
 
 Result: `{ "outcome": "<outcome>", "reason": "<text>" }`, with `reason` present for
-anything but `delivered`:
+anything but `delivered`, and `timings` for a request that asked for progress
+([Progress](#progress)):
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -429,6 +433,7 @@ the session is idle or still working. Request `data`:
 | `request` | A fresh UUID per reply the person sends, with exactly `session.answer`'s semantics: every outcome is remembered for at least 10 minutes and returned for a repeat, which types nothing; a repeat of a reply still being delivered waits for it |
 | `text` | The prompt: at most 16 KiB of UTF-8. Not blank, unless the reply has attachments |
 | `attachments` | Optional. Files and images for the agent, in order: `[{ "id": "<attachment>" }]`, at most 10, each sent whole by **this device** with `attachment.start` and `attachment.chunk` first ([Attachments](#attachments)). Absent, `null` and `[]` mean none. A host without `sessions.attach` refuses a reply that has any |
+| `progress` | Optional, as for `session.answer` ([Progress](#progress)) |
 
 **Line breaks become spaces.** Every control character, line breaks and tabs included,
 and the Unicode line and paragraph separators are typed as spaces, so a reply always
@@ -449,7 +454,8 @@ and Claude Code strips the zero-width, filler, variation-selector and tag charac
 sends ([#448](https://github.com/danswett/agent-bridge/issues/448)). A reply of nothing but
 those characters, with no attachments, is `refused` as empty.
 
-Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`:
+Result: `{ "outcome", "reason" }`, the outcomes of `session.answer`, with `timings` for a
+request that asked for progress:
 
 | `outcome` | Meaning | Typed? |
 |---|---|---|
@@ -470,6 +476,49 @@ what it reports and, immediately before typing, in the transcript itself. The pe
 serialization is shared with answers, but it ends once the reply's keys have gone: a
 question the agent asks while the host waits for its prompt to be recorded can be answered
 at once.
+
+### Progress
+
+A reply to a working session can take a minute to settle, and a client that hears nothing
+until then can only say "sending" ([#598](https://github.com/danswett/agent-bridge/issues/598)).
+So a host that offers `sessions.progress` reports how far a `session.reply` or
+`session.answer` has got, to a client that adds `"progress": true` to its `data`. Without
+it, nothing about the exchange changes: one response, with the result as above.
+
+With it, the host sends zero or more frames on the channel **before** the response, each
+with the request's `re`, a `progress` object and **no `ok`**:
+
+```json
+{"re": 7, "progress": {"stage": "received"}}
+{"re": 7, "progress": {"stage": "typed", "working": true}}
+{"re": 7, "ok": true, "result": {"outcome": "delivered", "timings": {"typed": 352, "recorded": 1190, "confirmed": 1361}}}
+```
+
+| `stage` | When | A client shows |
+|---|---|---|
+| `received` | As soon as the host has the request, before any check (so a request refused at once still hears it) | Sent |
+| `typed` | Every key has gone, so the outcome will be `delivered` or `unconfirmed`. `working` is `true` when the session was working: the agent takes the prompt at its next step, as Copilot's `steering` | Typed, or Queued when `working` |
+
+A client ignores a `stage` it doesn't know, and a progress frame never completes its
+request, whatever else it holds. A request refused before any key went hears only
+`received`. A repeat of a request still being delivered (the same `request` UUID) hears its
+own `received`, then the stages the first one has reached, at once, and the rest as they come;
+one sent after the outcome hears `received` and, if the keys went, `typed`. Nothing follows the
+response.
+
+`timings` in the result: milliseconds after the host received the request, by the host's
+clock. Absent fields were not reached, or are not known. For a repeat, they count from the
+repeat's own arrival, and a stage already reached by then reads `0`.
+
+| Field | When |
+|---|---|
+| `typed` | The last key went |
+| `recorded` | The agent's own timestamp for the prompt or answer it recorded, where its transcript has one (Copilot replies and `ask_user` answers, Claude Code and Codex replies) |
+| `confirmed` | The host matched that record to the request: only for `delivered` |
+
+The same framing runs on the local pipe ([local-pipe.md](local-pipe.md)). The host also logs
+every reply and answer's stages in milliseconds, progress asked for or not
+([host-replies.md](../host-replies.md#timings)).
 
 ### Attachments
 

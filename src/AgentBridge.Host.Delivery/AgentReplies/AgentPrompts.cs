@@ -5,8 +5,8 @@ namespace AgentBridge.Host.Delivery.AgentReplies;
 
 // A prompt from the person that an agent recorded, by the offset of the line recording it,
 // which is what identifies it: two replies of the same words are two prompts. Files are the
-// paths the agent took in as attachments of it.
-public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files);
+// paths the agent took in as attachments of it. At is the line's own timestamp, for timings only.
+public sealed record AgentPrompt(long Offset, string Text, IReadOnlyList<string> Files, DateTimeOffset? At = null);
 
 public sealed record AgentPromptsSince(bool Readable, IReadOnlyList<AgentPrompt> Prompts, long ScannedTo);
 
@@ -58,7 +58,7 @@ public static class ClaudePrompts
                     case "queue-operation" when Str(e, "operation") == "enqueue" && Str(e, "content") is { } content:
                         var mine = new List<string>();
                         queued.Add((InjectableText.Flatten(content), mine));
-                        prompts.Add(new AgentPrompt(start, content, mine));
+                        prompts.Add(new AgentPrompt(start, content, mine, Jsonl.Timestamp(e)));
                         // Claude is still on the prompt before: its Reads and their results keep
                         // arriving after an enqueue, so its files stay current until the queued
                         // prompt is taken.
@@ -96,7 +96,7 @@ public static class ClaudePrompts
                             return;
                         }
                         files = [];
-                        prompts.Add(new AgentPrompt(start, text, files));
+                        prompts.Add(new AgentPrompt(start, text, files, Jsonl.Timestamp(e)));
                         break;
                     case "attachment" when files is not null
                         && e.TryGetProperty("attachment", out var a) && a.ValueKind == JsonValueKind.Object
@@ -186,13 +186,13 @@ public static class CodexPrompts
                                 case "local_image" when ClaudePrompts.Str(c, "path") is { } path: images.Add(path); break;
                             }
                         }
-                        items.Add(new AgentPrompt(start, string.Join(' ', text), images));
+                        items.Add(new AgentPrompt(start, string.Join(' ', text), images, Jsonl.Timestamp(e)));
                         break;
                     case "user_message" when ClaudePrompts.Str(p, "message") is { } message:
                         var local = p.TryGetProperty("local_images", out var li) && li.ValueKind == JsonValueKind.Array
                             ? li.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToList()
                             : [];
-                        legacy.Add(new AgentPrompt(start, message, local));
+                        legacy.Add(new AgentPrompt(start, message, local, Jsonl.Timestamp(e)));
                         break;
                 }
             }
