@@ -54,6 +54,9 @@ export class HostClient {
   // a session.patch applies to. A new subscription starts afresh, since its patches are on its own
   // events.
   #raw = new Map();
+  // Whether anything was dropped since the latest subscribe was answered: a snapshot with a session
+  // it could not read is not the whole list, and nothing resumes from it.
+  #dropped = false;
   #usageSubscribed = false;
   #usageShared = false;
   #updateSubscribed = false;
@@ -265,6 +268,7 @@ export class HostClient {
           this.#snapshot = new Set();
           this.#resumed = m.result?.resumed === true;
           this.#raw.clear();
+          this.#dropped = false;
         }
       }
       if (m.ok === true) { p.resolve(m.result); }
@@ -283,6 +287,9 @@ export class HostClient {
       // the next is always one more than the last, and the first is 1. Taking whatever came first,
       // on a channel or after subscribing again, as the baseline missed events lost just then.
       gap = m.seq !== (this.#lastSeq ?? 0) + 1;
+      // An event numbered again or back (a host that is broken) may carry an older state than the
+      // one held: the list is not whole after it, and is never resumed from.
+      if (gap && m.seq <= (this.#lastSeq ?? 0)) { this.#lost(); }
       this.#lastSeq = m.seq;
     }
     // Before anything of this event is applied or told: the snapshot under way is no longer the
@@ -334,7 +341,7 @@ export class HostClient {
           if (this.store) {
             this.store.revision = Number.isFinite(data.revision) ? data.revision : this.store.revision;
             this.store.instance = this.#instance;
-            this.store.whole = true;
+            this.store.whole = !this.#dropped;
             this.store.setHeld(readDiscoveryHeld(data.discoveryHeld));
             this.store.retain(keep);
           }
@@ -394,6 +401,7 @@ export class HostClient {
   // The store's list is no longer the host's whole list: nothing resumes from it until a full
   // snapshot makes it whole again.
   #lost() {
+    this.#dropped = true;
     if (this.store) { this.store.whole = false; }
   }
 

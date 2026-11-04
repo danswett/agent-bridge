@@ -178,3 +178,46 @@ test('a patch is applied to a copy, never to the session it is on, and a key "__
   assert.equal({}.polluted, undefined);
   assert.throws(() => applyPatch(held, 2, patch), { message: PatchReasons.notOnHeld });
 });
+
+test('a full snapshot with a session the client could not read is not the whole list, and is never resumed from', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  const client = await subscribed(t, store, { revision: 4, count: 2 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1') });
+  t.host({ ev: 'session.upsert', seq: 2, data: session(7) });
+  t.host({ ev: 'sessions.synced', seq: 3, data: { revision: 4 } });
+
+  assert.equal(client.synced, true);
+  assert.equal(store.resumeFrom('run-1'), null);
+});
+
+test('a patch holding a lone surrogate is dropped whole, as the C# reader refuses it, and the list is subscribed again in full', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1', { title: 'Before' }) });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 4 } });
+
+  t.host({ ev: 'session.patch', seq: 3, data: { id: 's1', base: 1, revision: 5, set: { title: 'After \uD800' } } });
+  await flush();
+
+  assert.equal(store.get('s1').title, 'Before');
+  assert.equal(t.requests('sessions.subscribe').length, 2);
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true });
+  assert.equal(readPatch({ id: 's1', subagents: { remove: ['\uDC00a'] } }), null);
+  assert.ok(readPatch({ id: 's1', set: { title: 'a \uD83D\uDE00 pair' } }));
+});
+
+test('an event numbered again may be an older state than the one held, so the list is never resumed from after it', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1') });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 4 } });
+
+  t.host({ ev: 'session.upsert', seq: 2, data: session('s1', { title: 'Older' }) });
+  await flush();
+
+  assert.equal(t.requests('sessions.subscribe').length, 2);
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true });
+});

@@ -20,12 +20,22 @@ const has = (o, k) => Object.hasOwn(o, k);
 // never the object's prototype.
 const put = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
 const strings = (v) => Array.isArray(v) && v.every((s) => typeof s === 'string');
+// A lone surrogate, which the C# reader can't decode (Received refuses the whole patch for one):
+// applied here, the PWA would show a session the Windows app never had.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const decodable = (v) => {
+  if (typeof v === 'string') { return !LONE_SURROGATE.test(v); }
+  if (Array.isArray(v)) { return v.every(decodable); }
+  if (v !== null && typeof v === 'object') { return Object.entries(v).every(([k, x]) => !LONE_SURROGATE.test(k) && decodable(x)); }
+  return true;
+};
 
 // The patch as the PWA reads it, or null when it cannot be read at all: every part is strict
 // (Malformed records), since a patch read past a part would leave the session unlike the host's.
 // set and append are taken as they are; what they hold is applyPatch's to judge.
 export function readPatch(raw) {
   if (!isObject(raw) || typeof raw.id !== 'string') { return null; }
+  if (![raw.id, raw.set, raw.append, raw.subagents?.set, raw.subagents?.remove, raw.subagents?.order].every(decodable)) { return null; }
   const base = raw.base ?? null;
   if (base !== null && !Number.isSafeInteger(base)) { return null; }
   const subagents = raw.subagents ?? null;
