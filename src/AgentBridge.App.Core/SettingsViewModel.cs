@@ -514,7 +514,7 @@ public sealed class SettingsViewModel : Observable
     {
         if (!AgentInstallInProgress) { return; }
         await host.CallAsync(HostOps.AgentsInstallCancel);
-    }, changeBusy: false);
+    });
 
     public Task CheckForUpdatesAsync() => RunAsync(async () =>
     {
@@ -576,10 +576,11 @@ public sealed class SettingsViewModel : Observable
     // Every action here ends up behind an async void click handler, where an escaping exception
     // ends the app (and every unsent draft on its cards). So whatever goes wrong (the pipe, Task
     // Scheduler, the registry, the network under an update check) is shown, not thrown.
-    async Task RunAsync(Func<Task> act, bool changeBusy = true)
+    async Task RunAsync(Func<Task> act)
     {
         Error = null;
-        if (changeBusy) { busyActions++; Busy = true; }
+        busyActions++;
+        Busy = true;
         try { await act(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -587,7 +588,7 @@ public sealed class SettingsViewModel : Observable
         }
         finally
         {
-            if (changeBusy) { Busy = --busyActions > 0; }
+            Busy = --busyActions > 0;
             RaiseAll();
         }
     }

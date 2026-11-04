@@ -48,7 +48,7 @@ public sealed partial class SettingsView : UserControl
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
-            Title = "Install this CLI and its required runtimes?",
+            Title = $"Install {v.Agents.FirstOrDefault(a => a.Id == id)?.Label ?? id} and its required runtimes?",
             Content = "Use the Windows Package Manager community source and accept its source and package agreements. Required runtimes may request Windows administrator approval; declining leaves setup incomplete. Existing CLIs are not upgraded. No hook setup, sign-in, folder trust or restart is requested. Agency is installed through your organization.",
             PrimaryButtonText = "Install CLI and runtimes",
             CloseButtonText = "Cancel",
