@@ -539,7 +539,7 @@ easing in, its duration out, and how far it travels.
 | Push and pop | Narrow widths (§5.2): list → session → delegate | Opening a row or a delegate; Back, Esc or the system back gesture | The incoming screen's surface covers the old screen at once, and its content slides 24 in from the trailing side and fades in. Pop is the mirror: the screen beneath returns at once, and its content slides 24 in from the leading side. An approval's command never slides: a session asking a question only fades in, and the list's Needs you lane is there at once. Only content fades, never a surface, so two screens never show through each other | `push`: emphasis, decelerate; medium | Windows: `Frame` navigation with `SlideNavigationTransitionInfo`, or a connected animation from the row's title to the session's, configured Direct (never Gravity's lift and shadow). PWA: the tokens on the incoming content. Apple: `NavigationStack`. Android: Material's shared axis X, with predictive back | Cross-fade |
 | Pane and inspector | Wide widths: the delegate inspector, Details | The header's inspector toggle; Details; choosing a delegate | The pane's content slides 12 in from the trailing edge and fades in. The columns take their new widths at once, so text reflows once and not on every frame | `pane`: standard, decelerate; fast out; small | Windows: the tokens on the pane's content. PWA: a transition on transform and opacity. macOS: `.inspector` | Cross-fade |
 | Tab switch | Conversation / Delegates / Tools; machine tabs; the phone's bottom bar | Choosing a tab | The indicator moves to the new tab, as Selection does. The new content fades in without sliding (Fluent's top-level fade) | `tab`: standard, decelerate | Windows: `SelectorBar`'s and `NavigationView`'s own indicators. Apple: `TabView`. Android: `NavigationBar` | Instant |
-| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, the machine list, a delegate's details, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns. Opening, the space eases open as the content fades in and settles 4 down, and what is below eases down with it (Easing aside). Closing, the content fades out, quicker, and the space eases closed. The space is laid out once: what moves is clipped and translated, never resized every frame | `disclosure`: standard, decelerate; fast out; nudge. The space: `shift` | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`); what is below it as Easing aside says. PWA: the tokens on the chevron and the content; the space as Easing aside | Instant |
+| Disclosure | Show reasoning, Show prompt, Tool history, the finished delegates, the Ended group, a session group's header (§6.1, #767), the machine list, a delegate's details, a fold of delegate events (§6.4) | Opening or closing it | The chevron turns. Opening, the space eases open as the content fades in and settles 4 down, and what is below eases down with it (Easing aside). Closing, the content fades out, quicker, and the space eases closed. The space is laid out once: what moves is clipped and translated, never resized every frame | `disclosure`: standard, decelerate; fast out; nudge. The space: `shift` | Windows: `Expander`'s own motion where it is one; Show prompt's compact disclosure, the tokens on the chevron and the content (`Motion.Turn`, `Motion.Enter`); what is below it as Easing aside says. PWA: the tokens on the chevron and the content; the space as Easing aside | Instant |
 | Arriving and leaving | A session row (also as Needs you shows or hides it), a Needs you entry, a delegate in the strip, a call in Tools, a line in the conversation (a delegate event, the Now line, a prompt you didn't type (#489), a receipt, a note, a question's card), an empty-state note, the Jump to latest pill (§6.4) | A host adds or removes it; a question is asked or answered; Needs you is turned on or off; the conversation is scrolled more than a screen from its end, or back to it (the pill) | The item fades in as its slot opens, and its neighbours ease aside (Easing aside). Leaving, it fades out where it was, quicker, as its slot eases closed. A session that ends, or leaves the list, while no card is held is the same: its card fades out where it was and the cards below ease up over `shift` to close the gap, as the cards a held card passes do in Reorder; they never jump into place (#659, replacing #605's departure jump). Items arriving in the same frame arrive together, as one block; one arriving while that block still eases joins its move. An approval's card and its command fade where they land and never travel of their own (D3, #659) | `listItem`: standard, decelerate; fast out | Windows: the list's `ItemContainerTransitions` stays empty, because `AddDeleteThemeTransition` slides an item in from the side and `RepositionThemeTransition` keeps its own timing; a composition fade on the item, and its neighbours as Easing aside. PWA: the tokens on the item; a copy of a leaving item, which nothing can find or tap, fades where it was. Apple: `.transition(.opacity)` in a change animated with the `standard` spring. Android: `animateItem` with the tokens' fade and placement specs | Cross-fade; a session card's gap closes with a short cross-fade (`value`), with no travel |
 | Easing aside | Every list and stack: the session list, Needs you, the strip, Tools, the conversation, the inspector, and what is below a banner or a disclosure | Something above or beside it arrives, leaves, opens, closes or changes height | The neighbour eases from where it was to where the change put it, keeping its order. Only a translation runs: the layout changes once, and nothing is laid out again every frame. A second change while it moves retargets it from where it is, on `decelerate` so it never slows to a stop and starts again, never queued behind it. When the person has scrolled away from the edge things arrive at (the top of Tools, the end of a conversation they scrolled back through), what they are reading stays where it is: the scroll is anchored to it, and an "N new" pill at that edge says what came and takes them there. A response streaming in grows as it arrives, unanimated. Anything moved above an answerable question is a move for Scroll to a question's wait, which counts from where the move comes to rest | `shift`: standard, standard | Windows: an implicit composition animation on each item's `Offset` (and `Translation` for what a layout change moves), not a theme transition. PWA: FLIP (measure, lay out once, translate from the old place to none) with the Web Animations API. Apple: the change inside `withAnimation` on the `standard` spring. Android: `animateItem`'s placement spec, and `animateContentSize` on a block | Instant |
 | Status glyph | A row, the session header, the delegate strip, a delegate event's line in the conversation (§6.4) | The state changes, such as working → idle | The old glyph cross-fades into the new one, with its colour, and the words cross-fade (Value change). The arc and the orbit turning are §2.1's, not this | `glyph`: fast, standard | The same on every platform: opacity on the two glyphs | Instant |
@@ -625,8 +625,11 @@ Sections, top to bottom:
      selection's look (the quiet fill, the 3×16 Bridge pill, semibold words) and, at its
      trailing edge, "Showing N of M", or "N on *machine*" with a machine chosen. It is 36 px tall
      on a desktop and 44 on a phone.
-   - **Pressed:** the list shows only the rows waiting on you, in Pinned and Sessions, in their
-     own order and under the Sort menu's choice. Groups with none, and Ended, are hidden.
+   - **Pressed:** the list shows only the rows waiting on you, in Pinned, your groups and
+     Sessions, in their own order and under the Sort menu's choice. Sections and groups with
+     none, and Ended, are hidden. A collapsed group holding one shows open while the filter is
+     on, and is collapsed again when it is turned off: the filter never changes a group's
+     collapsed state ("Groups", below).
      - Nothing moves. A row answered while the filter is on stays where it is, with its new
        glyph and words, until the filter is turned off. A question arriving adds its row where
        that row lives.
@@ -641,33 +644,115 @@ Sections, top to bottom:
    - **Several questions in a session** (if a host ever sends them; protocol v1 has one): one
      row, whose status reads "N questions waiting", and N counts each question.
 2. **Pinned.**
-3. **Sessions,** in your order (#164).
-4. **Ended · N,** collapsed.
-5. **Collaborators** (#519), once you have a link: one group per collaborator, by verified
+3. **Your groups** (#767), each a named group that collapses, in your order ("Groups", below).
+4. **Sessions,** in your order (#164): the rows in no group.
+5. **Ended · N,** collapsed.
+6. **Collaborators** (#519), once you have a link: one group per collaborator, by verified
    @login, with their machines nested, after your own sessions (§6.7). Needs you's N never
    counts their items, and its filter never shows them.
 
 **Order (#164).** Rules the clients share; the PWA and the Windows app keep the order in
 their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
 - **Per device.** Kept on the device (the PWA's `localStorage`, a file beside the Windows
-  app's folds). Never sent to a host: it isn't protocol.
-- **New sessions** go to the top of Sessions once, then stay put. A machine's first list is
+  app's folds). Never sent to a host: it isn't protocol. Your groups are kept with it, and
+  roam with it once #759 does ("Groups", below).
+- **New sessions** go to the top of Sessions once, then stay put, in no group unless they
+  continue a grouped session ("Groups", below). A machine's first list is
   placed together, newest first, once the machine has sent all of it.
 - **Moving** is the person's only: Alt+↑/↓ on a row; a drag by the handle that shows on hover
   (mouse or pen); or the row menu, opened by a long press on touch, a right-click, or
-  Shift+F10 / the menu key. Its items are Move up, Move down and Pin (or Unpin). Moves stay
-  within the row's group; a row dragged into the other group is pinned or unpinned.
+  Shift+F10 / the menu key.   Its items are Move up, Move down, Pin (or Unpin), Move to group, and for a row in a
+    group, Remove from group (#767). Alt+↑/↓ and Move up and Move down cross the edges between your groups and Sessions
+  ("Groups", below), but never into or out of Pinned: Pin and Unpin do that. A row dragged
+  into or out of Pinned is pinned or unpinned; a row dragged into a group, or onto a group's
+  header, open or collapsed, joins that group.
 - **Pins:** a pinned row goes to the foot of Pinned, and an unpinned one to the top of
-  Sessions.
+  its group, or of Sessions when it is in none. Pinning keeps a row's group: it shows in
+  Pinned only, and comes back to its group when unpinned.
 - **Sort menu:** "Your order" (the default), "Most recent" and "Machine" (by machine name,
-  then your order). It sorts within Pinned and within Sessions. Rows move only in Your order.
+  then your order). It sorts within Pinned, within each group and within Sessions; the groups
+  themselves stay in your order. Rows move only in Your order.
   Where the order can't be kept (storage blocked or full), the list is Most recent and Your
   order can't be picked.
 - **Ended** holds the sessions a host removed while the client was running: the most
   recently ended first, at most 20, until the client restarts. A machine that goes offline
-  or out of view ends nothing.
+  or out of view ends nothing. An ended session leaves its group for Ended, which is never
+  grouped, and keeps its membership for a resume ("Groups", below).
 - **Unread:** a row whose session updated since the row was last open: the selected row (an
   unfolded card in the PWA until #179 lands). A session seen for the first time starts read.
+
+**Groups (#767).** *Decided by the owner on 2026-11-04 (#767): groups the person makes; their
+names and membership roam; collapsed or expanded is per device; a new group starts expanded.*
+Groups are the person's own, for purpose ("Team", "Personal"). Nothing groups a session by
+itself: not its repository, folder, machine or the session that launched it. Suggestions from
+launch lineage may come later, on top of this, once hosts report it.
+- **Where:** between Pinned and Sessions, in your order. A row is in at most one group. A
+  group spans machines: with a machine chosen or a search on, each group shows only the rows
+  that match, and a group with none is hidden. With All and no search, an empty group shows,
+  its header reading "· 0", until it is deleted. Ended and Collaborators are never grouped.
+- **Filters open, never toggle.** While Needs you's filter or a search is on, a collapsed group
+  holding a row that matches shows open, and its header reports expanded, as drawn; it can't
+  be collapsed until the filter or search is off. Then it is collapsed again: the stored state
+  is unchanged.
+- **The header** is a §5.3 Disclosure, 36 px tall on a desktop and 44 on a phone, with the
+  list's leading inset: a chevron (→ collapsed, ↓ expanded), the name in the body face,
+  semibold, then "· N", the rows shown in it on the machine chosen, in `text2`. A pinned row
+  keeps its group (Pins, above) but shows, and is counted, only in Pinned: no group's count,
+  needs or dot includes it. Its trailing edge, while it is collapsed:
+  - with any row in it waiting on you: the `needs` glyph and "N needs you", in Needs you's
+    text colour. A collapsed group never hides a question: Needs you's N counts its rows,
+    its filter shows them (above), and notifications and badges are unchanged (§7);
+  - otherwise, with any row in it unread: the 6 px Bridge dot;
+  - otherwise nothing.
+  Expanded, the trailing edge is empty, since its rows show their own state. A header has no
+  status glyph, age or second line: a group isn't a session.
+- **Toggling:** a click or tap on the header, Enter or Space, → and ← (§9.2). It changes at
+  once, as §5.3's Disclosure: its rows' space opens or closes and nothing below slides.
+  Collapsing a group holding the open session keeps it open; keyboard focus on a row inside
+  goes to the header (§9.1 A4).
+- **Its menu** (the ⋯ button that shows on hover or focus, a right-click, a long press on
+  touch, or Shift+F10 / the menu key): Rename group, Move up, Move down, Delete group. Alt+↑/↓
+  on the header moves the whole group among your groups; a drag by its handle does the same.
+- **Making and filling a group:** a row's Move to group lists your groups, then "New group…";
+  Remove from group is beside it in the row's menu. On a phone it is a sheet (§5.3's Sheet) with the
+  same items, the row's current group checked. "New group…" asks for a name (an inline field
+  on the header on a desktop, the sheet's field on a phone), makes the group at the foot of
+  your groups, expanded, and moves the row into it. A name is 1–40 characters after trimming,
+  shown as plain text, and unique among your groups ignoring case; at most 32 groups.
+- **Where a moved row lands:** Move to group, a drop on a header, or New group… put the row
+  at the top of the group. A row moved into a collapsed group leaves its place as §5.3's
+  Arriving and leaving says, and keyboard focus goes to that group's header, whose name says
+  the rest (§9.2).
+  Remove from group puts it at the top of Sessions.
+- **Keys across edges:** Alt+↓ on a group's last row moves it to the top of whatever follows
+  (the next expanded group, or Sessions); a collapsed group in the way is passed over as one
+  step, never entered, so the moved row stays on screen. Alt+↑ on the first row of Sessions or
+  of a group moves it to the foot of the expanded group above, passing collapsed ones the same
+  way. At the top of the first group, or the foot of Sessions, nothing moves.
+- **Renaming or deleting** never ends, hides or reorders a session. Delete group asks nothing:
+  its rows go to the top of Sessions in their order, a pinned member stays pinned and leaves
+  the group, focus goes to the first of the moved rows (or, with none, the next header or row),
+  and it is announced politely ("*name* deleted. 3 sessions moved to Sessions"). An empty
+  group stays until it is deleted.
+- **Kept and roaming:** groups are kept with your order (above). Their names, their order and
+  which sessions are in them roam with your order, pins and sort once #759 lands: keyed by
+  machine id + session id, last writer wins per change, in the same record as the order and
+  under its privacy rules (ids and the names you gave, never titles or paths). Collapsed or
+  expanded is per device and never roams; a group
+  first seen on a device, made there or arriving from another, starts expanded. Until #759
+  lands, all of it is per device.
+- **A resumed session keeps its group by its resume lineage.** A session's membership outlives
+  its ending: it is kept for 30 days after the session was last listed, so a resume finds it.
+  - Resumed on its own machine (`session.launch` with `resume`, which keeps the session's id;
+    v1-launch.md), its key is unchanged: it goes back to its group, at the top.
+  - Brought from another machine (`transfer`), it is resumed under a new id. The client that
+    asked knows the lineage from the launch's result (`launched.transfer`'s `from` and
+    `session`, with `launched.resume` its new id here), and puts the new key in the old one's
+    group, which then roams like any other change.
+  - With no lineage the client can tell (resumed at the machine, from another client that
+    didn't record it, or after the old membership was dropped), it is a new session: the top of
+    Sessions, in no group. A host never reports lineage today; if it does later, it is used
+    the same way.
 
 **A machine away (#269).** A host's relay link drops now and then (a restart, an update, a
 network blip), often for under a minute. While its machine has left the relay's presence, and the
@@ -2969,6 +3054,29 @@ question, as choosing its row does.
   an approval (`agent-principals.md` §5.7, normative). A person can opt in to one aggregated
   push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
   Needs you.
+- **Session groups (#767)** change nothing here: a session in a collapsed group is notified,
+  badged and counted as any other, and opening its notification expands nothing but shows its
+  session.
+
+**Session groups on each platform (#767).** The rules are §6.1's on every client; only the
+controls are each platform's. Where marked *to verify*, the pattern is still to be checked
+against that platform's own guidelines before it is built.
+- **Windows:** the header is an item of the sessions `ListView`, drawn as a disclosure button
+  with the ExpandCollapse automation pattern, so arrows, selection and drag stay the list's own,
+  rather than an `Expander` per group or `ListView`'s grouped `CollectionViewSource`, whose
+  headers don't collapse on their own. *To verify* against Fluent's list and tree guidance.
+- **PWA:** the header is a `<button aria-expanded aria-controls>` in the list's arrow order,
+  and its rows sit in an element with `role="group"` named for the group. A phone's Move to
+  group is a sheet.
+- **macOS:** each group is a sidebar section that collapses (`Section(isExpanded:)` in the
+  source list), between Pinned and Sessions; Move to Group is a submenu of the row's context
+  menu, and a drag onto a section adds to it. *To verify* against the macOS sidebar guidelines.
+- **iOS:** each group is a collapsible section of the inset grouped list
+  (`Section(isExpanded:)`), its header a button; Move to Group is a submenu of the row's
+  context menu, and a swipe action stays Pin. *To verify* against the iOS list guidelines.
+- **Android:** each group is a header item in the `LazyColumn`, a disclosure with its state as
+  `stateDescription` ("Expanded", "Collapsed"); a row's long press opens a
+  `ModalBottomSheet` with Move to group. *To verify* against Material 3 lists.
 
 **Lines that outlive their cause, on every client (#1193):** a line says something about a
 cause: a question waiting, a press counting down, a machine busy. When the cause is gone, an
@@ -3061,8 +3169,8 @@ they are un-parked.
   update, a restore notice, a sign-in), is not held back by it.
 
 **macOS (SwiftUI, #260):**
-- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,
-  Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
+- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, your groups,
+  Sessions, Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
   the same toggle.
 - **Menu bar:** an extra whose label is N. Its menu names the waiting sessions (machine and
   title, oldest first, at most 8) and Open Slipgates. An item opens its session at the
@@ -3220,6 +3328,11 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 - **A question's words** appear in the conversation only, never on a row, in Needs you, in
   Tools, in the inspector or in a menu.
 - **Numbers before nouns:** "3 delegates", "1 background command".
+- **Session groups (#767):** a group's name is the person's own words, never changed or
+  translated. The words around it: "Move to group", "New group…", "Remove from group", "Group
+  name", "Rename group", "Delete group", "*name* · N" on the header, "N needs you" on a
+    collapsed one (and "unread", said only), and "*name* deleted. N sessions moved to Sessions". Never "folder", "tag" or
+  "category".
 - **Approval notifications** say "waiting for your approval" and offer only Open (§7): an
   approval is approved in the app, never from a notification.
 - **No sentences explaining the UI,** no exclamation marks, and no emoji. The exceptions are
@@ -3379,6 +3492,22 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   session ends, its view and row go, and focus that was in either goes to the row that takes
   its place, or the row before it if it was last, or else the Sessions heading. On a phone the
   list comes back with focus on the Sessions heading, as Back gives it when its row has gone.
+- **Session groups (#767):**
+  - A group's header is a button that reports expanded or collapsed by its role (PWA
+    `aria-expanded`; Windows the ExpandCollapse pattern), never in its name. Its name is what
+    it shows: "*name*, 12 sessions"; collapsed, with "1 needs you" or "unread" after it when
+    its trailing edge shows the mark or the dot. Its AutomationId is built from the group's
+    id, never its name or
+    position (§9.1 A2).
+  - In the list's arrow order, headers sit among the rows: ↑/↓ move through headers and the
+    rows of expanded groups. → on a collapsed header expands it, and on an expanded one moves
+    to its first row. ← on an expanded header collapses it, and on a row in a group moves to
+    its header. Enter or Space on a header toggles it.
+  - Alt+↑/↓ on a row moves it across group edges as §6.1 says; on a header, it moves the group.
+    Shift+F10 or the menu key opens a header's menu as a row's.
+  - A move into or out of a group is announced once, politely: "Moved to *name*", "Removed
+    from *name*", unless focus moves to the group's header, whose name says it instead.
+    Toggling is said by the role alone (§9.1 A6).
 - **Collaborators (#519):**
   - A collaborator's row reads "External session, @*login*, *machine*, their name, *title*,
     working, read-only". A person header is a group named "@*login*, external collaborator, 2
