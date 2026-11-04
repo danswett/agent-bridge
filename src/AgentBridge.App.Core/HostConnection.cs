@@ -368,7 +368,8 @@ public sealed class HostConnection : IAsyncDisposable
         var (result, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
         var resumed = request?.Since is not null && result.ValueKind == JsonValueKind.Object
             && result.TryGetProperty("resumed", out var r) && r.ValueKind == JsonValueKind.True;
-        ui.Post(() => Sessions.Answered(ch, before, resumed));
+        var asked = request?.Since is not null;
+        ui.Post(() => Sessions.Answered(ch, before, resumed, asked));
     }
 
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
@@ -460,7 +461,7 @@ public sealed class HostConnection : IAsyncDisposable
                 {
                     // An event numbered again or back (a host that is broken) may carry an older state
                     // than the one held: the list is not whole after it, and is never resumed from.
-                    if (ev.Seq <= last) { ui.Post(Sessions.Refuse); }
+                    if (ev.Seq <= last) { RefuseOn(ch); }
                     Resubscribe(ch, ev.Seq, gaps);
                 }
                 last = ev.Seq;
@@ -520,7 +521,7 @@ public sealed class HostConnection : IAsyncDisposable
         {
             // A session the app could not read may be the busy one: the list is not
             // the whole word on whether this host may be restarted.
-            ui.Post(Sessions.Refuse);
+            RefuseOn(ch);
             throw;
         }
         ui.Post(() =>
@@ -533,6 +534,11 @@ public sealed class HostConnection : IAsyncDisposable
     }
 
     bool Followed(IClientChannel ch) => ReferenceEquals(Volatile.Read(ref pumping), ch);
+
+    // Something on that channel was refused: the list is not whole. Not an old channel's, whose
+    // events no longer change the list: it would leave the list of the channel that replaced it
+    // unsure and never resumed from, with nothing on that channel to ask for it again.
+    void RefuseOn(IClientChannel ch) => ui.Post(() => { if (Followed(ch)) { Sessions.Refuse(); } });
 
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
@@ -566,7 +572,7 @@ public sealed class HostConnection : IAsyncDisposable
                         // full, as after a gap, before anything after it is shown (v1-sessions.md,
                         // A patch the client cannot apply).
                         Refused(ev.Name, e);
-                        ui.Post(Sessions.Refuse);
+                        RefuseOn(ch);
                         Resubscribe(ch, ev.Seq, gaps);
                         break;
                     }
@@ -583,7 +589,7 @@ public sealed class HostConnection : IAsyncDisposable
                     {
                         // A session still listed may have ended: the list is not the host's whole
                         // list, so nothing resumes from it.
-                        ui.Post(Sessions.Refuse);
+                        RefuseOn(ch);
                         throw;
                     }
                     held.Remove(r.Id);
@@ -707,6 +713,9 @@ public sealed class SessionStore
     // since follow, and its synced's live set says which are left.
     string? snapshotInstance;
     bool snapshotResumed;
+    // Whether its subscribe gave since: a synced with live then, its answer not saying it resumed,
+    // can't be told for a full snapshot's, which would drop every session it didn't send again.
+    bool snapshotAsked;
 
     // Where a subscribe can resume from (v1-sessions.md, Resuming without a snapshot): the run of
     // the host the list came from and the revision it is whole at, while it is whole. Written on
@@ -733,6 +742,7 @@ public sealed class SessionStore
         earlyIds = null;
         snapshotInstance = instance;
         snapshotResumed = false;
+        snapshotAsked = false;
         tracking = null;
         Complete = false;
         refused = false;
@@ -761,12 +771,15 @@ public sealed class SessionStore
     // The subscribe on that channel was answered after the event numbered before (-1: none).
     public void Answered(object on, long before) => Answered(on, before, resumed: false);
 
-    // resumed: the host said so, to a subscribe that gave since.
-    public void Answered(object on, long before, bool resumed)
+    public void Answered(object on, long before, bool resumed) => Answered(on, before, resumed, asked: resumed);
+
+    // resumed: the host said so, to a subscribe that gave since (asked).
+    public void Answered(object on, long before, bool resumed, bool asked)
     {
         if (snapshot is null || !ReferenceEquals(on, snapshotOn) || snapshotAfter is not null) { return; }
         snapshotAfter = before;
         snapshotResumed = resumed;
+        snapshotAsked = asked;
         foreach (var (seq, id) in earlyIds ?? []) { if (seq > before) { snapshot.Add(id); } }
         earlyIds = null;
         if (early is { } e)
@@ -898,6 +911,11 @@ public sealed class SessionStore
     void Finish(DiscoveryHeld? held, long? revision, IReadOnlyList<string>? live)
     {
         if (snapshot is not { } seen) { return; }
+        if (!snapshotResumed && snapshotAsked && live is not null)
+        {
+            Reject();
+            return;
+        }
         if (snapshotResumed)
         {
             // Every live id must be one sent since the response or held from before, and the list

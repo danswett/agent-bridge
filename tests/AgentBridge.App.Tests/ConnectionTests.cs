@@ -1245,4 +1245,50 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Task.Delay(300);
         Assert.Equal("Newer", TestUi.Read(() => conn.Sessions.Get("a")!.Title));
     }
+
+    [Fact]
+    public async Task A_synced_naming_the_live_sessions_after_an_answer_that_does_not_say_it_resumed_is_not_taken_for_a_full_snapshot()
+    {
+        await using var other = Patching(Make.Session("a"), Make.Session("b"));
+        await using var conn = other.Connect();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+        await other.StopAsync();
+        await Wait.UntilAsync(() => conn.State != LinkState.Connected, "the host to go");
+        // Resumed, but saying so in a way the app can't read.
+        other.OnSubscribe = n => other.SubscribeReply = n == 2 ? new { revision = 0, count = 0, resumed = "true" } : null;
+        other.Start();
+
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 3 && conn.Sessions.Complete, "the full snapshot");
+        Assert.False(other.Sent(Ops.SessionsSubscribe)[2].TryGetProperty("since", out _));
+        Assert.Equal(["a", "b"], Ids(conn.Sessions));
+    }
+
+    [Fact]
+    public async Task A_session_the_replaced_channel_could_not_read_leaves_the_list_of_the_channel_that_replaced_it_whole()
+    {
+        await using var other = Patching(Make.Session("a"));
+        var channels = new List<GatedChannel>();
+        await using var conn = new HostConnection(async ct =>
+        {
+            var g = new GatedChannel(await LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct));
+            lock (channels) { channels.Add(g); }
+            return g;
+        }, new LockedDispatcher()) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the first snapshot");
+
+        var first = channels[0];
+        first.Hold();
+        await other.SendAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
+        await Wait.UntilAsync(() => first.Holding > 0, "the unreadable session held on the first channel");
+        await other.StopAsync();
+        other.Start();
+        await Wait.UntilAsync(() => channels.Count == 2 && conn.Sessions.Snapshots == 2 && conn.Sessions.Complete, "the second channel's snapshot");
+
+        first.Release();
+        await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read it");
+        await Task.Delay(300);
+        Assert.False(TestUi.Read(() => conn.Sessions.Unsure));
+        Assert.NotNull(TestUi.Read(() => conn.Sessions.ResumeFrom("run-1")));
+    }
 }
