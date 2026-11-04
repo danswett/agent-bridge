@@ -405,6 +405,21 @@ public class CopilotTests
         Assert.Equal(3, new[] { first.Id, second.Id, last.Id }.Distinct().Count());
     }
 
+    // While others wait, the host types only for a prompt whose dialog it can identify on screen
+    // (shell and path prompts); any other is shown as answered at the machine until it is alone.
+    [Fact]
+    public async Task A_read_listed_while_others_wait_is_answered_at_the_machine_until_it_is_the_only_one()
+    {
+        await using var s = new Session_();
+
+        var crowded = (await s.After(Copilot.User("go", 1), Copilot.Permission("r1", "c1", Copilot.Prompts["read"], 2), Copilot.Permission("r2", "c2", Copilot.Prompts["commands"], 3))).Question!;
+        var alone = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 4))).Question!;
+
+        Assert.Equal((true, 2), (crowded.AnswerAtMachine == true, crowded.Waiting));
+        Assert.Equal(crowded.Id, alone.Id);
+        Assert.Null(alone.AnswerAtMachine);
+    }
+
     [Fact]
     public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
     {

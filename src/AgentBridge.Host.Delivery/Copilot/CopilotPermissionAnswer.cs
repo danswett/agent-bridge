@@ -237,6 +237,13 @@ public static class CopilotPermissionScreen
             return (-1, "a waiting permission holds characters that could be drawn as part of Copilot's own dialog or hide what it draws, so the screen cannot say which is shown");
         }
         if (crowd.Dialog is not { } mine) { return (-1, "the host cannot tell this kind of permission prompt from the others waiting on the session's screen"); }
+        // One that would be drawn the same cannot be told from this one however the screen reads:
+        // a box wraps a long line hard at its width, so one line drawn on two rows reads like two
+        // lines, and two identical requests read alike (Trust review of #769).
+        if (crowd.Others.FirstOrDefault(o => o.Dialog is { } theirs && Alike(mine, theirs)) is { } twin)
+        {
+            return (-1, $"another waiting permission ({twin.Name}) would be drawn the same, so the screen cannot say which is shown");
+        }
         if (Frame(rows, options, end) is not { } frame) { return (-1, "the session's screen does not show the prompt's whole frame, so it cannot say which waiting permission it is"); }
         if (Shows(rows, frame, options, mine)) { return (frame.Top, null); }
         var shown = crowd.Others.FirstOrDefault(o => o.Dialog is { } theirs && Shows(rows, frame, options, theirs));
@@ -244,6 +251,11 @@ public static class CopilotPermissionScreen
             ? $"the machine is showing a different permission ({shown.Name})"
             : "the session's screen does not show this permission as Copilot draws it, so it cannot say which waiting permission it is");
     }
+
+    // Whether two dialogs could draw the same: every part alike once all white space is gone.
+    static bool Alike(CopilotDialog a, CopilotDialog b) =>
+        Squeeze(a.Title) == Squeeze(b.Title) && Squeeze(a.Question) == Squeeze(b.Question) && a.Body.Count == b.Body.Count
+        && a.Body.Zip(b.Body).All(p => p.First.Boxed == p.Second.Boxed && Squeeze(string.Concat(p.First.Lines)) == Squeeze(string.Concat(p.Second.Lines)));
 
     static bool Unsafe(string text) => text.Any(c => c is >= '\u2500' and <= '\u257F' or '\t') || ShownText.Misleads(text);
 

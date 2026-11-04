@@ -738,7 +738,9 @@ no waiting request holds a line-drawing character, a tab or a character drawn ot
 it runs; the options are inside one round frame whose top edge is on screen; every row in it
 above the options is this request's dialog (its title, the rule, each part of its body, a
 box's lines one to a row exactly as given, and its question) and nothing else; and the
-request is the earliest still waiting. Only shell and path prompts are identified so. Otherwise
+request is the earliest still waiting, with no other waiting request that would be drawn the
+same once all white space is gone. Only shell and path prompts are identified so; a listed
+prompt of another kind is `answerAtMachine` while others wait. Otherwise
 the answer is `refused`, naming the other where its dialog is the one drawn ("the machine is
 showing a different permission (path access, request ed05e9d7)"), and the key is held from
 the frame's top edge. It is never retargeted to the request on screen. The key goes

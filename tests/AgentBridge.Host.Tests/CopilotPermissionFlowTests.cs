@@ -565,6 +565,33 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // A box wraps a long line hard at its width, so one line drawn on two rows reads like the same
+    // two lines; and two identical requests read alike. Neither can be told apart on screen.
+    [Theory]
+    [InlineData("git push origin\nmain --force", "git push origin main --force")]
+    [InlineData("npm test", "npm test")]
+    // Trailing white space is not drawn (Copilot review of #769).
+    [InlineData("npm test", "npm test  ")]
+    public async Task A_first_request_another_waiting_one_would_be_drawn_the_same_as_is_never_answered(string first, string other)
+    {
+        var result = await Answer(first, other, CopilotScreen.Shell("Run it", first.Split('\n')));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "another waiting permission (shell, request r2) would be drawn the same, so the screen cannot say which is shown; answer at the machine"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_first_request_whose_own_dialog_is_drawn_is_answered_beside_a_distinct_one()
+    {
+        var question = await Asking(Command("git push origin\nmain --force"), Command("git push origin main --force-with-lease"));
+        injector.Screen = CopilotScreen.Shell("Run it", "git push origin", "main --force");
+        Completes("approved");
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
+    }
+
     [Fact]
     public async Task A_shown_dialog_whose_top_is_out_of_reach_is_never_taken_for_the_first_one()
     {

@@ -198,7 +198,13 @@ internal sealed class SessionTracker
         if (d.Agent == AgentKind.Copilot && question is { Kind: QuestionKind.Approval })
         {
             var approvals = pending.Where(q => q.Kind == QuestionKind.Approval).ToList();
-            if (approvals.Count > 1) { question = approvals[0] with { Waiting = approvals.Count }; }
+            if (approvals.Count > 1)
+            {
+                // One whose dialog the host cannot tell from the others' is never typed for while
+                // they wait (CopilotPermissionScreen), so it is shown as answered at the machine.
+                question = approvals[0] with { Waiting = approvals.Count };
+                if (_state.Unidentified.Contains(question.Id)) { question = question with { AnswerAtMachine = true }; }
+            }
         }
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at

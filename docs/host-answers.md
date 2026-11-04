@@ -200,9 +200,13 @@ text, which another request's command can end in or its diff hold). The key goes
   question, with nothing else. Only the shell prompt (the intention, the command in a box,
   "Do you want to run this command?") and the path prompt ("Allow path access", the paths
   and any read-only directories in boxes, "Do you want to allow this?") are known so;
+* no other waiting request would be drawn the same (its title, body and question alike once
+  all white space is gone: a box wraps a long line hard at its width, so one line on two rows
+  reads like two lines, and trailing white space is not drawn);
 * and this request is the earliest still waiting.
 
-Otherwise it is `refused` ("the machine is showing a different permission (path access,
+A listed prompt of any other kind is `answerAtMachine` while others wait, and answerable
+again once it is the only one. Otherwise it is `refused` ("the machine is showing a different permission (path access,
 request ed05e9d7)" when another's dialog is the one drawn, or why the screen cannot say),
 and never typed for the request on screen instead: answer it at the machine. The key is
 held from the frame's top edge. The transcript is checked so before the screen is read and
