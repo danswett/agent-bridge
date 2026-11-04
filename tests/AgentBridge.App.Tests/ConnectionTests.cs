@@ -446,12 +446,90 @@ public sealed class ConnectionTests : IAsyncLifetime
         store.BeginSnapshot(on);
         // Read on the pump before the subscribe's answer is applied: the synced waits for it.
         store.EndSnapshot(older, on, 5);
-        store.SetHeld(newer);
+        store.SetHeld(newer, on);
 
         store.Answered(on, 4);
 
         Assert.True(store.Complete);
         Assert.Equal(newer, store.Held);
+    }
+
+    [Fact]
+    public void A_discovery_change_from_another_channel_does_not_rewrite_a_pending_snapshot_end()
+    {
+        var store = new SessionStore();
+        var on = new object();
+        var pending = new DiscoveryHeld("the snapshot's hold", [AgentKind.Claude]);
+        var other = new DiscoveryHeld("another channel's hold", [AgentKind.Copilot]);
+        store.BeginSnapshot(on);
+        store.EndSnapshot(pending, on, 5);
+        store.SetHeld(other, new object());
+        Assert.Equal(other, store.Held);
+
+        store.Answered(on, 4);
+
+        Assert.True(store.Complete);
+        Assert.Equal(pending, store.Held);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Session_writes_queued_by_a_replaced_channel_are_dropped_after_the_new_snapshot(bool staleHold)
+    {
+        var older = staleHold ? new DiscoveryHeld("old channel's hold", [AgentKind.Claude]) : null;
+        var newer = staleHold ? null : new DiscoveryHeld("new channel's hold", [AgentKind.Copilot]);
+        await using var other = new FakeHost { Held = older };
+        other.Sessions.Add(Make.Session("a", title: "Before reconnect"));
+        other.Start();
+        var ui = new HoldingDispatcher();
+        await using var conn = new HostConnection(ct => LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct), ui)
+        {
+            RetryDelay = TimeSpan.Zero,
+            CapabilityRefresh = TimeSpan.FromHours(1),
+        };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+        ui.Hold();
+        try
+        {
+            // These are wire-only events: the next snapshot must not include their stale state.
+            var old = Assert.Single(other.Channels.Where(c => c.IsOpen).Distinct());
+            await old.SendEventAsync(Events.SessionUpsert, Make.Session("ended"));
+            await old.SendEventAsync(Events.SessionRemove, new SessionRemoved("a"));
+            await old.SendEventAsync(Events.SessionUpsert, new System.Text.Json.Nodes.JsonObject { ["id"] = 7 });
+            await old.SendEventAsync(Events.DiscoveryChanged, new DiscoveryChanged(older));
+            await Wait.UntilAsync(() => ui.QueuedCount == 4, "the old channel's session writes queued");
+            var delayed = ui.TakeHeld();
+
+            other.Sessions[0] = Make.Session("a", title: "After reconnect");
+            other.Held = newer;
+            await other.StopAsync();
+            other.Start();
+            await Wait.UntilAsync(() => conn.ConnectionNumber == 2 && conn.Sessions.Snapshots == 2
+                && conn.Sessions.Complete && conn.Sessions.Get("a")?.Title == "After reconnect", "the replacement snapshot");
+            Assert.Equal(newer?.Reason, conn.Sessions.Held?.Reason);
+            Assert.Equal(newer?.Agents ?? [], conn.Sessions.Held?.Agents ?? []);
+            var changes = 0;
+            conn.Sessions.HeldChanged += () => changes++;
+
+            // Apply after the new snapshot, even though the old pump posted while still followed.
+            foreach (var action in delayed) { ui.Post(action); }
+
+            Assert.Null(conn.Sessions.Get("ended"));
+            Assert.Equal("After reconnect", conn.Sessions.Get("a")!.Title);
+            Assert.False(conn.Sessions.Unsure);
+            Assert.True(conn.Sessions.Complete);
+            Assert.Equal(newer?.Reason, conn.Sessions.Held?.Reason);
+            Assert.Equal(newer?.Agents ?? [], conn.Sessions.Held?.Agents ?? []);
+            Assert.Equal(0, changes);
+
+            var current = new DiscoveryHeld("current channel's next change", [AgentKind.Codex]);
+            await other.SendAsync(Events.DiscoveryChanged, new DiscoveryChanged(current));
+            await Wait.UntilAsync(() => conn.Sessions.Held?.Reason == current.Reason, "the current channel's discovery change");
+            Assert.Equal(current.Agents, conn.Sessions.Held!.Agents);
+        }
+        finally { ui.Release(); }
     }
 
     static void Skip(FakeHost h, long count)

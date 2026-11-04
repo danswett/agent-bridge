@@ -135,6 +135,10 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   sessions changed since and the ids of the live ones
   ([v1-sessions.md](protocol/v1-sessions.md#patches-sessionpatch), #601). A patch it can't apply,
   or a resumed snapshot that can't be whole, asks for the full snapshot, as a gap does.
+  Session writes posted to the UI are applied only while their channel is still followed,
+  checked when the post runs, not when it was queued (#547). A replaced channel cannot
+  restore or remove a session, refuse the current list, or change its discovery hold.
+  A discovery change updates a pending snapshot end only on that snapshot's channel.
   A machine that leaves presence while the app's relay connection stays up on the
   same account stays (#269): its rows, the session open, its tab, your order and pins are kept,
   each row saying "Offline · last seen …", and its connection goes on trying. Nothing on those rows

@@ -435,9 +435,10 @@ sealed class HoldingDispatcher : IUiDispatcher
 
     public void Release()
     {
-        var queued = ui.Invoke(() => { holding = false; List<Action> q = [.. held]; held.Clear(); return q; });
-        foreach (var a in queued) { Post(a); }
+        foreach (var a in TakeHeld()) { Post(a); }
     }
+
+    public List<Action> TakeHeld() => ui.Invoke(() => { holding = false; List<Action> q = [.. held]; held.Clear(); return q; });
 
     public void Post(Action action) => ui.Invoke(() =>
     {

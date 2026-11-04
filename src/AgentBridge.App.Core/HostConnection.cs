@@ -383,14 +383,14 @@ public sealed class HostConnection : IAsyncDisposable
         var patch = hello.Capabilities.Contains(AgentBridge.Protocol.Capabilities.SessionsPatch);
         var instance = hello.Machine.Instance;
         var request = patch ? new SubscribeRequest { Patch = true, Since = Sessions.ResumeFrom(instance) } : null;
-        ui.Post(() => Sessions.BeginSnapshot(ch, patch ? instance : null));
+        PostSessions(ch, () => Sessions.BeginSnapshot(ch, patch ? instance : null));
         // Its result is read loosely, only for resumed: read strictly, a result the app could not
         // read ended the connection, and every reconnect asked again (#446).
         var (result, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, request, ct: ct);
         var resumed = request?.Since is not null && result.ValueKind == JsonValueKind.Object
             && result.TryGetProperty("resumed", out var r) && r.ValueKind == JsonValueKind.True;
         var asked = request?.Since is not null;
-        ui.Post(() => Sessions.Answered(ch, before, resumed, asked));
+        PostSessions(ch, () => Sessions.Answered(ch, before, resumed, asked));
     }
 
     // What the host tells hello.changed of: its read-only reason can change on its own (a host
@@ -510,16 +510,10 @@ public sealed class HostConnection : IAsyncDisposable
     // The channel's sessions may be missing changes from at on: they are subscribed again.
     void Resubscribe(IClientChannel ch, long at, SemaphoreSlim gaps)
     {
-        ui.Post(() =>
+        PostSessions(ch, () =>
         {
-            // The snapshot only if it is this channel's (AbandonSnapshot checks): an old channel's
-            // own snapshot must still end unfinished, or its sessions.synced, read next, ends it.
             Sessions.AbandonSnapshot(ch, at);
-            // Gapped only for the channel followed now. RunAsync doesn't wait for a pump to
-            // finish, so one draining a channel already replaced could read a gap after the new
-            // channel's snapshot began, and unconfirm rows whose recovery it can't ask for (that
-            // goes to its own channel's gap signal), holding them for good.
-            if (ReferenceEquals(Volatile.Read(ref pumping), ch)) { Gapped?.Invoke(); }
+            Gapped?.Invoke();
         });
         gaps.Release();
     }
@@ -560,9 +554,8 @@ public sealed class HostConnection : IAsyncDisposable
             RefuseOn(ch);
             throw;
         }
-        ui.Post(() =>
+        PostSessions(ch, () =>
         {
-            if (!Followed(ch)) { return; }
             Sessions.Upsert(s, exact, ch, seq);
             Sessions.Advance(ch, revision);
         });
@@ -571,10 +564,14 @@ public sealed class HostConnection : IAsyncDisposable
 
     bool Followed(IClientChannel ch) => ReferenceEquals(Volatile.Read(ref pumping), ch);
 
+    // Checked when the UI applies the post, not when the pump queues it: reconnect may
+    // replace the channel while this action waits on a busy dispatcher (#547).
+    void PostSessions(IClientChannel ch, Action apply) => ui.Post(() => { if (Followed(ch)) { apply(); } });
+
     // Something on that channel was refused: the list is not whole. Not an old channel's, whose
     // events no longer change the list: it would leave the list of the channel that replaced it
     // unsure and never resumed from, with nothing on that channel to ask for it again.
-    void RefuseOn(IClientChannel ch) => ui.Post(() => { if (Followed(ch)) { Sessions.Refuse(); } });
+    void RefuseOn(IClientChannel ch) => PostSessions(ch, Sessions.Refuse);
 
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
@@ -629,9 +626,8 @@ public sealed class HostConnection : IAsyncDisposable
                         throw;
                     }
                     held.Remove(r.Id);
-                    ui.Post(() =>
+                    PostSessions(ch, () =>
                     {
-                        if (!Followed(ch)) { return; }
                         Sessions.Remove(r.Id);
                         Sessions.Advance(ch, r.Revision);
                     });
@@ -647,16 +643,16 @@ public sealed class HostConnection : IAsyncDisposable
                     try { synced = Received.Read<SessionsSynced>(ev.Data); }
                     catch (JsonException)
                     {
-                        ui.Post(() => Sessions.RefuseSynced(ch, seq));
+                        PostSessions(ch, () => Sessions.RefuseSynced(ch, seq));
                         throw;
                     }
-                    ui.Post(() => Sessions.EndSnapshot(synced.DiscoveryHeld, ch, seq, synced.Revision, synced.Live));
+                    PostSessions(ch, () => Sessions.EndSnapshot(synced.DiscoveryHeld, ch, seq, synced.Revision, synced.Live));
                     break;
                 }
             case Events.DiscoveryChanged:
                 {
                     var d = Received.Read<DiscoveryChanged>(ev.Data);
-                    ui.Post(() => Sessions.SetHeld(d.DiscoveryHeld));
+                    PostSessions(ch, () => Sessions.SetHeld(d.DiscoveryHeld, ch));
                     break;
                 }
             case UsageProtocol.Update:
@@ -718,12 +714,12 @@ public sealed class SessionStore
     public event Action? Synced;
     public event Action? HeldChanged;
 
-    public void SetHeld(DiscoveryHeld? held)
+    public void SetHeld(DiscoveryHeld? held, object? on = null)
     {
         // A discovery.changed read after a sessions.synced that still waits on its subscribe's
         // answer is the newer word: finishing that snapshot later must not put the synced's older
         // hold back, which hid a newly reported hold until the next change.
-        if (early is { } e) { early = e with { Held = held }; }
+        if (ReferenceEquals(on, snapshotOn) && early is { } e) { early = e with { Held = held }; }
         ApplyHeld(held);
     }
 
