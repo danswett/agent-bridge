@@ -774,7 +774,9 @@ function endSession(key) {
   if (g && g.phase === 'pending') abort();
   const held = !!(g && g.phase === 'lifted' && g.key === key);
   const li = els.get(key), title = items[key].title;
+  let deferred = [];
   if (held) {
+    deferred = g.deferred || [];
     cancelAnimationFrame(g.raf); clearTimeout(g.endTimer);
     try { content.releasePointerCapture(g.id); } catch { /* already released */ }
     g = null;
@@ -794,6 +796,7 @@ function endSession(key) {
   setTimeout(() => li.remove(), 120);
   syncDom();
   relayout(false);
+  for (const k of deferred) endSession(k);
   if (held) say(`${title} ended. Move cancelled.`);
 }
 
