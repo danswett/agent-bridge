@@ -41,7 +41,8 @@ public sealed class ReplyViewModel : Observable
     static readonly Dictionary<string, Func<string, string>> OutcomeText = new()
     {
         ["delivered"] = _ => "Delivered",
-        ["unconfirmed"] = at => $"Sent, but not confirmed. Check at the machine{at} before sending it again.",
+        // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
+        ["unconfirmed"] = _ => ReceiptWords.Unconfirmed(null),
         ["stale"] = _ => "Not sent: the session has ended.",
         ["busy"] = _ => "Not sent: an answer or another reply to this session is being delivered. Try again in a moment.",
         ["refused"] = _ => "The machine refused this reply.",
@@ -165,6 +166,8 @@ public sealed class ReplyViewModel : Observable
         try { Text = old.text; }
         finally { settingText = false; }
         sent = old.sent;
+        // The room the old box kept stays kept (a reply's capability coming back rebuilds the box).
+        keepRoom = old.keepRoom;
         if (attach) { foreach (var f in old.Attachments) { Attachments.Add(f); } }
         Refresh();
     }
@@ -521,7 +524,7 @@ public sealed class ReplyViewModel : Observable
         }
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
         if (outcome == "delivered") { return new("delivered", "", null, Tone.None, ReceiptMark.Check, "Reply delivered"); }
-        var t = OutcomeText[outcome](at);
+        var t = outcome == "unconfirmed" ? ReceiptWords.Unconfirmed(machineName) : OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { t = $"The machine refused this reply: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { t += $" ({u})"; }
         return Said(outcome, t, outcome == "refused" ? Tone.Bad : Tone.Warn);

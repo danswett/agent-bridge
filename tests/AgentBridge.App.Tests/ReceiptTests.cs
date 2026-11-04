@@ -277,6 +277,14 @@ public sealed class ReceiptTests
         Assert.Null(ReceiptWords.AnsweredValue(form, Answer(form, "pg")));
     }
 
+    [Fact]
+    public void A_tapped_options_value_is_its_whole_label_never_cut_as_free_text_is()
+    {
+        var label = "Keep the session store in SQLite for now, and revisit it later";
+        var tap = Make.Choice() with { Fields = [new Field { Name = "answer", Type = FieldType.Choice, Options = [new Option("keep", label), new Option("move", "Move it")] }] };
+        Assert.Equal(label, ReceiptWords.AnsweredValue(tap, Answer(tap, "keep")));
+    }
+
     // ui.md §6.5: white space runs as one space, then cut at the last word break within 40
     // characters, or at 40 where the last break comes before the 21st.
     [Theory]

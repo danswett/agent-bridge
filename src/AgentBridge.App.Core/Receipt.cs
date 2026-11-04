@@ -57,8 +57,11 @@ public static class ReceiptWords
     // The room a receipt keeps from Send to the outcome (ui.md §6.5): the longest outcome's words,
     // which the view lays out unseen under the line, so it wraps them as it would wrap the line
     // (two lines at phone width, one on a wide window). A longer refusal may still grow it.
-    public static string Room(string? machineName) =>
-        $"Sent, but not confirmed. Check at the machine{(string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}")} before sending it again.";
+    public static string Room(string? machineName) => Unconfirmed(machineName);
+
+    // Not confirmed, for a reply and an answer alike (ui.md §6.5): the machine by its name.
+    public static string Unconfirmed(string? machineName) =>
+        $"Sent, but not confirmed. Check at {(string.IsNullOrEmpty(machineName) ? "the machine" : machineName)} before sending it again.";
 
     static string? StageText(string? stage) => stage switch
     {
@@ -118,7 +121,10 @@ public static class ReceiptWords
         if (v.ValueKind == System.Text.Json.JsonValueKind.String)
         {
             var s = v.GetString()!;
-            return FirstLine(field.Type == FieldType.Choice ? field.Options?.FirstOrDefault(o => o.Value == s)?.Label ?? s : s);
+            // A choice by its whole label, never cut: options that share their first 40 characters
+            // would read the same. Only free text is cut to its first line.
+            if (field.Type == FieldType.Choice) { return HiddenText.Reveal(field.Options?.FirstOrDefault(o => o.Value == s)?.Label ?? s); }
+            return FirstLine(s);
         }
         if (field.Type == FieldType.Choice && v.ValueKind == System.Text.Json.JsonValueKind.Object && v.TryGetProperty("other", out var other) && other.ValueKind == System.Text.Json.JsonValueKind.String)
         {

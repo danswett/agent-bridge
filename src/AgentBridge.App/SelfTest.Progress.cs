@@ -144,6 +144,18 @@ static partial class SelfTest
             }
             else { check(false, $"opens the gallery's tap question ({pass})"); }
 
+            // Stale: the same as unconfirmed, the tapped option pressed and the rest disabled.
+            if (await Add("stale", Tap("gallery-stale")) is { } staleCard && await Choose(window, main, staleCard.Id, "Option:docs") is { } staleView && staleCard.Question is { } sq)
+            {
+                demo.Script(staleCard.Id, () => Task.FromResult<object?>(new AnswerResult(AnswerOutcome.Stale, "the session is no longer asking that question")));
+                if (ById<Button>(staleView, "Option:docs") is { } docs) { Press(docs); }
+                var stale = await Until(() => sq.StatusText.StartsWith("Already answered or gone", StringComparison.Ordinal), TimeSpan.FromSeconds(5));
+                check(stale && !sq.CanAnswer && ById<Button>(staleView, "Option:docs") is { IsEnabled: true } && ById<Button>(staleView, "Option:fixes") is { IsEnabled: false },
+                    $"keeps the tapped option pressed and the others disabled once stale ({pass}: \"{sq.StatusText}\")");
+                await Draw("tap-stale");
+            }
+            else { check(false, $"opens the gallery's stale question ({pass})"); }
+
             // Busy, then refused: nothing was typed, so every option is offered again.
             if (await Add("busy", Tap("gallery-busy")) is { } busyCard && await Choose(window, main, busyCard.Id, "Option:fixes") is { } busyView)
             {

@@ -18,7 +18,8 @@ public sealed partial class QuestionViewModel : Observable
     {
         // Said as "You answered · value" with the check badge (Describe).
         ["delivered"] = _ => "You answered",
-        ["unconfirmed"] = at => $"Sent, but not confirmed. Check at the machine{at}.",
+        // Describe names the machine itself (ui.md §6.5: "Check at machine before sending it again").
+        ["unconfirmed"] = _ => ReceiptWords.Unconfirmed(null),
         ["stale"] = _ => "Already answered or gone: the session is no longer asking this.",
         ["busy"] = _ => "Another answer to this session is being delivered. Try again in a moment.",
         ["refused"] = _ => "The machine refused this answer.",
@@ -361,7 +362,7 @@ public sealed partial class QuestionViewModel : Observable
         {
             DeliveryState.Sending or DeliveryState.Waiting => ReceiptWords.InFlight(answer: true, e, machineName, stalled),
             DeliveryState.Failed => Said("failed", $"Couldn't send it: {e.Reason ?? "the machine said no"}.", Tone.Bad),
-            _ => Outcome(e, at, question),
+            _ => Outcome(e, machineName, at, question),
         };
     }
 
@@ -370,7 +371,7 @@ public sealed partial class QuestionViewModel : Observable
 
     static ReceiptLine Said(string key, string text, Tone tone) => new(key, text, null, tone, ReceiptMark.None, $"Answer: {text}");
 
-    static ReceiptLine Outcome(Delivery e, string at, Question? question)
+    static ReceiptLine Outcome(Delivery e, string? machineName, string at, Question? question)
     {
         var outcome = e.Outcome is { } o && OutcomeText.ContainsKey(o) ? o : "unconfirmed";
         if (outcome == "delivered")
@@ -379,7 +380,7 @@ public sealed partial class QuestionViewModel : Observable
             // In text2, with no badge: the answer's button says it was delivered, with its check.
             return new("delivered", "You answered", value is null ? null : ReceiptWords.Isolated(value), Tone.Progress, ReceiptMark.Check, value is null ? "Answer delivered. You answered" : $"Answer delivered. You answered {value}");
         }
-        var text = OutcomeText[outcome](at);
+        var text = outcome == "unconfirmed" ? ReceiptWords.Unconfirmed(machineName) : OutcomeText[outcome](at);
         if (outcome == "refused" && e.Reason is { } r) { text = $"The machine refused this answer: {r}."; }
         if (outcome == "unconfirmed" && e.Reason is { } u) { text += $" ({u})"; }
         return Said(outcome, text, outcome == "refused" ? Tone.Bad : Tone.Warn);
