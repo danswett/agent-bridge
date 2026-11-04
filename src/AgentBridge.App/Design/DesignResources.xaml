@@ -334,6 +334,9 @@
     <x:String x:Key="AbMotionReorderDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionReorderEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionReorderReduced">Instant</x:String>
+    <x:String x:Key="AbMotionLiftDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionLiftEase">0,0,0,1</x:String>
+    <x:String x:Key="AbMotionLiftReduced">Instant</x:String>
 
     <Style x:Key="AbGlyphDelegating" TargetType="ContentControl">
         <Setter Property="Width" Value="16" />
