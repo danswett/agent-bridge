@@ -738,6 +738,26 @@ public class MergeRuleTests
         }
     }
 
+    // JsonDocument.Parse throws JsonReaderException, a subclass of JsonException: a garbled
+    // answer must fail closed like any other unreadable one, not crash the run.
+    [Fact]
+    public void A_garbled_answer_about_main_fails_closed_rather_than_crashing_the_run()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: "<html>502 Bad Gateway</html>");
+        var config = WriteConfig();
+        try
+        {
+            var exit = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal(1, exit);
+            Assert.StartsWith($"{Head} error merge-rule Couldn't read main's CI: ", Assert.Single(github.Posted), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
     // CI finishing on main must re-judge every pull request, so their verdicts follow main to red
     // and back; main's other runs still start nothing.
     [Theory]

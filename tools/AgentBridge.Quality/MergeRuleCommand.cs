@@ -347,9 +347,9 @@ static class MergeRuleCommand
         return 1;
     }
 
-    static readonly Type[] ReadFailures = [typeof(InvalidOperationException), typeof(JsonException), typeof(KeyNotFoundException), typeof(FormatException)];
-
-    static bool IsReadFailure(Exception e) => ReadFailures.Contains(e.GetType());
+    // By kind, not exact type: JsonDocument.Parse throws JsonReaderException, a JsonException
+    // that an exact match missed, so a garbled answer crashed the run instead of failing closed.
+    static bool IsReadFailure(Exception e) => e is InvalidOperationException or JsonException or KeyNotFoundException or FormatException;
 
     /// <summary>
     /// The verdict on a pull request read from the open list: its light facts' failure (or error,
