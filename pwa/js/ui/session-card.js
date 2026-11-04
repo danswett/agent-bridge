@@ -57,6 +57,87 @@ export const QUESTION_ARRIVAL_GUARD_MS = 500;
 const SCROLL_SETTLED_MS = 100;
 export const TABS = Object.freeze(['conversation', 'delegates', 'tools']);
 
+// A question's or Needs you's answers that take a click (what their guards drop a pointer's on).
+export const QUESTION_CONTROLS = 'button, input, select, label, summary, a';
+
+// Answers moved under a still pointer (#491): where each of controls() sits on screen is read
+// whenever something that can move it changes size (holder, everything holding it, everything
+// beside each of those, and also), and a move of more than a pixel calls moved(). That includes
+// the browser pulling a scroll back as what it scrolls gets shorter at its end: the clamp is part
+// of the same layout the size change is seen in, before its scroll event comes. A scroll only
+// updates where they are: the person's own, and the browser's bringing a focused control into
+// view, aren't moves under a pointer, and the app's own scrolls to a question or a row wait in
+// their own right. Only answers shown are read: a hidden one has no place to keep. The guards'
+// own attribute changes no size, so a guard can't feed itself; a read is one per frame at most.
+export function watchMoves({ holder, controls, also = [], skip = () => false, moved }) {
+  const win = holder.ownerDocument?.defaultView ?? globalThis;
+  let was = null;
+  // The answers' own question laying itself out after the person's click, key or typing in it
+  // (an error under a field, Other's box opening): where they are now, not a move under a
+  // pointer. Only for the frame that interaction is drawn in, and only what resized in or around
+  // the question itself: anything else resizing then (a title, the response, a banner) is
+  // nothing the person did, and still counts.
+  let own = false;
+  let acts = 0;
+  const theirs = (entries) => own && (entries ?? []).every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  const read = (count, entries = null) => {
+    const at = controls().filter((b) => b.getClientRects().length > 0).map((b) => b.getBoundingClientRect().top);
+    const changed = was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1));
+    if (count && changed && !theirs(entries)) { moved(); }
+    was = at;
+  };
+  const sized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => read(true, entries)) : null;
+  const watched = new Set();
+  const observe = (el) => {
+    if (!el || watched.has(el) || skip(el)) { return; }
+    watched.add(el);
+    sized?.observe(el);
+  };
+  // What holds it can be put on the page after this starts watching (a session's view is built
+  // before it is shown): track() takes in whatever holds it now, and lets go of whatever has
+  // left the page since, which nothing else would.
+  const track = () => {
+    for (const el of watched) {
+      if (!el.isConnected) {
+        watched.delete(el);
+        sized?.unobserve(el);
+      }
+    }
+    for (let up = holder; up; up = up.parentElement) {
+      observe(up);
+      for (const el of up.parentElement?.children ?? []) { observe(el); }
+    }
+    for (const el of also) { observe(el); }
+  };
+  track();
+  const scrolled = (e) => { if (e.target?.contains?.(holder)) { read(false); } };
+  win.addEventListener?.('scroll', scrolled, { capture: true, passive: true });
+  return {
+    track,
+    observe,
+    unobserve(el) {
+      if (!el || !watched.delete(el)) { return; }
+      sized?.unobserve(el);
+    },
+    // The person acted in the answers' own question: what it draws next is theirs. Each act holds
+    // it for the frame it's drawn in, counted from the latest: an earlier act's frames ending
+    // mustn't cut a later one's short.
+    own() {
+      own = true;
+      const mine = ++acts;
+      const frame = win.requestAnimationFrame?.bind(win) ?? ((fn) => setTimeout(fn, 16));
+      frame(() => frame(() => { if (mine === acts) { own = false; } }));
+    },
+    // Where they are now, as the place to measure moves from (a new set of answers drawn).
+    settle() { was = null; read(false); },
+    stop() {
+      sized?.disconnect();
+      watched.clear();
+      win.removeEventListener?.('scroll', scrolled, { capture: true });
+    },
+  };
+}
+
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // Why nothing can be given for a session now, for under its controls, or null (#269): its
@@ -121,6 +202,8 @@ export class SessionCard {
   #scrollEnd = null;
   // A question that arrived in the drawing under way, to bring into sight once it is all drawn.
   #arrived = null;
+  // What moves the guarded question's answers on screen while it stays (#491).
+  #moves = null;
   #menu = new RowMenu();
   // The delegate open, in the inspector or pushed in the Delegates tab.
   #delegate = null;
@@ -272,6 +355,22 @@ export class SessionCard {
     this.view = h('section', { class: 'session-view', 'aria-labelledby': this.ids.title, hidden: true, dataset: { tab: 'conversation' } },
       e.header, this.strip.element, e.tabs, h('div', { class: 'view-body' }, e.conversation, e.inspector));
     this.#applyTab();
+    // A question that stays where it is can still move (#491): a title wrapping, a tool line
+    // coming or going, the response or reasoning or your message changing above it, a note,
+    // banner or app bar above the view, a list shrinking at its end. Each move is the same wait as
+    // a question arriving.
+    this.#moves = watchMoves({
+      holder: e.question,
+      controls: () => (this.#selected && this.#guarded?.isConnected ? [...this.#guarded.querySelectorAll(QUESTION_CONTROLS)] : []),
+      // Other sessions' views: hidden whenever this one shows, so they never move its question,
+      // and holding on to them would keep a removed session's view alive.
+      skip: (el) => el !== this.view && el.classList?.contains('session-view'),
+      moved: () => this.#movedUnder(),
+    });
+  }
+
+  #movedUnder() {
+    if (this.#guarded?.isConnected && this.#selected && this.viewing() && this.els.scroll.getClientRects().length) { this.#guard(); }
   }
 
   #changed(key, value) {
@@ -575,6 +674,8 @@ export class SessionCard {
     this.element.classList.toggle('selected', selected);
     if (selected) { this.els.open.setAttribute('aria-current', 'true'); } else { this.els.open.removeAttribute('aria-current'); }
     this.view.hidden = !selected;
+    // Shown now, in the page it was put into: what holds it there can move its question too.
+    if (selected) { this.#moves?.track(); }
     // Its question shows now, where a tap or a click may already be headed (a phone's push puts
     // the view under the finger that opened it): the same wait as a question arriving.
     if (selected && this.#guarded?.isConnected) { this.#guard(); }
@@ -699,6 +800,7 @@ export class SessionCard {
     this.#dropReceipt();
     this.delegates.dispose();
     this.detail.dispose();
+    this.#moves?.stop();
     clearTimeout(this.#history.timer);
   }
 
@@ -790,8 +892,13 @@ export class SessionCard {
     } else if (q) {
       view = renderQuestion(q, { machineName: this.machineName, why: able.why, readOnly: ctx?.readOnly ?? null, asker });
     }
-    // A new question replaces a receipt that has said its last word.
-    if (q && this.#receipt?.final) { this.#dropReceipt(); }
+    // A new question replaces a receipt that has said its last word. A question that stays moves
+    // up into its place.
+    let dropped = false;
+    if (q && this.#receipt?.final) {
+      this.#dropReceipt();
+      dropped = true;
+    }
     // Scroll to a question (ui.md §5.3): one that arrives is brought into sight once the whole
     // update is drawn (#bringQuestion), as long as the conversation was read to its end.
     const arrived = this.#asked !== undefined && !!q && q.id !== this.#asked;
@@ -809,10 +916,14 @@ export class SessionCard {
     // note that said why goes, and Send or Approve once moves up under the pointer as it does.
     const unheld = !!this.#guardedHeld && !held;
     const opened = !this.#guardedAnswerable && answerable;
+    if (this.#guarded !== (view || null)) {
+      this.#moves?.unobserve(this.#guarded);
+      if (view) { this.#moves?.observe(view); }
+    }
     this.#guarded = view || null;
     const same = view && q.id === this.#guardedId;
     let armed = false;
-    if (view && (!same || unheld || opened)) {
+    if (view && (!same || unheld || opened || dropped)) {
       this.#guardedId = q.id;
       if (this.#selected && this.viewing() && this.els.scroll.getClientRects().length) {
         this.#guard();
@@ -849,10 +960,15 @@ export class SessionCard {
   #guardQuestion(slot) {
     slot.addEventListener('click', (e) => {
       if (e.detail === 0 || (globalThis.performance?.now() ?? Date.now()) >= this.#guardUntil) { return; }
-      if (!this.#guarded?.contains(e.target) || !e.target.closest?.('button, input, select, label, summary, a')) { return; }
+      if (!this.#guarded?.contains(e.target) || !e.target.closest?.(QUESTION_CONTROLS)) { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
     }, true);
+    // What the person does in the question that went through: the question's answer to it isn't
+    // a move under their pointer (watchMoves). A dropped click stops above and changes nothing.
+    for (const type of ['click', 'keydown', 'input', 'change']) {
+      slot.addEventListener(type, (e) => { if (this.#guarded?.contains(e.target)) { this.#moves?.own(); } }, true);
+    }
   }
 
   #atEnd() {
@@ -992,7 +1108,7 @@ export class SessionCard {
           ? 'The question changed before you sent your answer. It was answered at the machine, or the agent moved on. What you typed is kept here.'
           : 'This question can no longer be answered from here. What you typed is kept here.'),
         ta,
-        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); } }, 'Dismiss'));
+        h('button', { type: 'button', class: 'button secondary', onclick: () => { this.#orphan = null; o.element.remove(); this.#movedUnder(); } }, 'Dismiss'));
     }
     return o.element;
   }

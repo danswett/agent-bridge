@@ -26,7 +26,7 @@ import { SessionOrder, SORTS, SORT_LABELS } from '../session-order.js';
 import { NeedsYouLane } from './needs-you-view.js';
 import { AppBadge } from '../needs-you.js';
 import { enter, scrollBehavior, watchLane } from './motion.js';
-import { QUESTION_ARRIVAL_GUARD_MS } from './session-card.js';
+import { QUESTION_ARRIVAL_GUARD_MS, watchMoves } from './session-card.js';
 
 // Needs you's answers (Approve once, Deny, Resend) wait as a question's do (ui.md §5.3): any
 // change to the lane can put Approve once under a pointer aimed at something else (an entry
@@ -49,40 +49,25 @@ function guardLane(list, scroller = null) {
     timer = setTimeout(() => list.removeAttribute('data-arriving'), QUESTION_ARRIVAL_GUARD_MS);
   };
   // The entries themselves coming, going or moving; and anything that moves their answers without
-  // that (an answer's status appearing or wrapping in an entry above, the note or machine tabs
-  // above the lane changing height, a banner or the app bar above the list appearing, the
-  // window's width). Where each answer sits is read when an entry, the lane, anything holding it
-  // or anything before any of those changes size; a move of more than a pixel runs the wait
-  // again. It is read where the page would be unscrolled (the scroller's and the window's
-  // scrolling added back), so scrolling isn't a move but the list being pushed down is; and only
-  // for answers shown, since a hidden one (Resend until a send fails) has no place to keep. An
-  // age ticking on moves nothing, and the guard's own attribute changes no size, so it can't feed
-  // itself.
+  // that (watchMoves, #491): an answer's status appearing or wrapping in an entry above, the note
+  // or machine tabs above the lane changing height, a banner or the app bar above the list
+  // appearing, the window's width, and the rows below getting shorter or going while the list is
+  // scrolled to its end, where the browser pulls the scroll back and the lane slides down with
+  // it. Where they sit is read on screen; a scroll alone moves nothing under a pointer.
   const lane = list.parentElement ?? list;
-  const where = () => {
-    const scrolled = (scroller?.scrollTop ?? 0) + (globalThis.scrollY ?? 0);
-    return [...list.querySelectorAll(LANE_ANSWERS)]
-      .filter((b) => b.getClientRects().length > 0)
-      .map((b) => b.getBoundingClientRect().top + scrolled);
-  };
-  let was = null;
-  const moved = () => {
-    const at = where();
-    if (was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1))) { arm(); }
-    was = at;
-  };
-  const sized = typeof ResizeObserver === 'function' ? new ResizeObserver(moved) : null;
-  for (let up = lane; up; up = up.parentElement) {
-    for (let el = up; el; el = el.previousElementSibling) { sized?.observe(el); }
-  }
-  for (const el of list.children) { sized?.observe(el); }
+  const moves = watchMoves({
+    holder: lane,
+    controls: () => [...list.querySelectorAll(LANE_ANSWERS)],
+    also: [...list.children],
+    moved: arm,
+  });
   const changes = typeof MutationObserver === 'function' ? new MutationObserver((records) => {
     for (const r of records) {
-      for (const n of r.removedNodes) { if (n.nodeType === 1) { sized?.unobserve(n); } }
-      for (const n of r.addedNodes) { if (n.nodeType === 1) { sized?.observe(n); } }
+      for (const n of r.removedNodes) { if (n.nodeType === 1) { moves.unobserve(n); } }
+      for (const n of r.addedNodes) { if (n.nodeType === 1) { moves.observe(n); } }
     }
     arm();
-    was = where();
+    moves.settle();
   }) : null;
   changes?.observe(list, { childList: true });
   const click = (e) => {
@@ -97,7 +82,7 @@ function guardLane(list, scroller = null) {
     arm,
     stop() {
       changes?.disconnect();
-      sized?.disconnect();
+      moves.stop();
       clearTimeout(timer);
       list.removeEventListener('click', click, true);
       scroller?.removeEventListener('scroll', scrolled);

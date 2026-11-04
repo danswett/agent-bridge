@@ -676,6 +676,148 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(50);
   expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBeGreaterThan(before);
 });
+
+// A question with two choices, asked of Codex's session; extra: anything else to set with it.
+const choices = (id, message = 'Which?') => ({
+  id, kind: 'form', message, askedAt: new Date(Date.now() + 60_000).toISOString(),
+  fields: [{ name: 'answer', type: 'choice', required: true, options: [{ value: 'a', label: 'First' }, { value: 'b', label: 'Second' }] }],
+});
+const askCodex = (page, question, extra = {}, ms = 60_000) => page.evaluate(({ question, extra, ms }) => {
+  const d = window.agentBridgeDemo;
+  const t = new Date(Date.now() + ms).toISOString();
+  d.upsert({ ...d.host.get('019a1b2c-codex-example'), status: 'waiting', statusSince: t, updatedAt: t, question, ...extra });
+}, { question, extra, ms });
+const answered = (page) => page.evaluate(() => window.agentBridgeDemo.host.answerLog.length);
+
+test('a question that stays takes no click for a moment when something above it moves it, as its title wrapping does', async ({ page }) => {
+  await openDemo(page);
+  const question = choices('q-moved');
+  await askCodex(page, question);
+  const v = await open(page, CODEX);
+  const choice = v.locator('.question-slot .choice').first();
+  await holdClock(page);
+  const top = await choice.evaluate((c) => c.getBoundingClientRect().top);
+  const before = await answered(page);
+  // The same question, untouched; the session's title grows long enough to wrap in the header.
+  await askCodex(page, question, { title: Array.from({ length: 24 }, () => 'a title long enough to wrap').join(' ') }, 61_000);
+  await page.clock.runFor(20);
+  await expect.poll(() => v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'))).toBe(true);
+  expect(await choice.evaluate((c, top) => c.getBoundingClientRect().top - top, top)).toBeGreaterThan(1);
+  // A click already on its way to where the choice was before: dropped.
+  await choice.evaluate((c) => c.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+  await page.clock.runFor(50);
+  expect(await answered(page)).toBe(before);
+  // Once the wait has run out, a click counts.
+  await page.clock.runFor(500);
+  await choice.evaluate((c) => c.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+  await page.clock.runFor(50);
+  expect(await answered(page)).toBeGreaterThan(before);
+});
+
+test('typing in a question doesn\'t hide a move above it in the same moment: the question still takes no click', async ({ page }) => {
+  await openDemo(page);
+  await askCodex(page, { id: 'q-typing', kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
+  const v = await open(page, CODEX);
+  const after = await page.evaluate(async () => {
+    const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
+    const box = view.querySelector('.question-slot textarea');
+    const send = view.querySelector('.question-slot button.send');
+    const top = send.getBoundingClientRect().top;
+    // A key typed in the question, and in the same moment the title above grows to wrap.
+    box.value = 'a note';
+    box.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    view.querySelector('.session-title').textContent = Array.from({ length: 24 }, () => 'a title long enough to wrap').join(' ');
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    return { moved: send.getBoundingClientRect().top - top > 1, armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
+  });
+  expect(after).toEqual({ moved: true, armed: true });
+  await expect(v.locator('.question-slot .question')).toHaveCount(1);
+});
+
+test('a session that goes leaves nothing of its view watched by the others', async ({ page }) => {
+  await page.addInitScript(() => {
+    const watched = window.__watched = new Set();
+    const { observe, unobserve, disconnect } = ResizeObserver.prototype;
+    const mine = new WeakMap();
+    const of = (ro) => { if (!mine.has(ro)) { mine.set(ro, new Set()); } return mine.get(ro); };
+    ResizeObserver.prototype.observe = function (el, o) { of(this).add(el); watched.add([this, el]); return observe.call(this, el, o); };
+    ResizeObserver.prototype.unobserve = function (el) { of(this).delete(el); return unobserve.call(this, el); };
+    ResizeObserver.prototype.disconnect = function () { of(this).clear(); return disconnect.call(this); };
+    window.__stillWatched = (el) => [...watched].some(([ro, x]) => x === el && of(ro).has(el));
+  });
+  await openDemo(page);
+  await open(page, CODEX);
+  await open(page, CLAUDE);
+  await open(page, CODEX);
+  // Claude's session goes, its view with it.
+  const kept = await page.evaluate(async () => {
+    const view = document.querySelector('.session-view[data-id="6f1c2b7e-claude-example"]');
+    window.agentBridgeDemo.remove('6f1c2b7e-claude-example');
+    for (let i = 0; i < 60 && view.isConnected; i += 1) { await new Promise((r) => requestAnimationFrame(r)); }
+    return { gone: !view.isConnected, watched: window.__stillWatched(view) };
+  });
+  expect(kept).toEqual({ gone: true, watched: false });
+});
+
+test('dismissing a kept draft above a question moves the question up, and the second click of a double-click doesn\'t answer it', async ({ page }) => {
+  await openDemo(page);
+  await askCodex(page, { id: 'q-notes', kind: 'form', message: 'Notes?', askedAt: new Date().toISOString(), fields: [{ name: 'n', title: 'Notes', type: 'text' }] });
+  const v = await open(page, CODEX);
+  await v.getByRole('textbox', { name: 'Notes' }).fill('half a thought');
+  await askCodex(page, choices('q-after-notes'), {}, 62_000);
+  await expect(v.locator('.question-changed')).toHaveCount(1);
+  await expect(v.locator('.question-slot .question[data-question="q-after-notes"]')).toHaveCount(1);
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  const before = await answered(page);
+  // Dismiss, and the second click of the same double-click lands where Dismiss was.
+  const after = await page.evaluate(() => {
+    const slot = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot');
+    const dismiss = [...slot.querySelectorAll('.question-changed button')].find((b) => b.textContent === 'Dismiss');
+    dismiss.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    const question = slot.querySelector('.question');
+    const armed = question.hasAttribute('data-arriving');
+    question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 2 }));
+    return { gone: !slot.querySelector('.question-changed'), armed };
+  });
+  expect(after).toEqual({ gone: true, armed: true });
+  await page.waitForTimeout(100);
+  expect(await answered(page)).toBe(before);
+});
+
+test('a receipt that goes from above a question that stays moves it up, and a click on its way doesn\'t answer it', async ({ page }) => {
+  await openDemo(page);
+  await askCodex(page, choices('q-first'));
+  const v = await open(page, CODEX);
+  // The first answered, its response held back; a second question comes while it is on its way,
+  // under the first's receipt.
+  await page.evaluate(() => window.agentBridgeDemo.host.holdResponses());
+  await v.locator('.question-slot .choice').first().click();
+  await askCodex(page, choices('q-second'), {}, 62_000);
+  const receipt = v.locator('.answer-receipt');
+  await expect(receipt).toHaveCount(1);
+  await expect(v.locator('.question-slot .question[data-question="q-second"]')).toHaveCount(1);
+  // The first's answer comes back: the receipt has said its last word.
+  await page.evaluate(() => window.agentBridgeDemo.host.releaseResponses());
+  await expect(receipt).not.toHaveAttribute('data-answer', /sending|waiting|progress/);
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  const before = await answered(page);
+  // The second, drawn again as it stays (reworded): the receipt goes and the question moves up
+  // into its place, as a click is on its way.
+  const after = await page.evaluate(async () => {
+    const slot = document.querySelector('.session-view[data-id="019a1b2c-codex-example"] .question-slot');
+    const d = window.agentBridgeDemo;
+    const s = d.host.get('019a1b2c-codex-example');
+    d.upsert({ ...s, question: { ...s.question, message: 'Which, now?' }, updatedAt: new Date(Date.now() + 63_000).toISOString() });
+    for (let i = 0; i < 120 && slot.querySelector('.answer-receipt'); i += 1) { await new Promise((r) => requestAnimationFrame(r)); }
+    const question = slot.querySelector('.question');
+    const armed = question.hasAttribute('data-arriving');
+    question.querySelector('.choice').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    return { gone: !slot.querySelector('.answer-receipt'), same: question.dataset.question, armed };
+  });
+  expect(after).toEqual({ gone: true, same: 'q-second', armed: true });
+  await page.waitForTimeout(100);
+  expect(await answered(page)).toBe(before);
+});
 test('a session the address names at startup, or after a reload, is there at once on a phone: nothing slides in', async ({ page }) => {
   await openDemo(page, { width: 390, height: 844 });
   const host = await row(page, CLAUDE).getAttribute('data-host-id');

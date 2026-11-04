@@ -637,6 +637,38 @@ test.describe('a moment before the lane takes a click', () => {
     });
   }
 
+  test('rows below the lane going, with the list scrolled to its end, slide the lane down as the list is pulled back, and the lane takes no click for a moment', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 500 });
+    await openDemo(page);
+    await ask(page, LAND, permission());
+    // Scrolled to its end.
+    const end = await page.evaluate(async () => {
+      const pane = document.getElementById('list-pane');
+      pane.scrollTop = pane.scrollHeight;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return pane.scrollTop;
+    });
+    expect(end).toBeGreaterThan(40);
+    await still(page);
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
+    const approve = lane(page).locator('.needs-approve').first();
+    const top = await approve.evaluate((b) => b.getBoundingClientRect().top);
+    const before = (await log(page)).length;
+    // Two sessions below the lane go (into the Ended group, folded, shorter than their rows): the
+    // list gets shorter, the browser pulls its scroll back, and the lane comes down with it, with
+    // nothing in the lane itself changing.
+    await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [CLAUDE, CODEX]);
+    await page.clock.runFor(20);
+    await expect.poll(() => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'))).toBe(true);
+    const moved = await approve.evaluate((b, top) => ({ by: b.getBoundingClientRect().top - top, scrolled: document.getElementById('list-pane').scrollTop }), top);
+    expect(moved.by).toBeGreaterThan(1);
+    expect(moved.scrolled).toBeLessThan(end);
+    await approve.evaluate((b) => b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));
+    await page.clock.runFor(50);
+    expect((await log(page)).length).toBe(before);
+  });
+
   test('an entry opened holds the lane while the list scrolls to its row, and a scroll after the wait holds nothing', async ({ page }) => {
     await openDemo(page);
     await ask(page, LAND, permission());
