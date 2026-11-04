@@ -31,7 +31,12 @@ letterforms. Every OS now uses the same fonts, but rasterization still differs s
 re-rendering on another OS changes pixels without changing layout. Commit only the boards
 whose source or renderer changed.
 
-Phone boards render at 2×, and everything else at 1×.
+Phone boards render at 2×, and everything else at 1×. A board's `canvas.json` entry can set
+`dpr` to render at another device-pixel ratio (1.5, say).
+
+A board can load its own font files in its `<helmet>` CSS by a path relative to
+`design/canvas` (`src: url(../../docs/design/proposals/544-custom-sans/fonts/woff2/X.woff2)`);
+the renderer inlines them. A proposal uses this to show faces that aren't the design system's.
 
 ## Proposals
 

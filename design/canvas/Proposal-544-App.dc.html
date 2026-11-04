@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: app component</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Medium.woff2) format('woff2');font-weight:500;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-MediumItalic.woff2) format('woff2');font-weight:500;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Italic[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Control A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Control B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Bold');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Bold');font-weight:700;font-style:normal}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/544-custom-sans.md). The proposal's faces load from
+     docs/design/proposals/544-custom-sans/fonts; Segoe UI Variable is the rendering machine's own. -->
+<div style="width: {{W}}px; height: {{H}}px; background: {{t.shell}}; color: {{t.text}}; font-family: {{tf}}; display: flex; flex-direction: column; overflow: hidden; position: relative">
+  <sc-if value="{{isDesk}}" hint-placeholder-val="{{true}}">
+  <sc-if value="{{hasChrome}}" hint-placeholder-val="{{true}}">
+  <div style="height: {{chromeH}}px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid {{t.stroke}}">
+    <sc-if value="{{isMac}}" hint-placeholder-val="{{false}}"><span style="display: flex; gap: 8px; margin-right: 8px"><i style="width: 12px; height: 12px; border-radius: 6px; background: #FF5F57"></i><i style="width: 12px; height: 12px; border-radius: 6px; background: #FEBC2E"></i><i style="width: 12px; height: 12px; border-radius: 6px; background: #28C840"></i></span></sc-if>
+    <span style="font-family: {{df}}; font-size: {{z.chrome}}px; font-weight: {{z.chromeW}}; letter-spacing: {{z.brandTrack}}">Slipgates</span>
+    <span style="font-size: {{z.meta}}px; color: {{t.text2}}">{{chromeSub}}</span>
+    <span style="flex: 1"></span>
+    <span style="font-size: {{z.meta}}px; color: {{t.text2}}">{{chromeRight}}</span>
+  </div>
+  </sc-if>
+  <div style="flex: 1; display: flex; min-height: 0">
+    <sc-if value="{{hasChrome}}" hint-placeholder-val="{{true}}">
+    <div style="width: {{listW}}px; flex: none; padding: 6px 8px; box-sizing: border-box; border-right: 1px solid {{t.stroke}}; overflow: hidden">
+      <sc-for list="{{groups}}" as="g">
+      <div style="font-size: {{z.section}}px; line-height: {{z.sectionLh}}px; font-weight: {{z.sectionW}}; color: {{t.text2}}; padding: 12px 10px 4px">{{g.name}}</div>
+      <sc-for list="{{g.rows}}" as="r">
+      <div style="padding: 7px 10px; border-radius: 6px; background: {{r.bg}}">
+        <div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; min-width: 0; font-size: {{z.row}}px; line-height: {{z.rowLh}}px; font-weight: {{r.w}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.title}}</span><span style="font-size: {{z.meta}}px; line-height: {{z.metaLh}}px; color: {{t.text2}}; font-variant-numeric: tabular-nums">{{r.time}}</span></div>
+        <div style="font-size: {{z.meta}}px; line-height: {{z.metaLh}}px; color: {{t.text2}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="color: {{r.stc}}; font-weight: {{r.stw}}">{{r.status}}</span> · {{r.meta}}</div>
+      </div>
+      </sc-for>
+      </sc-for>
+    </div>
+    </sc-if>
+    <div style="flex: 1; min-width: 0; background: {{t.layer}}; display: flex; flex-direction: column">
+      <div style="padding: 16px 28px 12px; border-bottom: 1px solid {{t.stroke}}">
+        <div style="font-family: {{df}}; font-size: {{z.title}}px; line-height: {{z.titleLh}}px; font-weight: {{z.titleW}}">Fix trust-wait banner</div>
+        <div style="font-size: {{z.meta}}px; line-height: {{z.metaLh}}px; color: {{t.text2}}; margin-top: 2px"><span style="color: {{t.amberText}}; font-weight: 600">Needs you</span> · devbox · agent-bridge</div>
+      </div>
+      <div style="flex: 1; padding: 20px 28px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; font-size: {{z.read}}px; line-height: {{z.readLh}}px">
+        <div style="align-self: flex-end; max-width: 72%; background: {{t.sel}}; border: 1px solid {{t.stroke}}; border-radius: 10px; padding: 8px 12px">The trust-wait banner stays up after I trust the folder. Can you fix it and run the tests?</div>
+        <div style="max-width: 720px"><sc-for list="{{p1}}" as="s"><span style="font-family: {{s.ff}}; font-size: {{s.fs}}; font-style: {{s.fst}}; font-weight: {{s.fw}}; background: {{s.bg}}; padding: {{s.pad}}; border-radius: 3px">{{s.t}}</span></sc-for></div>
+        <div style="font-family: 'Proposal Mono'; font-size: {{z.code}}px; line-height: {{z.codeLh}}px; color: {{t.text2}}; display: flex; flex-direction: column; gap: 2px; white-space: pre">
+          <div><span style="color: {{t.accentText}}">Edit</span>  src/windows/LaunchView.xaml.cs  <span style="color: {{t.accentText}}">+12</span> <span style="color: {{t.mark}}">−3</span></div>
+          <div><span style="color: {{t.accentText}}">Run</span>   dotnet test --filter TrustWait  <span style="color: {{t.accentText}}">14 passed</span></div>
+        </div>
+        <pre style="margin: 0; max-width: 720px; font-family: 'Proposal Mono'; font-size: {{z.code}}px; line-height: {{z.codeLh}}px; background: {{t.codeBg}}; border-radius: 6px; padding: 10px 12px; white-space: pre"><span style="font-style: italic; color: {{t.text2}}">// clear the banner on the first trusted state</span>
+_trust.<span style="font-weight: 700">Changed</span> += (_, e) =&gt;
+    Banner.IsOpen = e.State != TrustState.Trusted;</pre>
+        <div style="max-width: 720px"><sc-for list="{{p2}}" as="s"><span style="font-family: {{s.ff}}; font-size: {{s.fs}}; font-style: {{s.fst}}; font-weight: {{s.fw}}; background: {{s.bg}}; padding: {{s.pad}}; border-radius: 3px">{{s.t}}</span></sc-for></div>
+      </div>
+      <div style="margin: 0 28px 18px; border: 1px solid {{t.stroke2}}; border-radius: 8px; padding: 9px 12px; font-size: {{z.row}}px; line-height: {{z.rowLh}}px; color: {{t.text2}}">Reply to the agent…</div>
+    </div>
+  </div>
+  </sc-if>
+  <sc-if value="{{isPhone}}" hint-placeholder-val="{{false}}">
+  <div style="height: {{statusH}}px; flex: none; display: flex; align-items: center; padding: 0 {{statusPad}}px; font-size: {{statusFs}}px; font-weight: 600; font-variant-numeric: tabular-nums">9:41<span style="flex: 1"></span><span style="font-weight: 400; color: {{t.text2}}">{{statusRight}}</span></div>
+  <div style="padding: {{hdrPad}}; flex: none; display: flex; align-items: center; gap: 12px">
+    <span style="font-family: {{df}}; font-size: {{z.title}}px; line-height: {{z.titleLh}}px; font-weight: {{z.titleW}}; letter-spacing: {{z.titleTrack}}">{{phoneTitle}}</span>
+  </div>
+  <div style="flex: 1; overflow: hidden; padding: 0 {{listPad}}px">
+    <sc-for list="{{groups}}" as="g">
+    <div style="font-size: {{z.section}}px; line-height: {{z.sectionLh}}px; font-weight: {{z.sectionW}}; color: {{secColor}}; text-transform: {{secCase}}; padding: 14px {{secPad}}px 6px">{{g.name}}</div>
+    <div style="background: {{cardBg}}; border-radius: {{cardR}}px; overflow: hidden">
+    <sc-for list="{{g.rows}}" as="r">
+    <div style="padding: {{rowPad}}; border-bottom: 1px solid {{t.stroke}}">
+      <div style="display: flex; gap: 8px; align-items: baseline"><span style="flex: 1; min-width: 0; font-size: {{z.row}}px; line-height: {{z.rowLh}}px; font-weight: {{r.w}}; white-space: {{ws}}; overflow: hidden; text-overflow: ellipsis">{{r.title}}</span><span style="font-size: {{z.small}}px; line-height: {{z.smallLh}}px; color: {{t.text2}}; font-variant-numeric: tabular-nums">{{r.time}}</span></div>
+      <div style="font-size: {{z.meta}}px; line-height: {{z.metaLh}}px; color: {{t.text2}}"><span style="color: {{r.stc}}; font-weight: {{r.stw}}">{{r.status}}</span> · {{r.meta}}</div>
+    </div>
+    </sc-for>
+    </div>
+    </sc-for>
+    <div style="font-size: {{z.section}}px; line-height: {{z.sectionLh}}px; font-weight: {{z.sectionW}}; color: {{secColor}}; text-transform: {{secCase}}; padding: 14px {{secPad}}px 6px">Latest reply</div>
+    <div style="background: {{t.card}}; border-radius: 12px; margin: 0 {{replyMargin}}px; padding: 12px 14px; font-size: {{z.read}}px; line-height: {{z.readLh}}px"><sc-for list="{{p1}}" as="s"><span style="font-family: {{s.ff}}; font-size: {{s.fs}}; font-style: {{s.fst}}; font-weight: {{s.fw}}; background: {{s.bg}}; padding: {{s.pad}}; border-radius: 3px">{{s.t}}</span></sc-for></div>
+  </div>
+  <div style="flex: none; display: flex; justify-content: space-around; padding: 8px 0 {{navBottom}}px; border-top: 1px solid {{t.stroke}}; background: {{t.layer}}">
+    <sc-for list="{{tabs}}" as="tb"><span style="font-size: {{z.tab}}px; line-height: {{z.tabLh}}px; font-weight: {{z.tabW}}; color: {{tb.c}}">{{tb.t}}</span></sc-for>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":760},"platform":{"type":"string","default":"win"},"face":{"type":"string","default":"system"},"theme":{"type":"string","default":"dark"},"scale":{"type":"string","default":""},"label":{"type":"string","default":""},"w":{"type":"string","default":""},"h":{"type":"string","default":""}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const F = {
+      segoe: { name: 'Segoe UI Variable', note: 'today: Windows and the desktop PWA', text: "'Proposal Segoe Text', 'Segoe UI Variable Text', sans-serif", display: "'Proposal Segoe Display', 'Segoe UI Variable Display', sans-serif", ms: 0.962, synth: 'auto' },
+      sf: { name: 'SF Pro (stand-in: Inter)', note: 'today: macOS and iOS. SF Pro cannot be rendered here', text: "'SF Pro Text', sans-serif", display: "'SF Pro Display', sans-serif", ms: 0.977, synth: 'auto' },
+      roboto: { name: 'Roboto Flex', note: 'today: Android', text: "'Roboto Flex', sans-serif", display: "'Roboto Flex', sans-serif", ms: 0.988, synth: 'auto' },
+      a: { name: 'Slipgates Sans A', note: 'option A: the mono\'s own skeleton', text: "'Slipgates Sans A'", display: "'Slipgates Sans A'", ms: 1.0, synth: 'none' },
+      b: { name: 'Slipgates Sans B', note: 'option B: Inter, tuned to the mono', text: "'Slipgates Sans B'", display: "'Slipgates Sans B'", ms: 1.05, synth: 'none' },
+      mono: { name: 'Agent Bridge Mono', note: 'the bundled monospace', text: "'Proposal Mono'", display: "'Proposal Mono'", ms: 1.0, synth: 'none' }
+    };
+    const TH = {
+      dark: { shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', sel: 'rgba(255,255,255,0.06)',
+        text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentText: '#5EE6D3', onAccent: '#062621', amber: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', violetText: '#C4B5FD', codeBg: 'rgba(255,255,255,0.07)', mark: '#F472B6' },
+      light: { shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', sel: 'rgba(0,0,0,0.05)',
+        text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentText: '#0B7A6E', onAccent: '#FFFFFF', amber: '#B87700', amberText: '#7A4600', amberFill: '#FFF2D6', violetText: '#5B3CC4', codeBg: 'rgba(0,0,0,0.05)', mark: '#C2185B' }
+    };
+    const p = this.props.platform || 'win';
+    const t = TH[this.props.theme === 'light' ? 'light' : 'dark'];
+    const sys = { win: 'segoe', pwa: 'segoe', turn: 'segoe', mac: 'sf', ios: 'sf', android: 'roboto', pwaPhone: 'roboto' }[p];
+    const fk = this.props.face || 'system';
+    const text = F[fk === 'a' ? 'a' : fk === 'b' ? 'b' : sys];
+    const disp = fk === 'c' ? F.a : text;
+    const sc = this.props.scale || '';
+    // Type ramps from design/tokens.json type.roles (Windows, PWA) and the platform ramps (macOS, iOS, Android M3).
+    const Z = {
+      win: { chrome: 12, chromeW: 400, title: 20, titleLh: 28, titleW: 600, row: 14, rowLh: 20, read: 15, readLh: 24, meta: 12, metaLh: 16, section: 12, sectionLh: 16, sectionW: 600, code: 12, codeLh: 18 },
+      pwa: { chrome: 16, chromeW: 600, title: 20, titleLh: 28, titleW: 600, row: 14, rowLh: 20, read: 15, readLh: 24, meta: 12, metaLh: 16, section: 12, sectionLh: 16, sectionW: 600, code: 13, codeLh: 18 },
+      mac: { chrome: 13, chromeW: 700, title: 15, titleLh: 20, titleW: 700, row: 13, rowLh: 16, read: 14, readLh: 21, meta: 11, metaLh: 14, section: 11, sectionLh: 14, sectionW: 700, code: 12, codeLh: 16 },
+      pwaPhone: { read: 16, readLh: 24, title: 24, titleLh: 32, titleW: 600, row: 15, rowLh: 20, meta: 13, metaLh: 18, small: 13, smallLh: 18, section: 13, sectionLh: 18, sectionW: 600, tab: 12, tabLh: 16, tabW: 500 },
+      ios: { read: 17, readLh: 22, title: 34, titleLh: 41, titleW: 700, row: 17, rowLh: 22, meta: 15, metaLh: 20, small: 15, smallLh: 20, section: 13, sectionLh: 18, sectionW: 400, tab: 10, tabLh: 12, tabW: 500 },
+      android: { read: 16, readLh: 24, title: 22, titleLh: 28, titleW: 400, row: 16, rowLh: 24, meta: 14, metaLh: 20, small: 11, smallLh: 16, section: 14, sectionLh: 20, sectionW: 500, tab: 12, tabLh: 16, tabW: 500 }
+    };
+    Z.turn = Z.win;
+    let z = { ...Z[p], brandTrack: fk === 'c' || fk === 'a' ? '0' : 'normal', titleTrack: 'normal' };
+    // iOS Dynamic Type at AX3; Android 14 nonlinear font scale at 200% (AOSP FontScaleConverterFactory).
+    if (sc === 'ax3') z = { ...z, read: 40, readLh: 47, title: 52, titleLh: 61, row: 40, rowLh: 47, meta: 36, metaLh: 43, small: 36, smallLh: 43, section: 33, sectionLh: 39, tab: 10, tabLh: 12 };
+    if (sc === 'a200') z = { ...z, read: 28, readLh: 42, title: 35, titleLh: 45, row: 28, rowLh: 42, meta: 26, metaLh: 37, small: 22, smallLh: 32, section: 26, sectionLh: 37, tab: 24, tabLh: 32 };
+    if (p === 'mac' || p === 'ios') z.sectionW = p === 'ios' ? 400 : 700;
+    const ms = text.ms;
+    const T = (s) => ({ t: s, ff: 'inherit', fs: 'inherit', fst: 'normal', fw: 'inherit', bg: 'transparent', pad: '0' });
+    const C = (s) => ({ t: s, ff: "'Proposal Mono'", fs: (z.read * ms).toFixed(2) + 'px', fst: 'normal', fw: '400', bg: t.codeBg, pad: '0 3px' });
+    const E = (s) => ({ ...T(s), fst: 'italic' });
+    const B = (s) => ({ ...T(s), fw: '700' });
+    const rows = [
+      { title: 'Fix trust-wait banner', meta: 'devbox · agent-bridge', time: '2m', status: 'Needs you', stc: t.amberText, stw: 600, w: 600, bg: t.sel },
+      { title: 'Rename to Slipgates: tokens and wordmark', meta: 'studio · agent-bridge', time: '12m', status: 'Working', stc: t.accentText, stw: 600, w: 600, bg: 'transparent' }
+    ];
+    const rows2 = [
+      { title: 'Reject 0/O and 1/l/I in pairing codes', meta: 'laptop · agent-bridge', time: '1h', status: 'Idle', stc: t.text2, stw: 400, w: 400, bg: 'transparent' },
+      { title: 'Release notes for 1.33.16', meta: 'devbox · agent-bridge', time: '3h', status: 'Done', stc: t.text2, stw: 400, w: 400, bg: 'transparent' },
+      { title: 'Migrate dashboard cards', meta: 'studio · home-config', time: 'Yesterday', status: 'Done', stc: t.text2, stw: 400, w: 400, bg: 'transparent' }
+    ];
+    const phone = ['ios', 'android', 'pwaPhone'].includes(p);
+    const W = +(this.props.w || (phone ? (p === 'android' ? 412 : 390) : 1200));
+    const H = +(this.props.h || (phone ? (p === 'android' ? 915 : 844) : 760));
+    const muted = p === 'ios' ? t.text2 : t.accentText;
+    const ul = p === 'ios' ? 'uppercase' : 'none';
+    return {
+      W, H, t, tf: text.text, df: disp.display, z,
+      isDesk: !phone, isPhone: phone, isMac: p === 'mac', hasChrome: p !== 'turn',
+      chromeH: p === 'pwa' ? 52 : p === 'mac' ? 38 : 32, listW: p === 'mac' ? 260 : 300,
+      chromeSub: p === 'pwa' ? 'agent sessions' : '', chromeRight: p === 'win' ? '—   ▢   ✕' : p === 'pwa' ? '3 machines online' : '',
+      faceLabel: this.props.label || '',
+      groups: [{ name: p === 'android' || p === 'pwaPhone' ? 'Needs you' : p === 'ios' ? 'Needs you' : 'Needs you · 2', rows }, { name: 'Earlier', rows: rows2 }],
+      p1: [T('The banner listens for '), C('TrustStateChanged'), T(', but '), C('LaunchView.xaml.cs'), T(' only checks it once, at load. I’ll subscribe in '), C('OnNavigatedTo'), T(' and clear it '), E('as soon as'), T(' the folder is trusted.')],
+      p2: [B('Fixed.'), T(' All 14 trust tests pass on '), B('devbox'), T('. The banner now clears within one frame of '), C('Trusted'), T('.')],
+      statusH: p === 'android' ? 32 : 50, statusPad: p === 'android' ? 20 : 30, statusFs: p === 'android' ? 14 : 16, statusRight: p === 'android' ? '5G  86%' : '86%',
+      hdrPad: p === 'ios' ? '6px 16px 8px' : p === 'android' ? '14px 16px 10px' : '10px 16px 6px',
+      phoneTitle: p === 'ios' ? 'Sessions' : 'Slipgates',
+      listPad: p === 'android' ? 0 : 16, secPad: p === 'android' ? 16 : 4, secColor: muted, secCase: ul,
+      cardBg: p === 'ios' ? t.card : 'transparent', cardR: p === 'ios' ? 12 : 0,
+      rowPad: p === 'android' ? '12px 24px 12px 16px' : '11px 16px',
+      ws: sc ? 'normal' : 'nowrap',
+      navBottom: p === 'ios' ? 28 : 14, replyMargin: p === 'android' ? 16 : 0,
+      tabs: [{ t: 'Sessions', c: t.accentText }, { t: 'Machines', c: t.text2 }, { t: 'Settings', c: t.text2 }]
+    };
+  }
+}
+</script>
+</body>
+</html>

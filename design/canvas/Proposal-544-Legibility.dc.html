@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: small-size legibility, 1×</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Medium.woff2) format('woff2');font-weight:500;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-MediumItalic.woff2) format('woff2');font-weight:500;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Slipgates Sans A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Slipgates Sans B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Italic[opsz,wght].woff2) format('woff2');font-weight:100 900;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Italic.woff2) format('woff2');font-weight:400;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-SemiBold.woff2) format('woff2');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-SemiBoldItalic.woff2) format('woff2');font-weight:600;font-style:italic}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-Bold.woff2) format('woff2');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Mono';src:url(../../design/fonts/agent-bridge-mono/woff2/AgentBridgeMono-BoldItalic.woff2) format('woff2');font-weight:700;font-style:italic}
+@font-face{font-family:'Control A';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansA-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Control B';src:url(../../docs/design/proposals/544-custom-sans/fonts/woff2/SlipgatesSansB-Regular.woff2) format('woff2');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Text';src:local('Segoe UI Variable Text Bold');font-weight:700;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display');font-weight:400;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Semibold');font-weight:600;font-style:normal}
+@font-face{font-family:'Proposal Segoe Display';src:local('Segoe UI Variable Display Bold');font-weight:700;font-style:normal}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/544-custom-sans.md). The proposal's faces load from
+     docs/design/proposals/544-custom-sans/fonts; Segoe UI Variable is the rendering machine's own. -->
+<div style="width: 1440px; height: 760px; display: flex; font-family: 'Proposal Segoe Text', sans-serif">
+  <sc-for list="{{columns}}" as="col">
+  <div style="flex: 1; background: {{col.t.layer}}; color: {{col.t.text}}; padding: 20px 24px; box-sizing: border-box">
+    <div style="font-size: 12px; line-height: 16px; color: {{col.t.text2}}; margin-bottom: 8px">{{col.label}} · {{dprLabel}} · inline mono scaled to each face's x-height · font-synthesis as each platform does it</div>
+    <sc-for list="{{col.faces}}" as="f">
+    <div style="margin-top: 12px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{col.t.accentText}}">{{f.name}} <span style="font-weight: 400; color: {{col.t.text2}}">· {{f.note}}</span></div>
+    <sc-for list="{{f.rows}}" as="r">
+    <div style="display: flex; align-items: baseline; gap: 12px; margin-top: 4px; font-synthesis: {{f.synth}}">
+      <span style="width: 34px; flex: none; font-size: 11px; color: {{col.t.text2}}">{{r.size}} px</span>
+      <div style="flex: 1; min-width: 0; font-family: {{f.text}}; font-size: {{r.size}}px; line-height: {{r.lh}}px">
+        <div style="white-space: nowrap; overflow: hidden">Fix trust-wait banner · Editing <code style="font-family: 'Proposal Mono'; font-size: {{r.mono}}px; padding: 0 3px; border-radius: 3px; background: {{col.t.codeBg}}">LaunchView.xaml.cs</code> · Il1 0O rn m 3469 · 2m</div>
+        <div style="white-space: nowrap; overflow: hidden; font-weight: 600">Needs you · 3 <span style="font-weight: 400; color: {{col.t.text2}}">Waiting on you · devbox ·</span> <em>illicit filling, 1 left</em></div>
+      </div>
+    </div>
+    </sc-for>
+    </sc-for>
+  </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760},"dpr":{"type":"string","default":"1× device pixels"}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const F = {
+      segoe: { name: 'Segoe UI Variable', note: 'today: Windows and the desktop PWA', text: "'Proposal Segoe Text', 'Segoe UI Variable Text', sans-serif", display: "'Proposal Segoe Display', 'Segoe UI Variable Display', sans-serif", ms: 0.962, synth: 'auto' },
+      sf: { name: 'SF Pro (stand-in: Inter)', note: 'today: macOS and iOS. SF Pro cannot be rendered here', text: "'SF Pro Text', sans-serif", display: "'SF Pro Display', sans-serif", ms: 0.977, synth: 'auto' },
+      roboto: { name: 'Roboto Flex', note: 'today: Android', text: "'Roboto Flex', sans-serif", display: "'Roboto Flex', sans-serif", ms: 0.988, synth: 'auto' },
+      a: { name: 'Slipgates Sans A', note: 'option A: the mono\'s own skeleton', text: "'Slipgates Sans A'", display: "'Slipgates Sans A'", ms: 1.0, synth: 'none' },
+      b: { name: 'Slipgates Sans B', note: 'option B: Inter, tuned to the mono', text: "'Slipgates Sans B'", display: "'Slipgates Sans B'", ms: 1.05, synth: 'none' },
+      mono: { name: 'Agent Bridge Mono', note: 'the bundled monospace', text: "'Proposal Mono'", display: "'Proposal Mono'", ms: 1.0, synth: 'none' }
+    };
+    const TH = {
+      dark: { shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,0.07)', stroke2: 'rgba(255,255,255,0.12)', sel: 'rgba(255,255,255,0.06)',
+        text: '#FFFFFF', text2: 'rgba(255,255,255,0.72)', accent: '#2DD4BF', accentText: '#5EE6D3', onAccent: '#062621', amber: '#FFB224', amberText: '#FFD27A', amberFill: 'rgba(255,178,36,0.1)', violetText: '#C4B5FD', codeBg: 'rgba(255,255,255,0.07)', mark: '#F472B6' },
+      light: { shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,0.07)', stroke2: 'rgba(0,0,0,0.12)', sel: 'rgba(0,0,0,0.05)',
+        text: '#1A1A1A', text2: 'rgba(0,0,0,0.62)', accent: '#0B7A6E', accentText: '#0B7A6E', onAccent: '#FFFFFF', amber: '#B87700', amberText: '#7A4600', amberFill: '#FFF2D6', violetText: '#5B3CC4', codeBg: 'rgba(0,0,0,0.05)', mark: '#C2185B' }
+    };
+    const faces = ['segoe', 'a', 'b'].map(k => ({ ...F[k], rows: [12, 13, 14, 15].map(s => ({ size: s, lh: s + 6, mono: (s * F[k].ms).toFixed(2) })) }));
+    return {
+      dprLabel: this.props.dpr || '1× device pixels',
+      columns: [{ label: 'Dark', t: TH.dark, faces }, { label: 'Light', t: TH.light, faces }]
+    };
+  }
+}
+</script>
+</body>
+</html>

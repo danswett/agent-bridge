@@ -10,7 +10,12 @@ const { chromium } = require('playwright');
 const [projectDir, outDir, only] = process.argv.slice(2);
 const index = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
 const files = {};
-for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8');
+// A board's helmet may load a font file by a path relative to the canvas folder
+// (src: url(../../docs/....woff2)); the page is built from strings, so such URLs are inlined.
+const fontUrl = /url\((['"]?)((?:\.\.?\/)[^'")]+\.(woff2|ttf|otf))\1\)/g;
+const mime = { woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf' };
+for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) files[f] = fs.readFileSync(path.join(projectDir, f), 'utf8')
+  .replace(fontUrl, (_, q, rel, ext) => `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`);
 
 const nm = p => path.join(__dirname, 'node_modules', p);
 // @font-face can't redefine generic families, so system-ui, sans-serif and -apple-system
@@ -133,13 +138,14 @@ async function renderBoard(page, file, w, h) {
     if (skip.has(file) || (only ? !file.startsWith(only) : file.startsWith('Proposal-'))) continue;
     const b = index.boards[file];
     const phone = b.w < 500;
-    const page = await browser.newPage({ viewport: { width: b.w, height: b.h }, deviceScaleFactor: phone ? 2 : 1 });
+    const dpr = b.dpr || (phone ? 2 : 1);
+    const page = await browser.newPage({ viewport: { width: b.w, height: b.h }, deviceScaleFactor: dpr });
     await page.setContent('<!doctype html><html><head></head><body></body></html>');
     await renderBoard(page, file, b.w, b.h);
     await page.evaluate(() => document.fonts.ready);
     const out = path.join(outDir, file.replace('.dc.html', '').toLowerCase() + '.png');
     await page.screenshot({ path: out, clip: { x: 0, y: 0, width: b.w, height: b.h } });
-    console.log('wrote', path.basename(out), `${b.w}x${b.h}${phone ? '@2x' : ''}`);
+    console.log('wrote', path.basename(out), `${b.w}x${b.h}${dpr !== 1 ? `@${dpr}x` : ''}`);
     await page.close();
   }
   await browser.close();
