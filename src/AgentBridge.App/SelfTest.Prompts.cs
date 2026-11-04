@@ -5,7 +5,6 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 
 namespace AgentBridge.App;
@@ -62,17 +61,36 @@ static partial class SelfTest
             check(preview is { MaxLines: 2 } && Shown(preview) && preview.ActualHeight <= preview.LineHeight * 2 + 2 + (preview.LineHeight == 0 ? 40 : 0),
                 $"shows two lines of it under the label ({preview?.ActualHeight:0} px)");
 
-            var expander = ById<Expander>(view, "ShowPrompt");
-            var header = expander is null ? null : Find<ToggleButton>(expander).FirstOrDefault();
-            var peer = expander is null ? null : (IExpandCollapseProvider)new ExpanderAutomationPeer(expander).GetPattern(PatternInterface.ExpandCollapse);
-            check(expander is not null && peer?.ExpandCollapseState == ExpandCollapseState.Collapsed && AutomationProperties.GetName(expander) == "Scheduled prompt 4, Show prompt" && header is { IsTabStop: true },
-                $"offers Show prompt collapsed, a control Tab reaches, named \"{(expander is null ? "" : AutomationProperties.GetName(expander))}\"");
+            var toggle = ById<DisclosureButton>(view, "ShowPrompt");
+            var peer = toggle is null ? null : FrameworkElementAutomationPeer.CreatePeerForElement(toggle)?.GetPattern(PatternInterface.ExpandCollapse) as IExpandCollapseProvider;
+            check(toggle is not null && peer?.ExpandCollapseState == ExpandCollapseState.Collapsed && AutomationProperties.GetName(toggle) == "Scheduled prompt 4, Show prompt" && toggle is { IsTabStop: true, IsEnabled: true },
+                $"offers Show prompt collapsed, a control Tab reaches, named \"{(toggle is null ? "" : AutomationProperties.GetName(toggle))}\"");
+
+            // Compact, as the PWA's (#504's design review): a chevron leading its words and pointing
+            // right, the words at the label's size, the control as wide as they are.
+            var chevron = ById<ContentControl>(view, "PromptChevron");
+            var words = ById<TextBlock>(view, "PromptToggleText");
+            static float Angle(UIElement e) => Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(e).RotationAngleInDegrees;
+            var compact = new List<string>();
+            if (toggle is null || chevron is null || words is null) { compact.Add("no chevron or words"); }
+            else
+            {
+                var chevronAt = chevron.TransformToVisual(toggle).TransformPoint(default).X;
+                var wordsAt = words.TransformToVisual(toggle).TransformPoint(default).X;
+                if (chevronAt >= wordsAt) { compact.Add($"chevron at {chevronAt:0}, words at {wordsAt:0}"); }
+                if (Angle(chevron) != 0) { compact.Add($"chevron turned {Angle(chevron):0}°"); }
+                if (label is not null && words.FontSize != label.FontSize) { compact.Add($"words at {words.FontSize} px, the label at {label.FontSize} px"); }
+                if (toggle.ActualWidth > chevron.ActualWidth + words.ActualWidth + 4 + toggle.Padding.Left + toggle.Padding.Right + 1) { compact.Add($"{toggle.ActualWidth:0} px wide"); }
+                var toggleAt = toggle.TransformToVisual(column).TransformPoint(default).X + toggle.Padding.Left;
+                if (Math.Abs(toggleAt - column.Padding.Left) > 1) { compact.Add($"chevron {toggleAt - column.Padding.Left:0} px from the column's start"); }
+            }
+            check(compact.Count == 0, $"draws Show prompt compact: a chevron pointing right before its words, at the label's size, as wide as they are{(compact.Count > 0 ? $": not {string.Join(", ", compact)}" : "")}");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".prompt.collapsed.png"));
 
-            peer?.Expand();
-            // The Expander builds its content the first time it opens: looked up once it has.
-            Border? rule = null;
-            var opened = await Until(() => card.PromptOpen && (rule = ById<Border>(view, "PromptRule")) is not null && Shown(rule), TimeSpan.FromSeconds(5));
+            // Opened as a press does it, from the keyboard or the pointer.
+            if (toggle is not null) { (FrameworkElementAutomationPeer.CreatePeerForElement(toggle)?.GetPattern(PatternInterface.Invoke) as IInvokeProvider)?.Invoke(); }
+            var rule = ById<Border>(view, "PromptRule");
+            var opened = await Until(() => card.PromptOpen && Shown(rule), TimeSpan.FromSeconds(5));
             await Task.Delay(400);
             var full = ById<TextBlock>(view, "PromptText");
             var wrongOpen = new List<string>();
@@ -82,7 +100,9 @@ static partial class SelfTest
             if (rule is not null && Colour(rule.BorderBrush) != Colour(Themed(rule, "AbAgent"))) { wrongOpen.Add($"rule in {Colour(rule.BorderBrush)}, not {Colour(Themed(rule, "AbAgent"))}"); }
             if (Shown(preview)) { wrongOpen.Add("the preview still shown"); }
             if (full is null || full.Text != Monitor) { wrongOpen.Add("not all of it"); }
-            if (expander is null || AutomationProperties.GetName(expander) != "Scheduled prompt 4, Hide prompt") { wrongOpen.Add($"named \"{(expander is null ? "" : AutomationProperties.GetName(expander))}\""); }
+            if (toggle is null || AutomationProperties.GetName(toggle) != "Scheduled prompt 4, Hide prompt") { wrongOpen.Add($"named \"{(toggle is null ? "" : AutomationProperties.GetName(toggle))}\""); }
+            if (peer?.ExpandCollapseState != ExpandCollapseState.Expanded) { wrongOpen.Add("not heard as expanded"); }
+            if (chevron is null || Angle(chevron) != 90) { wrongOpen.Add($"chevron turned {(chevron is null ? 0 : Angle(chevron)):0}°, not down"); }
             check(wrongOpen.Count == 0, $"opens Show prompt on all of it inside a thin agent rule on the leading edge, not a filled card, named Hide prompt{(wrongOpen.Count > 0 ? $": not {string.Join(", ", wrongOpen)}" : "")}");
             foreach (var theme in new[] { ElementTheme.Light, ElementTheme.Dark })
             {
@@ -111,7 +131,7 @@ static partial class SelfTest
             // An agent's prompt: the driven diamond, "Sent by an agent" and who, in secondary text.
             await demo.Upsert(card.Session with { UpdatedAt = DateTimeOffset.UtcNow, Driver = DriverKind.Agent, DriverPrincipal = "homeassistant:0f1e2d3c", Activity = card.Session.Activity with { UserMessage = "Run the nightly check and post the result.", UserMessageFrom = UserMessageFrom.Agent, UserMessageLabel = null, TurnCount = turns + 2 } });
             var sent = await Until(() => label is not null && Text(label) == "Sent by an agent" && Shown(ById<ContentControl>(view, "PromptDiamond")), TimeSpan.FromSeconds(10));
-            check(sent && !Shown(ById<ContentControl>(view, "PromptClock")) && ById<TextBlock>(view, "PromptBy") is { Text: "homeassistant:0f1e2d3c" } by && Shown(by) && expander is not null && AutomationProperties.GetName(expander) == "Prompt sent by an agent, Show prompt",
+            check(sent && !Shown(ById<ContentControl>(view, "PromptClock")) && ById<TextBlock>(view, "PromptBy") is { Text: "homeassistant:0f1e2d3c" } by && Shown(by) && toggle is not null && AutomationProperties.GetName(toggle) == "Prompt sent by an agent, Show prompt",
                 "draws an agent's prompt with the driven diamond and \"Sent by an agent\", the agent in secondary text");
             await Picture(window.RootElement, Path.ChangeExtension(outFile, ".prompt.agent.png"));
 

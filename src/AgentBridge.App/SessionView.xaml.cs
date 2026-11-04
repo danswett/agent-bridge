@@ -144,6 +144,21 @@ public sealed partial class SessionView : UserControl
         Motion.Settle(Receipt);
         shownMessage = Card?.UserMessage ?? "";
         shownReceipt = Card?.ReceiptText ?? "";
+        promptShownOpen = Card?.PromptOpen == true;
+        Motion.Settle(PromptRule);
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen, instant: true);
+    }
+
+    // Show prompt (§5.3, Disclosure): the chevron turns, and what opens settles 4 down into a space
+    // opened at once; closing is at once but for the chevron turning back.
+    bool promptShownOpen;
+    void Disclose()
+    {
+        if (Card is not { } c || c.PromptOpen == promptShownOpen) { return; }
+        promptShownOpen = c.PromptOpen;
+        Motion.Turn(PromptChevron, "Disclosure", promptShownOpen);
+        if (promptShownOpen) { Motion.Enter(PromptRule, "Disclosure", new System.Numerics.Vector2(0, -1)); }
+        else { Motion.Settle(PromptRule); }
     }
 
     // Your message rises 12 as it fades in; an answer's outcome fades in where it is.
@@ -267,6 +282,7 @@ public sealed partial class SessionView : UserControl
         }
         if (all || e.PropertyName is nameof(SessionCardViewModel.UserMessage) or nameof(SessionCardViewModel.ReceiptText)) { Acknowledge(); }
         if (all || e.PropertyName is nameof(SessionCardViewModel.Response) or nameof(SessionCardViewModel.HasVoice)) { ShowResponse(reset: false); }
+        if (all || e.PropertyName == nameof(SessionCardViewModel.PromptOpen)) { Disclose(); }
         if ((all || e.PropertyName == nameof(SessionCardViewModel.AsksText)) && questionView is not null && Card is { } c && questionView.Heading != c.AsksText)
         {
             // Who asks, drawn by the app in the question: not the person's typing laid out.
