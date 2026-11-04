@@ -48,7 +48,7 @@ public sealed class StandaloneHooks(
             throw new InvalidDataException($"{path} is a directory, not an ownership record; it was left alone");
         }
         var record = Read(path);
-        if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
+        if (!HasCurrentOwnerVersion(record) || (string?)record["profile"] is not { } owner || !Path.IsPathFullyQualified(owner))
         {
             throw new InvalidDataException($"{path} has unrecognized ownership; inspect it before cleanup");
         }
@@ -66,6 +66,9 @@ public sealed class StandaloneHooks(
     static JsonObject Read(string path) => JsonNode.Parse(Registrations.Decode(File.ReadAllBytes(path)),
         documentOptions: new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }) as JsonObject
         ?? throw new InvalidDataException($"{path} is not a JSON object; it was left alone");
+
+    static bool HasCurrentOwnerVersion(JsonObject record) =>
+        record["version"] is JsonValue value && value.TryGetValue<int>(out var version) && version == 1;
 
     static byte[] Bytes(JsonNode value) => Encoding.UTF8.GetBytes(value.ToJsonString(Pretty) + Environment.NewLine);
 
@@ -111,7 +114,7 @@ public sealed class StandaloneHooks(
         if (File.Exists(owner))
         {
             var record = Read(owner);
-            if ((int?)record["version"] != 1 || (string?)record["profile"] is not { } owned || !Same(owned, profile))
+            if (!HasCurrentOwnerVersion(record) || (string?)record["profile"] is not { } owned || !Same(owned, profile))
             {
                 throw new InvalidOperationException($"{owner} belongs to another installation; it was left alone");
             }
@@ -133,7 +136,7 @@ public sealed class StandaloneHooks(
         {
             var claudeOwner = Path.Combine(homes.Claude, OwnerFile);
             var record = File.Exists(claudeOwner) ? Read(claudeOwner) : null;
-            var owned = record is not null && (int?)record["version"] == 1
+            var owned = record is not null && HasCurrentOwnerVersion(record)
                 && (string?)record["profile"] is { } ownedProfile && Same(ownedProfile, profile);
             if (HasBridgeCommands(Read(claudeSettings), owned))
             {

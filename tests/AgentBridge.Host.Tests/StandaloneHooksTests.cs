@@ -169,6 +169,8 @@ public sealed class StandaloneHooksTests : IDisposable
     [InlineData("{invalid")]
     [InlineData("[]")]
     [InlineData("{\"version\":\"invalid\"}")]
+    [InlineData("{\"version\":1.5}")]
+    [InlineData("{\"version\":2147483648}")]
     [InlineData("{\"version\":1,\"profile\":\"relative-profile\"}")]
     public async Task Cleanup_preserves_invalid_ownership_and_still_removes_other_valid_owned_agents(string damaged)
     {
