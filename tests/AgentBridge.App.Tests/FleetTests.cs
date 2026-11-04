@@ -1107,6 +1107,37 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_machine_chosen_from_a_menu_after_it_was_forgotten_changes_nothing_and_the_list_keeps_its_rows()
+    {
+        await BothMachinesAsync();
+        // As More's menu held it while open: the choice, then its machine forgotten.
+        var stale = TestUi.Read(() => main.Machines.Single(m => m.Key == "remote-id"));
+        ui.Post(() => main.Remove("remote-id"));
+
+        ui.Post(() => main.SelectedMachine = stale);
+
+        TestUi.Read(() =>
+        {
+            Assert.Null(main.SelectedMachine!.Key);
+            Assert.Same(main.Machines[0], main.SelectedMachine);
+            Assert.Equal(["here"], main.Sessions.Select(c => c.Id));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task A_read_only_machines_tab_says_view_only_in_its_name_and_tooltip_and_the_reason_stays_off_it()
+    {
+        const string why = "read-only: this is a read-only comparison host (delivery.readOnly in its config); answer at the machine";
+        remoteHost.On(Ops.Hello, _ => new HelloResult(1, new MachineInfo("remote-id", "Build server", "windows", "0.1.0", ReadOnly: why, Instance: "run-7"), [Capabilities.SessionsRead]));
+        await BothMachinesAsync();
+
+        await Wait.UntilAsync(() => TestUi.Read(() => main.Machines.Single(m => m.Key == "remote-id").Label) == "Build server · 1 session · View only", "the read-only machine's tab");
+        Assert.Equal("Build server", TestUi.Read(() => main.Machines.Single(m => m.Key == "remote-id").Short));
+        Assert.Equal("Test PC (this machine) · 1 session", TestUi.Read(() => main.Machines.Single(m => m.Key == Machine.LocalKey).Label));
+    }
+
+    [Fact]
     public void A_machine_rows_button_names_follow_the_machine_being_renamed()
     {
         var row = new MachineRowViewModel("remote-id") { Name = "Connecting machine" };

@@ -24,6 +24,8 @@ public sealed partial class SessionsPage : UserControl
         InitializeComponent();
         ListColumn.Width = new GridLength(DesignLayout.List);
         Motion.Banner(FleetNote);
+        ListPane.SizeChanged += OnListPaneSized;
+        MoreMachines.SizeChanged += OnTabSized;
         SizeChanged += (_, _) => Measure();
         Loaded += (_, _) => { Measure(); SyncList(); Ready(); if (!LaneItems.IsHitTestVisible) { GuardLane(); } };
         // A lane held as the page went keeps no timer running; it is held afresh as the page comes back.
@@ -159,7 +161,7 @@ public sealed partial class SessionsPage : UserControl
                 // once: it sits in the list's header, outside the rows' panel, unless a template
                 // puts it inside, when the rows stay still too.
                 var from = -Motion.Trailing(this);
-                foreach (var part in new UIElement[] { ListHead, MachineTabsScroll, ListNotes }) { Motion.Enter(part, "Push", from); }
+                foreach (var part in new UIElement[] { ListHead, MachineBar, ListNotes }) { Motion.Enter(part, "Push", from); }
                 if (List.ItemsPanelRoot is { } panel && !Motion.Within(LaneItems, panel)) { Motion.Enter(panel, "Push", from); }
                 break;
             case PaneMotion.Inspector:
@@ -309,32 +311,51 @@ public sealed partial class SessionsPage : UserControl
 
     void OnNew(object sender, RoutedEventArgs e) => NewRequested?.Invoke();
 
-    // --- The machine tabs (§6.1): built here, as a SelectorBar takes no items source. ---
+    // --- The machine tabs (§6.1, #290): built here, as a SelectorBar takes no items source. ---
+    // One tab per machine choice, kept while the choice is; the bar holds only those that fit
+    // (MachineTabFit), in order, and More lists the rest. They never scroll sideways: a thin
+    // scrollbar under them once hid machines past the pane's edge, and was hard to hit.
+
+    readonly Dictionary<MachineChoice, SelectorBarItem> tabs = [];
+    // The choices under More, in their order, as last arranged.
+    List<MachineChoice> overflow = [];
+    // A tab's own padding and border, beside its name: read from one drawn, until then the default
+    // style's (SelectorBarItemPadding 12 each side, a 1 px border).
+    double tabChrome = 26;
+    bool chromeSeen;
+    // Measures a name as a tab draws it, off the page; and More's words in More's own style.
+    readonly TextBlock ruler = new() { TextWrapping = TextWrapping.NoWrap };
+    readonly TextBlock moreRuler = new() { TextWrapping = TextWrapping.NoWrap };
+    bool arrangeQueued;
+    // The chosen tab, when it alone would push More past the bar's edge, and the most its name may then
+    // take (MachineTabSplit.ChosenWidth less its padding); every other name takes DesignLayout.MachineTab.
+    SelectorBarItem? cutTab;
+    double cutName;
 
     void BuildMachineTabs()
     {
         if (viewModel is null) { return; }
-        syncing = true;
-        try
+        var gone = tabs.Keys.Except(viewModel.Machines).ToList();
+        foreach (var old in gone)
         {
-            MachineTabs.Items.Clear();
-            foreach (var old in named) { old.PropertyChanged -= OnChoiceNamed; }
-            named.Clear();
-            foreach (var choice in viewModel.Machines)
-            {
-                var item = new SelectorBarItem { Tag = choice };
-                NameTab(item, choice);
-                MachineTabs.Items.Add(item);
-                // A machine is named once its host says its name, after its tab is made.
-                choice.PropertyChanged += OnChoiceNamed;
-                named.Add(choice);
-            }
+            old.PropertyChanged -= OnChoiceNamed;
+            tabs.Remove(old);
         }
-        finally { syncing = false; }
-        SyncMachineTab();
+        // A machine forgotten, or kept offline past its time, while More is open: its line would
+        // choose nothing (MainViewModel refuses a choice no longer listed), so the menu goes.
+        if (gone.Count > 0 && MoreMachinesMenu.IsOpen) { MoreMachinesMenu.Hide(); }
+        foreach (var choice in viewModel.Machines.Where(c => !tabs.ContainsKey(c)))
+        {
+            var item = new SelectorBarItem { Tag = choice };
+            item.Loaded += OnTabLoaded;
+            item.SizeChanged += OnTabSized;
+            NameTab(item, choice);
+            tabs[choice] = item;
+            // A machine is named once its host says its name, after its tab is made.
+            choice.PropertyChanged += OnChoiceNamed;
+        }
+        ArrangeMachineTabs();
     }
-
-    readonly List<MachineChoice> named = [];
 
     static void NameTab(SelectorBarItem item, MachineChoice choice)
     {
@@ -343,18 +364,174 @@ public sealed partial class SessionsPage : UserControl
         ToolTipService.SetToolTip(item, choice.Label);
     }
 
+    // A long name is cut short with an ellipsis, as a row's title is, where the tab's own text would
+    // wrap onto a second line. The whole name is the tooltip and the accessible name. The tab's own
+    // text keeps its pointer-over, pressed and disabled looks, which a Child of ours would lose.
+    // The first tab drawn gives the tabs' real padding and face (ObserveTabChrome): until then they
+    // were fitted by the default style's, so they are fitted again.
+    void OnTabLoaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not SelectorBarItem item || NameOf(item) is not { } name) { return; }
+        name.TextWrapping = TextWrapping.NoWrap;
+        name.TextTrimming = TextTrimming.CharacterEllipsis;
+        name.MaxWidth = NameCap(item);
+        if (!chromeSeen) { QueueArrange(); }
+    }
+
+    double NameCap(SelectorBarItem item) => item == cutTab ? Math.Min(cutName, DesignLayout.MachineTab) : DesignLayout.MachineTab;
+
+    // The tab's name as drawn: its template's text (the self-test reads it too).
+    internal static TextBlock? NameOf(SelectorBarItem item) => Descendants(item).OfType<TextBlock>().FirstOrDefault(t => t.Name == "PART_TextVisual");
+
+    static IEnumerable<DependencyObject> Descendants(DependencyObject node)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            yield return child;
+            foreach (var inner in Descendants(child)) { yield return inner; }
+        }
+    }
+
+    internal IReadOnlyList<MachineChoice> MachinesUnderMore => overflow;
+    internal Button MoreMachinesButton => MoreMachines;
+    internal TextBlock MoreMachinesWords => MoreMachinesText;
+    // How many times the tabs have been arranged, for the self-test to see them settle.
+    internal int Arrangements { get; private set; }
+    // What the tabs were last arranged from, for the self-test to say.
+    internal string Arranged { get; private set; } = "";
+
     void OnChoiceNamed(object? sender, PropertyChangedEventArgs e)
     {
-        if (sender is MachineChoice choice && MachineTabs.Items.FirstOrDefault(i => i.Tag == choice) is { } item) { NameTab(item, choice); }
+        if (sender is not MachineChoice choice || !tabs.TryGetValue(choice, out var item)) { return; }
+        NameTab(item, choice);
+        // Its line under More, open while the machine goes offline or its sessions change, says so as
+        // its tab does; it was written only as the menu opened (#368 review).
+        foreach (var line in MoreMachinesMenu.Items.OfType<MenuFlyoutItem>().Where(i => i.Tag == choice)) { NameLine(line, choice); }
+        // A longer or shorter name may change what fits.
+        if (e.PropertyName is nameof(MachineChoice.Short) or "" or null) { QueueArrange(); }
     }
-    void SyncMachineTab()
+
+    // The machine chosen may have come from the bar's own selection change, whose items are not
+    // to be changed inside it.
+    void SyncMachineTab() => QueueArrange();
+
+    // The list pane's width, not the bar's: a bar whose tabs outgrow it is laid out at their width
+    // and clipped, so its own width would let them stay too wide. Once per tick while a divider drags.
+    void OnListPaneSized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width != e.PreviousSize.Width) { QueueArrange(); }
+    }
+
+    // A tab or More drawn at another width with the pane's unchanged: Windows' text size changed under
+    // them (Settings, Accessibility, Text size), or a name or More's count did. Their widths were fitted
+    // by the old size, so More could be clipped at the narrowest list until something else refitted.
+    // Fitting again is settled: it changes the bar only when what it measures has changed, so it raises
+    // no new size of its own.
+    void OnTabSized(object sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width != e.PreviousSize.Width) { QueueArrange(); }
+    }
+
+    // Later, so a change never lands inside the bar's own selection change; at low priority, after the
+    // layout pass, so every size that pass changed is fitted once.
+    void QueueArrange()
+    {
+        if (arrangeQueued) { return; }
+        arrangeQueued = true;
+        if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => { arrangeQueued = false; ArrangeMachineTabs(); })) { arrangeQueued = false; }
+    }
+
+    // Which tabs the bar holds, from their names' widths and the bar's own, and which it selects.
+    void ArrangeMachineTabs()
     {
         if (viewModel is null) { return; }
-        var want = MachineTabs.Items.FirstOrDefault(i => i.Tag == viewModel.SelectedMachine) ?? MachineTabs.Items.FirstOrDefault();
-        if (MachineTabs.SelectedItem == want) { return; }
+        Arrangements++;
+        var choices = viewModel.Machines.Where(tabs.ContainsKey).ToList();
+        var chosen = Math.Max(0, choices.IndexOf(viewModel.SelectedMachine!));
+        var room = ListPane.ActualWidth - ListPane.BorderThickness.Left - ListPane.BorderThickness.Right - MachineBar.Padding.Left - MachineBar.Padding.Right;
+        // No width while the pane isn't drawn (not laid out yet, or collapsed behind a pushed
+        // session): every tab stays in the bar, out of sight, until its SizeChanged arranges them.
+        // Returning instead left the bar empty or stale for whatever reads it meanwhile.
+        MachineTabSplit split;
+        if (room <= 0 || choices.Count == 0) { split = new([.. Enumerable.Range(0, choices.Count)], []); }
+        else
+        {
+            ObserveTabChrome();
+            var widths = choices.Select(c => Math.Ceiling(Math.Min(TextWidth(c.Short), DesignLayout.MachineTab) + tabChrome)).ToList();
+            // More's width with the most it could ever say, so the count changing never makes it outgrow its room.
+            SayMore(choices.Count - 1);
+            MoreMachines.Visibility = Visibility.Visible;
+            MoreMachines.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+            // Not drawn yet, its template may not be applied: its parts, then.
+            var more = Math.Max(MoreMachines.DesiredSize.Width, MoreTextWidth() + MoreMachinesContent.Spacing + MoreMachinesChevron.Width + MoreMachines.Padding.Left + MoreMachines.Padding.Right);
+            split = MachineTabFit.Split(widths, chosen, room, Math.Ceiling(more) + MachineBar.ColumnSpacing);
+            Arranged = $"room {room:0}, More {more:0}, tabs {string.Join(" ", widths)}, chrome {tabChrome:0.#}";
+        }
+        overflow = [.. split.More.Select(i => choices[i])];
+        cutTab = split.ChosenWidth is not null ? tabs[choices[chosen]] : null;
+        cutName = split.ChosenWidth is { } cut ? Math.Max(0, Math.Floor(cut - tabChrome)) : DesignLayout.MachineTab;
+        SayMore(overflow.Count);
+        MoreMachines.Visibility = overflow.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // The fewest changes to the bar's items, so a tab with keyboard focus keeps it.
+        var want = split.Shown.Select(i => tabs[choices[i]]).ToList();
         syncing = true;
-        try { MachineTabs.SelectedItem = want; }
+        try
+        {
+            foreach (var gone in MachineTabs.Items.Except(want).ToList()) { MachineTabs.Items.Remove(gone); }
+            for (var i = 0; i < want.Count; i++)
+            {
+                var at = MachineTabs.Items.IndexOf(want[i]);
+                if (at == i) { continue; }
+                if (at >= 0) { MachineTabs.Items.RemoveAt(at); }
+                MachineTabs.Items.Insert(i, want[i]);
+            }
+            var selected = choices.Count > 0 ? tabs[choices[chosen]] : null;
+            if (MachineTabs.SelectedItem != selected) { MachineTabs.SelectedItem = selected; }
+        }
         finally { syncing = false; }
+        // A tab loaded later takes its cap in OnTabLoaded; those already drawn take it here.
+        foreach (var item in want) { if (NameOf(item) is { } name) { name.MaxWidth = NameCap(item); } }
+    }
+
+    void SayMore(int count)
+    {
+        MoreMachinesText.Text = $"{count} more";
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(MoreMachines, $"{Words.Plural(count, "more machine", "more machines")}");
+    }
+
+    double TextWidth(string text)
+    {
+        ruler.Text = text;
+        ruler.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        return ruler.DesiredSize.Width;
+    }
+
+    double MoreTextWidth()
+    {
+        moreRuler.Style = MoreMachinesText.Style;
+        moreRuler.FontFamily = MoreMachinesText.FontFamily;
+        moreRuler.Text = MoreMachinesText.Text;
+        moreRuler.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+        return moreRuler.DesiredSize.Width;
+    }
+
+    void ObserveTabChrome()
+    {
+        foreach (var item in MachineTabs.Items)
+        {
+            if (item.ActualWidth > 0 && NameOf(item) is { ActualWidth: > 0 } name)
+            {
+                tabChrome = item.ActualWidth - name.ActualWidth;
+                chromeSeen = true;
+                // The face the tab draws its name in, from its style: the ruler has none of its own.
+                ruler.FontFamily = name.FontFamily;
+                ruler.FontSize = name.FontSize;
+                ruler.FontWeight = name.FontWeight;
+                return;
+            }
+        }
     }
 
     void OnMachineTab(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
@@ -363,6 +540,35 @@ public sealed partial class SessionsPage : UserControl
         viewModel.SelectedMachine = choice;
         // A tab chosen: its rows fade in, without sliding (ui.md §5.3, Tab switch).
         if (ready && List.ItemsPanelRoot is { } panel) { Motion.Enter(panel, "Tab"); }
+    }
+
+    // More: the machines that don't fit, each with its state, as its tab's tooltip says it.
+    void OnMoreMachinesOpening(object sender, object e)
+    {
+        MoreMachinesMenu.Items.Clear();
+        foreach (var choice in overflow)
+        {
+            var item = new MenuFlyoutItem { Tag = choice };
+            NameLine(item, choice);
+            item.Click += (_, _) => ChooseFromMore(choice);
+            MoreMachinesMenu.Items.Add(item);
+        }
+    }
+
+    static void NameLine(MenuFlyoutItem line, MachineChoice choice)
+    {
+        line.Text = choice.Label;
+        ToolTipService.SetToolTip(line, choice.Label);
+    }
+
+    // A machine chosen under More is a tab chosen like any other: its rows fade in, without sliding
+    // (ui.md §5.3, Tab switch), as OnMachineTab has them. The bar's own selection follows later
+    // (SyncMachineTab), while syncing, so OnMachineTab doesn't see it.
+    void ChooseFromMore(MachineChoice choice)
+    {
+        if (viewModel is null || viewModel.SelectedMachine == choice) { return; }
+        viewModel.SelectedMachine = choice;
+        if (viewModel.SelectedMachine == choice && ready && List.ItemsPanelRoot is { } panel) { Motion.Enter(panel, "Tab"); }
     }
 
     // --- The sort menu: Your order, Most recent, Machine (#164), the one in force checked. ---

@@ -10,14 +10,17 @@ public sealed class MachineChoice : Observable
 {
     string label;
 
-    public MachineChoice(string? key, string label)
+    public MachineChoice(string? key, string label, string? shortLabel = null)
     {
         Key = key;
         this.label = label;
+        this.shortLabel = shortLabel ?? "";
     }
 
     // Null for every machine.
     public string? Key { get; }
+    // The name in full with the machine's state ("Build server · 3 sessions · View only"): a tab's
+    // tooltip and accessible name, and its line under More (#290).
     public string Label { get => label; internal set => Set(ref label, value); }
     // The machine tabs' words (ui.md §6.1): All, or the machine's name.
     public string Short { get => shortLabel; internal set => Set(ref shortLabel, value); }
@@ -78,7 +81,9 @@ public sealed partial class MainViewModel : Observable
         get => selected;
         set
         {
-            if (value is null || !Set(ref selected, value)) { return; }
+            // A choice no longer listed (its machine forgotten, or kept offline past its time,
+            // while a menu still held it) would filter the list to nothing under All's tab.
+            if (value is null || !Machines.Contains(value) || !Set(ref selected, value)) { return; }
             Refilter();
             // The session open stays open only while its row is listed.
             if (open is not null && !Visible(open)) { Selected = null; }
@@ -349,7 +354,9 @@ public sealed partial class MainViewModel : Observable
             choice.Short = m.Name;
             var count = byId.Values.Count(c => owner[c] == m);
             var state = m.Offline ? "offline" : m.Host.State == LinkState.Connected ? Words.Plural(count, "session", "sessions") : "connecting…";
-            choice.Label = $"{m.Name}{(m.IsLocal ? " (this machine)" : "")} · {state}";
+            // As its row on Machines says it (§6.6): the tab is the only place the list names it.
+            var viewOnly = !m.Offline && ViewOnlyWhy(m) is not null ? " · View only" : "";
+            choice.Label = $"{m.Name}{(m.IsLocal ? " (this machine)" : "")} · {state}{viewOnly}";
         }
         SyncMachineRows();
     }

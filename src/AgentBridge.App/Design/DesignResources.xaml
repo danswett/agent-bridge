@@ -169,6 +169,7 @@
     <x:Double x:Key="AbLayoutDivider">8</x:Double>
     <x:Double x:Key="AbLayoutDividerLine">3</x:Double>
     <x:Double x:Key="AbLayoutReadingMax">712</x:Double>
+    <x:Double x:Key="AbLayoutMachineTab">128</x:Double>
 
     <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
     <Style x:Key="AbTypeTitle" TargetType="TextBlock">
