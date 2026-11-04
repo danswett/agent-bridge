@@ -64,6 +64,7 @@ no_test_paths:
   - .gitignore
   - LICENSE
   - tools/design-mockups/**     # renders reference images only; nothing ships or tests from it
+  - ops/**                      # SRE plan, runbooks, KQL and read-only operator probes; nothing ships from it
   - .github/dependabot.yml      # schedules update PRs; each PR's own changes select its tests
 
 suites:

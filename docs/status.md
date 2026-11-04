@@ -17,6 +17,7 @@ implementation and machine snapshots below retain their stated dates.*
 | [rehearsal-2026-10.md](rehearsal-2026-10.md) | The rehearsal's final report and verdict |
 | [migration.md](migration.md) | `migrate` and `rollback`: what moves and what doesn't |
 | [/quality](../quality/) | The test plan: rings from inner loop to release, and the catalog of every suite |
+| [/ops](../ops/README.md) | Running the live service: the SRE plan, SLOs, alerts, runbooks and incident process (#568) |
 | [/AGENTS.md](../AGENTS.md) | How to work in this repository: rules, merge procedure, releases, relay deploys, guards |
 
 ## 1. Goal
