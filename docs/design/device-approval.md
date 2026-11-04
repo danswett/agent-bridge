@@ -185,12 +185,19 @@ written without a fraction, exponent or sign. Ids are exactly 32 lowercase hex c
 binary fields are base64url without padding that decode to exactly the stated lengths. An
 entry's **size** is measured over its fixed content, never over the wrapper a path sends it in:
 the body bytes, the decoded signatures, and each assertion's decoded authenticator data, client
-data and signature. A `remove` is at most **48 KiB** and every other entry at most **8 KiB**, and a
+data and signature. A `remove` is at most **46 KiB** and every other entry at most **8 KiB**, and a
 larger one is invalid on every path: relay append, gossip, enrollment and `roster.submit` (§7.1).
 Otherwise a signer could pad an entry with legal JSON whitespace past what a submission carries
 while it still fits a channel frame, and an entry every host accepts by gossip could not be
-delivered by `roster.submit` as part of a removal's proof. A `remove` keeping 512 adds, with both
-signers' assertions, is under 40 KiB; an `add` with the longest WebAuthn credential id and name
+delivered by `roster.submit` as part of a removal's proof. 46 KiB is what fits one channel frame
+(65,519 bytes of plaintext) once the wrapper base64url-encodes it: about 62.8 KB with the
+envelope. So every valid entry travels in one frame on every path, provided the wrapper is
+**canonical**: its members in the order of the table above, with no insignificant whitespace.
+Every sender, and every forwarder (the relay, a gossiping device, an approver at enrollment),
+re-emits the wrapper canonically rather than passing on what it received. Each assertion's
+signature must be minimal DER, as `sig` is (high-S is accepted there, since authenticators produce
+it), so that nobody but the signer can enlarge an entry. A `remove` keeping 512 adds, with both
+signers' assertions, is about 25 KiB; an `add` with the longest WebAuthn credential id and name
 is under 6 KiB.
 
 **Entry hash and identity.** The entry hash is `SHA-256(bodyBytes)` over the decoded bytes,
@@ -280,7 +287,8 @@ history state. It is valid only if:
     unlike a removal it would otherwise pass silently. So a subordination is **announced like a
     conflict**, naming both approvers, as "*H* replaced the enrollment of *X* that *A* approved".
     The device itself shows "Replaced by *H*" and keeps its keys and roster: it was not removed
-    (§6.5 acts only on a `remove` entry), and removing H restores it.
+    (§6.5 acts only on a `remove` entry), and removing H restores it, unless that removal kept
+    the copy (decision 9's kept-copy residual; below).
 
   What does bound both is structural:
   * H can never copy a device **senior** to it. H's copy must be signed in a state where H is
@@ -1349,7 +1357,7 @@ follows it.
 ### 6.1 The person
 
 A person's device that can approve has a **Devices** page listing the roster: name, kind,
-platform, 16 hex characters of the id in groups of four, when and by whom each device was added,
+platform, 16 hex characters of the id in groups of four, by whom each device was added and when this device first saw it (§6.1),
 whether it is on probation, and whether it is online now or when it was last seen. It also shows
 the genesis fingerprint. **Remove** takes two presses (the first arms it for 5 seconds, "Press
 again to remove", as Forget does), then the presence check. It offers the cascade (§3.4), signs
@@ -1566,10 +1574,11 @@ submission is sent in **parts**, each one frame, carrying a submission id, its i
 total. The host stages the parts and checks the submission only when all have arrived, as one
 unit, so evidence still arrives together with its removal; it keeps at most one staged submission
 per key, discards one left incomplete for 60 seconds, and refuses one over **16 MiB** of entry
-sizes in total (§3.2). That holds any removal proof whose evidence is not mostly removals: 1,281
-entries of 8 KiB is about 10 MiB, plus the removal itself. Evidence is signed by the target and
-its subtree, so a hostile target can pad over-budget removals of its own to 48 KiB each and push
-a proof past 16 MiB; such a removal is then refused at that host through `roster.submit`, shown as
+sizes in total (§3.2). That holds any removal proof whose evidence holds fewer than about 160
+removals padded to their limit: 1,281 entries of 8 KiB is about 10 MiB, plus the removal itself.
+Evidence is signed by the target and its subtree, so a hostile target can pad about 160
+over-budget removals of its own to 46 KiB each and push a proof past 16 MiB; such a removal is
+then refused at that host through `roster.submit`, shown as
 not confirmed there, and admitted by `devices sync` at the machine, which decision 9 states with
 the other evidence refusals. Every single entry a host could accept by any path fits. It is bounded **per key**: one submission a minute from each key, so a flood from the
 relay's own keys cannot crowd out an honest peer's, and at most 256 entries per submission besides
@@ -1842,7 +1851,7 @@ So is one whose active add is now a different one: a hostile senior that displac
 with a copy of its key (§3.3) keeps the id active under its own signing key, and same-user code
 holding the device's DH key could otherwise answer folder trust under the copy's key, without the
 original device's presence check. The person allows it again at the machine. Settings shows
-each device's roster name, kind, 16 characters of its id, and when and by whom it was added, which
+each device's roster name, kind, 16 characters of its id, by whom it was added and when this machine first saw it (never the signer's `at`), which
 closes #157 item 4. Items 1 and 2 of #157 (tightening only after a restart, terminal writes past the
 lock) are unaffected and still open.
 
@@ -2059,11 +2068,14 @@ Each slice adds its own. Together they cover:
     target's subtree that it does not keep; a self-removal with a non-empty `keep` or a
     `cosigner`; a cosigned removal whose signers fail the
     cosign test, even for a target junior to `by` (there are no cosigned removals of rank 1); a
-    `targets` or `voidGrants` member (not part of v1); a removal over 48 KiB or any other entry
+    `targets` or `voidGrants` member (not part of v1); a removal over 46 KiB or any other entry
     over 8 KiB of fixed content, such as one padded with JSON whitespace, at the relay, by gossip,
-    at enrollment and through `roster.submit` alike: refused. An entry within the limits sent in
-    a wrapper padded with whitespace is accepted on every path, since size is measured over fixed
-    content.
+    at enrollment and through `roster.submit` alike: refused. A `remove` of exactly 46 KiB in its
+    canonical wrapper fits one channel frame, and travels in one `roster.submit` part, one gossip
+    message and one enrollment frame. An entry within the limits that arrives in a wrapper padded
+    with whitespace, where it fits a frame, is accepted, since size is measured over fixed content,
+    and whoever forwards it re-emits the wrapper canonically. An assertion whose signature is not
+    minimal DER, as a relay could make one by re-encoding an honest entry: refused.
 * Caps and budgets: a roster at its 4,096-entry limit (filled with renames by one device) still
   accepts a removal of that device. The ninth rename of one device, a signer's 65th add, merge or
   removal, and the 513th add of a generation are refused, counted across every branch and
@@ -2197,7 +2209,8 @@ Each slice adds its own. Together they cover:
   unchanged either way.
 * **An outside add wins against a kept add.** G approves C2, S and then P; P approves C1. C1 and
   C2 remove P keeping C1 (R). Before the person's removal of S, S signs a copy of C1's key on a
-  parent after S's add and before P's, so S is senior to C1 and P is not senior to the copy. The
+  parent after S's add and before P's, so S is senior to C1 and P is not senior to the copy, and
+  adopts it with a merge of its own, since the copy is quarantined at first. The
   copy may displace C1's add; C1's add, kept by R, may not displace the copy, which was made
   outside P's subtree (and under the plain rule could not either, P not being senior to it). So
   the copy wins and C1 is active under S's keys, announced as a displacement naming S, which S
@@ -2422,10 +2435,10 @@ Each slice adds its own. Together they cover:
   is used, and refused as a whole with one entry more, or at a host that has already admitted
   any evidence. That submission spans many frames and is accepted only once its last part
   arrives; one with a part missing for 60 seconds, over 16 MiB of entry sizes, or holding a
-  49 KiB removal or a 9 KiB add is refused as a whole, and nothing in it is applied. With
+  47 KiB removal or a 9 KiB add is refused as a whole, and nothing in it is applied. With
   evidence that is all renames and adds at the 8 KiB limit, the 1,281-entry proof is about
-  10 MiB and accepted. With evidence that is mostly the target's subtree's over-budget removals,
-  each padded to 48 KiB, the proof passes 16 MiB: it is refused through `roster.submit`, the host
+  10 MiB and accepted. With 162 of its evidence entries the target's subtree's over-budget
+  removals, each padded to 46 KiB, the proof passes 16 MiB: it is refused through `roster.submit`, the host
   shows as not confirming the removal, and `devices sync` at the machine admits it. A flood of submissions from
   many other keys does not stop one holding a valid removal from being checked first.
 * An approver whose head moved before its append asks the person again, and never reuses the old
