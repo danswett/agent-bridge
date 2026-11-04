@@ -67,7 +67,7 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(reset, limited.RetryAt);
-        Assert.Equal($"GitHub is limiting how often this network can check for updates. Agent Bridge will check again after {reset:t}.", limited.Message);
+        Assert.Equal("GitHub is limiting how often this network can check for updates. Agent Bridge will check again after 12:20 PT.", limited.Message);
 
         // Clicks before the reset are answered at once, with the same words, and ask nothing.
         time.Advance(TimeSpan.FromMinutes(19));
@@ -93,7 +93,8 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         var limited = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.True(limited.Limited);
         Assert.Equal(time.GetUtcNow() + TimeSpan.FromMinutes(5), limited.RetryAt);
-        Assert.EndsWith($"The last successful check was at {Now:t}.", limited.Message);
+        // Pacific, named, whatever the machine's zone: 20:00 UTC on 4 November 2026 is 12:00 PST.
+        Assert.EndsWith("The last successful check was at 12:00 PT.", limited.Message);
 
         time.Advance(TimeSpan.FromMinutes(4));
         await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
@@ -122,6 +123,23 @@ public sealed class ReleaseDiscoveryTests : IDisposable
         time.Advance(ReleaseDiscovery.FirstBackoff);
         var second = await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
         Assert.Equal(time.GetUtcNow() + 2 * ReleaseDiscovery.FirstBackoff, second.RetryAt);
+        Assert.Equal(2, github.Requests.Count);
+    }
+
+    [Fact]
+    public async Task A_backoff_that_could_not_be_saved_still_holds_this_processs_checks_rather_than_the_older_file()
+    {
+        using var discovery = Discovery();
+        github.Answer = _ => Ok(Releases, "\"v1\"");
+        await discovery.ReleasesAsync(Url, CancellationToken.None);
+        time.Advance(ReleaseDiscovery.Interval);
+        // The file stays readable but can no longer be replaced: where its new copy goes is taken.
+        Directory.CreateDirectory(Path.Combine(folder, ReleaseDiscovery.FileName + ".tmp"));
+        github.Answer = _ => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Headers = { RetryAfter = new(TimeSpan.FromMinutes(30)) } };
+
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+        await Assert.ThrowsAsync<ReleaseDiscoveryException>(() => discovery.ReleasesAsync(Url, CancellationToken.None));
+
         Assert.Equal(2, github.Requests.Count);
     }
 

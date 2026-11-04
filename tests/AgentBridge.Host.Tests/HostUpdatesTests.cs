@@ -3,7 +3,9 @@ using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
 using AgentBridge.Host.Core.Updates;
 using Microsoft.Extensions.Time.Testing;
+using Velopack;
 using Velopack.Locators;
+using Velopack.Sources;
 using Xunit;
 
 // The host's own updater, as far as it can be tried without an installed package.
@@ -138,6 +140,52 @@ public sealed class HostUpdatesTests : IDisposable
         Assert.Null(await updates.CheckAsync(CancellationToken.None));
         Assert.Equal(2, github.Requests);
         Assert.Equal("https://api.github.com/repos/danswett/agent-bridge/releases?per_page=10&page=1", github.Url);
+    }
+
+    // GitHub's own shape, as the API lists releases: the adapter keeps each release's assets, so
+    // Velopack finds the channel's feed among them, and leaves pre-releases out when they are off.
+    [Theory]
+    [InlineData(true, "0.1.602")]
+    [InlineData(false, "0.1.601")]
+    public async Task A_release_GitHub_lists_is_offered_from_its_channel_feed_and_a_pre_release_only_when_they_are_on(bool prereleases, string offered)
+    {
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", "0.1.600", packages, null, null, null, "win");
+        static string Download(string version, string file) => $"https://github.com/danswett/agent-bridge/releases/download/v{version}/{file}";
+        static string Release(string version, bool pre, string published) => $$"""
+            {"name":"Agent Bridge {{version}}","prerelease":{{(pre ? "true" : "false")}},"published_at":"{{published}}","assets":[
+              {"name":"releases.win.json","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/1","browser_download_url":"{{Download(version, "releases.win.json")}}","content_type":"application/json"},
+              {"name":"AgentBridgeApp-{{version}}-full.nupkg","url":"https://api.github.com/repos/danswett/agent-bridge/releases/assets/2","browser_download_url":"{{Download(version, $"AgentBridgeApp-{version}-full.nupkg")}}","content_type":"application/octet-stream"}]}
+            """;
+        static string Feed(string version) =>
+            $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"AgentBridgeApp-{{version}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
+        var github = new FakeGitHub();
+        github.Answer = () => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"[{Release("0.1.602", true, "2026-11-04T20:00:00Z")},{Release("0.1.601", false, "2026-11-04T19:00:00Z")}]"),
+        };
+        using var discovery = new ReleaseDiscovery(Path.Combine(root, "app"), github, random: () => 0);
+        var feeds = new FakeDownloads(new()
+        {
+            [Download("0.1.602", "releases.win.json")] = Feed("0.1.602"),
+            [Download("0.1.601", "releases.win.json")] = Feed("0.1.601"),
+        });
+        var source = new DiscoveredGithubSource(VelopackHostUpdates.Repository, prereleases, discovery, feeds);
+
+        var found = await new UpdateManager(source, null, copy).CheckForUpdatesAsync();
+
+        Assert.Equal(offered, found?.TargetFullRelease.Version.ToString());
+        Assert.Equal(1, github.Requests);
+    }
+
+    sealed class FakeDownloads(Dictionary<string, string> files) : IFileDownloader
+    {
+        public Task<byte[]> DownloadBytes(string url, IDictionary<string, string>? headers = null, double timeout = 30) =>
+            Task.FromResult(System.Text.Encoding.UTF8.GetBytes(files[url]));
+        public Task<string> DownloadString(string url, IDictionary<string, string>? headers = null, double timeout = 30) =>
+            Task.FromResult(files[url]);
+        public Task DownloadFile(string url, string targetFile, Action<int> progress, IDictionary<string, string>? headers = null, double timeout = 30, CancellationToken cancelToken = default) =>
+            throw new InvalidOperationException("nothing is downloaded here");
     }
 
     sealed class FakeGitHub : HttpMessageHandler

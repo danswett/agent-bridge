@@ -277,7 +277,8 @@ into one folder with one version. An app update is a host update, so they never 
   `X-RateLimit-Reset` once `X-RateLimit-Remaining` is 0 (at least a minute and at most an hour,
   plus up to a minute of jitter). Any other failure (no network, a 5xx, an answer that isn't a
   list) is backed off from a minute, doubling up to an hour. Until then a check fails at once, with
-  no request, saying when it will next try and when the last good check was. Settings shows that
+  no request, saying when it will next try and when the last good check was (in Pacific, marked
+  PT, since the words also reach other devices and Home Assistant). Settings shows that
   as the update status rather than as an error, and a failure is never reported as "up to date".
   No static feed is published (no Pages copy of `releases.<channel>.json`, and every release is a
   pre-release, so `releases/latest/download` finds nothing), so the API list stays the source.

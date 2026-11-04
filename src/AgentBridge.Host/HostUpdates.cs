@@ -164,7 +164,9 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
 // (#530), rather than a request to the API of its own at every check. The rest is Velopack's:
 // each release's releases.<channel>.json, and the packages, from their browser download URLs,
 // which the API's limit does not count. The app has the same (AgentBridge.App's Platform.cs).
-sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery) : GithubSource(repository, null, prereleases)
+// downloader: Velopack's own unless a test hands in one that serves the releases' feeds.
+sealed class DiscoveredGithubSource(string repository, bool prereleases, ReleaseDiscovery discovery, IFileDownloader? downloader = null)
+    : GithubSource(repository, null, prereleases, downloader)
 {
     protected override async Task<GithubRelease[]> GetReleases(bool includePrereleases)
     {

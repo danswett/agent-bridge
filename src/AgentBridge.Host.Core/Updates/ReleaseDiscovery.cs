@@ -212,11 +212,25 @@ public sealed class ReleaseDiscovery : IDisposable
         return new ReleaseDiscoveryException($"{what} {Product.Name} will check again after {When(at)}.{last}", at, state.Problem == Problems.Limited);
     }
 
+    // In Pacific, as everything this project shows, and named so: the words also reach the
+    // account's other devices and Home Assistant, which may be in another zone.
     string When(DateTimeOffset at)
     {
-        var local = TimeZoneInfo.ConvertTime(at, time.LocalTimeZone);
-        var today = TimeZoneInfo.ConvertTime(time.GetUtcNow(), time.LocalTimeZone).Date;
-        return local.ToString(local.Date == today ? "t" : "g", CultureInfo.CurrentCulture);
+        var pacific = TimeZoneInfo.ConvertTime(at, Pacific);
+        var today = TimeZoneInfo.ConvertTime(time.GetUtcNow(), Pacific).Date;
+        return pacific.ToString(pacific.Date == today ? "HH:mm" : "MMM d HH:mm", CultureInfo.InvariantCulture) + " PT";
+    }
+
+    static readonly TimeZoneInfo Pacific = FindPacific();
+
+    static TimeZoneInfo FindPacific()
+    {
+        foreach (var id in new[] { "America/Los_Angeles", "Pacific Standard Time" })
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id); }
+            catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException) { }
+        }
+        return TimeZoneInfo.CreateCustomTimeZone("PT", TimeSpan.FromHours(-8), "Pacific", "Pacific");
     }
 
     // The processes take turns through a file none of them shares while it holds it. A folder
@@ -238,19 +252,22 @@ public sealed class ReleaseDiscovery : IDisposable
         }
     }
 
+    // The newer of the file and what this process last wrote: a write that failed (a full disk, a
+    // file another process holds) must not have its backoff undone by the older file next time.
     State Read()
     {
         try
         {
             if (!File.Exists(StatePath)) { return memory; }
-            return memory = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
+            var disk = JsonSerializer.Deserialize(File.ReadAllText(StatePath), ReleaseDiscoveryJson.Default.State) ?? new State();
+            return memory = memory.Saved > disk.Saved ? memory : disk;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return memory; }
     }
 
     void Write(State state)
     {
-        memory = state;
+        memory = state = state with { Saved = time.GetUtcNow() };
         try
         {
             var temp = StatePath + ".tmp";
@@ -284,6 +301,7 @@ public sealed class ReleaseDiscovery : IDisposable
         public DateTimeOffset? NotBefore { get; init; }
         public int Failures { get; init; }
         public string? Problem { get; init; }
+        public DateTimeOffset? Saved { get; init; }
     }
 }
 
