@@ -374,7 +374,7 @@ public sealed class AnswerService : ISessionAnswerer
             if (state.Request is not { } pending) { return Stale("Copilot is no longer asking for that permission"); }
             if (!string.Equals(pending.Digest, digest, StringComparison.Ordinal)) { return Stale("Copilot's permission prompt reads differently from what was shown"); }
             if (pending.AtMachine is { } why) { return Refused($"{why} can only be answered at the machine"); }
-            if (state.PendingPermissions + state.PendingAsks > 1)
+            if (state.PendingAsks > 0)
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
             }
@@ -383,17 +383,24 @@ public sealed class AnswerService : ISessionAnswerer
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Failed(AnswerOutcome.Refused, $"could not read the screen of {Short(session.Id)} for permission {Short(requestId)}", e); }
             if (screen.Rows is not { } rows) { return Refused(DeliveryReasons.Of(screen.Problem ?? "the host could not read the session's screen; answer at the machine")); }
-            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes);
+            var (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Waiting(state));
             if (choice is null) { return Refused($"{problem}; answer at the machine"); }
             // Again after the screen was read: what is on it is this request only if this
-            // request was still the one waiting once it had been read.
+            // request was still the one waiting once it had been read, and no request that
+            // arrived meanwhile could be the one drawn.
             var after = CopilotPermissionTranscript.Before(transcript, requestId);
             if (!after.Readable) { return Refused("the session's transcript could not be read, so nothing is typed; answer at the machine"); }
             if (after.Request is not { } still || !string.Equals(still.Digest, digest, StringComparison.Ordinal)) { return Stale("Copilot is no longer asking for that permission"); }
-            if (after.PendingPermissions + after.PendingAsks > 1)
+            if (after.PendingAsks > 0)
             {
                 return Refused("Copilot has more than one prompt waiting, and the screen shows only one of them; answer at the machine");
             }
+            (choice, problem) = CopilotPermissionScreen.Locate(rows, approve, pending.Probes, Waiting(after));
+            if (choice is null) { return Refused($"{problem}; answer at the machine"); }
+            // The screen showing this request is what lets a key go; the order asked is only
+            // how the card chose it. One asked after another still waiting is never typed into,
+            // whatever the screen shows, since nothing says how Copilot orders them.
+            if (!after.First) { return Refused("Copilot is asking for an earlier permission first; answer at the machine"); }
             keys = new KeyPlan([new KeySend(choice.Key, false, 0, 0, choice.Hold)]);
             from = after.ScannedTo;
 
@@ -407,6 +414,24 @@ public sealed class AnswerService : ISessionAnswerer
         try { return await ConfirmPermissionAsync(transcript, requestId, from, approve, timeline); }
         catch (Exception e) { return Failed(AnswerOutcome.Unconfirmed, $"the {decision} typed into {Short(session.Id)} could not be checked", e); }
     }
+
+    // The other requests waiting, each named by its kind and request id, never by what the
+    // agent wrote, since a refusal is shown as plain words; one that cannot be read has no
+    // probes, so it can never be ruled out.
+    static List<(string Name, IReadOnlyList<string> Probes)> Waiting(CopilotPermissionState state) =>
+        [.. state.Others.Select(o => ($"{KindName(o.Prompt?.Kind)}, request {Short(o.RequestId)}", o.Prompt?.Probes ?? []))];
+
+    static string KindName(string? kind) => kind switch
+    {
+        "commands" => "shell",
+        "write" => "edit",
+        "read" => "read",
+        "path" => "path access",
+        "url" => "URL",
+        "mcp" => "MCP tool",
+        "custom-tool" => "tool",
+        _ => "permission",
+    };
 
     async Task<AnswerResult> ConfirmPermissionAsync(string transcript, string requestId, long from, bool approve, DeliveryTimeline timeline)
     {

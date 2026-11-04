@@ -6,8 +6,14 @@ namespace AgentBridge.Host.Delivery.Copilot;
 // What a session's transcript says just before an approval is typed: whether it could be read,
 // the request asked about if it is still waiting (null once completed, or if it never was),
 // how many permission requests and ask_user calls are waiting in all, and the line boundary the
-// answer is looked for after.
-public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo);
+// answer is looked for after. Others: every other permission request waiting, in the order
+// asked, each described (null where it cannot be read), so the screen can be checked for
+// them too. First: the request asked about is the earliest of those waiting (#690).
+public sealed record CopilotPermissionState(bool Readable, CopilotPermissionPrompt? Request, int PendingPermissions, int PendingAsks, long ScannedTo)
+{
+    public IReadOnlyList<(string RequestId, CopilotPermissionPrompt? Prompt)> Others { get; init; } = [];
+    public bool First { get; init; }
+}
 
 // What the transcript recorded for one permission request after a point: the result kind of
 // its permission.completed, whether that carried feedback, whether the session's own turn was
@@ -23,14 +29,19 @@ public static class CopilotPermissionTranscript
     // typed now would answer.
     public static CopilotPermissionState Before(string path, string requestId)
     {
-        var permissions = new Dictionary<string, CopilotPermissionPrompt?>(StringComparer.Ordinal);
+        // In the order asked: a Dictionary's enumeration order is not kept once one is removed.
+        var permissions = new List<(string Id, CopilotPermissionPrompt? Prompt)>();
         var asks = new Dictionary<string, string?>(StringComparer.Ordinal);
         if (Jsonl.Lines(path, 0, skipFirst: false, Line) is not { } to)
         {
             return new CopilotPermissionState(false, null, 0, 0, 0);
         }
-        permissions.TryGetValue(requestId, out var request);
-        return new CopilotPermissionState(true, request, permissions.Count, asks.Count, to);
+        var at = permissions.FindIndex(p => p.Id == requestId);
+        return new CopilotPermissionState(true, at < 0 ? null : permissions[at].Prompt, permissions.Count, asks.Count, to)
+        {
+            Others = [.. permissions.Where(p => p.Id != requestId)],
+            First = at == 0,
+        };
 
         void Line(ReadOnlySpan<byte> bytes, long start)
         {
@@ -52,11 +63,12 @@ public static class CopilotPermissionTranscript
                         asks.Remove(id);
                         break;
                     case "permission.requested" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        // Only the request asked about is described; the others are counted.
-                        permissions[id] = id == requestId ? CopilotPermission.Describe(data) : null;
+                        // Every one is described: the screen is checked for the others too.
+                        permissions.RemoveAll(p => p.Id == id);
+                        permissions.Add((id, CopilotPermission.Describe(data)));
                         break;
                     case "permission.completed" when CopilotPrompts.Str(data, "requestId") is { } id:
-                        permissions.Remove(id);
+                        permissions.RemoveAll(p => p.Id == id);
                         break;
                     case "abort" or "session.shutdown" or "session.resume" when e.AgentId is null:
                         asks.Clear();
@@ -134,8 +146,9 @@ public static class CopilotPermissionScreen
     // the list (the No row's message box opened at the machine, say) stops it.
     public sealed record Choice(string Key, int Row, IReadOnlyList<ScreenRow> Hold);
 
-    // probes: CopilotPermissionPrompt.Probes, what this prompt is about.
-    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve, IReadOnlyList<string> probes)
+    // probes: CopilotPermissionPrompt.Probes, what this prompt is about. others: every other
+    // permission request waiting, by a name for a person and its probes.
+    public static (Choice? Choice, string? Problem) Locate(IReadOnlyList<string> rows, bool approve, IReadOnlyList<string> probes, IReadOnlyList<(string Name, IReadOnlyList<string> Probes)>? others = null)
     {
         var numbered = new List<(int Row, int Number, string Label, bool Selected)>();
         for (var i = 0; i < rows.Count; i++)
@@ -161,13 +174,17 @@ public static class CopilotPermissionScreen
         // show one of the probes, whitespace aside, since a long command wraps. Held from
         // there down, so another prompt with the same options in its place (the next path
         // request, say) stops the key.
-        var wanted = probes.Select(Squeeze).Where(s => s.Length > 0).ToList();
-        var top = -1;
-        var above = "";
-        for (var i = block[0].Row - 1; i >= Math.Max(0, block[0].Row - 30) && top < 0; i--)
+        var top = Top(rows, block[0].Row, probes);
+        // Copilot can have several requests waiting and draws one of them (#690). Being the
+        // earliest asked is not proof of which: the screen is. Another waiting request whose
+        // subject is drawn as near the options as this one's, or nearer, may be the one shown,
+        // or cannot be told from it; one that cannot be looked for at all cannot be ruled out.
+        foreach (var (name, other) in others ?? [])
         {
-            above = Squeeze(Clean(rows[i]).Text) + above;
-            if (wanted.Any(w => above.Contains(w, StringComparison.Ordinal))) { top = i; }
+            if (other.Count == 0) { return (null, $"another waiting permission request ({name}) cannot be checked against the session's screen"); }
+            var theirs = Top(rows, block[0].Row, other);
+            if (theirs >= 0 && theirs > top) { return (null, $"the machine is showing a different permission ({name})"); }
+            if (theirs >= 0 && theirs == top) { return (null, $"another waiting permission ({name}) reads the same on the session's screen, so it cannot say which is shown"); }
         }
         if (top < 0) { return (null, "the session's screen does not show what this permission prompt is for"); }
         var hold = Enumerable.Range(top, end - top + 1).Select(r => new ScreenRow(r, rows[r])).ToList();
@@ -188,6 +205,21 @@ public static class CopilotPermissionScreen
         if (yes.Count != 1) { return (null, "the prompt on the session's screen has no single plain Yes to approve once"); }
         var chosen = yes[0];
         return (new Choice(chosen.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), chosen.Row, hold), null);
+    }
+
+    // The nearest row above the options from which the rows down to them show one of the
+    // probes, within 30 rows; -1 if none does.
+    static int Top(IReadOnlyList<string> rows, int options, IReadOnlyList<string> probes)
+    {
+        var wanted = probes.Select(Squeeze).Where(s => s.Length > 0).ToList();
+        if (wanted.Count == 0) { return -1; }
+        var above = "";
+        for (var i = options - 1; i >= Math.Max(0, options - 30); i--)
+        {
+            above = Squeeze(Clean(rows[i]).Text) + above;
+            if (wanted.Any(w => above.Contains(w, StringComparison.Ordinal))) { return i; }
+        }
+        return -1;
     }
 
     static (int Number, string Label, bool Selected)? Item(string row)

@@ -196,6 +196,23 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Equal("Send", q.SendLabel);
     }
 
+    // Copilot asks a permission for each of a batch of parallel tool calls and shows them one at a
+    // time (#690): the card says how many wait, keeps that count current, and the next comes as
+    // its own question.
+    [Fact]
+    public void Permissions_asked_together_are_shown_one_at_a_time_saying_how_many_wait()
+    {
+        var card = new SessionCardViewModel(Make.Session(question: Make.Approval("r1#d") with { Waiting = 3 }), Context());
+        Assert.Equal("1 of 3 permissions waiting", card.Question!.Queue);
+
+        card.Update(Make.Session(question: Make.Approval("r1#d") with { Waiting = 4 }));
+        Assert.Equal("1 of 4 permissions waiting", card.Question!.Queue);
+
+        card.Update(Make.Session(question: Make.Approval("r2#e")));
+        Assert.Equal("r2#e", card.Question!.Id);
+        Assert.Null(card.Question.Queue);
+    }
+
     [Theory]
     [InlineData(true, false, "approvalOff")]
     [InlineData(true, true, "atMachine")]

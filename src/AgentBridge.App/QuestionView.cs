@@ -86,6 +86,12 @@ public sealed class QuestionView : StackPanel
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetHeadingLevel(headFocus, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level3);
         headFocus.LostFocus += (_, _) => headFocus.IsTabStop = false;
         Children.Add(headFocus);
+        if (vm.Queue is { } queue)
+        {
+            var waiting = new TextBlock { Text = queue, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsText") };
+            AutomationId(waiting, "PermissionsWaiting");
+            Children.Add(waiting);
+        }
         // What its escapes stand for, above its text (ui.md §6.4): an escape can be read past while its
         // character still acts.
         foreach (var note in vm.Notes)

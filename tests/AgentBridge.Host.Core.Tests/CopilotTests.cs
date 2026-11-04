@@ -382,6 +382,30 @@ public class CopilotTests
     }
 
     [Fact]
+    public async Task Permissions_asked_together_are_listed_one_at_a_time_earliest_first_each_saying_how_many_wait_and_each_under_its_own_id()
+    {
+        await using var s = new Session_();
+        var read = Copilot.Prompts["read"];
+        string[] asked =
+        [
+            Copilot.User("go", 1),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 2),
+            Copilot.Permission("r2", "c2", read, 3),
+            Copilot.Permission("r3", "c3", Copilot.Prompts["url"], 4),
+        ];
+
+        var first = (await s.After(asked)).Question!;
+        var second = (await s.After(Copilot.PermissionDone("r1", "c1", "approved", 5))).Question!;
+        var last = (await s.After(Copilot.PermissionDone("r2", "c2", "approved", 6))).Question!;
+
+        // Listing the newest offered Approve once for a request the screen was not showing (#690).
+        Assert.Equal((3, true), (first.Waiting, first.Id.StartsWith("r1#", StringComparison.Ordinal)));
+        Assert.Equal((2, true), (second.Waiting, second.Id.StartsWith("r2#", StringComparison.Ordinal)));
+        Assert.Equal((null, true), (last.Waiting, last.Id.StartsWith("r3#", StringComparison.Ordinal)));
+        Assert.Equal(3, new[] { first.Id, second.Id, last.Id }.Distinct().Count());
+    }
+
+    [Fact]
     public async Task A_request_to_run_outside_the_sandbox_and_a_kind_the_host_does_not_drive_are_answered_only_at_the_machine()
     {
         await using var s = new Session_();

@@ -379,11 +379,129 @@ public sealed class CopilotPermissionFlowTests : IAsyncLifetime
         Assert.Empty(injector.Plans);
     }
 
+    // A session asking two permissions at once, as Copilot does for parallel tool calls (#690):
+    // r1, the command, first; r2, a read of settings.json, after it. The host has read both.
+    async Task<string> TwoWaiting()
+    {
+        Fixture.Append(events, Copilot.ToolStart("c2", "view", new { path = "C:\\Users\\someone\\settings.json" }, 5),
+            Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 6));
+        await source.RefreshAsync();
+        return Question;
+    }
+
+    static readonly string[] ReadPrompt =
+    [
+        " Allow read",
+        " C:\\Users\\someone\\settings.json",
+        "",
+        " \u276F 1. Yes",
+        "   2. Yes, and remember this path for the session",
+        "   3. No (Esc)",
+    ];
+
     [Fact]
-    public async Task With_another_prompt_also_waiting_the_screen_cannot_say_which_is_shown_so_nothing_is_typed()
+    public async Task With_two_permissions_waiting_the_earliest_is_listed_and_approved_when_the_screen_shows_it_and_not_the_other()
+    {
+        var question = await TwoWaiting();
+        Completes("approved");
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.StartsWith("r1#", question);
+        Assert.Equal(2, source.Get(Id)!.Question!.Waiting);
+        Assert.Equal(new AnswerResult(AnswerOutcome.Delivered), result);
+        Assert.Equal("1", Assert.Single(Assert.Single(injector.Plans).Plan.Sends).Text);
+    }
+
+    [Fact]
+    public async Task With_two_permissions_waiting_a_screen_showing_the_other_one_is_refused_by_naming_it_and_nothing_is_typed()
+    {
+        var question = await TwoWaiting();
+        // The other request's dialog, under scrollback that still shows this one's command.
+        injector.Screen = [Prompt[0], "", .. ReadPrompt];
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "the machine is showing a different permission (read, request r2); answer at the machine"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_permission_asked_after_another_still_waiting_is_never_typed_into_even_when_the_screen_shows_it()
+    {
+        // A sub-agent's request (r1) is no longer listed once its agent aborts, but Copilot's
+        // transcript never says it stopped waiting; so r2, listed, is not the earliest waiting.
+        File.WriteAllLines(events,
+        [
+            Copilot.User("ship it", 1),
+            Copilot.ToolStart("c1", "powershell", new { command = "git push" }, 2, agentId: "helper"),
+            Copilot.Permission("r1", "c1", Copilot.Prompts["commands"], 3, agentId: "helper"),
+            Copilot.ToolStart("c2", "view", new { path = "C:\\Users\\someone\\settings.json" }, 4),
+            Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 5),
+            Copilot.Event("abort", new { reason = "user_initiated" }, 6, agentId: "helper"),
+        ]);
+        await source.RefreshAsync();
+        injector.Screen = ReadPrompt;
+        Assert.StartsWith("r2#", Question);
+
+        var result = await Answerer().AnswerAsync(Request("approve"));
+
+        Assert.Equal(new AnswerResult(AnswerOutcome.Refused, "Copilot is asking for an earlier permission first; answer at the machine"), result);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task An_answer_to_the_first_of_two_cannot_answer_the_second_once_the_first_is_resolved()
+    {
+        var first = await TwoWaiting();
+        Assert.StartsWith("r1#", first);
+        Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", second++));
+        await source.RefreshAsync();
+        injector.Screen = ReadPrompt;
+
+        var again = await Answerer().AnswerAsync(Request("approve") with { Question = first });
+
+        Assert.Equal(AnswerOutcome.Stale, again.Outcome);
+        Assert.Empty(injector.Plans);
+        var next = source.Get(Id)!.Question!;
+        Assert.StartsWith("r2#", next.Id);
+        Assert.NotEqual(first, next.Id);
+        Assert.Null(next.Waiting);
+    }
+
+    [Fact]
+    public async Task A_permission_asked_while_the_screen_was_read_and_drawn_in_its_place_is_refused_and_nothing_is_typed()
+    {
+        // The read was taken with only r1 waiting; r2 arrived and is what the screen shows by
+        // the time it is checked again. Its subject is drawn nearer the options than r1's.
+        injector.Screen = [Prompt[0], "", .. ReadPrompt];
+        injector.OnScreen = () => Fixture.Append(events, Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 6));
+
+        var result = await Answerer().AnswerAsync(Request("approve"));
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("different permission (read, request r2)", result.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task With_an_unreadable_permission_also_waiting_nothing_is_typed_since_the_screen_cannot_rule_it_out()
     {
         var question = Question;
-        Fixture.Append(events, Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 5, agentId: "helper"));
+        Fixture.Append(events, Copilot.Event("permission.requested", new { requestId = "r9" }, 5));
+
+        var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
+
+        Assert.Equal(AnswerOutcome.Refused, result.Outcome);
+        Assert.Contains("cannot be checked against the session's screen", result.Reason);
+        Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task With_a_question_also_waiting_the_screen_cannot_say_which_is_shown_so_nothing_is_typed()
+    {
+        var question = Question;
+        Fixture.Append(events, Copilot.ToolStart("c3", "ask_user", new { question = "Which?" }, 5));
 
         var result = await Answerer().AnswerAsync(Request("approve") with { Question = question });
 

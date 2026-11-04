@@ -243,6 +243,9 @@ public sealed partial class QuestionViewModel : Observable
     public string Id => Question.Id;
     public bool Approval => Question.Kind == QuestionKind.Approval;
     public string Heading => Approval ? "Permission requested" : "Waiting on you";
+    // Copilot asked several permissions at once and shows them one at a time, this one first
+    // (#690): each is its own question, so an answer to this one never reaches the next.
+    public string? Queue => Approval && Question.Waiting is > 1 and var n ? $"1 of {n} permissions waiting" : null;
     // An approval's text with anything not drawn where it runs, and its right-to-left letters, as
     // visible escapes (#220): a host escapes them, and an older one's prompt is drawn so too. The card
     // draws it exactly as written, as one block nothing in it is read as Markdown in (#323,
@@ -536,7 +539,7 @@ public sealed partial class QuestionViewModel : Observable
     // every update, so compared by what they hold). The same id can come back otherwise: a host
     // updated to refuse what it used to offer (#220), or a budget that had to cut it.
     public static bool SaysTheSame(Question a, Question b) =>
-        a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent
+        a.Kind == b.Kind && a.Message == b.Message && a.Truncated == b.Truncated && a.AnswerAtMachine == b.AnswerAtMachine && a.Agent == b.Agent && a.Waiting == b.Waiting
         && SameEscaped(a.Escaped, b.Escaped)
         && a.Fields.Count == b.Fields.Count && a.Fields.Zip(b.Fields).All(p => SameField(p.First, p.Second));
 

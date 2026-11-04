@@ -190,10 +190,33 @@ public sealed class CopilotPermissionTests : IDisposable
         Fixture.Append(events, Copilot.Permission("r2", "c2", Copilot.Prompts["read"], 2), Copilot.ToolStart("q1", "ask_user", new { message = "?" }, 3, agentId: "sub"));
         var crowded = CopilotPermissionTranscript.Before(events, "r1");
         Assert.Equal((2, 1), (crowded.PendingPermissions, crowded.PendingAsks));
+        Assert.True(crowded.First);
+        Assert.Equal("r2", Assert.Single(crowded.Others).Prompt?.RequestId);
+        Assert.False(CopilotPermissionTranscript.Before(events, "r2").First);
 
         Fixture.Append(events, Copilot.PermissionDone("r1", "c1", "approved", 4));
         Assert.Null(CopilotPermissionTranscript.Before(events, "r1").Request);
+        Assert.True(CopilotPermissionTranscript.Before(events, "r2").First);
         Assert.False(CopilotPermissionTranscript.Before(events + ".missing", "r1").Readable);
+    }
+
+    // Copilot asks a permission for each of a batch of parallel tool calls and draws one of them
+    // (#690). The screen, not the order asked, says which: the request whose subject is drawn
+    // nearest the options is the one shown, and one the screen cannot tell apart is never typed for.
+    [Fact]
+    public void With_other_requests_waiting_a_prompt_is_chosen_only_when_the_screen_shows_it_and_none_of_them()
+    {
+        (string, IReadOnlyList<string>)[] read = [("read, request r2", ["settings.json"])];
+        // The command's dialog, under scrollback that still shows the other request's tool call.
+        string[] scrolled = ["\u25CF View C:\\Users\\someone\\settings.json", "", .. Shell];
+
+        Assert.Equal("1", CopilotPermissionScreen.Locate(scrolled, approve: true, ShellProbes, read).Choice?.Key);
+        Assert.Equal("the machine is showing a different permission (read, request r2)",
+            CopilotPermissionScreen.Locate([.. Shell[..3], " C:\\Users\\someone\\settings.json", .. Shell[3..]], approve: true, ShellProbes, read).Problem);
+        Assert.Contains("reads the same on the session's screen",
+            CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, [("shell, request r2", ShellProbes)]).Problem);
+        Assert.Contains("cannot be checked against the session's screen",
+            CopilotPermissionScreen.Locate(Shell, approve: true, ShellProbes, [("permission, request r2", [])]).Problem);
     }
 
     [Fact]

@@ -189,6 +189,17 @@ internal sealed class SessionTracker
         // Status precedence (docs/design/subagents.md §4): the session's own question wins over
         // a sub-agent's (rule 1, "question wins"), and a sub-agent's makes it waiting too (rule 2).
         var question = pending.LastOrDefault(q => q.Agent is null) ?? (pending.Count > 0 ? pending[^1] : null);
+        // Copilot asks a permission for each of a batch of parallel tool calls at once, and its
+        // one dialog shows them one at a time; seen answered at the machine in the order asked
+        // (#690). Listing the newest offered Approve once for a request the screen was not
+        // showing, so the earliest is listed, saying how many wait; each is its own question,
+        // so an answer meant for one never reaches the next. Delivery still types only when
+        // the screen shows that request and none of the others.
+        if (d.Agent == AgentKind.Copilot && question is { Kind: QuestionKind.Approval })
+        {
+            var approvals = pending.Where(q => q.Kind == QuestionKind.Approval).ToList();
+            if (approvals.Count > 1) { question = approvals[0] with { Waiting = approvals.Count }; }
+        }
         // Delivery types only into the main agent's ask_user (AnswerService refuses a stamped
         // call), so nothing proves where keys for a sub-agent's would land: it is answered at
         // the machine. Nor for a Copilot form while a permission prompt or a sub-agent's
