@@ -77,6 +77,10 @@ public sealed class SessionSource : ISessionSource
         public DateTimeOffset? LastEmit;
         public ITimer? Timer;
         public bool Dirty;
+        // The revision of the commit that made ListForm what it is, and of the first commit not yet
+        // emitted (null when none waits): what a resumed subscription and its watermark go by.
+        public long Committed;
+        public long? Pending;
     }
 
     public SessionSource(SessionSourceOptions options, IProcessInspector? processes = null, TimeProvider? time = null, SessionDrivers? drivers = null)
@@ -180,17 +184,43 @@ public sealed class SessionSource : ISessionSource
         }
     }
 
-    public SessionSubscription Subscribe()
+    public SessionSubscription Subscribe() => Subscribe(null);
+
+    // A run's revisions only go up and every live session is in memory, so resuming needs no
+    // history: a session whose ListForm changed since has a later Committed, and one that ended is
+    // missing from Live.
+    public SessionSubscription Subscribe(long? since)
     {
         lock (_gate)
         {
             var sorted = Sorted();
-            var subscription = new SessionSubscription(new SubscribeResult(_revision, sorted.Count), Unsubscribe);
-            foreach (var e in sorted) { subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, e.ListForm)); }
-            subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionsSynced, new SessionsSynced(_revision, _held)));
+            List<string>? live = null;
+            if (since is { } from && from >= 0 && from <= _revision)
+            {
+                live = [.. sorted.Select(e => e.ListForm.Id)];
+                if (ProtocolJson.ByteCount(live) > SessionsSynced.MaxLiveBytes) { live = null; }
+            }
+            var sent = live is null ? sorted : [.. sorted.Where(e => e.Committed > since)];
+            var subscription = new SessionSubscription(new SubscribeResult(_revision, sent.Count, live is null ? null : true), Unsubscribe);
+            foreach (var e in sent) { subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, e.ListForm)); }
+            subscription.Channel.Writer.TryWrite(new SessionEvent(Events.SessionsSynced, new SessionsSynced(_revision, _held, live)));
             _subscribers.Add(subscription);
             return subscription;
         }
+    }
+
+    // Under _gate. Every change up to this revision has been written to every subscription: the
+    // host's revision, less while a session's change waits out CoalesceInterval. Taking the plain
+    // revision, a client that resumed from it after a drop would never be sent the change still
+    // waiting then, of another session than the one whose upsert carried it.
+    long Watermark()
+    {
+        var mark = _revision;
+        foreach (var e in _entries.Values)
+        {
+            if (e.Pending is { } p && p - 1 < mark) { mark = p - 1; }
+        }
+        return mark;
     }
 
     void Unsubscribe(SessionSubscription subscription)
@@ -762,6 +792,8 @@ public sealed class SessionSource : ISessionSource
                 entry.Json = json;
                 _entries[full.Id] = entry;
                 _revision++;
+                entry.Committed = _revision;
+                entry.Pending ??= _revision;
                 entry.Dirty = true;
                 ScheduleEmit(entry);
                 return;
@@ -804,9 +836,11 @@ public sealed class SessionSource : ISessionSource
     void Emit(Entry entry, DateTimeOffset now)
     {
         entry.Dirty = false;
+        entry.Pending = null;
         entry.LastEmit = now;
         var session = entry.ListForm;
-        foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, session)); }
+        var mark = Watermark();
+        foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.SessionUpsert, session, mark)); }
         _changes.Writer.TryWrite(new SessionChange(SessionChangeKind.Upserted, session.Id, session, _revision));
     }
 
@@ -820,7 +854,8 @@ public sealed class SessionSource : ISessionSource
             entry.Timer?.Dispose();
             entry.Timer = null;
             _revision++;
-            foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.SessionRemove, new SessionRemoved(id))); }
+            var mark = Watermark();
+            foreach (var s in _subscribers) { s.Channel.Writer.TryWrite(new SessionEvent(Events.SessionRemove, new SessionRemoved(id), mark)); }
             _changes.Writer.TryWrite(new SessionChange(SessionChangeKind.Removed, id, null, _revision));
         }
     }

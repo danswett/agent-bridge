@@ -19,7 +19,7 @@ public class SubagentTests
     static string FixturePath(string name) => Path.Combine(AppContext.BaseDirectory, "fixtures", "copilot", name);
 
     // Replays the recorded transcript up to a second after Fixture.T0.
-    sealed class Recorded : IAsyncDisposable
+    internal sealed class Recorded : IAsyncDisposable
     {
         readonly Fixture _f = new();
         readonly string _events;
@@ -34,7 +34,7 @@ public class SubagentTests
             Source = _f.Source();
         }
 
-        public async Task<Session> Through(int second)
+        public async Task<Session> Through(double second)
         {
             var batch = new List<string>();
             while (_next < _lines.Length && At(_lines[_next]) < Fixture.T0.AddSeconds(second)) { batch.Add(_lines[_next++]); }

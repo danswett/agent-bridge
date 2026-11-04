@@ -105,6 +105,11 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   logs it once, not at every attempt, and asks again after 5 minutes (`Fleet.RefusedRetryDelay`),
   or sooner when the account's machines change, that machine comes back online or it is opened,
   though never sooner than the ordinary 5 s. Any other failure is retried every 5 s, as before.
+  Of a host that offers `sessions.patch`, either connection asks for each change as only what
+  changed, and, reconnecting to the same run of that host with a list it held whole, for only the
+  sessions changed since and the ids of the live ones
+  ([v1-sessions.md](protocol/v1-sessions.md#patches-sessionpatch), #601). A patch it can't apply,
+  or a resumed snapshot that can't be whole, asks for the full snapshot, as a gap does.
   A machine that leaves presence while the app's relay connection stays up on the
   same account stays (#269): its rows, the session open, its tab, your order and pins are kept,
   each row saying "Offline · last seen …", and its connection goes on trying. Nothing on those rows

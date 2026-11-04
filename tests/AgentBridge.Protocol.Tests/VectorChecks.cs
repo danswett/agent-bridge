@@ -16,6 +16,7 @@ public static class VectorChecks
     public const string AttachmentChunk = "Attachments.Read";
     public const string Transfer = "TransferProtocol.Check";
     public const string TransferResult = "TransferLimits.CheckResult";
+    public const string Patches = "SessionPatches.Apply";
 
     // Null when the check takes it; otherwise why not. context is the vector's own: the question
     // an answer answers, the most a channel takes, the most a machine takes of a bundle.
@@ -34,8 +35,22 @@ public static class VectorChecks
             _ => throw new ArgumentException($"{check} does not check a {record.GetType().Name}"),
         },
         TransferResult => TransferLimits.CheckResult((AgentBridge.Protocol.TransferResult)record, context?["maxBytes"]?.GetValue<long>() ?? TransferProtocol.DefaultMaxBytes),
+        Patches => PatchCheck((SessionPatch)record, context),
         _ => throw new ArgumentException($"no check is called {check}"),
     };
+
+    // The context holds the session as the client last received it (absent: none) and the seq of
+    // the event that gave it, and for a valid patch the session it must then hold, exactly.
+    static string? PatchCheck(SessionPatch patch, JsonNode? context)
+    {
+        var held = context?["session"]?.DeepClone().AsObject();
+        JsonObject applied;
+        try { applied = SessionPatches.Apply(held, context?["seq"]?.GetValue<long>(), patch); }
+        catch (SessionPatchException e) { return e.Message; }
+        return context?["result"] is { } result && !JsonNode.DeepEquals(result, applied)
+            ? throw new InvalidOperationException($"the patch gives {applied.ToJsonString()}, not its context's result")
+            : null;
+    }
 
     // A host takes an answer only for the question pending (stale otherwise) before Answers.Check
     // runs, so a vector answering another question than its context's would say nothing.

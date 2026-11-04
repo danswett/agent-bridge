@@ -525,14 +525,37 @@ public sealed record DiscoveryChanged([property: Strict(Strictness.Security)] Di
 
 public sealed record ListRequest(string? Cursor = null);
 
+// sessions.subscribe's request. Patch: live changes as session.patch. Since: what the client
+// held of an earlier channel to this run of the host, to be sent only what changed since. Both
+// are taken by a host that offers sessions.patch and ignored by any other.
+public sealed record SubscribeRequest
+{
+    public bool? Patch { get; init; }
+    public SubscribeSince? Since { get; init; }
+}
+
+// The run of the host (hello's machine.instance) and the revision the client's whole list is at.
+public sealed record SubscribeSince
+{
+    public required string Instance { get; init; }
+    public required long Revision { get; init; }
+}
+
 // sessions.subscribe's result; the sessions themselves follow as session.upsert events,
-// then sessions.synced.
-public sealed record SubscribeResult(long Revision, int Count);
+// then sessions.synced. Resumed: only the sessions changed since the request's Since follow.
+public sealed record SubscribeResult(long Revision, int Count, bool? Resumed = null);
 
-// DiscoveryHeld: as on sessions.list, as of the end of the snapshot.
-public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null);
+// DiscoveryHeld: as on sessions.list, as of the end of the snapshot. Live: in a resumed
+// snapshot, every live session's id, the ones not sent again included. Strict and whole: read
+// with an id left out, a session still running would be dropped from the client's list.
+public sealed record SessionsSynced(long Revision, [property: Strict(Strictness.Security)] DiscoveryHeld? DiscoveryHeld = null, [property: Strict(Strictness.Identity)] IReadOnlyList<string>? Live = null)
+{
+    // The most of Live a host sends; a host with more sessions sends the whole snapshot instead.
+    public const int MaxLiveBytes = 32 * 1024;
+}
 
-public sealed record SessionRemoved([property: Strict(Strictness.Identity)] string Id);
+// Revision: to a client that asked for patches, as on a session.patch.
+public sealed record SessionRemoved([property: Strict(Strictness.Identity)] string Id, long? Revision = null);
 
 // session.answer. Fields holds one value per field name, shaped by the field's type (see
 // the contract); Text answers a question without fields. Request is the client's UUID for
@@ -582,6 +605,7 @@ public static class Ops
 public static class Events
 {
     public const string SessionUpsert = "session.upsert";
+    public const string SessionPatch = "session.patch";
     public const string SessionRemove = "session.remove";
     public const string SessionsSynced = "sessions.synced";
     public const string DiscoveryChanged = "discovery.changed";
@@ -618,6 +642,9 @@ public static class Paging
 public static class Capabilities
 {
     public const string SessionsRead = "sessions.read";
+    // sessions.subscribe takes patch (live changes as session.patch) and since (resuming without
+    // a whole snapshot): docs/protocol/v1-sessions.md, Patches and Resuming.
+    public const string SessionsPatch = "sessions.patch";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
     public const string SessionsStop = "sessions.stop";

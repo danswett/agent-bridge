@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Protocol;
 
 // The shared protocol vectors (docs/protocol/vectors/README.md): what every Protocol v1 record
@@ -109,6 +110,54 @@ public static class ProtocolVectors
 
     static readonly DiscoveryHeld Held = new("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
 
+    static readonly SubscribeSince Since = new() { Instance = Machine.Instance!, Revision = 118 };
+
+    // session.patch: each valid patch is made by SessionPatches.Diff from its context's session to
+    // its result, and the check applies it to the session (held from the event at seq) and must give
+    // the result exactly. The recorded sequences are in session-patches.json.
+    static readonly Subagent Third = new() { Id = "agent-3", Kind = SubagentKind.Background, Name = "Check the docs", Status = SubagentStatus.Working, StartedAt = T1, CurrentTool = Running with { Id = "call_9" }, Shells = 0 };
+    static readonly Session Working = FullSession.WithoutHistory() with { Status = SessionStatus.Working, Question = null, Subagents = [Delegate, Nested, Third] };
+
+    static void Patches(VectorFileBuilder f)
+    {
+        var ended = Working with
+        {
+            Status = SessionStatus.Idle, StatusSince = T1.AddSeconds(30), UpdatedAt = T1.AddSeconds(30),
+            Activity = Working.Activity with { CurrentTool = null, TurnCount = 5, Response = Working.Activity.Response + " The docs build too." },
+            Subagents = [Third, Delegate with { Status = SubagentStatus.Ended, Outcome = SubagentOutcome.Done, EndedAt = T1.AddSeconds(30), CurrentTool = null, Shells = 0 }],
+        };
+        var asked = Working with { Status = SessionStatus.Waiting, StatusSince = T1.AddSeconds(5), UpdatedAt = T1.AddSeconds(5), Question = Approval };
+        var added = Working with { UpdatedAt = T1.AddSeconds(9), Subagents = [.. Working.Subagents!, new Subagent { Id = "agent-4", Kind = SubagentKind.Task, Parent = "agent-3", Status = SubagentStatus.Working, StartedAt = T1.AddSeconds(9) }] };
+
+        JsonObject Json(Session s) => SessionPatches.Json(s);
+        SessionPatch Diff(Session to) => SessionPatches.Diff(Json(Working), 41, Json(to))!;
+        f.Context("held-at-41-then-a-turn-ending", new { session = Json(Working), seq = 41, result = Json(ended) })
+            .Context("held-at-41-then-a-question", new { session = Json(Working), seq = 41, result = Json(asked) })
+            .Context("held-at-41-then-a-nested-delegate", new { session = Json(Working), seq = 41, result = Json(added) })
+            .Context("none-held-then-the-whole-session", new { result = Json(Working) })
+            .Context("held-at-40", new { session = Json(Working), seq = 40 })
+            .Context("held-at-41", new { session = Json(Working), seq = 41 })
+            .Context("none-held", new { });
+        var turn = Diff(ended) with { Revision = 131 };
+        f.Record<SessionPatch>(Host, VectorChecks.Patches)
+            .Valid("a-turn-ending", turn, "held-at-41-then-a-turn-ending")
+            .Valid("a-question-asked", Diff(asked), "held-at-41-then-a-question")
+            .Valid("a-delegate-added-at-the-end", Diff(added), "held-at-41-then-a-nested-delegate")
+            .Valid("the-whole-session", SessionPatches.Whole(Json(Working), 131), "none-held-then-the-whole-session")
+            .Refused("on-another-event-than-the-one-held", turn, "held-at-40")
+            .Refused("on-a-session-not-held", turn, "none-held")
+            .Refused("for-another-session", turn with { Id = MinimalSession.Id }, "held-at-41")
+            .Refused("a-set-that-is-not-an-object", turn with { Set = JsonSerializer.SerializeToElement(new[] { 1 }) }, "held-at-41")
+            .Refused("text-appended-to-a-number", turn with { Append = JsonSerializer.SerializeToElement(new { activity = new { turnCount = "0" } }) }, "held-at-41")
+            .Refused("a-delegate-ordered-twice", turn with { Subagents = turn.Subagents! with { Order = ["agent-3", "agent-3"] } }, "held-at-41")
+            .Refused("a-delegate-without-an-id", turn with { Subagents = turn.Subagents! with { Set = [JsonSerializer.SerializeToElement(new { status = "ended" })] } }, "held-at-41")
+            // Read with its base left out, a patch would be applied to nothing as if it were the whole session.
+            .Refused("a-base-that-is-not-a-number", Broken(turn, j => j["base"] = "41"));
+        f.Record<SubagentsPatch>(Host)
+            .Valid("by-id", turn.Subagents!)
+            .Valid("one-entry", new SubagentsPatch { Set = [JsonSerializer.SerializeToElement(new { id = "agent-3", status = "ended" })] });
+    }
+
     static void Sessions(VectorFileBuilder f)
     {
         f.Record<MachineInfo>(Host)
@@ -192,13 +241,26 @@ public static class ProtocolVectors
         f.Record<ListRequest>(Client)
             .Valid("first-page", new ListRequest())
             .Valid("next-page", new ListRequest("c2Vzc2lvbnM6Mg"));
-        f.Record<SubscribeResult>(Host).Valid("three-sessions", new SubscribeResult(118, 3));
+        f.Record<SubscribeRequest>(Client)
+            .Valid("patches-and-resuming", new SubscribeRequest { Patch = true, Since = Since })
+            .Valid("patches-only", new SubscribeRequest { Patch = true })
+            .Valid("as-before", new SubscribeRequest());
+        f.Record<SubscribeSince>(Client).Valid("a-list-held-at-118", Since);
+        f.Record<SubscribeResult>(Host)
+            .Valid("three-sessions", new SubscribeResult(118, 3))
+            .Valid("resumed-with-one-changed", new SubscribeResult(131, 1, Resumed: true));
         f.Record<SessionsSynced>(Host)
             .Valid("held", new SessionsSynced(118, Held))
             .Valid("plain", new SessionsSynced(118))
+            .Valid("resumed", new SessionsSynced(131, Live: [SessionId, MinimalSession.Id]))
             // Ends no snapshot: no session is removed and no hold lifted on a record nobody could read.
-            .Refused("not-a-record", "[]");
-        f.Record<SessionRemoved>(Host).Valid("gone", new SessionRemoved(SessionId));
+            .Refused("not-a-record", "[]")
+            // Read with the id left out, a session still running would be dropped.
+            .Refused("a-live-id-that-is-not-text", Broken(new SessionsSynced(131, Live: [SessionId]), j => j["live"]!.AsArray().Add(7)));
+        f.Record<SessionRemoved>(Host)
+            .Valid("gone", new SessionRemoved(SessionId))
+            .Valid("gone-to-a-client-of-patches", new SessionRemoved(SessionId, 131));
+        Patches(f);
 
         const string form = "a-form", plain = "a-plain-question", approval = "an-approval", many = "five-text-fields";
         f.Context(form, new { question = Form }).Context(plain, new { question = Plain }).Context(approval, new { question = Approval }).Context(many, new { question = ManyTexts })

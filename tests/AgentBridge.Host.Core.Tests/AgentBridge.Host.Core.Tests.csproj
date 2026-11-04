@@ -19,6 +19,9 @@
     <None Include="..\fixtures\copilot\*" Link="fixtures\copilot\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\fixtures\claude\**\*" Link="fixtures\claude\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\fixtures\codex\*" Link="fixtures\codex\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The shared protocol vectors' files (docs/protocol/vectors): this project writes the
+         recorded patch sequences, which need the host's own replay of the fixtures. -->
+    <Compile Include="..\AgentBridge.Protocol.Tests\VectorFiles.cs" Link="VectorFiles.cs" />
   </ItemGroup>
 
 </Project>
