@@ -61,10 +61,18 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     opened with `90` was recorded as `9090`). Nothing known here clears it, so an answer
     that is the default, as the prompt shows it, types nothing and only the field's Enter goes,
     keeping it; any other answer to the field, or none, is `refused` whole before a key goes:
-    `answer at the machine (this field has a pre-filled default)`. A `null` or empty default
-    fills nothing in, and is typed as before. Seen in a real session for a number field; a text field is
+    `answer at the machine (this field has a pre-filled default)`. A text field's `null` or
+    empty default fills nothing in, and is typed as before; a number field's `null` default
+    opens reading `null`, so it is refused like any other. Numbers are compared exactly, and
+    one that cannot be (an exponent too large to hold, or no finite value) is refused. A number
+    field's string default is recorded by the CLI as `Number(text)`, so `"3"` is kept as `3`;
+    only a string that is plainly a JSON number is read so. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
     have no such field.
+  * An option list whose `default` is present but is not one of its options, `null` included,
+    opens on its Other box (`Dxn` in 1.0.105), where the walk from the top row ends a row off;
+    it is refused, and shown to be answered at the machine. So are a checkbox list with no
+    options and one whose default does not name its options.
   * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
     `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
     and Down add or take one, so walking it as a list recorded a different number), and a

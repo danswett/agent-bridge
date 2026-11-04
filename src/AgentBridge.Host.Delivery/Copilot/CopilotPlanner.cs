@@ -66,7 +66,7 @@ public static class CopilotPlanner
                 // it, so a key typed into it is added to it (#662). Only the default itself can be
                 // given: by typing nothing, and letting the field's Enter keep what is there. Any
                 // other answer, or none, is refused whole, before a key goes.
-                if (!has || !CopilotForm.Keeps(prefill, value)) { return (null, Prefilled(field.Name)); }
+                if (!has || !CopilotForm.Keeps(field, value)) { return (null, Prefilled(field.Name)); }
                 (keys, record) = ([""], Kept(field, prefill));
             }
             else if (!has)
@@ -102,10 +102,11 @@ public static class CopilotPlanner
         $"\"{name}\" opens with a value already filled in, which the host cannot clear, so anything it typed would be added to it; answer at the machine (this field has a pre-filled default)";
 
     // What the session records for a field left as it opened: the default it opened with, not
-    // the answer's own spelling of it (3.0 given for a 3 is recorded as the 3, or "3").
+    // the answer's own spelling of it (3.0 given for a 3 is recorded as the 3), and a number
+    // field's string default as the number the CLI turns it into ("3" is recorded as 3).
     static Expected Kept(CopilotField field, JsonElement prefill)
     {
-        if (field.Kind == CopilotFieldKind.Number) { return new Expected.Number(prefill.Clone()); }
+        if (field.Kind == CopilotFieldKind.Number) { return new Expected.Number(CopilotForm.Recorded(prefill)!.Value); }
         var words = prefill.ValueKind == JsonValueKind.String ? prefill.GetString()! : CopilotForm.Scalar(prefill);
         return string.IsNullOrWhiteSpace(words) ? new Expected.Omitted() : new Expected.Words(words);
     }

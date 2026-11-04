@@ -27,6 +27,33 @@ public class QuestionMappingTests
         Assert.All(q.Fields, f => Assert.Null(f.Options));
         Assert.Null(q.AnswerAtMachine);
     }
+
+    [Theory]
+    // A list Copilot opens on its Other box (a null default, or one naming no option), and lists
+    // the host cannot drive, are flagged to the person rather than offered and then refused (#700).
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": null }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": "z" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": [] } }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": "a" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": ["z"] }""")]
+    public void A_list_the_host_would_refuse_is_shown_to_be_answered_at_the_machine(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        Assert.True(q.AnswerAtMachine);
+    }
+
+    [Theory]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"] }""")]
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": "b" }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": null }""")]
+    [InlineData("""{ "type": "array", "items": { "enum": ["a", "b"] }, "default": ["b"] }""")]
+    public void A_list_with_no_default_or_one_naming_its_options_is_offered(string field)
+    {
+        var q = Ask($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        Assert.Null(q.AnswerAtMachine);
+    }
     [Fact]
     public void Every_schema_field_type_maps_onto_the_contract_field_in_order()
     {

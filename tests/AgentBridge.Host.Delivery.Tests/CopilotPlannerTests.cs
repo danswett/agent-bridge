@@ -170,6 +170,32 @@ public class CopilotPlannerTests
     }
 
     [Theory]
+    // Neither can be compared exactly (an exponent too large to hold, or no finite double for
+    // the CLI to record), so the same spelling in both is no proof: refused before any key (#700).
+    [InlineData("1e99999999999")]
+    [InlineData("1e400")]
+    public void A_default_and_answer_that_cannot_be_compared_as_numbers_are_refused_however_alike_they_read(string number)
+    {
+        var huge = $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "number", "default": {{number}} } } } }""";
+
+        Assert.Contains("pre-filled default", Refusal(huge, Answer(Raw($$"""{ "n": {{number}} }"""))));
+    }
+
+    [Fact]
+    public void A_number_fields_string_default_is_kept_only_when_it_is_plainly_that_number()
+    {
+        // The CLI records a number field's string as Number(text), so "3" is kept as 3; hex,
+        // padding and words are not read as numbers here, and nothing is typed for them.
+        Assert.Equal([("", true)], Keys(Plan(Number("\"3\""), Answer(new { n = 3 }))));
+        Assert.Contains("pre-filled default", Refusal(Number("\"0x10\""), Answer(new { n = 16 })));
+        Assert.Contains("pre-filled default", Refusal(Number("\" 3\""), Answer(new { n = 3 })));
+        Assert.Contains("pre-filled default", Refusal(Number("\"abc\""), Answer(new { n = 3 })));
+    }
+
+    internal static string Number(string @default) =>
+        $$"""{ "message": "m", "requestedSchema": { "properties": { "n": { "type": "integer", "default": {{@default}} } } } }""";
+
+    [Theory]
     [InlineData("2.50", "25e-1", true)]
     [InlineData("100", "1E+2", true)]
     [InlineData("-0", "0.000", true)]
@@ -379,11 +405,37 @@ public class CopilotPlannerTests
     }
 
     [Fact]
-    public void A_null_default_leaves_the_caret_on_the_first_row_and_a_schema_written_as_text_is_read()
+    public void An_absent_default_leaves_the_caret_on_the_first_row_and_a_schema_written_as_text_is_read()
     {
-        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"type\":\"string\",\"enum\":[\"a\",\"b\"],\"default\":null}}}" }""", Answer(new { pick = "b" }));
+        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"type\":\"string\",\"enum\":[\"a\",\"b\"]}}}" }""", Answer(new { pick = "b" }));
 
         Assert.Equal([(U + D, true)], Keys(plan));
+    }
+
+    [Theory]
+    // Copilot 1.0.105 copies a null default in and opens the list on its Other box; the walk
+    // from the top row then ends a row off: "a" recorded "b", and "b" reopened Other (#700).
+    [InlineData("""{ "type": "string", "enum": ["a", "b"], "default": null }""")]
+    [InlineData("""{ "type": "string", "oneOf": [ { "const": "a" }, { "const": "b" } ], "default": null }""")]
+    public void An_option_list_whose_default_is_null_opens_on_Other_and_is_refused_before_any_key(string field)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "pick": {{field}} } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("opens on its Other box", problem);
+        Assert.Contains("answer it at the machine", problem);
+    }
+
+    [Fact]
+    public void A_yes_or_no_field_whose_default_is_null_is_still_walked_from_the_top_row()
+    {
+        // Its Yes / No list has no Other box while schema constraints are enforced; a null
+        // default only puts the caret on No, and the walk starts with an Up.
+        var plan = Plan("""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": null } } } }""", Answer(new { ok = true }));
+
+        Assert.Equal([(U, true)], Keys(plan));
     }
 
     [Fact]

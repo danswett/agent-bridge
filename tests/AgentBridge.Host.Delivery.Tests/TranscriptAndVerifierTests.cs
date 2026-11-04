@@ -125,6 +125,16 @@ public class CopilotVerifierTests
     }
 
     [Fact]
+    public void A_number_fields_string_default_kept_by_its_Enter_is_confirmed_by_the_number_the_CLI_records()
+    {
+        // Copilot's form turns the "3" the box opened with into the number 3 when it is accepted.
+        var plan = Plan(CopilotPlannerTests.Number("\"3\""), new { n = 3 });
+
+        Assert.True(CopilotVerifier.Check(plan, Human("""{ "n": 3 }""")).Item1);
+        Assert.False(CopilotVerifier.Check(plan, Human("""{ "n": 33 }""")).Item1);
+    }
+
+    [Fact]
     public void A_structured_answer_matching_every_field_is_delivered_in_any_list_order_and_whitespace()
     {
         var plan = Plan(Form, new { pick = "s6", go = false, many = new[] { "a", "c" }, notes = "two  words ", count = 2.5 });

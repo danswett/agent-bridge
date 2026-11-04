@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using AgentBridge.Host.Core.Parsing;
 using AgentBridge.Protocol;
 
@@ -26,7 +27,7 @@ public sealed record CopilotField(
 // reads it (Get-DecisionSchemaFields), rather than from the Question a client saw: the
 // keys depend on things a Question does not carry (which rows open ticked, whether an
 // empty list is an answer, the older `choices` format).
-public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
+public sealed partial record CopilotForm(IReadOnlyList<CopilotField> Fields)
 {
     // Null with a reason when the prompt cannot be driven by keys from here.
     public static (CopilotForm? Form, string? Problem) Read(JsonElement arguments)
@@ -115,8 +116,12 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
                 }
             default:
                 // The keys never count from the default (they walk from the top row), but a
-                // default that names no option opens the list on its Other box with that text
-                // already typed in, so it is not typed into. A null default names none.
+                // default that names no option, null included, opens the list on its Other box;
+                // CopilotFieldSchema refuses those, and this stays as a second guard.
+                if (hasDefault && def.ValueKind == JsonValueKind.Null && input == CopilotFieldSchema.Input.Choice)
+                {
+                    return (null, $"\"{name}\" opens on its Other box (its default is null); answer it at the machine");
+                }
                 if (hasDefault && def.ValueKind != JsonValueKind.Null && IndexOf(options, def) < 0)
                 {
                     return (null, $"\"{name}\" has a default that is not one of its options; answer it at the machine");
@@ -145,60 +150,46 @@ public sealed record CopilotForm(IReadOnlyList<CopilotField> Fields)
     // As QuestionMapper writes Option.Value: a string as itself, anything else as its JSON.
     internal static string Scalar(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString()! : v.GetRawText();
 
-    // Whether an answer is what a field opens with, as the prompt shows it: the same scalar, or a
-    // string and a number that read the same. Anything else (an object, a list) never is.
-    public static bool Keeps(JsonElement prefill, JsonElement value) =>
-        SameScalar(prefill, value)
-        || (prefill.ValueKind is JsonValueKind.String or JsonValueKind.Number
-            && value.ValueKind is JsonValueKind.String or JsonValueKind.Number
-            && Scalar(prefill) == Scalar(value));
-
-    // Two JSON scalars are the same value: equal strings, the same literal, or equal numbers,
-    // compared exactly. Read through decimal, 1e-29 was 0 and 3.0000000000000000000000000000001
-    // was 3, so an answer that is not the default could pass for it (#700).
-    public static bool SameScalar(JsonElement a, JsonElement b)
+    // Whether an answer is what a field that opens with its default records when its Enter keeps
+    // it. Anything that cannot be compared exactly is not, and is refused before a key goes: read
+    // as raw text, a default and an answer both 1e99999999999 passed for the same number though
+    // neither could be compared (#700).
+    public static bool Keeps(CopilotField field, JsonElement value)
     {
-        if (a.ValueKind == JsonValueKind.Number && b.ValueKind == JsonValueKind.Number)
+        if (field.Prefill is not { } prefill) { return false; }
+        if (field.Kind == CopilotFieldKind.Number)
         {
-            return ExactNumber(a.GetRawText()) is { } x && x == ExactNumber(b.GetRawText());
+            return Recorded(prefill) is { } kept && Recorded(value) is { } given && SameScalar(kept, given);
         }
-        if (a.ValueKind != b.ValueKind) { return false; }
-        return a.ValueKind switch
+        // A text box records its default as it is; only a string default is the answer's words.
+        return prefill.ValueKind == JsonValueKind.String && value.ValueKind == JsonValueKind.String
+            && prefill.GetString() == value.GetString();
+    }
+
+    // The number a number box records for this value, as a JSON number, or null when that is not
+    // certain. Copilot 1.0.105's form (`Uxn`, its accept step) turns a number field's string into
+    // Number(text) when that is finite and keeps it a string otherwise, so a default of "3" is
+    // recorded as 3. Only a string that is plainly a JSON number is read so (Number() also takes
+    // hex, padding and "Infinity"), and only a finite one whose exact value can be held.
+    public static JsonElement? Recorded(JsonElement value)
+    {
+        var text = value.ValueKind switch
         {
-            JsonValueKind.String => a.GetString() == b.GetString(),
-            JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null => true,
-            _ => false,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.String when PlainNumber().IsMatch(value.GetString()!) => value.GetString()!,
+            _ => null,
         };
+        if (text is null || CopilotFieldSchema.ExactNumber(text) is null) { return null; }
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) || !double.IsFinite(d)) { return null; }
+        using var doc = JsonDocument.Parse(text);
+        return doc.RootElement.Clone();
     }
 
-    // A JSON number's exact value as text: its significant digits and the power of ten that
-    // scales them, so 2.50, 2.5 and 25e-1 read alike and nothing is rounded. Null for one whose
-    // exponent is too large to hold, which is then the same as nothing.
-    static string? ExactNumber(string raw)
-    {
-        var s = raw;
-        var negative = s.StartsWith('-');
-        if (negative) { s = s[1..]; }
-        long exponent = 0;
-        var e = s.IndexOfAny(['e', 'E']);
-        if (e >= 0)
-        {
-            if (!long.TryParse(s[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent)
-                || Math.Abs(exponent) > 1_000_000_000) { return null; }
-            s = s[..e];
-        }
-        var dot = s.IndexOf('.');
-        if (dot >= 0)
-        {
-            exponent -= s.Length - dot - 1;
-            s = s.Remove(dot, 1);
-        }
-        var digits = s.TrimStart('0');
-        if (digits.Length == 0) { return "0"; }
-        var significant = digits.TrimEnd('0');
-        exponent += digits.Length - significant.Length;
-        return $"{(negative ? "-" : "")}{significant}e{exponent.ToString(CultureInfo.InvariantCulture)}";
-    }
+    [GeneratedRegex(@"\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\z", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainNumber();
+
+    // Compared as CopilotFieldSchema compares them, so the list and its default read alike.
+    public static bool SameScalar(JsonElement a, JsonElement b) => CopilotFieldSchema.SameScalar(a, b);
 
     // Whether this is the prompt the client was shown: the same fields, in the same order,
     // of the same kind, with the same options. Two readers of one schema that disagree

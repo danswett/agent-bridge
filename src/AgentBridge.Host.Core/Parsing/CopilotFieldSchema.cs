@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace AgentBridge.Host.Core.Parsing;
@@ -17,6 +18,12 @@ namespace AgentBridge.Host.Core.Parsing;
 //   * `Y_n` opens every field with its `default`; the text box (`Fxn`) shows `default ?? ""`,
 //     and the number box (`Lxn`) `String(default)`, so a null default there reads "null".
 //     Up and Down in a number box add or take one from it; typed keys are added to it.
+//   * The option list (`Dxn`) opens on its Other box whenever its value is set and is not one
+//     of its options: `M = r !== void 0 && r !== "" && !R.includes(r) ? r : void 0`, then
+//     `useState(M !== void 0)`. `Y_n` copies a default in whenever it is `!== undefined`, so a
+//     null default opens Other too, with the caret on it; Up there is the Other box's `onExit`,
+//     which puts the caret on the LAST option, so a walk counted from the top row ends a row off.
+//     Only an absent default, or one naming an option, leaves Other closed (#700).
 //
 // Problem is set for a field whose input cannot be planned with certainty (keywords the CLI
 // reads differently, or not at all); Input is then what the CLI would draw.
@@ -43,7 +50,7 @@ public static class CopilotFieldSchema
                     var (values, badEnum) = List(items, "enum");
                     if (badAnyOf || badEnum) { return (Input.Multi, [], Unknown); }
                     var (choices, problem) = anyOf is { } a ? Consts(a) : values is { } v ? Values(v, null) : ([], null);
-                    return (Input.Multi, choices, problem);
+                    return (Input.Multi, choices, problem ?? (choices.Count == 0 ? "is a list with no options to choose from" : Ticks(p, choices)));
                 }
             case "string":
                 {
@@ -53,7 +60,7 @@ public static class CopilotFieldSchema
                     if (oneOf is null && values is null) { return (Input.Text, [], null); }
                     var (labels, _) = List(p, "enumNames");
                     var (choices, problem) = oneOf is { } o ? Consts(o) : Values(values!.Value, labels);
-                    return (Input.Choice, choices, problem ?? (choices.Count == 0 ? "is a list with no options to choose from" : null));
+                    return (Input.Choice, choices, problem ?? (choices.Count == 0 ? "is a list with no options to choose from" : Opens(p, choices)));
                 }
             case "number" or "integer":
                 return (Input.Number, [], null);
@@ -105,6 +112,83 @@ public static class CopilotFieldSchema
             i++;
         }
         return (list, null);
+    }
+
+    // A list's default, as the option list opens on it: absent, or one of its options. Anything
+    // else, null included, opens the Other box, which the keys do not walk.
+    static string? Opens(JsonElement p, IReadOnlyList<Choice> choices)
+    {
+        if (!p.TryGetProperty("default", out var def)) { return null; }
+        if (def.ValueKind == JsonValueKind.Null) { return "opens on its Other box (its default is null)"; }
+        return choices.Count(c => SameScalar(c.Value, def)) == 1 ? null : "has a default that is not one of its options";
+    }
+
+    // A checkbox list's default: absent or null (nothing ticked), or a list naming its options,
+    // each once.
+    static string? Ticks(JsonElement p, IReadOnlyList<Choice> choices)
+    {
+        if (!p.TryGetProperty("default", out var def) || def.ValueKind == JsonValueKind.Null) { return null; }
+        if (def.ValueKind != JsonValueKind.Array) { return "has a default that is not a list"; }
+        var named = new HashSet<int>();
+        foreach (var entry in def.EnumerateArray())
+        {
+            var at = -1;
+            for (var i = 0; i < choices.Count; i++)
+            {
+                if (!SameScalar(choices[i].Value, entry)) { continue; }
+                if (at >= 0) { return "has a default that does not name its options"; }
+                at = i;
+            }
+            if (at < 0 || !named.Add(at)) { return "has a default that does not name its options"; }
+        }
+        return null;
+    }
+
+    // Two JSON scalars are the same value: equal strings, the same literal, or equal numbers,
+    // compared exactly. Read through decimal, 1e-29 was 0 and 3.0000000000000000000000000000001
+    // was 3, so an answer that is not the default could pass for it (#700).
+    public static bool SameScalar(JsonElement a, JsonElement b)
+    {
+        if (a.ValueKind == JsonValueKind.Number && b.ValueKind == JsonValueKind.Number)
+        {
+            return ExactNumber(a.GetRawText()) is { } x && x == ExactNumber(b.GetRawText());
+        }
+        if (a.ValueKind != b.ValueKind) { return false; }
+        return a.ValueKind switch
+        {
+            JsonValueKind.String => a.GetString() == b.GetString(),
+            JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null => true,
+            _ => false,
+        };
+    }
+
+    // A JSON number's exact value as text: its significant digits and the power of ten that
+    // scales them, so 2.50, 2.5 and 25e-1 read alike and nothing is rounded. Null for one whose
+    // exponent is too large to hold, which is then the same as nothing.
+    public static string? ExactNumber(string raw)
+    {
+        var s = raw;
+        var negative = s.StartsWith('-');
+        if (negative) { s = s[1..]; }
+        long exponent = 0;
+        var e = s.IndexOfAny(['e', 'E']);
+        if (e >= 0)
+        {
+            if (!long.TryParse(s[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exponent)
+                || Math.Abs(exponent) > 1_000_000_000) { return null; }
+            s = s[..e];
+        }
+        var dot = s.IndexOf('.');
+        if (dot >= 0)
+        {
+            exponent -= s.Length - dot - 1;
+            s = s.Remove(dot, 1);
+        }
+        var digits = s.TrimStart('0');
+        if (digits.Length == 0) { return "0"; }
+        var significant = digits.TrimEnd('0');
+        exponent += digits.Length - significant.Length;
+        return $"{(negative ? "-" : "")}{significant}e{exponent.ToString(CultureInfo.InvariantCulture)}";
     }
 
     static bool Scalar(JsonElement v) => v.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False;
