@@ -24,6 +24,7 @@ are generated.
 | `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
 | `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions and enrollment values. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
+| `roster-state.json` | Not records: the roster's acceptance rule and state ([devices.md](../devices.md), #55): the §10 scenarios as entries offered in order, each verdict and refusal code, and the state a verifier then applies. `RosterStateVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it; the PWA's port of the rule replays it (#55 R1c) |
 
 ## Shape
 
