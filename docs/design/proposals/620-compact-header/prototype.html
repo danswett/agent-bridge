@@ -100,6 +100,7 @@
   @media (prefers-reduced-motion: reduce) {
     .animating .full { transition: none; animation: xfade var(--xfade) linear; }
     @keyframes xfade { from { opacity: 0; } to { opacity: 1; } }
+    .fading .full { transition: opacity var(--xfade) linear; opacity: 0; }
   }
   @media (forced-colors: active) {
     .full, .bar::before, .slot { background: Canvas; border-color: CanvasText; }
@@ -162,7 +163,7 @@
 (() => {
   'use strict';
   // The proposal's numbers (pt): fold away after 32 down, come back after 64 up, both counted in one direction.
-  const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40, SOLID = 4;
+  const BAR = 48, DOWN = 32, UP = 64, TITLE_IN = 40;
   const $ = (id) => document.getElementById(id);
   const phone = $('phone'), scroller = $('scroller'), full = $('full'), conv = $('conv'), bt = $('bt');
 
@@ -193,7 +194,8 @@
   }).join('');
 
   let fullH = 257, room = fullH - BAR;      // room: how far the header can slide before only the bar is left
-  let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0;
+  let last = 0, dir = 0, run = 0, returned = false, focusInside = false, programmatic = false, animTimer = 0, fadeTimer = 0;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   const measure = () => {
     fullH = full.offsetHeight;
@@ -209,8 +211,17 @@
   };
 
   const setReturned = (v) => {
+    clearTimeout(fadeTimer);
+    phone.classList.remove('fading');
     if (returned === v) return;
-    returned = v; run = 0;
+    run = 0;
+    if (!v && reduced.matches) {
+      // Reduced motion: the header fades out where it is, then goes under the bar without travelling.
+      phone.classList.add('fading');
+      fadeTimer = setTimeout(() => { returned = false; render(); phone.classList.remove('fading'); }, 83);
+      return;
+    }
+    returned = v;
     animate(); render();
   };
 
@@ -218,11 +229,11 @@
   // and comes back over the conversation on 64 pt up (Material's enterAlways), going again on 32 pt down.
   function render() {
     const s = last;
-    const ty = returned ? 0 : -Math.min(s, room);
+    const ty = returned || focusInside ? 0 : -Math.min(s, room);   // focus in the header holds it open
     phone.style.setProperty('--ty', `${ty}px`);
     phone.style.setProperty('--covered', `${Math.max(BAR, fullH + ty)}px`);
     const hidden = -ty;
-    phone.toggleAttribute('data-solid', hidden > SOLID);
+    phone.toggleAttribute('data-solid', hidden >= TITLE_IN);   // the fill, hairline and title come in together
     phone.toggleAttribute('data-titled', hidden >= TITLE_IN);
     phone.dataset.state = hidden === 0 ? (s > 0 ? 'returned' : 'rest') : hidden >= room ? 'compact' : 'riding';
   }
@@ -237,6 +248,7 @@
     if (nd !== dir) { dir = nd; run = 0; }
     run += Math.abs(d);
     if (s <= 0) { returned = false; run = 0; }
+    else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
     else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
     else if (!returned && dir < 0 && run >= UP && s > room) setReturned(true);
     render();
