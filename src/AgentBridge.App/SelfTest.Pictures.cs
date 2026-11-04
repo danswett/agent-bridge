@@ -21,12 +21,48 @@ static partial class SelfTest
         // captures for controls (including controls deliberately drawn off screen).
         if (element is FrameworkElement root && ReferenceEquals(root.XamlRoot?.Content, root))
         {
+            await CaptureFrame(root);
             var title = ById<FrameworkElement>(root, "TitleBar");
             return WindowPicture.Take(MainWindow.CurrentHandle, (title?.ActualHeight ?? 0) / root.ActualHeight);
         }
         var bitmap = new RenderTargetBitmap();
         await bitmap.RenderAsync(element);
         return ((await bitmap.GetPixelsAsync()).ToArray(), (uint)bitmap.PixelWidth, (uint)bitmap.PixelHeight, BitmapAlphaMode.Premultiplied);
+    }
+
+    static async Task CaptureFrame(FrameworkElement root)
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = false;
+        var queued = false;
+        void Rendering(object? sender, object args) => started = true;
+        void Rendered(object? sender, RenderedEventArgs args)
+        {
+            if (!started || queued) { return; }
+            queued = true;
+            // Rendering precedes the frame; Rendered follows it. Leave that render
+            // callback before DwmFlush: it cannot publish pending XAML work itself.
+            if (!root.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => completed.TrySetResult()))
+            {
+                completed.TrySetException(new InvalidOperationException("The UI dispatcher refused the self-test capture frame barrier."));
+            }
+        }
+        try
+        {
+            CompositionTarget.Rendered += Rendered;
+            // Subscribing requests frames even when XAML would otherwise be idle.
+            CompositionTarget.Rendering += Rendering;
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (TimeoutException e)
+        {
+            throw new TimeoutException("No XAML frame completed for the self-test capture within 10 seconds.", e);
+        }
+        finally
+        {
+            CompositionTarget.Rendering -= Rendering;
+            CompositionTarget.Rendered -= Rendered;
+        }
     }
 
     static async Task CheckDarkPagePicture(MainWindow window, string file, Action<bool, string> check)
