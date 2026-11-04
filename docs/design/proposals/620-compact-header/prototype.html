@@ -108,6 +108,7 @@
     .bar::before { border-bottom: 1px solid CanvasText; }
     .tab[aria-selected="true"]::after { background: Highlight; }
     .q, .chip, .you, .opt, .box { border-color: CanvasText; }
+    .glyph.needs { forced-color-adjust: none; color: Highlight; --needs-ink: HighlightText; }   /* keeps the S on its disc, as tokens.css maps needs */
   }
 </style>
 </head>
@@ -302,6 +303,24 @@ full.addEventListener('touchmove', (e) => {
 const endTouch = () => { touch = null; };
 full.addEventListener('touchend', endTouch);
 full.addEventListener('touchcancel', endTouch);
+  // Focus is never hidden in the conversation either: on a short (landscape) screen the full header can cover all of it,
+  // so if the browser's own focus scroll leaves the control under the header or out of view, the header folds and the control comes out below the bar.
+  scroller.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (el === scroller) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement !== el || focusInside) return;
+      const sr = $('stage').getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (r.top >= sr.top + Math.max(BAR, fullH + ty) && r.bottom <= sr.bottom) return;
+      clearTimeout(fadeTimer); clearTimeout(animTimer);
+      fading = false; phone.classList.remove('fading', 'animating');
+      programmatic = true; returned = false; held = null; run = 0; dir = 0;
+      const y = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      scroller.scrollTop = Math.max(y - BAR - 8, room);
+      last = Math.max(0, scroller.scrollTop); render();
+      requestAnimationFrame(() => requestAnimationFrame(() => { last = Math.max(0, scroller.scrollTop); programmatic = false; render(); }));
+    });
+  });
   if ('ResizeObserver' in window) new ResizeObserver(measure).observe(full); else addEventListener('resize', measure);
 
   // A scroll the app makes (to an arriving question, a restored position) never folds or brings back the header.
