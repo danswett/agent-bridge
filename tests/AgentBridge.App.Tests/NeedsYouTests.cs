@@ -328,12 +328,10 @@ public sealed class NeedsYouTests : IAsyncLifetime
     public void A_long_line_of_brackets_is_made_plain_quickly(string mark, int times)
     {
         var line = string.Concat(Enumerable.Repeat(mark, times));
-        var clock = System.Diagnostics.Stopwatch.StartNew();
 
-        var plain = NeedsYouEntry.PlainLine(line);
+        Speed.IsLinear(n => string.Concat(Enumerable.Repeat(mark, n)), times, l => NeedsYouEntry.PlainLine(l));
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), $"took {clock.Elapsed}");
-        Assert.StartsWith(mark, plain);
+        Assert.StartsWith(mark, NeedsYouEntry.PlainLine(line));
     }
 
     [Fact]
