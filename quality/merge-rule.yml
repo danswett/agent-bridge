@@ -113,6 +113,15 @@ sensitive_paths:
   - pwa/js/ui/launch-view.js
   - pwa/js/answers.js
   - pwa/js/answer-service.js
+  # Every other PWA file that builds, routes or admits a remote action: the services that send
+  # launch, reply and stop, their views, the sessions page that routes them, and main.js, which
+  # wires them together.
+  - pwa/js/*-service.js
+  - pwa/js/replies.js
+  - pwa/js/main.js
+  - pwa/js/ui/reply-view.js
+  - pwa/js/ui/stop-view.js
+  - pwa/js/ui/sessions-page.js
   - pwa/js/host-session.js
   # What an approval or a question shows before someone answers it: a prompt that renders
   # differently from what the agent asked can get a yes it shouldn't (#549).
