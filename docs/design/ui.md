@@ -14,7 +14,10 @@ question, #253) replaced the Needs you lane with a filter, signed off by the own
 2026-11-02; the reasoning is in [proposals/253-attention.md](proposals/253-attention.md).
 Collaborators (#519: the External colour, its marks, the person filter, the external filter and
 the held message) were decided by the owner on 2026-11-03 and added here (§6.7); the reasoning
-and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md).* The
+and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md). The
+accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
+requirements they rest on, each with the check that enforces it, and the rules the owner
+approved for it on 2026-11-04 (#707).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -104,7 +107,7 @@ session: rule 1 applies, Needs you counts it, and the status reads "Waiting on y
 from an external agent".
 
 N is a number before its noun, singular for one ("1 delegate", "1 agent", "1 background
-command"). A glyph's accessible name is the row read aloud (§9).
+command"). A glyph's accessible name is the row read aloud (§9.2).
 
 Rule 1 matches the 2026-10-30 shadow finding on #84 ("question wins") and the host's
 current behaviour. Rule 7 keeps #46's meaning in a new form. The tests in both clients are
@@ -151,11 +154,11 @@ Rules:
   status roles.
 - **Theme:** light, dark and high contrast follow the OS on every client. In high
   contrast, every role and every Windows/PWA surface maps to a system colour (`tokens.json`
-  `hc`, `hcVariants` and `surface.windows.hc`).
+  `hc`, `hcVariants` and `surface.windows.hc`; §9.1 A9).
 - **Contrast:** status glyphs reach 3:1 against their surface, and text in a role colour
   reaches 4.5:1, on every surface and on every role's fill over it (`tokens.json`
-  `color.contrast`, checked by `tools/design-gen`'s tests). Words on a tint (`subtle`,
-  `selected`) are text, text2 or Bridge, and a tint never sits on a role fill: code in a
+  `color.contrast`, checked by `tools/design-gen`'s tests; §9.1 A8). Words on a tint (`subtle`,
+  `selected`) are text, text2 or Bridge (on light's `selected`, `text` where Bridge would be; §9.1 A8), and a tint never sits on a role fill: code in a
   question takes the card colour. That is why light Needs you is `#B87700` rather than the brighter `#E8A10C` (2.20:1 on the
   card), light `text3` is 0.58 rather than 0.52 (#183), and iOS light secondary text is
   `rgba(60,60,67,0.76)` rather than UIKit's 0.60.
@@ -573,7 +576,7 @@ client's own relay link is up on the same account:
   Those live in session details. Nor a question's words: a waiting row says only its status
   ("Waiting on you", "Delegate *name* asks"), and the question is in the conversation (#253).
 - **Line 2 is one line,** cut short at its end; the title is too. Every fact is still in the
-  session's header or Details, and the row reads in full to a screen reader (§9).
+  session's header or Details, and the row reads in full to a screen reader (§9.2).
 
 **Facts on a line (#214).** Wherever facts are joined by "·" (a row's line 2, the header's
 meta line, the status words themselves): the separator is in the text face whatever face its
@@ -1141,7 +1144,7 @@ question, as choosing its row does.
   - "This app is open in another window or tab." · Use here.
 
   The first two are statuses, their words read out through a live region that is always on the
-  page (one unhidden with its words already in it isn't reliably read); the last is an alert.
+  page (one unhidden with its words already in it isn't reliably read); the last is an alert (§9.1 A6).
   Each comes and goes as §5.3's Toast and banner: in from above, and out the same way, quicker
   (under reduced motion, a cross-fade). The demo banner is there from the start and never moves.
 - **Pages are routes** in the address's hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`,
@@ -1253,9 +1256,36 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
 
 ## 9. Accessibility
 
-- **Contrast:** every text pair meets 4.5:1 and every glyph 3:1, in light, dark and high
-  contrast.
-- **Touch targets:** at least 44×44 on touch platforms, 32×32 on desktop.
+### 9.1 The accessibility contract
+
+These rules hold on every client: the Windows app, the PWA and the Apple and Android apps to
+come. Other sections give a surface's words, names and targets; the rules come from here, and
+where a section words a rule more loosely, this section wins. A client change that breaks a
+rule is a bug, whoever reviews it. **Enforced by** names the suite in
+[quality/catalog.yml](../../quality/catalog.yml) and the test or rule in it that fails when the
+rule is broken; **manual** means no automated check exists yet, so review checks it by hand. A
+known violation is allowlisted in its check with its issue, covers only the elements it names,
+and is never a precedent. **Not yet enforced** names the issue that tracks a rule no check covers yet. The parts of A1, A3, A4, A7, A8, A12, A13 and A14 that settle #365, #366, #369, #371, #373, #678 and #699 were approved by the owner on 2026-11-04 (#707).
+
+| # | Rule | Enforced by | Spec for |
+|---|------|-------------|----------|
+| A1 | **The name says what is shown** (WCAG 2.5.3). A control's or a row's accessible name starts with the words it shows, in the order they are shown; an icon-only control is named for its action and what it acts on. Every other fact the control draws is in its name or its accessible description, so nothing seen goes unheard. A control repeated on each row names its row: "Set up Copilot CLI", "Remove *label* from draft". How a row's name is built is in §9.2; a session row's name goes on from there with its second line's facts and its age, in the order drawn and joined with commas, never moved to an accessible description. | PWA: axe `label-content-name-mismatch` in `a11y-pwa`; a session row's facts and age are not yet enforced, tracked in #365 (allowlisted there until it is fixed), and `pwa-ui`'s "every glyph is named with its state" covers the glyph. Windows: manual | #365, #678, #699 |
+| A2 | **Repeated controls have their own keys.** On Windows, every control a person can act on and every status that changes, when repeated on each row, has an AutomationId unique in its window, built from the row's stable key, never from its position. Only a part nobody acts on (a template's text) may share an id. In the PWA an `id` is never repeated, and repeated controls are told apart by their names (A1). | Manual | #678, #699 |
+| A3 | **Focus order is the visual order** (WCAG 2.4.3). Tab and Shift+Tab walk the regions and their controls in the order they are laid out at the current width; arrows move within a list or a group of tabs (§9.2). On a desktop the list head's Sort sits on its first line, before New, so the page's one order (Sort, then New) is the drawn order at both widths. | PWA: `a11y-pwa`'s keyboard.spec, "Tab walks … in the order they are laid out" on a desktop and on a phone; Sort before New is not yet enforced, tracked in #371 (allowlisted there until it is fixed). Windows: manual | #371 |
+| A4 | **Focus stays where the person is.** A control whose request is in flight keeps keyboard focus: it stays focusable, says it's busy, and ignores further presses until the outcome (in the PWA `aria-disabled="true"`, never `disabled`, as Forget on Machines does). A re-render keeps focus on the same control, found by its key. When a control goes, focus moves to a target its surface's section names, never to the page or the window; when Launch starts a session, that target is the new session's reply box. A pop returns focus to the row that pushed the screen; a closed menu, sheet or dialog returns it to the control that opened it. | PWA: `a11y-pwa`'s keyboard.spec (the reply, End session and Launch walks; Back on a phone; the overflow menu). Focus kept in flight and focus on the reply box after Launch are not yet enforced, tracked in #369. Windows: manual | #369, #600 |
+| A5 | **Escape and back go back one step.** Esc closes the innermost menu, sheet, popup or dialog first (a dialog's Esc is its Cancel). With none open, Esc, the browser's back and the system back gesture pop one pushed screen (§5.3, §7's back stack), and the header's Back goes where §7 says (on a phone, always the list), with focus as A4. | PWA: `a11y-pwa`'s keyboard.spec, "Escape closes it with focus back on More"; Esc on a pushed session is manual (#370). Windows: manual | #370 |
+| A6 | **Announcements are polite, and said once.** A status that changes on its own is a polite live region (PWA `role=status`; Windows `AutomationProperties.LiveSetting` Polite with a LiveRegionChanged event), on the page and empty before its first words (§7). Assertive (`role=alert`; LiveSetting Assertive) is only for a problem that stops what the person is doing and needs them to act, for example Launch's problem line, a reply or answer that failed, and §7's "This app is open in another window or tab". Progress, success and revocation are never assertive. A change is said once: a focus move, a name and a live region never say the same thing twice, and a control's state is said by its role (pressed, expanded, busy), not repeated in its name (§6.4). Each surface sets its own rate limit: Needs you at most every 5 s (§9.2); the reply receipt says nothing in its first 400 ms, then at most one stage a second (only the later of two is spoken), and always its outcome (the owner's #600 decision, whose text reaches §6.5 with #617). | Manual (`a11y-screen-reader` is planned) | #600, #678, #699 |
+| A7 | **One verb per state.** An action button says, with one verb, what it does in the current state, and its words change when the state does (for example "Set up" when missing and "Repair" when broken, #678). A row in a state with nothing to do shows no button rather than a disabled one, as §6.7's collaborators are absent, not disabled; §6.1's controls disabled while a machine is away stay as they are. A toggle keeps its words; its pressed or checked state says the rest. | Manual; no button instead of a disabled one is not yet enforced, tracked in #678 | #678, #699 |
+| A8 | **Contrast:** text 4.5:1, and glyphs and the non-text parts that show state or focus 3:1, against what they sit on, in light, dark and high contrast (§3's Contrast). Words that would be Bridge on light's `selected` tint take `text` instead, and every foreground and background pair a client draws is listed in `tokens.json` `color.contrast`, so `a11y-contrast` checks it. | Tokens: `a11y-contrast` (`tokens.json` `color.contrast`). PWA: axe `color-contrast` in light, dark and forced colours in `a11y-pwa`. `text` on light's selected tint and the full list of drawn pairs are not yet enforced, tracked in #366 (allowlisted there until it is fixed). Non-text 3:1 is manual. Windows: manual | #366 |
+| A9 | **High contrast uses system colours.** In Windows high contrast and the browser's forced colours, every role and surface takes a system colour (§3's Theme, `tokens.json` `hc`), and shape and words still carry each state (§2.1). | PWA: `pwa-ui`'s theme.spec, "in forced colours every role is a system colour", and `a11y-pwa`'s forced-colours axe run (Chromium); that shape and words still tell states apart is manual. Windows: manual | |
+| A10 | **Reduced motion** follows each platform's setting, as §5.3's reduced-motion column and §9.2 say. | PWA: `a11y-pwa`'s reduced-motion.spec. Windows: manual | #659 |
+| A11 | **Targets:** at least 44×44 on touch platforms and 32×32 with a pointer on desktop; never under WCAG 2.5.8's minimum anywhere (24×24, or its spacing exception). | PWA: axe `target-size` in `a11y-pwa` (WCAG 2.5.8 only); 44 and 32 are manual | |
+| A12 | **Keyboard focus is always shown** (WCAG 2.4.7). In the PWA the ring is drawn through `:focus-visible` (§3: Bridge is focus), never `:focus` alone, and outlines are never hidden for the whole page; on Windows it is the system's focus visuals. A ring is drawn only for focus moved by a key: a press, a touch, or the app coming back from a notification draws none. | PWA: `a11y-pwa`'s keyboard.spec ("with focus shown"). No ring after a touch or a notification is not yet enforced, tracked in #373. Windows: manual | #373 |
+| A13 | **Content stays selectable.** Conversation, code, prompts, questions and every field stay selectable and copyable; never a blanket `user-select: none`. A control's own words (a button, a tab, a menu item), a row's title, a session's header, the app bar's title and a banner's words are not selected by a press, a long press or a double tap; anything a person may want to copy stays selectable. | Manual; the unselectable words are not yet enforced, tracked in #373 | #373 |
+| A14 | **Risky settings carry warning weight.** A setting that weakens a safeguard (bypassing the agent's permission prompts) is drawn with warning weight: Needs you's text colour for its explanation, or an InfoBar while it is on. Its confirmation names exactly what changes and has Cancel as its default button. | Not yet enforced, tracked in #699 | #699 |
+
+### 9.2 Names, keys and announcements by surface
+
 - **Glyphs** carry their state as an accessible name. A row reads as "Plan Migration to
   Windows App, delegating to 3 agents, DEV-VM1": its parts (title, status, driver, machine;
   a strip item's name, state, time and parent) are joined with commas, while the status's own
