@@ -178,15 +178,17 @@ sealed class FakeAgentHaBridge : IAsyncDisposable
     }, Runtime_, Host, Hook, time);
 
     // A migrate or rollback whose waits these fakes settle at once or never (a daemon stopped or
-    // started, the spool's claim let go or held, a host that never takes the spool), on a clock
-    // moved on by one poll each time it waits. A wait meant to run out (a daemon that never stops,
+    // started, the spool's claim let go or held, a host that never takes the spool), on a PollClock,
+    // which moves on only while the migration waits. A wait meant to run out (a daemon that never stops,
     // one never seen back) still takes its whole timeout, of this clock's time: on the real one each
     // took 2 s, and those waits were most of what made MigrationTests hold up Host.Tests (#479).
     // Not for a migration that has to see the host start (VerifyAsync): the intake runs on real time.
-    public Task<MigrationReport> OnWaitedClock(Func<Migrator, Task<MigrationReport>> run, TimeSpan? verify = null)
+    // It starts at the wall clock's now, since the migration reads its time against the files and
+    // spool names it writes.
+    public async Task<MigrationReport> OnPollClock(Func<Migrator, Task<MigrationReport>> run, TimeSpan? verify = null)
     {
-        var clock = new WaitedClock();
-        return clock.Run(run(Migrator(verify, time: clock)), PollEvery);
+        await using var clock = new PollClock(DateTimeOffset.UtcNow);
+        return await run(Migrator(verify, time: clock));
     }
 
     // Every file under HOME and its hash, but for what the daemon and the hook change by
