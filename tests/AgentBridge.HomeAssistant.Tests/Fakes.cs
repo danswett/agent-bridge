@@ -166,6 +166,8 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     public Func<string, Exception?>? NotifyThrows { get; set; }
     readonly System.Threading.Channels.Channel<HaEvent> events = System.Threading.Channels.Channel.CreateUnbounded<HaEvent>();
     public int EventSubscriptions;
+    // Those taken and not yet let go.
+    public int HeldEventSubscriptions;
 
     public Task CallServiceAsync(string domain, string service, JsonObject data, CancellationToken cancellationToken = default)
     {
@@ -245,11 +247,16 @@ internal sealed partial class FakeHomeAssistant : IHomeAssistant
     {
         await SubscriptionGate.Task.WaitAsync(cancellationToken);
         Interlocked.Increment(ref EventSubscriptions);
-        subscribed?.Invoke();
-        await foreach (var e in events.Reader.ReadAllAsync(cancellationToken))
+        Interlocked.Increment(ref HeldEventSubscriptions);
+        try
         {
-            if (e.EventType == eventType) { yield return e; }
+            subscribed?.Invoke();
+            await foreach (var e in events.Reader.ReadAllAsync(cancellationToken))
+            {
+                if (e.EventType == eventType) { yield return e; }
+            }
         }
+        finally { Interlocked.Decrement(ref HeldEventSubscriptions); }
     }
 
     public async IAsyncEnumerable<HaTrigger> WatchAsync(IReadOnlyCollection<string> entityIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)

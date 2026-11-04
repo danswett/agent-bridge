@@ -195,13 +195,16 @@ public sealed class AgentReadinessTests : IDisposable
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         commands.Run = async ct => { entered.TrySetResult(); return await release.Task.WaitAsync(ct); };
-        await using var service = Service();
+        // The probe ends when the test releases it, never by the clock: with the usual three
+        // seconds, a loaded Windows runner (#553) reached the timeout before the second refresh
+        // had started, and both reports read as timed out.
+        await using var service = Service(timeout: TimeSpan.FromMinutes(1));
 
         var first = service.RefreshAsync();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var second = service.RefreshAsync();
         release.SetResult(new CommandResult(true, false, 0, "2.3.4"));
-        var reports = await Task.WhenAll(first, second);
+        var reports = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Single(commands.Calls);
         Assert.All(reports, r => Assert.Equal("2.3.4", Agent(r, "claude").Version));

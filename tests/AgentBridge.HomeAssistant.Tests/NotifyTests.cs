@@ -1075,10 +1075,13 @@ public sealed class NotifyTests : IDisposable
 
         daemon = "agent-ha-bridge's daemon (pid 4242)";
         await Until(() => !c.Started);
-        await Task.Delay(200);
+        // Let go, not only paused: the listener notices a pause on its own tick. A fixed 200 ms
+        // here could end before it had (#596, a loaded windows-11-arm runner), and resumed before
+        // it noticed, it held on throughout and never subscribed again.
+        await Until(() => Volatile.Read(ref ha.HeldEventSubscriptions) == 0);
         var held = Volatile.Read(ref ha.EventSubscriptions);
         daemon = null;
-        await Until(() => Volatile.Read(ref ha.EventSubscriptions) == held + 1);
+        await Until(() => Volatile.Read(ref ha.EventSubscriptions) == held + 1 && Volatile.Read(ref ha.HeldEventSubscriptions) == 1);
     }
 
     [Fact]
