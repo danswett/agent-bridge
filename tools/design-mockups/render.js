@@ -47,6 +47,8 @@ const inter = '@fontsource-variable/inter/files/inter-latin-wght-normal.woff2';
 const fontCss = [
   // Stand-ins: Segoe UI and SF Pro are not licensed for this machine, so Inter takes their place.
   ...['Segoe UI Variable Text', 'Segoe UI Variable Display', 'Segoe UI', 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', 'Google Sans', STAND_IN].map(f => font(f, inter)),
+  // Real, not a stand-in: a wordmark option in docs/design/brand.md (#536).
+  font('Inter Tight', '@fontsource-variable/inter-tight/files/inter-tight-latin-wght-normal.woff2'),
   font('Roboto Flex', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   font('Roboto', '@fontsource-variable/roboto-flex/files/roboto-flex-latin-full-normal.woff2'),
   // The real monospace, from the repository (design/fonts/slipgates-mono).

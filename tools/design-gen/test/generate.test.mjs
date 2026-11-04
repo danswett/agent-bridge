@@ -1,6 +1,6 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { generate, staleFiles, write, repoRoot } from '../generate.mjs';
 import { parseXml, parsePathData, formatCommands } from '../lib/svg.mjs';
@@ -36,6 +36,17 @@ test('a hand-edited generated file is reported stale, and generating again puts 
   assert.deepEqual(staleFiles(root), []);
 });
 
+test('a generated file design-gen no longer writes is reported stale, and generating again deletes it', () => {
+  const root = copy('retired');
+  const old = 'src/AgentBridge.Host.Core/DesignBrand.cs';
+  mkdirSync(path.join(root, path.dirname(old)), { recursive: true });
+  writeFileSync(path.join(root, old), 'namespace AgentBridge.Host.Core;\n');
+  assert.deepEqual(staleFiles(root), [old]);
+  write(root);
+  assert.deepEqual(staleFiles(root), []);
+  assert.equal(existsSync(path.join(root, old)), false);
+});
+
 test('a file checked out with Windows line endings is not stale', () => {
   const root = copy('crlf');
   writeFileSync(path.join(root, XAML), read(root, XAML).replace(/\n/g, '\r\n'));
@@ -65,6 +76,33 @@ test('a surface without a high-contrast mapping is refused rather than left to t
   delete tokens.surface.windows.hc.card;
   writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
   assert.throws(() => generate(root), /surface\.windows\.hc\.card is missing/);
+});
+
+test('a rename is one change to the brand token, reaching the Windows app and host, the PWA, Apple and Android', () => {
+  const root = copy('brand');
+  const tokens = JSON.parse(read(root, 'design/tokens.json'));
+  tokens.brand = { name: 'Gatehouse', shortName: 'Gatehouse', supportEmail: 'help@example.org' };
+  writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+  const brandFiles = ['src/AgentBridge.Protocol/DesignBrand.cs', 'pwa/design/brand.js', 'design/apple/Brand.swift', 'design/android/values/brand.xml'];
+  assert.deepEqual(staleFiles(root).sort(), [...brandFiles, XAML].sort());
+  const out = generate(root);
+  assert.match(out['src/AgentBridge.Protocol/DesignBrand.cs'], /public const string Name = "Gatehouse";/);
+  assert.match(out['pwa/design/brand.js'], /supportEmail: 'help@example\.org',/);
+  assert.match(out['design/apple/Brand.swift'], /public static let shortName = "Gatehouse"/);
+  assert.match(out['design/android/values/brand.xml'], /<string name="brand_name" translatable="false">Gatehouse<\/string>/);
+  assert.match(out[XAML], /<x:String x:Key="AbBrandName">Gatehouse<\/x:String>/);
+});
+
+test('a brand short name a home screen would clip, a value needing escaping, or a malformed address is refused', () => {
+  const root = copy('badbrand');
+  const tokens = JSON.parse(read(root, 'design/tokens.json'));
+  const attempt = (b) => {
+    writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify({ ...tokens, brand: { ...tokens.brand, ...b } }));
+    return () => generate(root);
+  };
+  assert.throws(attempt({ shortName: 'Slipgates Desktop' }), /a home screen shows 12/);
+  assert.throws(attempt({ name: 'Slip "gates"' }), /would need escaping/);
+  assert.throws(attempt({ supportEmail: 'support.slipgates.com' }), /not an address/);
 });
 
 // --- the app's resources, read as the XAML they are ---
@@ -113,6 +151,17 @@ test('the sprite has a symbol for every glyph and icon, and each moving part on 
   const needs = read(repoRoot, 'pwa/design/sprite.svg').match(/<symbol id="glyph-needs"[\s\S]*?<\/symbol>/)[0];
   assert.ok(!/#[0-9A-Fa-f]{6}/.test(needs), 'the ink comes from --ab-glyph-ink, not the file');
   assert.match(needs, /var\(--ab-glyph-ink\)/);
+});
+
+test('a glyph\'s track stays faint by default, and a session row can draw it solid in trackRow (rule D)', () => {
+  const working = read(repoRoot, 'pwa/design/sprite.svg').match(/<symbol id="glyph-mark-working"[\s\S]*?<\/symbol>/)[0];
+  assert.match(working, /class="track" fill="var\(--ab-glyph-track, currentColor\)" fill-opacity="var\(--ab-glyph-track-opacity, 0\.3\)"/);
+  const xaml = read(repoRoot, XAML).match(/<Style x:Key="AbGlyphMarkWorking"[\s\S]*?<\/Style>/)[0];
+  const paths = [...xaml.matchAll(/<Path [^>]*\/>/g)].map((m) => m[0]);
+  assert.equal(paths.filter((p) => /Fill="\{TemplateBinding Foreground\}" Opacity="0\.3"/.test(p)).length, 1, 'the faint track');
+  const solid = paths.filter((p) => p.includes('{TemplateBinding BorderBrush}'));
+  assert.equal(solid.length, 1, 'the solid track, drawn only when BorderBrush is set');
+  assert.ok(!solid[0].includes('Opacity='));
 });
 
 test('the PWA gets an @font-face with font-display swap for every face of both families, synthesis off, then the fallback stacks', () => {

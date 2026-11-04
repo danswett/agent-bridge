@@ -4,7 +4,7 @@
 // the app can check at run time that every one of them resolves in every theme.
 
 import { toXamlColor } from './color.mjs';
-import { SYSTEM_COLORS, roleTokens, surfaceTokens, fontFamilies, monoFamilies, bundledFonts, rampFaces, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes, motion, xamlCase } from './tokens.mjs';
+import { SYSTEM_COLORS, roleTokens, surfaceTokens, fontFamilies, monoFamilies, bundledFonts, rampFaces, radii, spaces, accentShades, hyperlinkTokens, layoutSizes, typeRamp, inlineMono, inlineMonoSizes, motion, xamlCase, brand } from './tokens.mjs';
 import { MOVING_CLASSES, formatCommands, fmt } from './svg.mjs';
 
 const pascal = (s) => s.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join('');
@@ -70,6 +70,12 @@ function partXaml(node, svg, indent, names) {
   }
   if (node.opacity !== 1) { a.push(`Opacity="${fmt(node.opacity)}"`); }
   if (name) { a.unshift(`x:Name="${name}"`); }
+  // A track is drawn twice: faint in the foreground, then solid in the control's BorderBrush,
+  // which is unset, so draws nothing, until a session row sets it to trackRow (brand.md, rule D).
+  if (node.classes.includes('track') && !name) {
+    const solid = a.filter((x) => !x.startsWith('Opacity=')).map((x) => x.replace('{TemplateBinding Foreground}', '{TemplateBinding BorderBrush}'));
+    return `${indent}<Path ${a.join(' ')} />\n${indent}<Path ${solid.join(' ')} />`;
+  }
   const open = `${indent}<Path ${a.join(' ')}`;
   return name ? `${open}>\n${indent}    <Path.RenderTransform>${rotate(svg.size)}</Path.RenderTransform>\n${indent}</Path>` : `${open} />`;
 }
@@ -145,6 +151,12 @@ ${accent.length ? `
          the system accent take it instead of the person's Windows accent. High contrast ignores it. -->
 ${accent.map((a) => `    <Color x:Key="${a.key}">${toXamlColor(a.value)}</Color>`).join('\n')}
 ` : ''}
+    <!-- The product's name and contact (docs/design/brand.md, The name), for markup:
+         {StaticResource AbBrandName}. Code reads AgentBridge.Protocol.DesignBrand. -->
+    <x:String x:Key="AbBrandName">${brand(tokens).name}</x:String>
+    <x:String x:Key="AbBrandShortName">${brand(tokens).shortName}</x:String>
+    <x:String x:Key="AbBrandSupportEmail">${brand(tokens).supportEmail}</x:String>
+
     <!-- The text face and the monospace (docs/design/ui.md §4.1): each bundled family as one
          collection of real faces, then the fallback stack. WinUI's controls and its own text
          styles draw in ContentControlThemeFontFamily, and a TextBlock or RichTextBlock with no
