@@ -8,6 +8,7 @@ public class CiPlanTests
           plan:
             outputs:
               whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
+              suites: ${{ steps.select.outputs.suites }}
               product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
               product: ${{ steps.select.outputs.product }}
               ha-integration: ${{ steps.select.outputs.ha-integration }}
@@ -116,6 +117,15 @@ public class CiPlanTests
     {
         Assert.Equal(["ci.yml job product has steps that run when a suite is selected, but its env SUITES isn't ${{ needs.plan.outputs.suites }}"],
             Check(Wired.Replace("SUITES: ${{ needs.plan.outputs.suites }}", "SUITES: '[]'")));
+        // The plan's own output must come from the selection, or every selective PR skips the steps.
+        Assert.Equal(["ci.yml plan's output suites is ${{ steps.select.outputs.test-projects }}, not ${{ steps.select.outputs.suites }}"],
+            Check(Wired.Replace("suites: ${{ steps.select.outputs.suites }}", "suites: ${{ steps.select.outputs.test-projects }}")));
+        Assert.Equal(["ci.yml plan has no output suites"],
+            Check(Wired.Replace("suites: ${{ steps.select.outputs.suites }}", "")));
+        // A step's own env would win over its job's.
+        Assert.Equal(["ci.yml job product step \"The NativeAOT transport\" env sets SUITES, which only a job's env may set, as SUITES, from the plan"],
+            Check(Wired.Replace("contains(fromJSON(env.SUITES), 'transport'))\n", "contains(fromJSON(env.SUITES), 'transport'))\n        env:\n          SUITES: '[]'\n")
+                .Replace("contains(fromJSON(env.SUITES), 'transport'))\r\n", "contains(fromJSON(env.SUITES), 'transport'))\r\n        env:\r\n          SUITES: '[]'\r\n")));
         // An alias would let a step test the suites without the step checks seeing it.
         Assert.Equal(["ci.yml job product env PICKED reads the plan's suites, which steps may read only as SUITES"],
             Check(Wired.Replace("SUITES: ${{ needs.plan.outputs.suites }}", "SUITES: ${{ needs.plan.outputs.suites }}\n      PICKED: ${{ needs['plan'].outputs.suites }}")));

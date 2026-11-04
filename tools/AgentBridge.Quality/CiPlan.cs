@@ -123,6 +123,7 @@ static partial class CiPlan
             Add($"ci.yml plan has no step with id {WholeRing}, which decides the whole ring apart from the selector");
         var planOutputs = Child(plan, "outputs") as YamlMappingNode;
         var bindings = gated.Select(id => (Output: id, Binding: $"${{{{ steps.select.outputs.{id} }}}}"))
+            .Append(("suites", "${{ steps.select.outputs.suites }}"))
             .Append((WholeRing, $"${{{{ steps.{WholeRing}.outputs.{WholeRing} }}}}"));
         foreach (var (output, binding) in bindings)
         {
@@ -241,18 +242,19 @@ static partial class CiPlan
 
         // The plan's suites and whole-ring reach steps only as SUITES and WHOLE_RING: under another
         // name a step could test them without the checks above seeing it.
-        var envs = new List<(string Where, YamlMappingNode Env)>();
+        var envs = new List<(string Where, YamlMappingNode Env, bool Step)>();
         if (Child(root, "env") is YamlMappingNode workflowEnv)
-            envs.Add(("ci.yml env", workflowEnv));
-        foreach (var (id, job) in jobs)
+            envs.Add(("ci.yml env", workflowEnv, false));
+        // Not the plan's own steps: its WHOLE_RING comes from its whole-ring step, not from needs.
+        foreach (var (id, job) in jobs.Where(j => j.Key != Plan))
         {
             if (Child(job, "env") is YamlMappingNode jobEnv)
-                envs.Add(($"ci.yml job {id} env", jobEnv));
+                envs.Add(($"ci.yml job {id} env", jobEnv, false));
             foreach (var step in Steps(job))
                 if (Child(step, "env") is YamlMappingNode stepEnv)
-                    envs.Add(($"ci.yml job {id} step \"{Scalar(step, "name") ?? Scalar(step, "id") ?? "(unnamed)"}\" env", stepEnv));
+                    envs.Add(($"ci.yml job {id} step \"{Scalar(step, "name") ?? Scalar(step, "id") ?? "(unnamed)"}\" env", stepEnv, true));
         }
-        foreach (var (where, envMap) in envs)
+        foreach (var (where, envMap, isStep) in envs)
             foreach (var (keyNode, valueNode) in envMap.Children)
             {
                 var key = (keyNode as YamlScalarNode)?.Value ?? "";
@@ -260,6 +262,12 @@ static partial class CiPlan
                 foreach (var (output, allowed) in new[] { ("suites", "SUITES"), (WholeRing, "WHOLE_RING") })
                     if (ReadsOutput(output).IsMatch(value) && key != allowed)
                         Add($"{where} {key} reads the plan's {output}, which steps may read only as {allowed}");
+                // A step's env wins over its job's, and env names are matched in any case in
+                // expressions, so a step could hand itself SUITES: '[]' and skip on a ready PR; a
+                // second spelling beside the job's would leave which one counts unclear.
+                var upper = key.ToUpperInvariant();
+                if (upper is "SUITES" or "WHOLE_RING" && (isStep || key != upper))
+                    Add($"{where} sets {key}, which only a job's env may set, as {upper}, from the plan");
             }
 
         return problems;
