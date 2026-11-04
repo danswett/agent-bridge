@@ -547,9 +547,10 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
     lifts once it has moved 4 with the button down. A click still opens the session, and a
     right-click its menu.
   - **The grip** is there only in Your order. There each card reserves a 24 column for it,
-    on touch and with a mouse alike, so nothing shifts as it shows on hover; on touch it shows
-    on every card in `text3`. In Most recent and Machine rows don't move, so there is no grip
-    and no column, and the row's content stays where it is.
+    on touch and with a mouse alike, so nothing shifts as it shows on hover; on touch, and on
+    any device with a touchscreen (a laptop's beside its mouse too), it shows on every card in
+    `text3`. In Most recent and Machine rows don't move, so there is no grip and no
+    column, and the row's content stays where it is.
   - **The hint,** "Press and hold a session to move it. Or use Move up and Move down in its
     menu.", is a toast. It shows once by itself, the first time a touch user sees the list in
     Your order with at least 2 sessions that can move, and a flag on the device stops it

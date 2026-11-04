@@ -555,7 +555,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 }
 /* Moving sessions (ui.md §5.3 Lift and Reorder, §6.1 Moving; #592, #593). A card can't be
    selected, called out or dragged by the system, so a long press is the app's own. Its grip is
-   its leading 24, the card's full height: on hover with a mouse or pen, always on touch (D5). */
+   its leading 24, the card's full height: on hover with a mouse or pen, always on touch (D5) and
+   on a device with a touchscreen too. */
 .session-list { position: relative; }
 .session-list > .session {
   -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
@@ -574,6 +575,11 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (hover: hover) and (pointer: fine) {
   .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { opacity: 0; color: var(--ab-text2); }
   .session-list[data-sort="yours"]:not([data-filtered="true"]) :is(.session:hover, .session.lifted) .drag-handle { opacity: 1; }
+}
+/* A touchscreen besides (a laptop's): a grip takes a touch whole, with no scroll, so it shows
+   wherever it is, as on touch. */
+@media (hover: hover) and (pointer: fine) and (any-pointer: coarse) {
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { opacity: 1; color: var(--ab-text3); }
 }
 .session.lifted .drag-handle { color: var(--ab-text); cursor: grabbing; }
 :root[data-reordering] * { -webkit-user-select: none; user-select: none; }

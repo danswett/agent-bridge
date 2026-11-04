@@ -340,6 +340,30 @@ test.describe('on an Android phone, by touch', () => {
   });
 });
 
+test.describe('on a laptop with a touchscreen as well as a mouse', () => {
+  test.skip(({ browserName }) => browserName !== 'chromium', 'the input devices are set through Chromium\'s settings');
+
+  test('the grips show on every card, not only the one hovered, as each takes a touch whole', async ({ playwright, baseURL }) => {
+    // Blink's own input settings: a fine primary pointer that hovers, and a coarse one besides.
+    const browser = await playwright.chromium.launch({
+      channel: test.info().project.use.channel,
+      args: ['--blink-settings=primaryPointerType=4,availablePointerTypes=6,primaryHoverType=2,availableHoverTypes=3'],
+    });
+    try {
+      const page = await browser.newPage({ baseURL, viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+      await openDemo(page);
+      expect(await page.evaluate(() => matchMedia('(hover: hover) and (pointer: fine) and (any-pointer: coarse)').matches)).toBe(true);
+      await page.mouse.move(0, 0);
+      for (const id of FIRST) {
+        expect(await card(page, id).locator('.drag-handle').evaluate((e) => getComputedStyle(e).opacity)).toBe('1');
+      }
+      expect(await page.evaluate(() => window.__cspViolations)).toEqual([]);
+    } finally {
+      await browser.close();
+    }
+  });
+});
+
 test.describe('the long press, on each platform', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
