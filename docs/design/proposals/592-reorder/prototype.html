@@ -26,7 +26,7 @@
   --subtle: rgba(255,255,255,.05); --selected: rgba(255,255,255,.07);
   --text: #FFFFFF; --text2: rgba(255,255,255,.72); --text3: rgba(255,255,255,.54);
   --bridge: #2DD4BF; --needs: #FFB224; --active: #4C9AFF; --agent: #A78BFA; --danger: #FF6B6B; --neutral: #8B949E;
-  --ink: #14100A; --knock: #272A2E;
+  --ink: #14100A; --knock: #272A2E; --bridge-on: #062621;
   --tint: color-mix(in srgb, var(--card) 95%, var(--bridge));
 }
 [data-theme="light"] {
@@ -35,14 +35,14 @@
   --subtle: rgba(0,0,0,.03); --selected: rgba(0,0,0,.05);
   --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
   --bridge: #0B7A6E; --needs: #B87700; --active: #0B63E5; --agent: #6D4AE0; --danger: #C9302C; --neutral: #6E7781;
-  --ink: #14100A; --knock: #F9F9F9;
+  --ink: #14100A; --knock: #F9F9F9; --bridge-on: #FFFFFF;
   --tint: color-mix(in srgb, var(--card) 96%, var(--bridge));
 }
 /* A stand-in for Windows' Night sky contrast theme, for screens that can't switch to the real one. */
 .hc {
   --shell: #000; --layer: #000; --card: #000; --stroke: #A6A6A6; --stroke2: #FFF; --subtle: #000; --selected: #000;
   --text: #FFF; --text2: #FFF; --text3: #A6A6A6; --bridge: #D6B4FD; --needs: #FFF; --active: #FFF; --agent: #FFF;
-  --danger: #FFF; --neutral: #FFF; --ink: #000; --knock: #000; --tint: #000; --hl: #D6B4FD;
+  --danger: #FFF; --neutral: #FFF; --ink: #000; --knock: #000; --tint: #000; --hl: #D6B4FD; --bridge-on: #000;
 }
 .rm { --nb: 0ms !important; --settle: 0ms !important; --lift: 0ms !important; --press: 0ms !important; }
 
@@ -140,15 +140,17 @@ button { font: inherit; color: inherit; }
 .row-age { grid-column: 4; grid-row: 1; font-size: 12px; color: var(--text2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chip {
   grid-column: 4; grid-row: 1; display: none; align-items: center; gap: 4px; padding: 0 8px; height: 20px; border-radius: 10px;
-  font-size: 12px; line-height: 16px; font-weight: 600; color: var(--bridge); background: color-mix(in srgb, var(--bridge) 14%, transparent);
+  font-size: 12px; line-height: 16px; font-weight: 600; color: var(--bridge-on); background: var(--bridge);
 }
 .chip svg { width: 12px; height: 12px; }
 .slot.crossing .chip, .slot.outside .chip { display: inline-flex; }
 .slot.crossing .row-age, .slot.outside .row-age { visibility: hidden; }
 .slot.outside .chip { color: var(--text2); background: var(--subtle); }
 
-/* Recent and Name sorts have no grip and no drag (ui.md §6.1). */
-.sorted .grip { visibility: hidden; }
+/* Other sorts have no grip and no drag, and reserve no column for it (ui.md §6.1): the glyph
+   sits 12 from the edge, where it is without the grip. */
+.sorted .grip { display: none; }
+.sorted .row-main { grid-template-columns: 0 20px minmax(0, 1fr) auto; }
 
 /* The lifted card: it follows the pointer outside the list's clip, above rows and headers, below the bar. */
 .slot.lifted, .slot.settling { position: fixed; z-index: 30; }
@@ -211,6 +213,8 @@ body.dragging, body.dragging * { cursor: grabbing !important; -webkit-user-selec
   font-size: 13px; line-height: 18px; opacity: 0; pointer-events: none; transition: opacity 167ms var(--ease), transform 167ms var(--ease);
 }
 .toast.on { opacity: 1; transform: translate(-50%, 0); }
+/* Under reduced motion the hint doesn't slide; it only fades. */
+.rm .toast, .rm .toast.on { transform: translate(-50%, 0); transition: opacity 167ms var(--ease); }
 .tune {
   position: fixed; z-index: 55; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: min(360px, calc(100vw - 24px));
   border-radius: 8px; background: var(--card); border: 1px solid var(--stroke2); box-shadow: 0 8px 16px rgba(0,0,0,.18);
@@ -528,7 +532,10 @@ $('#hc').addEventListener('change', (e) => { cfg.hc = e.target.checked; applyCfg
 $('#haptic').addEventListener('change', (e) => { cfg.haptic = e.target.checked; applyCfg(); });
 mqReduce.addEventListener?.('change', applyCfg);
 $('#theme').addEventListener('click', () => { cfg.theme = cfg.theme === 'dark' ? 'light' : 'dark'; applyCfg(); });
-$('#reset').addEventListener('click', () => { Object.assign(cfg, DEFAULTS); applyCfg(); measure(); relayout(true); });
+$('#reset').addEventListener('click', () => {
+  Object.assign(cfg, DEFAULTS); applyCfg(); measure(); relayout(true);
+  try { localStorage.removeItem(HINT_SEEN); } catch { /* storage blocked */ }
+});
 $('#copy').addEventListener('click', async () => {
   const text = JSON.stringify(values(), null, 2);
   const ta = $('#values');
@@ -544,6 +551,7 @@ $('#sort').addEventListener('click', () => {
   $('#sort-label').textContent = sorted ? 'Recent' : 'Your order';
   app.classList.toggle('sorted', sorted);
   showToast(sorted ? 'Sorted by Recent. Switch back to Your order to move sessions.' : 'Your order. Drag a session to move it.');
+  firstHint();
 });
 
 // ---- Speech ---------------------------------------------------------------------------
@@ -553,6 +561,16 @@ function say(text, delay = 0) {
   sayTimer = setTimeout(() => { live.textContent = ''; requestAnimationFrame(() => { live.textContent = text; }); }, delay);
 }
 let toastTimer = 0;
+const HINT = 'Press and hold a session to move it. Or use Move up and Move down in its menu.';
+const HINT_SEEN = 'p592-move-hint-seen';
+// D5: the hint shows once by itself, the first time a touch user sees the list in Your order
+// with at least 2 sessions to move; a flag on the device stops it after that. Tapping the grip
+// shows it every time. Where storage is blocked the list can't be in Your order (ui.md §6.1).
+function firstHint() {
+  if (sorted || order.length < 2 || !matchMedia('(pointer: coarse)').matches) return;
+  try { if (localStorage.getItem(HINT_SEEN)) return; localStorage.setItem(HINT_SEEN, '1'); } catch { return; }
+  showToast(HINT);
+}
 function showToast(text) {
   toast.textContent = text;
   toast.classList.add('on');
@@ -563,6 +581,20 @@ function showToast(text) {
 // ---- Gesture --------------------------------------------------------------------------
 let g = null;           // the gesture in progress
 let suppressClick = false;   // swallows the click that ends a lift, a hold or a grip tap
+let rehit = null;       // the card a press during the settle resolved to; its click goes there
+
+// The card whose committed place is under a point, and whether the point is on its grip (the
+// first 24 of the card, the grip's hit area, ui.md §9), from the layout, not the drawn cards.
+function slotAt(cx, cy) {
+  const cr = content.getBoundingClientRect();
+  const x = cx - cr.left, y = cy - cr.top;
+  for (const [key, p] of layout(groupsNow(), headersShown).pos) {
+    if (x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) return { key, onGrip: !sorted && x - p.x < 24 };
+  }
+  return null;
+}
+// Ends a settle at once. The order is already committed; this only finishes the drawing.
+function settleNow() { if (g && g.phase === 'settling') { clearTimeout(g.settleTimer); g.finishNow(); relayout(true); } }
 
 function locate(groups, key, showHeaders) {
   const gs = showHeaders ? groups : [{ id: 'sessions', keys: groups.flatMap((x) => x.keys) }];
@@ -580,14 +612,23 @@ function groupsWith(cand) {
 const same = (a, b) => a && b && a.gid === b.gid && a.i === b.i;
 
 content.addEventListener('pointerdown', (e) => {
-  // A press during the settle finishes it at once and acts on the card in its new place.
-  if (g && g.phase === 'settling' && e.isPrimary) { clearTimeout(g.settleTimer); g.finishNow(); }
+  // The order was committed at release, so a press during the settle acts on the card now in
+  // that place: the settle is finished, and the press is resolved against the committed layout
+  // rather than e.target, which was hit-tested against cards still sliding there.
+  let li = null, onGrip = false;
+  rehit = null;
+  if (g && g.phase === 'settling' && e.isPrimary) {
+    settleNow();
+    const at = slotAt(e.clientX, e.clientY);
+    if (at) { li = els.get(at.key); onGrip = at.onGrip; rehit = { li, onGrip }; }
+  } else if (e.target.closest) {
+    li = e.target.closest('.slot');
+    onGrip = !!e.target.closest('.grip');
+  }
   if (g || !e.isPrimary || e.button !== 0) return;
-  const li = e.target.closest('.slot');
   if (!li) return;
   closeMenu(false);
   suppressClick = false;
-  const onGrip = !!e.target.closest('.grip');
   g = { id: e.pointerId, type: e.pointerType, key: li.dataset.key, li, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY,
         phase: 'pending', onGrip, timer: 0 };
   li.classList.add('pressed');
@@ -642,7 +683,7 @@ window.addEventListener('pointerup', (e) => {
   if (g.phase === 'pending') {
     const tapGrip = g.onGrip && g.type === 'touch' && !sorted;
     abort();
-    if (tapGrip) { suppressClick = true; showToast('Press and hold a session to move it. Or use Move up and Move down in its menu.'); }
+    if (tapGrip) { suppressClick = true; showToast(HINT); }
   } else if (g.phase === 'lifted') {
     drop(false);
   }
@@ -684,9 +725,11 @@ document.addEventListener('contextmenu', (e) => {
 });
 content.addEventListener('dragstart', (e) => e.preventDefault());
 content.addEventListener('click', (e) => {
-  if (suppressClick) { suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
-  const li = e.target.closest('.slot');
-  if (!li || e.target.closest('.grip')) return;
+  if (suppressClick) { suppressClick = false; rehit = null; e.preventDefault(); e.stopPropagation(); return; }
+  const hit = rehit;
+  rehit = null;
+  const li = hit ? hit.li : e.target.closest('.slot');
+  if (!li || (hit ? hit.onGrip : e.target.closest('.grip'))) return;
   selected = li.dataset.key;
   syncDom();
 }, true);
@@ -808,6 +851,16 @@ function drop(cancel) {
   const holdOnly = g.type === 'touch' && !g.armed && !cancel;
   if (cancel || g.outside || holdOnly) { g.candidate = g.origin; }
   const p = placeSocket(false);
+  // The order is committed here, at release (ui.md §6.1). The settle below is only drawn, so a
+  // key, a menu or a press during it acts on the new order and can't be overwritten by it.
+  const moved = !same(g.candidate, g.origin);
+  if (moved) {
+    const gs = groupsWith(g.candidate);
+    if (g.show) {
+      order = [...gs[0].keys, ...gs[1].keys];
+      items[g.key].pinned = g.candidate.gid === 'pinned';
+    } else order = gs[0].keys;
+  }
   const cr = content.getBoundingClientRect();
   const li = g.li;
   g.phase = 'settling';
@@ -816,12 +869,12 @@ function drop(cancel) {
   hdr.pinned.classList.remove('target'); hdr.sessions.classList.remove('target');
   li.style.transform = `translate3d(${cr.left + p.x}px, ${cr.top + p.y}px, 0)`;
   const wasOutside = g.outside;
-  const done = () => finish(cancel || wasOutside, holdOnly, p);
+  const done = () => finish(cancel || wasOutside, holdOnly, p, moved);
   const ms = reduced() ? 0 : Number(cfg.settleMs);
   if (ms <= 0) done(); else { g.finishNow = done; g.settleTimer = setTimeout(done, ms + 20); }
 }
 
-function finish(cancelled, holdOnly, p) {
+function finish(cancelled, holdOnly, p, moved) {
   const li = g.li, key = g.key, cand = g.candidate, origin = g.origin;
   li.style.transition = 'none';
   li.classList.remove('settling');
@@ -829,14 +882,6 @@ function finish(cancelled, holdOnly, p) {
   socket.classList.remove('on');
   for (const e of Object.values(empty)) e.classList.remove('on');
   const focused = document.activeElement;
-  const moved = !same(cand, origin);
-  if (moved) {
-    const gs = groupsWith(cand);
-    if (g.show) {
-      order = [...gs[0].keys, ...gs[1].keys];
-      items[key].pinned = cand.gid === 'pinned';
-    } else order = gs[0].keys;
-  }
   syncDom();
   void li.offsetWidth;
   li.style.transition = '';
@@ -853,6 +898,7 @@ function finish(cancelled, holdOnly, p) {
 
 function cancelDrag(silent) {
   if (!g) return;
+  if (g.phase === 'settling') { settleNow(); return; }
   if (g.phase === 'pending') { abort(); return; }
   if (g.phase === 'lifted') { drop(true); if (silent) clearTimeout(sayTimer); }
 }
@@ -870,6 +916,7 @@ new ResizeObserver(() => {
 
 // ---- Keyboard and menu ----------------------------------------------------------------
 function move(key, delta) {
+  settleNow();
   if (sorted) { showToast('Switch to Your order to move sessions.'); return; }
   const gs = headersShown ? groupsNow() : [{ id: 'sessions', keys: order.slice() }];
   const grp = gs.find((x) => x.keys.includes(key));
@@ -897,6 +944,7 @@ function reveal(key) {
   else if (top + p.h > list.scrollTop + list.clientHeight) list.scrollTop = top + p.h - list.clientHeight;
 }
 function togglePin(key) {
+  settleNow();
   const s = items[key];
   s.pinned = !s.pinned;
   order = order.filter((k) => k !== key);
@@ -958,6 +1006,7 @@ syncDom();
 measure();
 relayout(true);
 lastW = content.clientWidth;
+firstHint();
 
 // A small hook for the proposal's Playwright checks; not part of the design.
 window.__reorder = {

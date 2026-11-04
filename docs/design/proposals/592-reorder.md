@@ -5,6 +5,15 @@
 > [ui.md](../ui.md) (§5.3 Lift and Reorder, §6.1 Moving, §9), and the `lift` motion token is
 > in `design/tokens.json`. ui.md is the spec and wins wherever this page and it disagree. The
 > PWA (#593), Windows (#594) and native (#595) work follows.
+>
+> **Corrected (2026-11-04)** from the implementations, #633 (PWA) and #637 (Windows), and the
+> design track's answers on #593 and #594: the order is committed on release and the settle
+> is only drawn (§5, §12.1); under reduced motion only the held card follows the pointer, and
+> the hint only fades (§10); a press during the settle acts on the card now in that place
+> (§5); the Pin chip is a solid Bridge fill (§6); the drag shadow is two tokens both clients
+> read (§3, §11); the empty Sessions placeholder (§6); Windows' pen-only haptic (§9.1); the
+> grip's column only in Your order (§9.1); the hint shows once by itself (§9.1, D5); the
+> answer guard (§10); and a recycled held card (§5). The prototype follows them.
 
 *Written for the owner by the design track, and decided on 2026-11-04.* Issues:
 [#592](https://github.com/danswett/agent-bridge/issues/592) (the interaction),
@@ -64,11 +73,11 @@ The lift is the moment the card becomes the thing in your hand. It runs over `li
 | Property | At rest | Lifted |
 |---|---|---|
 | Scale | 1 | **1.02** about the card's centre (D1). 1.02 grows a 340 px card by 7 px, which is enough to read as raised without covering the row above or below. 1.03 reads as "zoomed" on a phone. |
-| Shadow | none | The proposed drag shadow `shadow.drag` (§11). Dark: `0 8 16 rgba(0,0,0,.28)` plus `0 0 2 rgba(0,0,0,.24)`. Light: `0 8 16 rgba(0,0,0,.14)` plus `0 0 2 rgba(0,0,0,.12)`. That is Fluent's 16 dp shadow, the height of a flyout. On Windows it's a `ThemeShadow` at 16 Z. |
+| Shadow | none | The drag shadow, from two tokens (§11): `0 8 16` in `surface.dragShadow` plus `0 0 2` in `surface.dragShadowEdge`. Dark: black at .28 and .24. Light: .14 and .12. That is Fluent's 16 dp shadow, the height of a flyout. Windows draws it as a Composition `DropShadow` on the card from `AbDragShadow` and `AbDragShadowEdge` (a `ThemeShadow` would shadow the group header too), and the PWA as a `box-shadow` from `--ab-drag-shadow` and `--ab-drag-shadow-edge`, so the two lifts look the same. |
 | Surface | the row's fill (transparent, or `selected`) | **`card` with a 5% Bridge tint** (4% in light): `color-mix(card 95%, bridge)`. It reads as the same card, picked up. A selected card keeps its `selected` overlay on top. |
 | Edge | none | A 1 px `stroke2` outline, so the card's edge holds on a busy list in light theme. |
 | Corner | `radius.control` (4) | `radius.card` (8 on Windows and in the PWA; 10 on iOS, the cell radius). |
-| Grip | `text3` on touch; hidden until hover with a mouse | `text`, with the cursor `grabbing` |
+| Grip | In Your order only, in a reserved 24 column: `text3` on touch; hidden until hover with a mouse. No grip and no column in other sorts | `text`, with the cursor `grabbing` |
 | Selection pill | the 3×16 Bridge pill, if selected | It stays and moves with the card. Selection doesn't change. |
 | Z-order | in the list | Above every row and header. Below the app bar, the title bar, menus and toasts. Lifting never covers the chrome. |
 
@@ -98,15 +107,18 @@ generator's `hc` table already maps these). See the
 - **Updates wait.** While a card is lifted, a host's changes to the list (arrivals, departures,
   status) apply to the model at once but are drawn only after the drop. A status glyph inside a
   row still cross-fades. If the lifted session itself is removed by its host, the drag cancels
-  and the card fades out where it is.
+  and the card fades out where it is. If a virtualized list recycles the held card's view
+  mid-drag, the card is put back rather than carried on, and that is announced as a cancel.
 
 ## 5. Release, settle and cancel
 
-**Drop.** On release the card **settles from where the pointer left it into the gap** over
-`reorder` (D7), and lowers at the same time: scale to 1, shadow and tint out, and the corner
-back to 4. The order is committed at the moment of release, so the session is in its new
-place even while the card is still settling (§5.3 principle 3). A press during the settle acts
-on the card in its new place.
+**Drop.** **The order is committed at release.** The card then **settles from where the
+pointer left it into the gap** over `reorder` (D7), and lowers at the same time: scale to 1,
+shadow and tint out, and the corner back to 4. The settle is only drawn. The session is in its
+new place while the card is still settling (§5.3 principle 3), so a key or a menu during it
+acts on the committed order and nothing overwrites it afterwards. A press during the settle
+acts on the card now in that place: it is resolved against the committed layout, not against
+cards still sliding there.
 
 **Cancel.** The card goes back to where it came from, with the same settle, and the
 neighbours close the gap there:
@@ -118,6 +130,7 @@ neighbours close the gap there:
 - **`pointercancel`** (the system took the pointer), losing the window's focus, the page being
   hidden, or a second touch point (a pinch).
 - The lifted session ending, or the sort leaving Your order.
+- The list recycling the held card's view (§4).
 
 Announced: "Cancelled. Back at position *N* of *M*."
 
@@ -133,11 +146,14 @@ visible before the drop. See the [Pinned board](592-reorder/proposal-592-pinned.
   with `reorder`, because its group grew or shrank. Two cues show what the drop will do:
   - The **target group's header turns Bridge** (`Highlight` in forced colours) and gains
     "· drop to pin" or "· drop to unpin".
-  - A **Pin or Unpin chip**, in Bridge on a 14% Bridge fill, replaces the card's age.
+  - A **Pin or Unpin chip** replaces the card's age: a solid Bridge fill with the on-Bridge
+    text (`bridge.onDark`, `onLight`; `--ab-bridge-on`). The proposal's Bridge text on a 14%
+    Bridge fill gave about 4.2:1 in light, under 4.5:1.
 - **Drop** pins or unpins exactly as the menu would, at the dropped position. Announced:
   "Pinned. Position 3 of 3 in Pinned." or "Unpinned. Position 1 of 10 in Sessions."
 - **The last pinned card leaving** leaves a dashed placeholder, "Drop here to keep it pinned",
-  so the group stays open to drop back into. It disappears on drop.
+  so the group stays open to drop back into. It disappears on drop. **The last card in Sessions
+  leaving** for Pinned leaves the mirror of it, "Drop here to unpin".
 - **With nothing pinned there is no Pinned header, so a drag can't pin.** Pin is in the menu.
   (A drop zone that appears from nowhere mid-drag would move the whole list.)
 
@@ -176,9 +192,10 @@ See the [Touch board](592-reorder/proposal-592-touch.png).
 - **Long press to lift** anywhere on the card (D3). **iOS 500 ms**: UIKit's drag-lift and
   context-menu delay. **Android 400 ms**: `ViewConfiguration.getLongPressTimeout()`'s default,
   which Compose's `detectDragGesturesAfterLongPress` uses. **PWA:** the same per platform,
-  detected from the user agent (500 elsewhere) (D2).   On the grip, a **150 ms** hold or a 4 px move
-    lifts, because the grip never scrolls (`touch-action: none`). Android's 400 ms is the
-    default since Android 12; older versions use 500.
+  detected from the user agent (500 elsewhere) (D2). On the grip, a **150 ms** hold or a 4 px
+  move lifts, because the grip never scrolls (`touch-action: none`). Android's 400 ms is the
+  default since Android 12; older versions use 500. **Windows** holds 500 ms on touch, and
+  starts a drag after 10 px on touch and 4 px with a mouse.
 - **During the hold** the card shows `selected` at once (Press) and sinks to 98.5% over the
   hold, linearly, so the hold has visible progress. With reduced motion it doesn't sink.
 - **Scroll or drag.** Moving more than **10 px** (the existing `LONG_PRESS_SLOP`) before the
@@ -191,7 +208,9 @@ See the [Touch board](592-reorder/proposal-592-touch.png).
 - **Haptic:** one light tick at the lift (D4). That is `UIImpactFeedbackGenerator(.light)` or
   `.sensoryFeedback(.impact(weight: .light))` on iOS, `HapticFeedbackType.LongPress` on
   Android, and `navigator.vibrate(10)` in the PWA where it exists (Android Chrome; iOS Safari
-  has no web vibration). No tick per slot.
+  has no web vibration). No tick per slot. **On Windows only a pen ticks:** WinUI has no
+  haptics API for a touch screen, which is a platform limit with no substitute (no sound and
+  no extra motion).
 - **Suppress the system's own long press:** `-webkit-touch-callout: none`, `user-select: none`,
   `-webkit-user-drag: none` and `-webkit-tap-highlight-color: transparent` on the card, and
   `contextmenu` prevented for touch. There is then no iOS callout, loupe or link preview, and
@@ -200,9 +219,15 @@ See the [Touch board](592-reorder/proposal-592-touch.png).
   in `pointercancel` even though the touch continues. The PWA then follows the same touch's
   `touchmove`, `touchend` and `touchcancel` until it ends; only a cancel without a touch
   stream cancels the drag.
-- **The grip stays visible on touch,** in `text3` (D5), so moving is discoverable. Tapping it
-  shows a toast, "Press and hold a session to move it. Or use Move up and Move down in its
-  menu."
+- **The grip stays visible on touch,** in `text3` (D5), so moving is discoverable. It, and the
+  24 column it sits in, exist only in Your order. The column is reserved there on touch and
+  with a mouse alike, so rows don't shift as the grip comes and goes. In Most recent and
+  Machine there is no grip and no column, and the row's content stays where it is today.
+- **The hint** is a toast, "Press and hold a session to move it. Or use Move up and Move down
+  in its menu." It **shows once by itself**, the first time a touch user sees the list in Your
+  order with at least 2 sessions that can move, and a flag on the device stops it showing
+  again. **Tapping the grip shows it** every time. It never shows in another sort, or when a
+  filter leaves fewer than 2.
 
 ### 9.2 Mouse and pen
 
@@ -232,7 +257,8 @@ so it does nothing and announces "Top of Pinned." or "End of Sessions.".
     "Pinned, position *N* of *M*. Drops as pinned.";
   - drop: "Moved to position *N* of *M* in *group*.", "Pinned. Position *N* of *M* in Pinned."
     or "Unpinned. …";
-  - cancel: "Cancelled. Back at position *N* of *M*.".
+  - cancel: "Cancelled. Back at position *N* of *M*.", also when the list recycles the held
+    card (§4).
 - **Touch screen readers.** VoiceOver and TalkBack can't long-press-drag reliably, so each
   card exposes the menu's moves as **custom actions**: Move up, Move down and Pin (or Unpin).
   These are `accessibilityAction(named:)` on Apple, `customActions` in Compose semantics, and
@@ -242,36 +268,48 @@ so it does nothing and announces "Top of Pinned." or "End of Sessions.".
   - no sink, no scale and no shadow; the lift is a 2 px Bridge outline on `card`;
   - the gap and neighbours jump to their places, the drop is instant, and the cancel is
     instant (D6);
-  - the card itself still follows the pointer, because that is the person's own movement, not
-    animation (as §5.3 Sheet already does).
+  - only the held card moves, following the pointer, because that is the person's own
+    movement, not animation (as §5.3 Sheet already does);
+  - the hint toast only fades, in place, rather than sliding in.
+- **Answers wait.** A move must never land a tap on a Needs you answer that slid under the
+  finger. The lift arms the answer guard (§5.3 Scroll to a question), it is held through the
+  drag, and it lasts 1 s after a drop, a cancel, an abandoned hold or a keyboard or menu move.
+- **The Pin chip's contrast:** on-Bridge text on a solid Bridge fill passes 4.5:1 in both
+  themes (§6).
 - **High contrast:** §3.
-- **Hit targets:** the grip's hit area is the full card height and 24 px wide. The card is
-  ≥ 44 px tall on touch.
+- **Hit targets:** in Your order, the grip's hit area is the full card height and 24 px wide.
+  The card is ≥ 44 px tall on touch.
 
 ## 11. Tokens
 
-Decided: only `motion.catalogue.lift` is a token, because both clients time the lift from
-the generated motion (`--ab-motion-lift-*` in the PWA, `AbMotionLift*` on Windows). The
+Decided: `motion.catalogue.lift` is a token, because both clients time the lift from the
+generated motion (`--ab-motion-lift-*` in the PWA, `AbMotionLift*` on Windows). **The drag
+shadow is two tokens too** (corrected), because both clients came to read it:
+`surface.dragShadow` (the `0 8 16` key shadow; dark black at .28, light .14) and
+`surface.dragShadowEdge` (the `0 0 2` edge; .24 and .12), with `WindowText` in high contrast,
+where the outline replaces them. They generate `--ab-drag-shadow` and `--ab-drag-shadow-edge`
+for the PWA's `box-shadow`, and `AbDragShadow` and `AbDragShadowEdge` for Windows'
+Composition `DropShadow`. The chip uses the existing `bridge.onDark` and `onLight`. The
 other values stay in ui.md's text. The long press, its slop and the haptic are each
 platform's own, so the native clients read them from the system. The PWA keeps them as
-constants beside its long-press menu's. The lift scale, the tint (a mix of two existing
-tokens) and the drag shadow are used by the PWA and Windows lifts alone. Each can become a
-token in #593 or #594 if both clients come to read it. The table below is the original
-proposal, kept for the record:
+constants beside its long-press menu's. The lift scale and the tint (a mix of two existing
+tokens) are used by the PWA and Windows lifts alone. The table below is the original
+proposal, kept for the record; its `shadow.drag` became the two `surface` tokens:
 
 | Token | Value | Use |
 |---|---|---|
 | `motion.catalogue.lift` | `fast`, `decelerate`; reduced: `instant` | The lift: scale, shadow, tint, corner |
 | `motion.catalogue.reorder` | **unchanged**: `standard`, `standard`; reduced: `instant` | Neighbours, the settle, the cancel, keyboard moves |
-| `shadow.drag` (Windows and PWA, dark) | `0 8px 16px rgba(0,0,0,.28), 0 0 2px rgba(0,0,0,.24)` | The lifted card. WinUI: `ThemeShadow`, Z 16 |
+| `shadow.drag` (Windows and PWA, dark) | `0 8px 16px rgba(0,0,0,.28), 0 0 2px rgba(0,0,0,.24)` | The lifted card. WinUI: a Composition `DropShadow` (corrected from `ThemeShadow`) |
 | `shadow.drag` (light) | `0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12)` | |
 | `drag.liftScale` | 1.02 | D1 |
 | `drag.longPress` | iOS 500, Android 400 ms (the platforms' own) | D2 |
 | `drag.slop` | touch 10, mouse 4 px | |
 | `drag.autoScroll` | zone 10% (40–80 px); 1000 px/s; exponent 2 | §7 |
 
-`shadow.drag` is new because `surface.*.shadow` (one colour at .18) has no geometry. Apple
-and Android use their system list's lift shadow rather than this.
+The drag shadow is new because `surface.*.shadow` (one colour at .18) has no geometry; the
+geometry stays in ui.md's text. Apple and Android use their system list's lift shadow rather
+than this.
 
 ## 12. The prototype
 
@@ -306,6 +344,13 @@ the link in the PR, or serve the folder and open it over the local network.
 WebKit on Windows can't construct `Touch`, so the handover test runs in Chromium only. Every
 run ended with no page errors.
 
+**Corrected and tested again** (2026-11-04), with tests that fail on the earlier prototype:
+the order is committed at release, so Alt+↓ pressed during the settle keeps both moves; a
+press during the settle opens the card now in that place; the hint keeps its place and only
+fades under reduced motion; the Pin chip is a solid Bridge fill with on-Bridge text; Recent
+has no grip and no grip column; and the hint shows once by itself on touch in Your order, then
+only on a grip tap.
+
 Screenshots of the prototype mid-drag:
 
 | | |
@@ -325,7 +370,11 @@ Events state machine on the list: idle, then pending (the hold), then lifted, th
   replaces today's FLIP.
 - **The lifted card:** `position: fixed` (or a transform layer above the list) with
   `will-change: transform`, moved in `pointermove` by `translate3d`, with no transition.
-- **Settle:** a transition to the gap's rectangle, then commit.
+- **Drop:** commit at release, in one `#moved` call, then settle: a transition from the
+  pointer to the gap's rectangle that is only drawn. A key, a menu or a press during it acts
+  on the committed order, and a press is hit-tested against the committed layout.
+- **Shadow:** `box-shadow: 0 8px 16px var(--ab-drag-shadow), 0 0 2px
+  var(--ab-drag-shadow-edge)`.
 - **Wiring:** `setPointerCapture` at the lift; `touch-action: pan-y` on cards and `none` on
   the grip; a non-passive `touchmove` listener while lifted; and the `pointercancel` handover
   in §9.1.
@@ -341,16 +390,20 @@ below/above" caption, and stop using OLE drag-and-drop for an in-list move. Inst
   grip and the row, with `CapturePointer` at the lift (4 px, or at once on the grip). Touch
   uses a `Holding`-free timer of 500 ms.
 - **The lift:** animate the lifted container's `Scale` and `Translation` through
-  `ElementCompositionPreview` / `Visual` properties. Set `Translation` Z to 16 with a
-  `ThemeShadow` whose receivers are the list. Follow the pointer by setting `Translation` X/Y
-    each `PointerMoved` (never `Visual.Offset`, which XAML layout owns), with no animation, and
-    raise the container's `Canvas.ZIndex` above the others.
+  `ElementCompositionPreview` / `Visual` properties. Draw the shadow as a Composition
+  `DropShadow` on the card's visual from `AbDragShadow` and `AbDragShadowEdge` (corrected: a
+  `ThemeShadow` would shadow the group header too). Follow the pointer by setting
+  `Translation` X/Y each `PointerMoved` (never `Visual.Offset`, which XAML layout owns), with
+  no animation, and raise the container's `Canvas.ZIndex` above the others.
 - **Neighbours:** a `Vector3KeyFrameAnimation` on each displaced container's `Translation`,
   using `reorder`'s duration and its `CubicBezierEasingFunction` (0.33, 0, 0.67, 1). Read both
   from `Motion`.
-- **Settle and commit:** animate to the gap, then `ObservableCollection.Move` once. The list
-  keeps the selection rules in `SessionsPage` (the reorder is still a remove and an insert to
-  `ListView`).
+- **Commit, then settle:** `ObservableCollection.Move` once at release, then a settle that is
+  only drawn, from the pointer to the card's new place. The list keeps the selection rules in
+  `SessionsPage` (the reorder is still a remove and an insert to `ListView`). If `ListView`
+  recycles the held container mid-drag, put the card back and announce a cancel.
+- **Haptic:** only a pen ticks. WinUI has no haptics API for a touch screen, and nothing
+  replaces it.
 - **Auto-scroll:** `ScrollViewer.ChangeView(null, offset, null, disableAnimation: true)` per
   `CompositionTarget.Rendering` frame.
 - **Escape and `PointerCaptureLost`** cancel. Announce with `RaiseNotificationEvent`.
@@ -377,7 +430,8 @@ with `LazyListState.scrollBy` per frame.
 
 The text as proposed. ui.md now carries it, expanded: the lift is its own catalogue row,
 because each `motion.catalogue` token has one, and the touch, edge and cancel rules are
-spelled out under Moving. Where the two differ, ui.md wins.
+spelled out under Moving. ui.md also carries the corrections at the top of this page, which
+the quotes below predate. Where the two differ, ui.md wins.
 
 **§5.3, principle 4**, amended:
 
@@ -445,7 +499,9 @@ Decided (owner, 2026-11-04): the recommended option, listed first, for every dec
 
 **D5. The grip on touch.**
 1. **Visible on every card in `text3`, and tapping it shows the hint (recommended; decided).** Moving is
-   discoverable, and the grip doubles as a fast handle (D3).
+   discoverable, and the grip doubles as a fast handle (D3). As built: the grip is in Your
+   order only, and the hint also shows once by itself, the first time a touch user sees Your
+   order with 2 or more sessions that can move (§9.1).
 2. Hidden on touch; shown only while a card is lifted. A cleaner row; moving is undiscoverable
    except by the menu.
 
@@ -485,7 +541,7 @@ node render.js ../../design/canvas ../../docs/design/proposals/592-reorder Propo
 
 ## 16. What follows
 
-1. **ui.md and tokens:** done on #605.
+1. **ui.md and tokens:** done on #605, and corrected there from #633 and #637.
 2. **#593, the PWA:** the Pointer Events reorder (§12.1). That fixes touch.
 3. **#594, Windows:** the Composition reorder (§12.1). That retires the ghost and the caption.
 4. **#595, Apple and Android:** the native lists' drag, matched to §3–§10 when those clients

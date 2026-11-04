@@ -163,7 +163,7 @@ const DARK = {
   shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,.07)', stroke2: 'rgba(255,255,255,.12)',
   subtle: 'rgba(255,255,255,.05)', subtle2: 'rgba(255,255,255,.06)', selected: 'rgba(255,255,255,.07)',
   text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)',
-  bridge: '#2DD4BF', needs: '#FFB224', active: '#4C9AFF', agent: '#A78BFA', danger: '#FF6B6B', neutral: '#8B949E',
+  bridge: '#2DD4BF', onBridge: '#062621', needs: '#FFB224', active: '#4C9AFF', agent: '#A78BFA', danger: '#FF6B6B', neutral: '#8B949E',
   tint: 'color-mix(in srgb, #2F3338 95%, #2DD4BF)', shadow: (s) => `0 ${8 * s}px ${16 * s}px rgba(0,0,0,${0.28 * s}), 0 0 ${2 * s}px rgba(0,0,0,${0.24 * s})`,
   popShadow: '0 8px 16px rgba(0,0,0,.28)', notch: '#000', finger: 'rgba(255,255,255,.16)', fingerStroke: 'rgba(255,255,255,.45)',
   cursorFill: '#FFFFFF', cursorStroke: '#000000', bezel: '#3A3F45',
@@ -172,7 +172,7 @@ const LIGHT = {
   shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,.07)', stroke2: 'rgba(0,0,0,.12)',
   subtle: 'rgba(0,0,0,.03)', subtle2: 'rgba(0,0,0,.06)', selected: 'rgba(0,0,0,.05)',
   text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)',
-  bridge: '#0B7A6E', needs: '#B87700', active: '#0B63E5', agent: '#6D4AE0', danger: '#C9302C', neutral: '#6E7781',
+  bridge: '#0B7A6E', onBridge: '#FFFFFF', needs: '#B87700', active: '#0B63E5', agent: '#6D4AE0', danger: '#C9302C', neutral: '#6E7781',
   tint: 'color-mix(in srgb, #FFFFFF 96%, #0B7A6E)', shadow: (s) => `0 ${8 * s}px ${16 * s}px rgba(0,0,0,${0.14 * s}), 0 0 ${2 * s}px rgba(0,0,0,${0.12 * s})`,
   popShadow: '0 8px 16px rgba(0,0,0,.14)', notch: '#1A1A1A', finger: 'rgba(0,0,0,.12)', fingerStroke: 'rgba(0,0,0,.4)',
   cursorFill: '#FFFFFF', cursorStroke: '#000000', bezel: '#C9CDD2',
@@ -274,7 +274,7 @@ class Component extends DCLogic {
       items.push(row(L.r, {
         style: `${box(p.x + (L.dx || 0), p.y + (L.dy || 0), p.w, p.hgt)}; z-index: 5`, face, bar: selBar(L.sel), gripColor: t.text, gripOp: 1,
         chip, age: chip ? '' : SESSIONS[L.r][2], chipIcon: cancel ? ICON_X : ICON_PIN, chipFill: cancel ? 'none' : 'currentColor', chipStroke: cancel ? 'currentColor' : 'none',
-        chipStyle: f.hc ? `color: ${t.text}; outline: 1px solid ${t.bridge}` : (cancel ? `color: ${t.text2}; background: ${t.subtle2}` : `color: ${t.bridge}; background: color-mix(in srgb, ${t.bridge} 14%, transparent)`),
+        chipStyle: f.hc ? `color: ${t.text}; outline: 1px solid ${t.bridge}` : (cancel ? `color: ${t.text2}; background: ${t.subtle2}` : `color: ${t.onBridge}; background: ${t.bridge}`),
       }));
     }
     if (f.ptr) {
