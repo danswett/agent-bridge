@@ -119,10 +119,17 @@ public sealed partial class SettingsViewModel
     {
         if (!HostRunning || !host.Can(HostOps.AgentVerificationCapability)) { throw new InvalidOperationException(VerificationStateText); }
         var instance = host.HostInstance ?? throw new InvalidOperationException("The host instance is not known yet.");
-        await host.CallAsync(HostOps.AgentsVerifyCancel, new AgentVerificationCancel(request),
-            TimeSpan.FromSeconds(15), knownHost: true, onlyTo: instance, out _);
-        VerificationActionStatus = "Observation stopped. The requested launch may still open and its session was not closed.";
+        VerificationActionStatus = "Stopping observation, not the agent session. Check current status if the reply is lost.";
+        var result = Received.Read<AgentVerificationReport>(await host.CallAsync(HostOps.AgentsVerifyCancel,
+            new AgentVerificationCancel(request), TimeSpan.FromSeconds(15), knownHost: true, onlyTo: instance, out _));
         await host.RefreshStatusAsync();
+        if (result.Request != request || result.State is VerificationState.Unknown or VerificationState.Running)
+        {
+            throw new InvalidOperationException("The host did not confirm that observation stopped. Check current status; the session was not closed.");
+        }
+        VerificationActionStatus = result.State == VerificationState.Cancelled
+            ? "Observation stopped. The requested launch may still open and its session was not closed."
+            : $"The test had already ended ({result.State}). Its session was not closed; see the current-host report.";
     });
 
     public Task RefreshVerificationAsync() => RunAsync(() => host.RefreshStatusAsync());
