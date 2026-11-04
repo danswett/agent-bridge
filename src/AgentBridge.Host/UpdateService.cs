@@ -35,7 +35,7 @@ public sealed class UpdateService
     // Devices remembered for the limit and for the log; the oldest is let go past this.
     internal int DevicesKept { get; init; } = 64;
     public const string Full = "this machine has too many presses waiting for its app already; try again in a few minutes";
-    public const string NoApp = "the Agent Bridge app is not running on this machine, and it is what installs updates";
+    public const string NoApp = $"the {Product.App} is not running on this machine, and it is what installs updates";
     public const string ThroughTheRelay = "updates are asked for from another device, through the relay; on this machine, use the app's Settings";
 
     readonly Action<string> log;

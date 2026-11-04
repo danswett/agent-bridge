@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.Win32;
 using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
@@ -66,7 +67,7 @@ static partial class ToastActivator
             server.SetValue(null, $"\"{exe}\" -ToastActivated");
         }
         using var id = Registry.CurrentUser.CreateSubKey($@"Software\Classes\AppUserModelId\{Aumid}");
-        id.SetValue("DisplayName", "Agent Bridge");
+        id.SetValue("DisplayName", Product.Name);
         id.SetValue("IconUri", icon);
         id.SetValue("CustomActivator", $"{{{Clsid}}}");
     }

@@ -1,6 +1,7 @@
 using AgentBridge.Host;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 using Xunit;
 
 // Who a local connection is (§6.3 invariant 13), from synthetic process chains: nothing here
@@ -19,7 +20,7 @@ public sealed class CallerGuardTests
     {
         var caller = Guard().Classify([P(10, App, 5), P(4, @"C:\Windows\explorer.exe")]);
 
-        Assert.Equal(new Caller(CallerKind.App, "the Agent Bridge app"), caller);
+        Assert.Equal(new Caller(CallerKind.App, $"the {Product.App}"), caller);
     }
 
     [Fact]
@@ -50,7 +51,7 @@ public sealed class CallerGuardTests
     [Fact]
     public void Anything_else_of_the_users_is_neither_app_nor_agent_and_one_that_cannot_be_traced_is_not_trusted()
     {
-        Assert.Equal(new Caller(CallerKind.Other, "pwsh.exe (pid 30), which is not the Agent Bridge app beside this host"),
+        Assert.Equal(new Caller(CallerKind.Other, $"pwsh.exe (pid 30), which is not the {Product.App} beside this host"),
             Guard().Classify([P(30, @"C:\Program Files\PowerShell\7\pwsh.exe"), P(4, @"C:\Windows\explorer.exe")]));
         // The app's name somewhere else is not the app beside this host.
         Assert.Equal(CallerKind.Other, Guard().Classify([P(30, @"C:\Temp\AgentBridge.exe")]).Kind);
@@ -97,7 +98,7 @@ public sealed class CallerGuardTests
         Assert.Equal("inside a copilot process (pid 20)", AgentAncestry.Inside(null, inAgent, () => []));
         Assert.Null(AgentAncestry.Inside(null, atDesk, () => []));
         // Started detached, its parent gone: the variable every launched agent inherits says it.
-        Assert.Equal("inside a session the Bridge Host launched (AGENT_BRIDGE_SESSION is set)", AgentAncestry.Inside("5b0e…", atDesk, () => []));
+        Assert.Equal($"inside a session the {Product.HostName} launched (AGENT_BRIDGE_SESSION is set)", AgentAncestry.Inside("5b0e…", atDesk, () => []));
         Assert.Equal(Launchers.SessionVariable, AgentAncestry.SessionVariable);
         // Not knowing is not leave: macOS without ps, or an ancestor /proc will not show.
         Assert.StartsWith("in a process tree that could not be traced in full", AgentAncestry.Inside(null, atDesk with { Complete = false }, () => []));

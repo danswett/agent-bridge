@@ -112,16 +112,16 @@ public sealed partial class MainViewModel : Observable
     // A line across the top when something stops the app from doing its job.
     public string? Banner => host.State switch
     {
-        LinkState.NotRunning => "The Bridge Host is not running on this machine. Start it from Settings.",
-        LinkState.Refused => $"The Bridge Host refused this app: {host.StateDetail}",
-        LinkState.Connecting => "Connecting to the Bridge Host…",
+        LinkState.NotRunning => $"The {Product.HostName} is not running on this machine. Start it from Settings.",
+        LinkState.Refused => $"The {Product.HostName} refused this app: {host.StateDetail}",
+        LinkState.Connecting => $"Connecting to the {Product.HostName}…",
         _ => ReadOnlyWhy,
     };
     public bool HasBanner => Banner is not null;
 
     // Why answers, replies and End session are off on this machine's cards, when its host says so.
     public string? ReadOnlyWhy => host.Status?.AgentHaBridge is { Length: > 0 } ha
-        ? $"Answering, replying and ending sessions are off: {ha}. Agent Bridge only watches while agent-ha-bridge runs."
+        ? $"Answering, replying and ending sessions are off: {ha}. {Product.Name} only watches while agent-ha-bridge runs."
         : null;
 
     // What holds each host's discovery, as agent-ha-bridge's status line said it: while it holds,

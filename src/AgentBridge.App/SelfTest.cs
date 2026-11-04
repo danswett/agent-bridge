@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.Protocol;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
@@ -654,7 +655,7 @@ static partial class SelfTest
         static string Hex(string h) => $"#FF{h.TrimStart('#')}";
         var accent = Design.DesignKeys.AccentColors.ToDictionary(a => a.Key, a => a.Color);
         var bar = window.Bar;
-        check(bar.Title == "Agent Bridge" && Math.Abs(bar.ActualHeight - (double)Application.Current.Resources["AbLayoutTitleBar"]) < 0.5,
+        check(bar.Title == Product.Name && window.Title == Product.Name && Math.Abs(bar.ActualHeight - (double)Application.Current.Resources["AbLayoutTitleBar"]) < 0.5,
             $"draws the 48 px title bar with the app's name ({bar.ActualHeight:0.#} px)");
         var mark = ById<ContentControl>(window.RootElement, "Mark");
         check(mark is not null && Find<Microsoft.UI.Xaml.Shapes.Path>(mark).Count > 0, "draws the mark in the title bar");
@@ -1042,12 +1043,15 @@ static partial class SelfTest
         List<string> missingType = [.. Design.DesignKeys.TypeStyles.Where(k => !(Application.Current.Resources.TryGetValue(k, out var s) && s is Style { TargetType.Name: "TextBlock" }))];
         List<string> missingSizes = [.. Design.DesignKeys.LayoutSizes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var d) && d is double))];
         check(missingType.Count + missingSizes.Count == 0, $"has the design's type ramp and layout sizes{(missingType.Count + missingSizes.Count > 0 ? $": missing {string.Join(", ", missingType.Concat(missingSizes))}" : "")}");
+        // The bundled family's name as the generated stack gives it (after the file's '#'), so these
+        // checks name whatever the design calls the font rather than a copy of its name.
+        var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
+        var family = bundled[(bundled.IndexOf('#') + 1)..];
         List<string> missingFonts = [.. Design.DesignKeys.FontFiles.Where(f => !File.Exists(Path.Combine(AppContext.BaseDirectory, f)))];
-        check(missingFonts.Count == 0, $"bundles Agent Bridge Mono and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
+        check(missingFonts.Count == 0, $"bundles {family} and its licence{(missingFonts.Count > 0 ? $": missing {string.Join(", ", missingFonts)}" : "")}");
 
         // The bundled font itself, with no fallback after it: in a monospace ten i are as wide as
         // ten M. Were the file not found, the name would fall through to Segoe UI, where they aren't.
-        var bundled = (mono as FontFamily)?.Source.Split(',')[0].Trim() ?? "";
         TextBlock Sample(string text) => new() { Text = text, FontFamily = new FontFamily(bundled), FontSize = 20, HorizontalAlignment = HorizontalAlignment.Left };
         var narrow = Sample("iiiiiiiiii");
         var wide = Sample("MMMMMMMMMM");
@@ -1068,7 +1072,7 @@ static partial class SelfTest
             var undrawn = controls.Where(x => x.Control.Style is null || Find<Microsoft.UI.Xaml.Shapes.Path>(x.Control).Count == 0).Select(x => x.Key).ToList();
             check(undrawn.Count == 0, $"draws every design glyph and icon{(undrawn.Count > 0 ? $": not {string.Join(", ", undrawn)}" : "")}");
             var (n, w) = (narrow.ActualWidth, wide.ActualWidth);
-            check(n > 0 && Math.Abs(n - w) < 1, $"sets code in the bundled Agent Bridge Mono ({bundled}: ten i {n:0.#} px, ten M {w:0.#} px)");
+            check(n > 0 && Math.Abs(n - w) < 1, $"sets code in the bundled {family} ({bundled}: ten i {n:0.#} px, ten M {w:0.#} px)");
         }
         finally { root.Children.Remove(host); }
     }

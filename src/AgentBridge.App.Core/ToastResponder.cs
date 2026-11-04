@@ -1,3 +1,5 @@
+using AgentBridge.Protocol;
+
 namespace AgentBridge.App.Core;
 
 // Acts on a toast click, whether the app was running or the click is what started it: opens
@@ -83,7 +85,7 @@ public sealed class ToastResponder
         sink.Show(new ToastNotice(tag, xml, Quiet: true));
     }
 
-    public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = "Agent Bridge")
+    public async Task HandleAsync(string? arguments, IReadOnlyDictionary<string, string> inputs, string title = Product.Name)
     {
         var action = ToastAction.Parse(arguments);
         if (action.Action != "answer" || action.Session is null || action.Question is null || !MayAnswer(action))

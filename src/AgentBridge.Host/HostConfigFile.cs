@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.Host;
 
@@ -58,7 +59,7 @@ public static class HostConfigFile
         // A newer schema is not this host's to edit: it reads that file as all off anyway.
         if (root["version"] is JsonValue v && v.TryGetValue<int>(out var version) && version > HostSettings.Version)
         {
-            throw new InvalidOperationException($"{path} is version {version}, written by a newer Agent Bridge; update this one first");
+            throw new InvalidOperationException($"{path} is version {version}, written by a newer {Product.Name}; update this one first");
         }
         if (remoteApproval is { } approve)
         {

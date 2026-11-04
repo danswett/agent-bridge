@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -54,7 +55,7 @@ public sealed class Deliveries
 {
     const string NoOutcome = "no outcome came back from the machine in time";
     const string TooOld = "too long has passed since it was first sent for the machine to still recognise it; check at the machine";
-    const string Restarted = "the Bridge Host restarted before saying whether it went";
+    const string Restarted = $"the {Product.HostName} restarted before saying whether it went";
     const int MaxBusyResends = 5;
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);
 

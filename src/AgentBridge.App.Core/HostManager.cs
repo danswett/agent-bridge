@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using AgentBridge.Local;
+using AgentBridge.Protocol;
 
 namespace AgentBridge.App.Core;
 
@@ -200,7 +201,7 @@ public sealed class HostManager
         if (on)
         {
             if (!HostInstalled) { throw new InvalidOperationException($"the host is not beside the app ({layout.HostExe})"); }
-            tasks.Register(TaskName, LogonTaskXml.Build(userId, layout.LauncherExe, layout.ServeArguments, $"Agent Bridge host for profile \"{layout.Profile}\": shows this machine's agent sessions to the Agent Bridge app and the user's devices."));
+            tasks.Register(TaskName, LogonTaskXml.Build(userId, layout.LauncherExe, layout.ServeArguments, $"{Product.Name} host for profile \"{layout.Profile}\": shows this machine's agent sessions to the {Product.App} and the user's devices."));
         }
         else if (tasks.Exists(TaskName)) { tasks.Delete(TaskName); }
     }

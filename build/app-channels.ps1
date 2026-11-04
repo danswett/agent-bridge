@@ -15,6 +15,20 @@
 
 $AppPackId = 'AgentBridgeApp'
 
+# The product's name and brand art as the app's project gives them (Product, AppIconFile,
+# AppLogoFile in AgentBridge.App.csproj): the installer's title, the Start shortcut's and Apps &
+# Settings' name, the setup icon and release titles name the app as the app itself does (#537).
+# Unlike the pack id above, which installed copies find their updates by, these are display only.
+$AppProject = [xml](Get-Content -Raw (Join-Path $PSScriptRoot '..\src\AgentBridge.App\AgentBridge.App.csproj'))
+function Get-AppProjectProperty([string]$Name) {
+    $value = @($AppProject.Project.PropertyGroup | ForEach-Object { $_.$Name } | Where-Object { $_ })
+    if ($value.Count -ne 1) { throw "AgentBridge.App.csproj sets $Name $($value.Count) times, not once" }
+    [string]$value[0]
+}
+$AppProductName = Get-AppProjectProperty 'Product'
+$AppIconFile = Get-AppProjectProperty 'AppIconFile'
+$AppLogoFile = Get-AppProjectProperty 'AppLogoFile'
+
 # Runtime identifier, channel and the PE machine its executables carry.
 $AppChannels = [ordered]@{
     'win-x64'   = [pscustomobject]@{ Runtime = 'win-x64'; Channel = 'win'; Machine = 'x64' }

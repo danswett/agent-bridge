@@ -1086,13 +1086,13 @@ public sealed partial class LaunchService : ISessionLauncher
     {
         if (!RemoteFolderTrust)
         {
-            return "Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in the Agent Bridge app's Settings on that machine, "
+            return $"Answer at the machine. To answer from your devices, turn on \"Answer folder-trust questions from my devices\" in {AppSettings}, "
                 + "or run agent-bridge-host config set launch.remoteFolderTrust true there and restart the host.";
         }
         if (probe.Active() is { } off) { return $"Answer at the machine: {off}."; }
         if (TrustDevices.Count == 0)
         {
-            return "Answer at the machine. No device is approved yet to answer these from: approve yours in the Agent Bridge app's Settings on that machine, "
+            return $"Answer at the machine. No device is approved yet to answer these from: approve yours in {AppSettings}, "
                 + "or add its id to launch.remoteFolderTrustDevices there.";
         }
         if (p is { TrustTyped: true }) { return "Answer at the machine: an answer was already typed into its window, and what it did is for a person there to see and finish."; }
@@ -1235,9 +1235,12 @@ public sealed partial class LaunchService : ISessionLauncher
     string Refusal(string device) =>
         !RemoteFolderTrust || probe.Active() is not null || TrustDevices.Count == 0 ? AtMachine(null, null)! : NotApproved(device);
 
+    // Where a person at the machine turns on, and approves devices for, answering folder trust remotely.
+    const string AppSettings = $"the {Product.App}'s Settings on that machine";
+
     // For a device not approved: what a person at the machine does to approve it.
     public static string NotApproved(string device) =>
-        $"Answer at the machine, or approve this device ({device[..Math.Min(8, device.Length)]}) to answer folder-trust questions in the Agent Bridge app's Settings on that machine.";
+        $"Answer at the machine, or approve this device ({device[..Math.Min(8, device.Length)]}) to answer folder-trust questions in {AppSettings}.";
 
     static TrustAnswerResult TrustUnconfirmed(string what) => new(TrustAnswerOutcome.Unconfirmed, $"Not confirmed: answer at the machine. {char.ToUpperInvariant(what[0])}{what[1..]}.");
 

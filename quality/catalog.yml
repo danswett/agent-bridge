@@ -205,6 +205,9 @@ suites:
     platforms: [win-x64, win-arm64, linux-x64]
     runner: local
     project: tests/AgentBridge.App.Tests
+    # AppBrandTests reads the app's project, the installer's scripts and the host's and app's
+    # copy for the product's name (#537), none of which the graph can see.
+    triggers: [src/AgentBridge.App/**, src/AgentBridge.Host/**, src/AgentBridge.Host.Core/**, src/AgentBridge.Host.Delivery/**, src/AgentBridge.HostLauncher/**, build/app-channels.ps1, build/pack-app.ps1, build/publish-prerelease.ps1]
     command: dotnet test tests/AgentBridge.App.Tests -c Release
     where: ci.yml product
     baseline: { tests: 515, seconds: 30 }
@@ -460,9 +463,10 @@ suites:
     # Not only what generate.mjs writes (--check compares each with design/: the PWA's design/,
     # index.html, manifest and icons, the app's Design/ and Assets icons, DesignLayout.cs), but
     # what the tests in tools/design-gen/test read: the PWA's CSS, scripts and service worker and
-    # the app's XAML and C# (no undefined tokens or hard-coded colours), pack-app.ps1's --icon,
+    # the app's XAML and C# (no undefined tokens or hard-coded colours), the icon paths in
+    # AppAssets.cs, app-channels.ps1 and pack-app.ps1,
     # and ui.md's motion section. So all of pwa/ and the app; the job takes under a minute.
-    triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, build/pack-app.ps1, docs/design/ui.md]
+    triggers: [design/**, tools/design-gen/**, pwa/**, src/AgentBridge.App/**, src/AgentBridge.App.Core/DesignLayout.cs, src/AgentBridge.App.Core/AppAssets.cs, build/pack-app.ps1, build/app-channels.ps1, docs/design/ui.md]
     command: node tools/design-gen/generate.mjs --check && node --test "tools/design-gen/test/*.test.mjs"
     where: ci.yml light
     status: exists

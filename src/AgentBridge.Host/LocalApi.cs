@@ -33,10 +33,10 @@ public static class LocalApi
                 && !(caller.Kind == CallerKind.HostCli && op == HostOps.Restart))
             {
                 throw Refuse(op, caller, op == HostOps.UpdateReport
-                    ? "only the Agent Bridge app beside this host reports its updates, and takes other devices' presses of Install"
+                    ? $"only the {Product.App} beside this host reports its updates, and takes other devices' presses of Install"
                     : caller.Kind == CallerKind.Agent
-                    ? "stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the Agent Bridge app"
-                    : "only the Agent Bridge app beside this host may stop, restart, sign in, change settings or read the relay account", log);
+                    ? $"stopping, restarting, signing in, changing settings and reading the relay account are for the person, from the {Product.App}"
+                    : $"only the {Product.App} beside this host may stop, restart, sign in, change settings or read the relay account", log);
             }
             if (authorization is not null && op.StartsWith("host.peers.", StringComparison.Ordinal)) { return authorization.Manage(op, data); }
             return await control.HandleAsync(channel, op, data);
