@@ -258,7 +258,9 @@ so it does nothing and announces "Top of Pinned." or "End of Sessions.".
   - drop: "Moved to position *N* of *M* in *group*.", "Pinned. Position *N* of *M* in Pinned."
     or "Unpinned. …";
   - cancel: "Cancelled. Back at position *N* of *M*.", also when the list recycles the held
-    card (§4).
+    card (§4);
+  - the held session ending: "*title* ended. Move cancelled.", as the others close the gap
+    with `reorder` (instantly under reduced motion). The prototype's Simulate switch shows it.
 - **Touch screen readers.** VoiceOver and TalkBack can't long-press-drag reliably, so each
   card exposes the menu's moves as **custom actions**: Move up, Move down and Pin (or Unpin).
   These are `accessibilityAction(named:)` on Apple, `customActions` in Compose semantics, and
