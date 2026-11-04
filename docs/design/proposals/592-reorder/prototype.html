@@ -414,7 +414,8 @@ function groupsNow() {
 }
 function columns() { return Math.max(1, Number(cfg.columns) || 1); }
 
-function layout(groups, showHeaders) {
+// preview: a held card's layout. Only it shows the empty group's drop placeholder.
+function layout(groups, showHeaders, preview) {
   const cols = columns();
   const W = content.clientWidth - 2 * M.pad;
   const gapY = cols > 1 ? 8 : M.gapY;
@@ -425,7 +426,7 @@ function layout(groups, showHeaders) {
   for (const g of gs) {
     if (showHeaders) { heads.set(g.id, y); y += M.hh; }
     if (g.keys.length === 0) {
-      if (showHeaders) { empties.set(g.id, { x: M.pad, y, w: W, h: M.rh }); y += M.rh + gapY + M.groupGap; }
+      if (showHeaders && preview) { empties.set(g.id, { x: M.pad, y, w: W, h: M.rh }); y += M.rh + gapY + M.groupGap; }
       continue;
     }
     g.keys.forEach((k, i) => {
@@ -834,7 +835,7 @@ function removeKeys(keys) {
 }
 
 function placeSocket(instant) {
-  const L = layout(groupsWith(g.candidate), g.show);
+  const L = layout(groupsWith(g.candidate), g.show, true);
   const p = L.pos.get(g.key);
   if (instant) socket.style.transition = 'none';
   Object.assign(socket.style, { width: p.w + 'px', height: p.h + 'px', transform: `translate3d(${p.x}px, ${p.y}px, 0)` });
@@ -865,7 +866,7 @@ function pick(quiet = false) {
       const n = grp.keys.filter((k) => k !== g.key).length;
       for (let i = 0; i <= n; i++) {
         const c = { gid: grp.id, i };
-        const p = layout(groupsWith(c), g.show).pos.get(g.key);
+        const p = layout(groupsWith(c), g.show, true).pos.get(g.key);
         const d = Math.hypot(p.x + p.w / 2 - cx, p.y + p.h / 2 - cy);
         if (d < best - (same(c, g.candidate) ? -1 : 1)) { best = d; cand = c; }
       }
