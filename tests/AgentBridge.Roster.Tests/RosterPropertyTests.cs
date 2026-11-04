@@ -23,6 +23,14 @@ public sealed class RosterPropertyTests
         ["bars"] = RosterStateTests.Bars,
         ["self-removal"] = RosterStateTests.SelfRemoval,
         ["rank-one"] = RosterStateTests.RankOne,
+        ["fabricated-cosigners"] = RosterRecoveryTests.FabricatedCosigners,
+        ["fork-before-recovery"] = () => RosterRecoveryTests.ForkBeforeRecovery(),
+        ["fork-from-recovery"] = () => RosterRecoveryTests.ForkBeforeRecovery(fromRecovery: true),
+        ["one-device-recovery"] = () => RosterRecoveryTests.ForkBeforeRecovery(cosigned: false),
+        ["kept-cannot-shield"] = RosterRecoveryTests.KeptCannotShield,
+        ["reciprocal"] = RosterRecoveryTests.Reciprocal,
+        ["tie"] = RosterRecoveryTests.Tie,
+        ["mutual"] = RosterRecoveryTests.Mutual,
     };
 
     // The labels in a random order in which every entry still follows its parents.
