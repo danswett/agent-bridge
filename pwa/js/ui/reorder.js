@@ -46,7 +46,8 @@ const same = (a, b) => !!a && !!b && a.group === b.group && a.index === b.index;
 //   fixed(card) -> whether it holds its place (its machine is still sending its list);
 //   title(card) -> what to call it;
 //   commit(card, group, index, { before, after }) -> whether the order changed (and the list was
-//     drawn so): the card goes to place index of group, between the cards before and after;
+//     drawn so): the card goes to place index of group, between the cards before and after (each
+//     side's, nearest first, as they were when it was lifted);
 //   menu(card): its row menu, for a long press released without moving;
 //   hint(): what a tap on the grip says;
 //   say(text): a polite announcement;
@@ -130,7 +131,7 @@ export class Reorder {
 
   // What a press (pointerdown) acts on: during a drop's settle, the card in its new place under the
   // pointer rather than whatever was drawn there a moment before.
-  target(e) { return this.#reroute?.id === e.pointerId ? this.#reroute.row : e.target; }
+  target(e) { return this.#reroute?.id === e.pointerId ? this.#reroute.target : e.target; }
 
   #listen() {
     const list = this.list;
@@ -138,18 +139,21 @@ export class Reorder {
       this.#reroute = null;
       if (!this.#settle) { return; }
       this.finish();
-      const hit = this.doc.elementFromPoint?.(e.clientX, e.clientY)?.closest?.('.row-main');
-      if (hit && list.contains(hit) && !hit.contains(e.target)) { this.#reroute = { id: e.pointerId, row: hit }; }
+      // The grip is the row's sibling, not in it: a press there lifts the card now under it.
+      const hit = this.doc.elementFromPoint?.(e.clientX, e.clientY)?.closest?.('.drag-handle, .row-main');
+      if (hit && list.contains(hit) && !hit.contains(e.target)) {
+        this.#reroute = { id: e.pointerId, target: hit, row: hit.matches('.row-main') ? hit : null };
+      }
     }, true);
-    // The click of a press that was rerouted lands where the press went; its target is wherever
-    // the press and the release had in common.
+    // The click of a press that was rerouted lands where the press went (on the grip, nowhere);
+    // its target is wherever the press and the release had in common.
     list.addEventListener('click', (e) => {
       const r = this.#reroute;
-      if (!r || e.detail === 0 || r.row.contains(e.target)) { return; }
+      if (!r || e.detail === 0 || r.row?.contains(e.target)) { return; }
       this.#reroute = null;
       e.preventDefault();
       e.stopImmediatePropagation();
-      r.row.click();
+      r.row?.click();
     }, true);
     list.addEventListener('dragstart', (e) => { if (e.target.closest?.('.session')) { e.preventDefault(); } });
     // The finger a touch press is: some engines send its touchstart before its pointerdown.
@@ -186,8 +190,8 @@ export class Reorder {
       const t = g.viaTouch && g.phase === 'lifted' ? this.#own(g, e.touches) : null;
       if (t) { g.x = t.clientX; g.y = t.clientY; this.#track(); }
     }, { passive: false, capture: true });
-    add(doc, 'touchend', (e) => { if (this.#g === g && g.viaTouch && g.phase === 'lifted' && this.#own(g, e.changedTouches)) { this.#drop(false); } }, true);
-    add(doc, 'touchcancel', (e) => { if (this.#g === g && g.phase === 'lifted' && this.#own(g, e.changedTouches)) { this.#drop(true); } }, true);
+    add(doc, 'touchend', (e) => { if (this.#g === g && g.viaTouch && g.phase === 'lifted' && this.#own(g, e.changedTouches)) { this.#drop(false, { released: true }); } }, true);
+    add(doc, 'touchcancel', (e) => { if (this.#g === g && g.phase === 'lifted' && this.#own(g, e.changedTouches)) { this.#drop(true, { released: true }); } }, true);
     // The list (or the page) scrolling moves the list under a card held still.
     add(doc, 'scroll', () => { if (this.#g === g && g.phase === 'lifted') { this.#track(); } }, { passive: true, capture: true });
     add(win, 'resize', () => { if (this.#g === g && g.phase === 'lifted' && this.list.getBoundingClientRect().width !== g.width) { this.#drop(true, { instant: true }); } });
@@ -219,7 +223,7 @@ export class Reorder {
   #up(e) {
     const g = this.#g;
     if (!g || e.pointerId !== g.id) { return; }
-    if (g.phase === 'lifted') { this.#drop(false); return; }
+    if (g.phase === 'lifted') { this.#drop(false, { released: true }); return; }
     const tapGrip = g.onGrip && g.type === 'touch';
     this.#abort();
     if (tapGrip) { this.#swallowClick(); this.host.hint?.(); }
@@ -231,7 +235,7 @@ export class Reorder {
     if (g.phase !== 'lifted') { this.#abort(); return; }
     // A finger whose touches still come: they carry the drag; a touchcancel ends it.
     if (g.type === 'touch' && g.touchId !== undefined) { g.viaTouch = true; return; }
-    this.#drop(true);
+    this.#drop(true, { released: true });
   }
 
   #abort() {
@@ -293,9 +297,9 @@ export class Reorder {
         const keep = m.origin.group === 'pinned' && grp.id !== 'pinned' && pinnedOthers === 0;
         const removed = (j) => (!keep && m.L[j]?.after ? -m.S : 0);
         const top = p < m.L.length ? m.L[p].top + removed(p) : m.L.length ? m.L[m.L.length - 1].bottom + m.gap + removed(m.L.length - 1) : m.me.top;
-        // The cards either side of the place, by which the drop says where it goes.
-        const before = i < n ? grp.cards[i].el : null;
-        const after = i > 0 ? grp.cards[i - 1].el : null;
+        // The cards either side of the place, nearest first, by which the drop says where it goes.
+        const before = grp.cards.slice(i).map((c) => c.el);
+        const after = grp.cards.slice(0, i).reverse().map((c) => c.el);
         slots.push({ group: grp.id, index: i, n: n + 1, p, keep, top, before, after, shift: (j) => removed(j) + (j >= p ? m.S : 0) });
       }
     }
@@ -381,7 +385,9 @@ export class Reorder {
     if (!g || g.phase !== 'lifted') { return; }
     const lr = this.list.getBoundingClientRect();
     g.ty = g.y - g.offY - lr.top - g.m.me.top;
-    g.el.style.transform = `translate3d(0, ${g.ty}px, 0)`;
+    // The `translate` property, applied before the card's `scale`: a `transform` would be scaled
+    // with it, and the card would drift from the pointer by 2% of how far it had gone.
+    g.el.style.translate = `0 ${g.ty}px`;
     if (!g.armed && Math.hypot(g.x - g.lx, g.y - g.ly) > DRAG_SLOP) { g.armed = true; }
     const v = this.#seen();
     const outside = g.x < v.left - OUTSIDE || g.x > v.right + OUTSIDE || g.y < v.top - OUTSIDE || g.y > v.bottom + OUTSIDE;
@@ -472,8 +478,9 @@ export class Reorder {
   }
 
   // Let go: back where it came from, or into the gap. instant: no settle (the list is about to
-  // change under it).
-  #drop(cancel, { instant = false, removed = false } = {}) {
+  // change under it). released: the pointer or finger that held it is up (or gone), so the click
+  // its release brings has come or won't.
+  #drop(cancel, { instant = false, removed = false, released = false } = {}) {
     const g = this.#g;
     if (!g || g.phase !== 'lifted') { return; }
     g.off?.();
@@ -486,6 +493,9 @@ export class Reorder {
     // Where each card is seen now, part way through making room perhaps; and the held one.
     const seen = new Map(g.m.L.map((b) => [b.el, b.el.getBoundingClientRect().top]));
     const from = lr.top + g.m.me.top + (g.ty ?? 0);
+    // A held session that went fades where it is held, as it is seen and clipped there (the host's
+    // own fade would be at its place, which auto-scroll may have taken out of sight).
+    if (removed) { leave(g.el, 'listItem'); }
     this.#g = null;
     // At rest in the layout at once: nothing eases there, everything is slid from where it was seen.
     this.list.classList.remove('reordering');
@@ -499,22 +509,19 @@ export class Reorder {
     g.chip.remove();
     delete this.doc.documentElement.dataset.reordering;
     g.el.classList.remove('lifted', 'crossing', 'outside');
-    g.el.style.transform = '';
+    g.el.style.translate = '';
+    const swallow = () => this.#swallowClick(released ? null : g);
     if (removed) {
-      // A copy fades where the card was held; the host's own fade (where it was) is this one.
-      const a = leave(g.el, 'listItem');
-      const copy = a?.effect?.target;
-      if (copy) { copy.style.top = `${parseFloat(copy.style.top) + (g.ty ?? 0)}px`; }
       g.el.dataset.left = 'true';
       // The finger or button is still down over whatever takes the card's place: its release
       // presses nothing, and the place last said goes unsaid.
       clearTimeout(this.#speak);
-      this.#swallowClick();
+      swallow();
       return;
     }
     if (!instant) { g.el.classList.add('settling'); }
-    const cardOf = (el) => (el ? this.host.cardOf(el) : null);
-    const moved = !back && !same(to, g.origin) && g.el.isConnected && this.host.commit(g.card, to.group, to.index, { before: cardOf(to.before), after: cardOf(to.after) });
+    const cards = (els) => els.map((el) => this.host.cardOf(el)).filter(Boolean);
+    const moved = !back && !same(to, g.origin) && g.el.isConnected && this.host.commit(g.card, to.group, to.index, { before: cards(to.before), after: cards(to.after) });
     if (!moved) { this.host.drawn?.(); }
     if (!instant && g.el.isConnected) {
       for (const [el, top] of seen) {
@@ -522,9 +529,10 @@ export class Reorder {
         const dy = top - el.getBoundingClientRect().top;
         if (Math.abs(dy) > 0.5) { slide(el, 'reorder', 0, dy); }
       }
-      // The held card's own box, without the scale it is still easing down from.
+      // The held card's own box, without the scale it is still easing down from; the slide is
+      // scaled with it, so it starts that much shorter.
       const now = this.list.getBoundingClientRect().top + this.#offset(g.el);
-      slide(g.el, 'reorder', 0, from - now);
+      slide(g.el, 'reorder', 0, (from - now) / (parseFloat(getComputedStyle(g.el).scale) || 1));
       const ms = timing('reorder', { doc: this.doc }).duration;
       const settle = { done: () => { clearTimeout(settle.timer); g.el.classList.remove('settling'); if (this.#settle === settle) { this.#settle = null; } } };
       this.#settle = settle;
@@ -532,7 +540,7 @@ export class Reorder {
     } else {
       g.el.classList.remove('settling');
     }
-    this.#swallowClick();
+    swallow();
     if (hold && g.el.isConnected) { this.host.menu(g.card); return; }
     const where = g.el.isConnected ? this.where(g.el) : null;
     if (!where) { return; }
@@ -581,20 +589,30 @@ export class Reorder {
 
   // The click a drag's release brings is the drag's: it never opens a session, chooses a menu
   // item or presses an answer (ui.md §5.3: nothing lands on what was moved under the pointer). The
-  // next press is the person's own, so it stops waiting for one then.
-  #swallowClick() {
+  // next press is the person's own, so it stops waiting for one then. g: the drag, when its
+  // pointer or finger is still down (Escape, the window losing focus, its session ending): the
+  // wait for the click starts only once that is released, however long it is held.
+  #swallowClick(g = null) {
     this.#unswallow();
     const win = this.win;
+    let timer = 0;
     const eat = (e) => { e.preventDefault(); e.stopImmediatePropagation(); off(); };
+    const ends = ['pointerup', 'pointercancel', 'touchend', 'touchcancel'];
+    const up = (e) => {
+      if (e.type.startsWith('pointer') ? e.pointerId !== g.id : !this.#own(g, e.changedTouches)) { return; }
+      for (const type of ends) { win.removeEventListener(type, up, true); }
+      timer = setTimeout(off, 600);
+    };
     const off = () => {
       win.removeEventListener('click', eat, true);
       win.removeEventListener('pointerdown', off, true);
+      for (const type of ends) { win.removeEventListener(type, up, true); }
       clearTimeout(timer);
       if (this.#swallow === off) { this.#swallow = null; }
     };
     win.addEventListener('click', eat, true);
     win.addEventListener('pointerdown', off, true);
-    const timer = setTimeout(off, 600);
+    if (g) { for (const type of ends) { win.addEventListener(type, up, true); } } else { timer = setTimeout(off, 600); }
     this.#swallow = off;
   }
 

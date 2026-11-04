@@ -298,6 +298,8 @@ test.describe('the long press, on each platform', () => {
     test(`on ${name} a card lifts after ${ms} ms held, not before, and the system's own long press is held back`, async ({ page }) => {
       await openDemo(page, { ua, hint });
       await page.clock.install();
+      // Still, so only runFor moves it: a slow machine's own time mustn't count toward the hold.
+      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
       const main = card(page, CODEX).locator('.row-main');
       const [x, y] = await middle(main);
       await main.dispatchEvent('pointerdown', { pointerId: 3, pointerType: 'touch', isPrimary: true, clientX: x, clientY: y, bubbles: true });
@@ -364,6 +366,80 @@ for (const width of [1440]) {
       await expect(said(page)).toHaveText('Cancelled. Back at position 2 of 4.');
     });
 
+    test('a held card follows the pointer one to one, for all it is drawn larger', async ({ page }) => {
+      await openDemo(page);
+      const before = await card(page, COPILOT).boundingBox();
+      const [x, y] = await grab(page, COPILOT);
+      await page.mouse.move(x, y + 150, { steps: 6 });
+      await expect.poll(() => card(page, COPILOT).evaluate((e) => getComputedStyle(e).scale)).toBe('1.02');
+      const after = await card(page, COPILOT).boundingBox();
+      expect(Math.abs(after.y + after.height / 2 - (before.y + before.height / 2) - 150)).toBeLessThan(1);
+      await page.mouse.up();
+    });
+
+    test('a card held through Escape, and held on, still presses nothing when it is let go', async ({ page }) => {
+      await openDemo(page);
+      const [x, y] = await middle(card(page, CODEX).locator('.row-main'));
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x, y + 8);
+      await expect(card(page, CODEX)).toHaveClass(/\blifted\b/);
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.lifted')).toHaveCount(0);
+      await page.waitForTimeout(800);
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      await expect(view(page, CODEX)).toBeHidden();
+      // The next press is the person's own.
+      await card(page, CODEX).locator('.row-main').click();
+      await expect(view(page, CODEX)).toBeVisible();
+    });
+
+    test('a press on a grip during a drop\'s settle lifts the card that has landed there', async ({ page }) => {
+      await openDemo(page);
+      await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));
+      const claude = await card(page, CLAUDE).boundingBox();
+      const [x, y] = await grab(page, DELEGATING);
+      const top = (await card(page, DELEGATING).boundingBox()).y;
+      await page.mouse.move(x, y + (claude.y - 20 - top), { steps: 8 });
+      await page.mouse.up();
+      expect(await order(page)).toEqual([COPILOT, DELEGATING, CLAUDE, CODEX]);
+      // The grip at the foot of the gap, which the card settling from above doesn't cover yet.
+      await page.mouse.move(x, claude.y + claude.height - 6);
+      await page.mouse.down();
+      await expect(card(page, DELEGATING)).toHaveClass(/\blifted\b/);
+      await expect(page.locator('.lifted')).toHaveCount(1);
+      await page.mouse.up();
+      expect(await order(page)).toEqual([COPILOT, DELEGATING, CLAUDE, CODEX]);
+      await expect(view(page, DELEGATING)).toBeHidden();
+    });
+
+    test('a held card whose session ends after the list scrolled its place away fades where it is held', async ({ page }) => {
+      await openDemo(page);
+      await many(page);
+      const pane = page.locator('.list-pane');
+      const first = (await order(page))[0];
+      const [x, y] = await grab(page, first);
+      const bottom = await pane.evaluate((e) => e.getBoundingClientRect().bottom);
+      await page.mouse.move(x, y + 8, { steps: 2 });
+      await page.mouse.move(x, bottom - 6, { steps: 10 });
+      await expect.poll(() => pane.evaluate((e) => e.scrollTop), { timeout: 5000 }).toBeGreaterThan(400);
+      await page.mouse.move(x, bottom - 200, { steps: 4 });
+      const held = await card(page, first).boundingBox();
+      const faded = await page.evaluate(async (id) => {
+        window.agentBridgeDemo.remove(id);
+        for (let i = 0; i < 60; i += 1) {
+          const copy = [...document.body.children].find((e) => e.inert && e.style.position === 'fixed');
+          if (copy) { return parseFloat(copy.style.top); }
+          await new Promise((r) => { requestAnimationFrame(r); });
+        }
+        return null;
+      }, first);
+      expect(faded).not.toBeNull();
+      expect(Math.abs(faded - held.y)).toBeLessThan(2);
+      await page.mouse.up();
+    });
+
     test('Alt+Down moves the card and the card it passes together', async ({ page }) => {
       await openDemo(page);
       await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));
@@ -410,6 +486,27 @@ for (const width of [1440]) {
       await expect(card(page, CODEX)).not.toHaveAttribute('data-pinned', 'true');
       await expect(said(page)).toHaveText(/^Unpinned\. Position \d of 4 in Sessions\.$/);
       await expect(page.locator('.list-group')).toHaveCount(0);
+    });
+
+    test('a card let go between two pinned cards that ended while it was held is pinned', async ({ page }) => {
+      await openDemo(page);
+      for (const id of [COPILOT, CLAUDE]) {
+        await card(page, id).locator('.row-main').click({ button: 'right' });
+        await card(page, id).getByRole('menuitem', { name: 'Pin' }).click();
+        await settled(page);
+      }
+      await expect.poll(() => order(page)).toEqual(FIRST);
+      await expect(card(page, CLAUDE)).toHaveAttribute('data-pinned', 'true');
+      const claude = await card(page, CLAUDE).boundingBox();
+      const [x, y] = await grab(page, DELEGATING);
+      const top = (await card(page, DELEGATING).boundingBox()).y;
+      await page.mouse.move(x, y + (claude.y - top), { steps: 10 });
+      await expect(said(page)).toHaveText('Pinned, position 2 of 3. Drops as pinned.');
+      await page.evaluate((ids) => { for (const id of ids) { window.agentBridgeDemo.remove(id); } }, [COPILOT, CLAUDE]);
+      await page.waitForTimeout(100);
+      await page.mouse.up();
+      await expect.poll(() => order(page)).toEqual([DELEGATING, CODEX]);
+      await expect(card(page, DELEGATING)).toHaveAttribute('data-pinned', 'true');
     });
 
     test('a key during a drop\'s settle moves the card on from its new place, and a press on the gap opens the card landing there', async ({ page }) => {

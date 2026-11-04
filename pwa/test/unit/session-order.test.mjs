@@ -248,3 +248,17 @@ test('a drop moves nothing in another sort, and never a row its machine has not 
   assert.equal(o.canLift(key('a')), false);
   assert.equal(o.moveTo(key('a'), 'sessions', 1), false);
 });
+
+test('a drop into a group whose rows on screen have all gone since it was drawn still lands in that group', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  const list = [entry('a', 4), entry('b', 3), entry('c', 2), entry('d', 1)];
+  shown(o, list);
+  o.setPinned(key('a'), true);
+  o.setPinned(key('b'), true);
+  assert.deepEqual(shown(o, list), { pinned: ['a', 'b'], sessions: ['c', 'd'], ended: [] });
+  // a and b end while d is held, and the list isn't drawn again until it is let go between them.
+  for (const id of ['a', 'b']) { o.observe({ type: 'remove', hostId: 'h1', session: { id, title: id, updatedAt: at(9) } }); }
+  const live = new Set([key('c'), key('d')]);
+  assert.equal(o.moveTo(key('d'), 'pinned', 1, live), true);
+  assert.deepEqual(shown(o, [entry('c', 2), entry('d', 1)]), { pinned: ['d'], sessions: ['c'], ended: ['b', 'a'] });
+});

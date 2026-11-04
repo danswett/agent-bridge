@@ -181,12 +181,15 @@ export class SessionOrder {
 
   // A drop (#592): the row goes to place `index` of `group` ('pinned' or 'sessions') among the
   // rows on screen there without it, pinned or unpinned by the group, in one change. Rows
-  // remembered for sessions not shown keep their places relative to each other.
-  moveTo(key, group, index) {
+  // remembered for sessions not shown keep their places relative to each other. live: the keys of
+  // the sessions there now, when some on screen may have gone since the list was last drawn (a
+  // card was held meanwhile); those are passed over.
+  moveTo(key, group, index, live = null) {
     if (this.sort !== 'yours' || !this.#group(key) || this.#shown.pending.has(key) || (group !== 'pinned' && group !== 'sessions')) { return false; }
-    const others = this.#shown[group].filter((k) => k !== key);
+    const shown = live ? this.#shown[group].filter((k) => k === key || live.has(k)) : this.#shown[group];
+    const others = shown.filter((k) => k !== key);
     const at = Math.max(0, Math.min(index, others.length));
-    if (this.#group(key) === group && this.#shown[group].indexOf(key) === at) { return false; }
+    if (this.#group(key) === group && shown.indexOf(key) === at) { return false; }
     const before = others[at];
     const after = others[at - 1];
     if (before !== undefined && !this.#shown.pending.has(before)) { this.#insert(key, before, false); return true; }

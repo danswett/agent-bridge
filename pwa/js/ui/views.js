@@ -73,13 +73,16 @@ export class SessionListView {
       title: (card) => card.session.title || 'Untitled session',
       commit: (card, group, index, { before, after }) => {
         const key = this.#keyOf(card);
-        // By the cards either side, so a session that arrived while it was held, and is drawn only
-        // now, doesn't shift where it lands; one of them gone meanwhile can't be landed beside.
+        // By the nearest cards either side still here, so a session that arrived while it was
+        // held, and is drawn only now, doesn't shift where it lands, and those that went meanwhile
+        // are passed over. With none left, the group as it is now, without those that went.
         const live = new Set(this.sessions.list().map((e) => SessionListView.key(e.hostId, e.session.id)));
-        const near = (c) => (c && live.has(this.#keyOf(c)) && !this.order.pending(this.#keyOf(c)) ? this.#keyOf(c) : null);
-        const ok = !!((near(before) && this.order.place(key, near(before), false))
-          || (near(after) && this.order.place(key, near(after), true))
-          || this.order.moveTo(key, group, index));
+        const near = (c) => live.has(this.#keyOf(c)) && !this.order.pending(this.#keyOf(c));
+        const below = before.find(near);
+        const above = after.find(near);
+        const ok = !!((below && this.order.place(key, this.#keyOf(below), false))
+          || (above && this.order.place(key, this.#keyOf(above), true))
+          || this.order.moveTo(key, group, index, live));
         if (ok) { this.render(); }
         return ok;
       },
