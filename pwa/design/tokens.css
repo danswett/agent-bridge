@@ -180,12 +180,16 @@
   --ab-motion-list-item-ease: cubic-bezier(0, 0, 0, 1);
   --ab-motion-list-item-exit-duration: 83ms;
   --ab-motion-list-item-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-shift-duration: 167ms;
+  --ab-motion-shift-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-glyph-duration: 83ms;
   --ab-motion-glyph-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-activity-dot-duration: 167ms;
   --ab-motion-activity-dot-ease: cubic-bezier(0, 0, 0, 1);
   --ab-motion-activity-dot-exit-duration: 83ms;
   --ab-motion-activity-dot-exit-ease: cubic-bezier(1, 0, 1, 1);
+  --ab-motion-value-duration: 83ms;
+  --ab-motion-value-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-selection-duration: 167ms;
   --ab-motion-selection-ease: cubic-bezier(0.33, 0, 0.67, 1);
   --ab-motion-press-duration: 83ms;
@@ -318,9 +322,11 @@
     --ab-motion-disclosure-exit-duration: 0ms;
     --ab-motion-list-item-duration: 83ms;
     --ab-motion-list-item-exit-duration: 83ms;
+    --ab-motion-shift-duration: 0ms;
     --ab-motion-glyph-duration: 0ms;
     --ab-motion-activity-dot-duration: 0ms;
     --ab-motion-activity-dot-exit-duration: 0ms;
+    --ab-motion-value-duration: 83ms;
     --ab-motion-selection-duration: 0ms;
     --ab-motion-press-duration: 0ms;
     --ab-motion-acknowledge-duration: 83ms;

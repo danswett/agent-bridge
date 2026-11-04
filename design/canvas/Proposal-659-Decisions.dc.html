@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #659: decisions for the owner</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/659-no-pop-motion.md §7). -->
+<div style="width: 1900px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Proposed (pending owner decisions)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Nothing pops: six decisions</h1>
+  <p style="margin: 0 0 22px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The recommended option is first in each, and marked. Durations are Windows and the PWA; Android and Apple take the same tiers.</p>
+  <div style="display: flex; flex-wrap: wrap; gap: 20px">
+    <sc-for list="{{decisions}}" as="d">
+      <div style="width: 592px; height: 350px; box-sizing: border-box; padding: 18px 20px; border-radius: 8px; border: 1px solid {{t.stroke}}; background: {{t.card}}">
+        <div style="font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text3}}">{{d.id}}</div>
+        <div style="margin-top: 2px; font-size: 16px; line-height: 22px; font-weight: 600">{{d.title}}</div>
+        <sc-for list="{{d.options}}" as="o">
+          <div style="{{o.style}}">
+            <div style="display: flex; gap: 8px; align-items: baseline">
+              <b style="flex: none; font-size: 13px; color: {{o.color}}">{{o.key}}</b>
+              <span style="font-size: 13px; line-height: 18px; font-weight: 600">{{o.head}}</span>
+            </div>
+            <sc-if value="{{o.rec}}"><div style="margin: 4px 0 0 20px; display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 15px; font-weight: 600; color: {{t.onBridge}}; background: {{t.bridge}}">Recommended</div></sc-if>
+            <div style="margin: 4px 0 0 20px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{o.why}}</div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1900,"height":880}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', card: '#202428', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', onBridge: '#0B2622', tag: 'rgba(45,212,191,.14)', recFill: 'rgba(45,212,191,.08)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', card: '#F7F8FA', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', onBridge: '#FFFFFF', tag: 'rgba(11,122,110,.12)', recFill: 'rgba(11,122,110,.07)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+const D = [
+  ['D1', 'How neighbours move', [
+    ['Ease at both ends: shift, 167 ms, standard', 'A neighbour is already on screen, so it is a move on screen (principle 5), and matches Reorder.'],
+    ['Decelerate', 'Snappier, but a row that leaps off its place reads as a jump at 167 ms.'],
+    ['Emphasis, 250 ms', 'Smoother, but a busy Tools list spends most of its time moving.']]],
+  ['D2', 'High churn and the scroll anchor', [
+    ['Coalesce, retarget, anchor with "N new"', 'Calls in one frame are one insertion; later ones join the move; scrolled away, what you read stays put and a pill counts what came.'],
+    ['Coalesce, no anchor', 'Simpler, but what you read slides away while you read it.'],
+    ['Throttle: one insertion per 300 ms, queued', 'Smooth, but lags the agent and breaks "never waits for itself".']]],
+  ['D3', 'Approvals and the click guard', [
+    ['Fade where they land, no travel; shifts re-arm the 500 ms guard', 'Opacity only, so a command is never read moving; any shift above an answerable question restarts the wait from rest.'],
+    ['Keep today\u2019s exception: approvals pop', 'Safest, but the one place that still pops is the one you look at.'],
+    ['Everything moves, the card slides 12 in', 'Most consistent, but a sliding command is harder to read and the guard must cover its travel.']]],
+  ['D4', 'Which values cross-fade, and how often', [
+    ['Words, counts, title weight: 83 ms; ages tick; 1 s cap', 'A value that changed under a second ago changes at once, so nothing strobes; usage bars ease.'],
+    ['As A, and ages too, once a minute each', 'More motion in every row for little news.'],
+    ['As today: values change in place', 'Only the status glyph cross-fades.']]],
+  ['D5', 'The disclosure\u2019s space', [
+    ['The space eases: laid out once, clip and shift', 'Compositor-only: no layout per frame.'],
+    ['grid-template-rows 0fr \u2192 1fr, Expander as is', 'Simpler, with a layout every frame.'],
+    ['As today: the space snaps; only the content fades', 'What is below still jumps.']]],
+  ['D6', 'The platforms\u2019 own transitions', [
+    ['Keep control-owned motion; draw list motion ourselves', 'Expander, menus, navigation and sheets keep theirs; arrivals, shifts and values come from the tokens. No AddDeleteThemeTransition.'],
+    ['Replace them all with our own', 'One feel everywhere, but more to build, and the app stops moving like the controls around it.'],
+    ['Use the platforms\u2019 list transitions as they come', 'Least work, but each platform feels different and Windows slides items in from the side.']]],
+];
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const t = THEMES[theme];
+    const decisions = D.map(([id, title, opts]) => ({ id, title, options: opts.map(([head, why], i) => ({
+      key: 'ABC'[i], head, why, rec: i === 0, color: i === 0 ? t.bridge : t.text3,
+      style: `margin-top: 12px; padding: 10px 12px; border-radius: 6px; ${i === 0 ? `background: ${t.recFill}; border: 1px solid ${t.bridge}` : `border: 1px solid ${t.stroke}`}`,
+    })) }));
+    return { t, theme, decisions };
+  }
+}
+</script>
+</body>
+</html>

@@ -293,6 +293,9 @@
     <x:String x:Key="AbMotionListItemExitDuration">00:00:00.083</x:String>
     <x:String x:Key="AbMotionListItemExitEase">1,0,1,1</x:String>
     <x:String x:Key="AbMotionListItemReduced">CrossFade</x:String>
+    <x:String x:Key="AbMotionShiftDuration">00:00:00.167</x:String>
+    <x:String x:Key="AbMotionShiftEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionShiftReduced">Instant</x:String>
     <x:String x:Key="AbMotionGlyphDuration">00:00:00.083</x:String>
     <x:String x:Key="AbMotionGlyphEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionGlyphReduced">Instant</x:String>
@@ -301,6 +304,9 @@
     <x:String x:Key="AbMotionActivityDotExitDuration">00:00:00.083</x:String>
     <x:String x:Key="AbMotionActivityDotExitEase">1,0,1,1</x:String>
     <x:String x:Key="AbMotionActivityDotReduced">Instant</x:String>
+    <x:String x:Key="AbMotionValueDuration">00:00:00.083</x:String>
+    <x:String x:Key="AbMotionValueEase">0.33,0,0.67,1</x:String>
+    <x:String x:Key="AbMotionValueReduced">CrossFade</x:String>
     <x:String x:Key="AbMotionSelectionDuration">00:00:00.167</x:String>
     <x:String x:Key="AbMotionSelectionEase">0.33,0,0.67,1</x:String>
     <x:String x:Key="AbMotionSelectionReduced">Instant</x:String>

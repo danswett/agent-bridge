@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #659: a disclosure's space and a value, easing</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/659-no-pop-motion.md). Frames are drawn from the tokens' curves, not captured. -->
+<div style="width: 1900px; height: 940px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Proposed (pending owner decisions)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Show reasoning eases its space open and shut; a Details value cross-fades</h1>
+  <p style="margin: 0 0 20px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The space is laid out once at its full height; the lines below are drawn where they were and ease down (shift), while the reasoning is revealed by a clip and fades in, settling 4 down. Closing fades it out first (83 ms, accelerate), then the space eases shut. Today both clients show and hide it in one frame.</p>
+  <sc-for list="{{strips}}" as="s">
+    <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 22px">
+      <div style="width: 150px; flex: none; padding-top: 22px">
+        <div style="font-size: 14px; line-height: 20px; font-weight: 600; color: {{s.color}}">{{s.name}}</div>
+        <div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{s.note}}</div>
+      </div>
+      <sc-for list="{{s.frames}}" as="f">
+        <div style="width: 300px; flex: none">
+          <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-bottom: 6px"><b style="color: {{t.text}}">{{f.ms}} ms</b> · {{f.note}}</div>
+          <div style="position: relative; width: 300px; height: {{s.h}}px; border-radius: 8px; border: 1px solid {{t.stroke}}; background: {{t.card}}; overflow: hidden">
+            <sc-for list="{{f.items}}" as="i">
+              <div style="{{i.style}}">{{i.text}}<sc-if value="{{i.sub}}"><span style="{{i.subStyle}}">{{i.sub}}</span></sc-if></div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1900,"height":940}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', card: '#202428', fill: '#262B30', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', card: '#F7F8FA', fill: '#ECEFF2', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+const bezier = (x1, y1, x2, y2) => (p) => {
+  const c = (a, b, s) => 3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i += 1) { const m = (lo + hi) / 2; if (c(x1, x2, m) < p) lo = m; else hi = m; }
+  return c(y1, y2, (lo + hi) / 2);
+};
+const standard = bezier(0.33, 0, 0.67, 1), decelerate = bezier(0, 0, 0, 1), accelerate = bezier(1, 0, 1, 1);
+const clamp = (v) => Math.max(0, Math.min(1, v));
+const H = 96, TOP = 44;
+const EVENTS = ['Edited src/list.ts', 'Ran npm test · 42 passed', 'Started delegate Review the diff · 2m'];
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const t = THEMES[theme];
+    const base = 'position: absolute; left: 12px; right: 12px; box-sizing: border-box; font-size: 13px; line-height: 18px;';
+    // open: 0 shut, 1 open. reveal: the clip's share shown. fade: the content's opacity. dy: its settle.
+    const disc = (ms, note, { space, reveal, fade, dy, chevron }) => {
+      const items = [
+        { text: 'Turn 14 · 2 tools', style: `${base} top: 10px; font-weight: 600` },
+        { text: `${chevron ? '▾' : '▸'} Show reasoning`, style: `${base} font-size: 12px; color: ${t.bridge}; font-weight: 600; top: 30px` },
+      ];
+      if (fade > 0) {
+        items.push({ text: 'The list rebuilds on every refresh, so a keyed update is needed first; then FLIP the rows that stay, and fade the new ones in where they land.',
+          style: `${base} top: ${TOP + 10 + dy}px; height: ${H - 12}px; padding: 8px 10px; border-radius: 6px; background: ${t.fill}; color: ${t.text2}; font-size: 12px; line-height: 17px; opacity: ${fade.toFixed(2)}; clip-path: inset(0 0 ${((1 - reveal) * 100).toFixed(1)}% 0)` });
+      }
+      EVENTS.forEach((e, i) => items.push({ text: e, style: `${base} top: ${(TOP + 14 + space * H + i * 26).toFixed(1)}px; color: ${t.text2}; font-size: 12px; background: ${t.card}` }));
+      return { ms, note, items };
+    };
+    const D = 167, OUT = 83;
+    const opening = [0, 40, 83, 125, 167].map((ms) => {
+      const p = ms / D;
+      return disc(ms, ms === 0 ? 'pressed: laid out, drawn shut' : (ms === 167 ? 'open, at rest' : `space ${Math.round(standard(p) * 100)}% open`),
+        { space: standard(p), reveal: standard(p), fade: decelerate(p), dy: -4 * (1 - decelerate(p)), chevron: true });
+    });
+    const closing = [0, 40, 83, 167, 250].map((ms) => {
+      const f = clamp(ms / OUT), s = clamp((ms - OUT) / D);
+      return disc(ms, ms === 0 ? 'pressed' : (ms <= OUT ? 'the reasoning fades out' : (ms === 250 ? 'shut, at rest' : 'then the space eases shut')),
+        { space: ms <= OUT ? 1 : 1 - standard(s), reveal: 1, fade: ms < OUT ? 1 - accelerate(f) : 0, dy: 0, chevron: false });
+    });
+    // A Details pair: the old value fades out as the new one fades in, in one cell as wide as the wider.
+    const cell = (label, from, to, p, top) => {
+      const lab = { text: label, style: `${base} top: ${top}px; width: 110px; font-size: 12px; color: ${t.text2}` };
+      const vs = `position: absolute; left: 128px; top: ${top}px; font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums;`;
+      const out = [lab];
+      if (p < 1) out.push({ text: from, style: `${vs} opacity: ${(1 - p).toFixed(2)}` });
+      if (p > 0) out.push({ text: to, style: `${vs} opacity: ${p.toFixed(2)}` });
+      return out;
+    };
+    const values = [0, 20, 40, 60, 83].map((ms) => {
+      const p = standard(ms / 83);
+      return { ms, note: ms === 0 ? 'Turns and Status change' : (ms === 83 ? 'at rest' : `${Math.round(p * 100)}% across`), items: [
+        ...cell('Status', 'Working', 'Waiting for you', p, 14), ...cell('Turns', '13', '14', p, 40),
+        ...cell('Compactions', '1', '1', 1, 66), ...cell('Updated', '2m ago', '2m ago', 1, 92),
+      ] };
+    });
+    const strips = [
+      { name: 'Opening', color: t.bridge, note: 'disclosure turns the chevron; shift moves the lines below; the content fades in (decelerate).', h: 246, frames: opening },
+      { name: 'Closing', color: t.bridge, note: 'The content fades out where it is, then the space eases shut: 250 ms in all.', h: 246, frames: closing },
+      { name: 'A value changes', color: t.bridge, note: 'value: 83 ms, standard. Tabular figures, no width jitter. A second change within 1 s is at once; ages tick in place.', h: 124, frames: values },
+    ];
+    return { t, theme, strips };
+  }
+}
+</script>
+</body>
+</html>

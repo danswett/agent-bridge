@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>Nothing pops · #659 prototype</title>
+<!--
+  #659 · Proposed (pending owner decisions D1–D6).
+  One self-contained file: no dependencies, no network. Open it in a browser, on a phone too.
+  It shows the behaviour in docs/design/proposals/659-no-pop-motion.md; it is not product code.
+  Durations are the Windows and PWA tokens (design/tokens.json motion): shift 167 ms standard,
+  listItem 167 in (decelerate) and 83 out (accelerate), disclosure 167 and 83, value 83,
+  toast 167 and 83 with 12 px of travel, crossFade 83.
+-->
+<style>
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, "SF Mono", Menlo, monospace;
+  --dec: cubic-bezier(0, 0, 0, 1);
+  --disc: 167ms;
+}
+[data-theme="dark"] {
+  --shell: #202326; --layer: #272A2E; --card: #2F3338;
+  --stroke: rgba(255,255,255,.07); --stroke2: rgba(255,255,255,.12);
+  --subtle: rgba(255,255,255,.05); --selected: rgba(255,255,255,.07);
+  --text: #FFFFFF; --text2: rgba(255,255,255,.72); --text3: rgba(255,255,255,.54);
+  --bridge: #2DD4BF; --needs: #FFB224; --needs-fill: #3A3426; --active: #4C9AFF; --danger: #FF6B6B; --neutral: #8B949E;
+  --bridge-on: #062621;
+}
+[data-theme="light"] {
+  --shell: #EEF0F2; --layer: #F9F9F9; --card: #FFFFFF;
+  --stroke: rgba(0,0,0,.07); --stroke2: rgba(0,0,0,.12);
+  --subtle: rgba(0,0,0,.03); --selected: rgba(0,0,0,.05);
+  --text: #1A1A1A; --text2: rgba(0,0,0,.62); --text3: rgba(0,0,0,.58);
+  --bridge: #0B7A6E; --needs: #B87700; --needs-fill: #F6EEDF; --active: #0B63E5; --danger: #C9302C; --neutral: #6E7781;
+  --bridge-on: #FFFFFF;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { font-family: var(--font); font-size: 14px; line-height: 20px; color: var(--text); background: var(--shell); -webkit-text-size-adjust: 100%; }
+button { font: inherit; color: inherit; }
+
+.top {
+  position: sticky; top: 0; z-index: 50; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top)); background: var(--layer); border-bottom: 1px solid var(--stroke);
+}
+.top h1 { margin: 0; font-size: 16px; line-height: 22px; font-weight: 600; flex: 1 1 220px; }
+.top h1 small { display: block; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text2); }
+.seg { display: inline-flex; border: 1px solid var(--stroke2); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; min-height: 36px; cursor: pointer; color: var(--text2); }
+.seg button[aria-pressed="true"] { background: var(--bridge); color: var(--bridge-on); font-weight: 600; }
+.chk { display: inline-flex; align-items: center; gap: 6px; color: var(--text2); min-height: 36px; cursor: pointer; }
+.btn { border: 1px solid var(--stroke2); background: var(--card); border-radius: 4px; padding: 5px 10px; min-height: 32px; cursor: pointer; }
+.btn:hover { background: var(--selected); }
+.btn.on { border-color: var(--bridge); color: var(--bridge); }
+:focus-visible { outline: 2px solid var(--bridge); outline-offset: 1px; }
+
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; align-items: start; }
+.panel { background: var(--layer); border: 1px solid var(--stroke); border-radius: 8px; overflow: hidden; }
+.panel > header { padding: 10px 12px 8px; border-bottom: 1px solid var(--stroke); }
+.panel h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
+.panel h2 span { color: var(--text3); font-weight: 400; }
+.panel p.hint { margin: 2px 0 8px; font-size: 12px; line-height: 16px; color: var(--text2); }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Items sit above the stand-ins of items leaving (.ghost), which fade underneath as the
+   neighbours ease over them. */
+.stack { position: relative; }
+.stack > * { position: relative; z-index: 1; background-color: var(--layer); }
+.stack > .ghost { position: absolute; z-index: 0; margin: 0; pointer-events: none; }
+
+/* (a) Tools */
+.tools-wrap { position: relative; }
+.tools { height: 340px; overflow-y: auto; overflow-anchor: none; margin: 0; padding: 4px 0; list-style: none; overscroll-behavior: contain; }
+.tool { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; min-height: 32px; padding: 6px 12px; }
+.tool svg { width: 12px; height: 12px; display: block; }
+.tool .what { font-family: var(--mono); font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tool .what b { font-weight: 600; }
+.tool .what span { color: var(--text2); }
+.tool time { font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
+.tool.done .mark { color: var(--neutral); } .tool.failed .mark { color: var(--danger); }
+.pill {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 5; display: inline-flex; align-items: center; gap: 4px;
+  border: 0; border-radius: 999px; padding: 4px 12px; min-height: 28px; background: var(--bridge); color: var(--bridge-on); font-weight: 600; font-size: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.24); cursor: pointer;
+}
+.pill[hidden] { display: none; }
+
+/* Value cells: the old and the new text stacked in one grid cell, so the cell keeps the
+   wider of the two while they cross-fade and nothing beside it moves. */
+.val { display: inline-grid; font-variant-numeric: tabular-nums; }
+.val > .v { grid-area: 1 / 1; white-space: nowrap; }
+
+/* (b) Sessions */
+.row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; min-height: 52px; padding: 6px 12px; }
+.row .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .m { grid-column: 2; font-size: 12px; line-height: 16px; color: var(--text2); }
+.row time { grid-row: 1; grid-column: 3; font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
+.dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--neutral); }
+.dot.working { border-color: var(--active); border-right-color: transparent; }
+.group { padding: 10px 12px 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--text2); }
+.group.needs { color: var(--needs); }
+.stack > .entry { margin: 0 8px 6px; padding: 8px 10px; border-radius: 6px; background-color: var(--needs-fill); border: 1px solid var(--needs); }
+.entry .q { font-weight: 600; font-size: 13px; }
+.entry code { display: block; margin-top: 4px; font-family: var(--mono); font-size: 12px; line-height: 16px; white-space: pre-wrap; }
+
+/* (c) Conversation */
+.conv { padding: 8px 12px 12px; }
+.conv .label { font-size: 12px; color: var(--text3); padding-top: 4px; }
+.conv .resp { margin: 0; padding: 4px 0 8px; }
+.disc { display: inline-flex; align-items: center; gap: 6px; border: 0; color: var(--text2); padding: 4px 0; cursor: pointer; }
+.disc svg { width: 12px; height: 12px; transition: transform var(--disc) var(--dec); }
+.disc[aria-expanded="true"] svg { transform: rotate(90deg); }
+.reasoning { margin: 4px 0 8px; padding: 8px 10px; border-left: 2px solid var(--stroke2); color: var(--text2); font-size: 13px; }
+.reasoning p { margin: 0 0 6px; } .reasoning p:last-child { margin: 0; }
+.event { display: flex; gap: 8px; align-items: center; font-size: 12px; line-height: 16px; color: var(--text2); padding: 4px 0; }
+.event a { color: var(--bridge); text-decoration: none; }
+.now { font-family: var(--mono); font-size: 12px; color: var(--text2); padding: 4px 0; }
+
+/* (d) Details */
+dl.details { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 6px 12px; margin: 0; padding: 12px; }
+dl.details dt { color: var(--text2); }
+dl.details dd { margin: 0; }
+dl.details .mono { font-family: var(--mono); font-size: 12px; }
+
+/* (e) Banner */
+.page { padding: 0 0 8px; }
+.stack > .banner { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 8px; padding: 8px 12px; border-radius: 6px; background-color: var(--needs-fill); border: 1px solid var(--needs); }
+.banner[hidden] { display: none; }
+.banner b { color: var(--needs); }
+.page h3 { margin: 0; padding: 8px 12px 4px; font-size: 14px; }
+.page p { margin: 0; padding: 0 12px 8px; color: var(--text2); }
+.stack > .card { margin: 0 12px 8px; padding: 10px 12px; border-radius: 6px; background-color: var(--card); border: 1px solid var(--stroke); }
+
+footer { max-width: 1400px; margin: 0 auto; padding: 0 16px 24px; color: var(--text3); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Nothing pops in or out <small>#659 · Proposed (pending owner decisions) · sample data</small></h1>
+  <div class="seg" role="group" aria-label="Motion">
+    <button type="button" id="m-today" aria-pressed="false">Today (pop)</button>
+    <button type="button" id="m-proposed" aria-pressed="true">Proposed</button>
+  </div>
+  <label class="chk"><input type="checkbox" id="reduced"> Reduced motion</label>
+  <button type="button" class="btn" id="theme">Light</button>
+</div>
+
+<main>
+  <section class="panel" aria-labelledby="h-tools">
+    <header>
+      <h2 id="h-tools">(a) Tools <span>· calls arrive at the top</span></h2>
+      <p class="hint">Scroll down and keep the stream running: what you read stays put, and the pill says how many came.</p>
+      <div class="acts">
+        <button type="button" class="btn" id="tool-one">1 call</button>
+        <button type="button" class="btn" id="tool-burst">Burst of 5</button>
+        <button type="button" class="btn" id="tool-stream" aria-pressed="false">Stream</button>
+      </div>
+    </header>
+    <div class="tools-wrap">
+      <button type="button" class="pill" id="pill" hidden>↑ <span class="val" id="pill-n"><span class="v">0</span></span> new</button>
+      <ol class="tools stack" id="tools" aria-label="Tools"></ol>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-rows">
+    <header>
+      <h2 id="h-rows">(b) Sessions <span>· rows and Needs you</span></h2>
+      <p class="hint">Rows fade in as their slot opens, and the rows below ease down. An approval fades where it lands (D3).</p>
+      <div class="acts">
+        <button type="button" class="btn" id="row-add">Add row</button>
+        <button type="button" class="btn" id="row-end">End a row</button>
+        <button type="button" class="btn" id="ask">Ask a question</button>
+        <button type="button" class="btn" id="answer">Answer one</button>
+      </div>
+    </header>
+    <div class="stack" id="rows" style="padding-bottom:8px"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-conv">
+    <header>
+      <h2 id="h-conv">(c) Conversation <span>· Show reasoning</span></h2>
+      <p class="hint">The space eases open and shut; the lines below ease with it.</p>
+      <div class="acts"><button type="button" class="btn" id="event-add">Add an event</button></div>
+    </header>
+    <div class="conv stack" id="conv">
+      <div class="label">Main agent · 2m</div>
+      <p class="resp">The flaky test was a race between the cache warm-up and the first request. I moved the warm-up ahead of the listener and added a test that fails without it.</p>
+      <button type="button" class="disc" id="disc" aria-expanded="false" aria-controls="reasoning"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg><span>Show reasoning</span></button>
+      <div class="reasoning" id="reasoning" hidden>
+        <p>The failure only shows on a cold start, and only when the first request lands inside the first 50 ms.</p>
+        <p>The cache's warm-up runs on the thread pool after the listener starts, so the first request can read an empty cache.</p>
+        <p>Moving the warm-up ahead of the listener costs about 30 ms at start and removes the race.</p>
+      </div>
+      <div class="event" id="ev-first"><span aria-hidden="true">↗</span><span>Started delegate <a href="#">Fix flaky cache test</a> · 6h</span></div>
+      <div class="event"><span aria-hidden="true">↙</span><span>Delegate <a href="#">Fix flaky cache test</a> reported back · 2h</span></div>
+      <div class="now" id="now">⟳ powershell npm test -- cache</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-details">
+    <header>
+      <h2 id="h-details">(d) Details <span>· values change</span></h2>
+      <p class="hint">Values cross-fade in place. Press twice within a second: the second change is at once.</p>
+      <div class="acts"><button type="button" class="btn" id="values">Change values</button></div>
+    </header>
+    <dl class="details" id="details">
+      <dt>Status</dt><dd><span class="val" data-k="status"><span class="v">Working</span></span></dd>
+      <dt>Agent</dt><dd>Copilot CLI</dd>
+      <dt>Machine</dt><dd>WORKSTATION</dd>
+      <dt>Model</dt><dd><span class="val" data-k="model"><span class="v">model-a</span></span></dd>
+      <dt>Folder</dt><dd class="mono">~/src/sample-app</dd>
+      <dt>Background</dt><dd><span class="val" data-k="bg"><span class="v">1 agent</span></span></dd>
+      <dt>Turns</dt><dd><span class="val" data-k="turns"><span class="v">12</span></span></dd>
+      <dt>Compactions</dt><dd><span class="val" data-k="compactions"><span class="v">0</span></span></dd>
+      <dt>Updated</dt><dd><span class="val" data-k="updated"><span class="v">2m ago</span></span></dd>
+    </dl>
+  </section>
+
+  <section class="panel" aria-labelledby="h-banner">
+    <header>
+      <h2 id="h-banner">(e) Banner <span>· pushes the page down</span></h2>
+      <p class="hint">The banner slides 12 in and fades; what is below eases down, and back as it leaves.</p>
+      <div class="acts"><button type="button" class="btn" id="banner-toggle">Show banner</button></div>
+    </header>
+    <div class="page stack" id="page">
+      <div class="banner" id="banner" role="status" hidden><b>BUILD-VM is offline.</b> <span>Its sessions show as they were.</span></div>
+      <h3 id="page-h">Sessions</h3>
+      <p>Everything below the banner eases with it.</p>
+      <div class="card">Refactor the settings page · WORKSTATION</div>
+      <div class="card">Nightly build fails on arm64 · BUILD-VM</div>
+    </div>
+  </section>
+</main>
+<footer>Durations: the Windows and PWA tokens. Today (pop) is what the clients do now (read from their code). Nothing here is product code.</footer>
+
+<script>
+'use strict';
+const T = { shift: 167, itemIn: 167, itemOut: 83, disc: 167, discOut: 83, value: 83, toastIn: 167, toastOut: 83, cross: 83, nudge: 4, small: 12, cap: 1000 };
+const E = { std: 'cubic-bezier(0.33, 0, 0.67, 1)', dec: 'cubic-bezier(0, 0, 0, 1)', acc: 'cubic-bezier(1, 0, 1, 1)' };
+const S = { mode: 'proposed', reduced: matchMedia('(prefers-reduced-motion: reduce)').matches };
+const $ = (id) => document.getElementById(id);
+const today = () => S.mode === 'today';
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) { if (k === 'class') { e.className = v; } else if (k === 'html') { e.innerHTML = v; } else { e.setAttribute(k, v); } }
+  for (const k of kids) { if (k != null) { e.append(k); } }
+  return e;
+};
+
+// ---- Motion -------------------------------------------------------------------------------
+
+// Arriving: a fade (listItem, decelerate), with travel only where the entry has some (a toast's
+// 12). Under reduced motion, the cross-fade and no travel.
+function fadeIn(el, { dur = T.itemIn, dy = 0 } = {}) {
+  if (today()) { return null; }
+  if (S.reduced) { return el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T.cross, easing: 'linear' }); }
+  const from = dy ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
+  const to = dy ? { opacity: 1, transform: 'translateY(0)' } : { opacity: 1 };
+  return el.animate([from, to], { duration: dur, easing: E.dec });
+}
+
+// Easing aside (shift): FLIP. Measure where each child is drawn (a move in flight included),
+// let the change lay out once, and translate each moved child from where it was drawn to its
+// new place. A move in flight is cancelled and restarted from where it is, never queued, and
+// continues on decelerate so it doesn't stall.
+const shifts = new WeakMap();
+let shiftCount = 0;
+function drawn(container) {
+  const m = new Map();
+  for (const k of container.children) {
+    if (k.classList.contains('ghost') || !k.getClientRects().length) { continue; }
+    m.set(k, k.getBoundingClientRect().top);
+  }
+  return m;
+}
+function flip(container, mutate) {
+  const before = drawn(container);
+  const moving = new Set();
+  for (const k of before.keys()) {
+    const a = shifts.get(k);
+    if (a && a.playState === 'running') { moving.add(k); }
+    a?.cancel();
+    shifts.delete(k);
+  }
+  mutate();
+  if (today() || S.reduced) { return; }
+  let any = false;
+  for (const k of container.children) {
+    if (!before.has(k) || !k.getClientRects().length) { continue; }
+    const dy = before.get(k) - k.getBoundingClientRect().top;
+    if (Math.abs(dy) < 0.5) { continue; }
+    const a = k.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }],
+      { duration: T.shift, easing: moving.has(k) ? E.dec : E.std });
+    a.id = 'shift';
+    shifts.set(k, a);
+    any = true;
+  }
+  if (any) { shiftCount += 1; }
+}
+
+// Leaving: a copy nothing can find or tap fades where the item was (listItem's fast exit), as
+// the item's slot closes and its neighbours ease over it.
+function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
+  if (today()) { els.forEach((e) => e.remove()); return; }
+  const ghosts = els.map((el) => {
+    const g = el.cloneNode(true);
+    g.removeAttribute('id');
+    g.classList.add('ghost');
+    g.setAttribute('aria-hidden', 'true');
+    g.inert = true;
+    // Where it is drawn and how opaque, a move or a fade in flight included, so leaving mid-way
+    // doesn't jump.
+    const cs = getComputedStyle(el);
+    g.dataset.from = cs.opacity;
+    Object.assign(g.style, { top: `${el.offsetTop + new DOMMatrix(cs.transform).m42}px`, left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px` });
+    return g;
+  });
+  flip(container, () => { els.forEach((e) => e.remove()); container.prepend(...ghosts); });
+  for (const g of ghosts) {
+    const to = dy && !S.reduced ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
+    const a = g.animate([{ opacity: Number(g.dataset.from), transform: 'translateY(0)' }, to],
+      S.reduced ? { duration: T.cross, easing: 'linear', fill: 'forwards' } : { duration: dur, easing: E.acc, fill: 'forwards' });
+    a.onfinish = () => g.remove();
+    a.oncancel = () => g.remove();
+  }
+}
+function arrive(container, els, place) {
+  flip(container, () => place(els));
+  els.forEach((e) => fadeIn(e));
+}
+
+// Value change: the old text fades out over the new in the same cell. A value changed again
+// within a second changes at once, so a busy value never strobes.
+function setValue(cell, text) {
+  const cur = cell.querySelector('.v:not(.old)');
+  if (cur.textContent === text) { return; }
+  const now = performance.now();
+  const last = Number(cell.dataset.at ?? -1e9);
+  cell.dataset.at = String(now);
+  cell.querySelectorAll('.old').forEach((o) => o.remove());
+  cur.getAnimations().forEach((a) => a.cancel());
+  if (today() || now - last < T.cap) { cur.textContent = text; return; }
+  const old = cur.cloneNode(true);
+  old.classList.add('old');
+  old.setAttribute('aria-hidden', 'true');
+  cell.append(old);
+  cur.textContent = text;
+  const d = S.reduced ? T.cross : T.value;
+  const ease = S.reduced ? 'linear' : E.std;
+  const out = old.animate([{ opacity: 1 }, { opacity: 0 }], { duration: d, easing: ease, fill: 'forwards' });
+  out.onfinish = () => old.remove();
+  cur.animate([{ opacity: 0 }, { opacity: 1 }], { duration: d, easing: ease });
+}
+
+// ---- (a) Tools ----------------------------------------------------------------------------
+const GLYPH = {
+  done: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.2l2.3 2.3 4.7-5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  failed: '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
+const CALLS = [
+  ['view', 'src/App/ToolList.xaml'], ['grep', 'ItemContainerTransitions'], ['powershell', 'npm test -- motion'],
+  ['edit', 'src/App/Motion.cs'], ['glob', '**/*.xaml'], ['view', 'pwa/js/ui/motion.js'], ['task', 'Run the UI tests'],
+  ['powershell', 'git status --short'], ['create', 'docs/notes/shift.md'], ['grep', 'replaceChildren'],
+];
+const tools = [];
+const toolList = $('tools');
+let seq = 0;
+const pending = [];
+let flushing = false;
+let fresh = 0;
+const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 45 ? 'just now' : `${Math.round(s / 60)}m`; };
+function makeTool(at = Date.now()) {
+  const [name, summary] = CALLS[seq % CALLS.length];
+  seq += 1;
+  return { id: seq, name, summary, at, status: seq % 13 === 0 ? 'failed' : 'done' };
+}
+function toolRow(t) {
+  const li = h('li', { class: `tool ${t.status}`, 'data-id': String(t.id) });
+  li.append(h('span', { class: 'mark', html: GLYPH[t.status] }), h('span', { class: 'what', html: '<b></b> <span></span>' }), h('time', {}, ago(t.at)));
+  li.querySelector('b').textContent = t.name;
+  li.querySelector('.what span').textContent = t.summary;
+  return li;
+}
+const realTools = () => toolList.querySelectorAll(':scope > .tool:not(.ghost)');
+const atTop = () => toolList.scrollTop <= 2;
+function addTool() {
+  pending.push(makeTool());
+  if (!flushing) { flushing = true; requestAnimationFrame(flushTools); }
+}
+// Calls that come in the same frame are one insertion; one that comes while an insertion is
+// still easing retargets it (flip), so a burst never queues.
+function flushTools() {
+  flushing = false;
+  const items = pending.splice(0).reverse();
+  if (!items.length) { return; }
+  tools.unshift(...items);
+  tools.splice(50);
+  if (today()) {
+    // What both clients do today: the whole list rebuilt on each refresh.
+    toolList.replaceChildren(...tools.map(toolRow));
+    return;
+  }
+  const els = items.map(toolRow);
+  const place = () => {
+    const first = realTools()[0];
+    if (first) { first.before(...els); } else { toolList.append(...els); }
+  };
+  const trim = () => { while (realTools().length > 50) { realTools()[realTools().length - 1].remove(); } };
+  if (!atTop() && !returning) {
+    // Scrolled away: anchor what is read. The new calls go in above, the offset grows by their
+    // height in the same frame, and the pill counts them.
+    place();
+    toolList.scrollTop += els.reduce((n, e) => n + e.offsetHeight, 0);
+    trim();
+    showPill(fresh + items.length);
+    return;
+  }
+  arrive(toolList, els, () => { place(); trim(); });
+}
+const pill = $('pill');
+function showPill(n) {
+  const was = fresh;
+  fresh = n;
+  pill.getAnimations().forEach((a) => a.cancel());
+  if (pill.hidden) {
+    pill.querySelector('.v').textContent = String(n);
+    pill.hidden = false;
+    fadeIn(pill);
+  } else if (n !== was) {
+    setValue($('pill-n'), String(n));
+  }
+}
+function hidePill() {
+  if (pill.hidden) { return; }
+  fresh = 0;
+  const done = () => { pill.hidden = true; delete $('pill-n').dataset.at; };
+  if (today()) { done(); return; }
+  const a = pill.animate([{ opacity: 1 }, { opacity: 0 }], S.reduced ? { duration: T.cross } : { duration: T.itemOut, easing: E.acc });
+  a.onfinish = done;
+}
+pill.addEventListener('click', () => { returning = true; toolList.scrollTo({ top: 0, behavior: S.reduced || today() ? 'auto' : 'smooth' }); hidePill(); });
+toolList.addEventListener('scroll', () => { if (atTop()) { returning = false; hidePill(); } }, { passive: true });
+
+// While the pill's smooth scroll to the top runs, new calls arrive as at the top: anchoring
+// would move the scroll under it and stop it short.
+let returning = false;
+let stream = null;
+function streamStep() {
+  const n = Math.random() < 0.2 ? 2 + Math.floor(Math.random() * 3) : 1;
+  for (let i = 0; i < n; i += 1) { addTool(); }
+  stream = setTimeout(streamStep, 120 + Math.random() * 280);
+}
+$('tool-one').addEventListener('click', addTool);
+$('tool-burst').addEventListener('click', () => { for (let i = 0; i < 5; i += 1) { addTool(); } });
+$('tool-stream').addEventListener('click', (e) => {
+  const on = !stream;
+  if (on) { streamStep(); } else { clearTimeout(stream); stream = null; }
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+  e.currentTarget.classList.toggle('on', on);
+  e.currentTarget.textContent = on ? 'Stop stream' : 'Stream';
+});
+// Ages tick in place: a clock moving isn't news.
+setInterval(() => {
+  for (const li of realTools()) {
+    const t = tools.find((x) => String(x.id) === li.dataset.id);
+    if (t) { li.querySelector('time').textContent = ago(t.at); }
+  }
+}, 15000);
+{
+  const start = Date.now() - 40 * 60000;
+  for (let i = 0; i < 24; i += 1) { tools.unshift(makeTool(start + i * 90000)); }
+  toolList.replaceChildren(...tools.map(toolRow));
+}
+
+// ---- (b) Sessions -------------------------------------------------------------------------
+const rowsEl = $('rows');
+const TITLES = ['Rebase the release branch', 'Nightly build fails on arm64', 'Refactor the settings page', 'Write the motion tests',
+  'Update the onboarding copy', 'Profile the cold start', 'Tidy the logging', 'Review the installer change'];
+const MACHINES = ['WORKSTATION', 'BUILD-VM'];
+let rowSeq = 0;
+function sessionRow() {
+  const i = rowSeq++;
+  const working = i % 3 !== 1;
+  return h('div', { class: 'row', 'data-row': String(i) },
+    h('span', { class: `dot ${working ? 'working' : ''}`, 'aria-hidden': 'true' }),
+    h('span', { class: 't' }, TITLES[i % TITLES.length]),
+    h('time', {}, i === 0 ? 'now' : `${i * 7}m`),
+    h('span', { class: 'm' }, `${working ? 'Working' : 'Idle'} · ${MACHINES[i % 2]}`));
+}
+const needsHead = h('div', { class: 'group needs', id: 'needs-head' }, 'Needs you · ', h('span', { class: 'val', id: 'needs-n' }, h('span', { class: 'v' }, '0')));
+const sessionsHead = h('div', { class: 'group' }, 'Sessions');
+rowsEl.append(sessionsHead);
+for (let i = 0; i < 5; i += 1) { rowsEl.append(sessionRow()); }
+const QUESTIONS = [
+  ['Main agent asks', 'Approve once: run this?', 'npm run build -- --release'],
+  ['Delegate Fix flaky cache test asks', 'Approve once: run this?', 'git push origin fix/cache-warmup'],
+  ['Main agent asks', 'Which branch should I rebase onto?', null],
+];
+let qSeq = 0;
+const entries = () => [...rowsEl.querySelectorAll(':scope > .entry:not(.ghost)')];
+$('row-add').addEventListener('click', () => arrive(rowsEl, [sessionRow()], ([r]) => sessionsHead.after(r)));
+$('row-end').addEventListener('click', () => {
+  const rows = [...rowsEl.querySelectorAll(':scope > .row:not(.ghost)')];
+  if (rows.length) { depart(rowsEl, [rows[Math.min(1, rows.length - 1)]]); }
+});
+$('ask').addEventListener('click', () => {
+  const [who, q, cmd] = QUESTIONS[qSeq++ % QUESTIONS.length];
+  const e = h('div', { class: 'entry' }, h('div', { class: 'q' }, `${who} · ${q}`), cmd ? h('code', {}, cmd) : null);
+  const n = entries().length + 1;
+  if (!needsHead.isConnected) {
+    // The lane arrives with its first entry: one insertion.
+    needsHead.querySelector('.v').textContent = String(n);
+    delete needsHead.querySelector('#needs-n').dataset.at;
+    arrive(rowsEl, [needsHead, e], (els) => rowsEl.prepend(...els));
+  } else {
+    arrive(rowsEl, [e], ([x]) => (entries().at(-1) ?? needsHead).after(x));
+    setValue($('needs-n'), String(n));
+  }
+});
+$('answer').addEventListener('click', () => {
+  const list = entries();
+  if (!list.length) { return; }
+  if (list.length === 1) { depart(rowsEl, [needsHead, list[0]]); } else { depart(rowsEl, [list[0]]); setValue($('needs-n'), String(list.length - 1)); }
+});
+
+// ---- (c) Conversation ---------------------------------------------------------------------
+const conv = $('conv');
+const disc = $('disc');
+const reasoning = $('reasoning');
+let discToken = 0;
+disc.addEventListener('click', () => {
+  const open = disc.getAttribute('aria-expanded') !== 'true';
+  const token = ++discToken;
+  disc.setAttribute('aria-expanded', String(open));
+  disc.querySelector('span').textContent = open ? 'Hide reasoning' : 'Show reasoning';
+  // From where it is drawn, so reversing mid-way never jumps back to full or to nothing.
+  const from = reasoning.hidden ? 0 : Number(getComputedStyle(reasoning).opacity);
+  reasoning.getAnimations().forEach((a) => a.cancel());
+  if (open && !reasoning.hidden) {
+    // Reopened while its fade-out ran: the space is still open, so only the fade turns back.
+    if (!today() && !S.reduced) { reasoning.animate([{ opacity: from }, { opacity: 1 }], { duration: T.disc, easing: E.dec }); }
+  } else if (open) {
+    flip(conv, () => { reasoning.hidden = false; });
+    if (today() || S.reduced) { return; }
+    // The space is laid out once; the content is clipped to the opening space and fades in,
+    // settling 4 down, while the lines below ease down (flip).
+    reasoning.animate([{ clipPath: 'inset(0 0 100% 0)' }, { clipPath: 'inset(0 0 0 0)' }], { duration: T.shift, easing: E.std });
+    reasoning.animate([{ opacity: 0, transform: `translateY(-${T.nudge}px)` }, { opacity: 1, transform: 'translateY(0)' }], { duration: T.disc, easing: E.dec });
+  } else {
+    if (today() || S.reduced) { flip(conv, () => { reasoning.hidden = true; }); return; }
+    // Closing: the content fades out, quicker; then the space closes and the lines below ease up.
+    const a = reasoning.animate([{ opacity: from }, { opacity: 0 }], { duration: T.discOut, easing: E.acc, fill: 'forwards' });
+    a.onfinish = () => {
+      if (token !== discToken) { return; }
+      flip(conv, () => { reasoning.hidden = true; });
+      a.cancel();
+    };
+  }
+});
+let evSeq = 0;
+$('event-add').addEventListener('click', () => {
+  const names = ['Run the UI tests', 'Read the motion helper', 'Check the token tiers'];
+  const ev = h('div', { class: 'event' }, h('span', { 'aria-hidden': 'true' }, '↗'), h('span', { html: 'Started delegate <a href="#"></a> · just now' }));
+  ev.querySelector('a').textContent = names[evSeq++ % names.length];
+  arrive(conv, [ev], ([x]) => $('now').before(x));
+});
+
+// ---- (d) Details --------------------------------------------------------------------------
+const cell = (k) => document.querySelector(`#details .val[data-k="${k}"]`);
+let turns = 12;
+let compactions = 0;
+let step = 0;
+$('values').addEventListener('click', () => {
+  step += 1;
+  turns += 1;
+  if (step % 3 === 0) { compactions += 1; }
+  setValue(cell('status'), ['Idle', 'Working', 'Waiting on you'][step % 3]);
+  setValue(cell('model'), step % 2 ? 'model-b (high)' : 'model-a');
+  setValue(cell('bg'), step % 2 ? '2 agents' : '1 agent');
+  setValue(cell('turns'), String(turns));
+  setValue(cell('compactions'), String(compactions));
+  setValue(cell('updated'), 'just now');
+});
+
+// ---- (e) Banner ---------------------------------------------------------------------------
+const page = $('page');
+const banner = $('banner');
+$('banner-toggle').addEventListener('click', (e) => {
+  const show = banner.hidden;
+  e.currentTarget.textContent = show ? 'Hide banner' : 'Show banner';
+  if (show) {
+    flip(page, () => { banner.hidden = false; });
+    fadeIn(banner, { dur: T.toastIn, dy: -T.small });
+  } else {
+    // A copy leaves the way the banner came, quicker, as the page eases back up; the banner
+    // itself goes back, hidden, for next time.
+    depart(page, [banner], { dy: -T.small, dur: T.toastOut });
+    banner.hidden = true;
+    page.prepend(banner);
+  }
+});
+
+// ---- Switches -----------------------------------------------------------------------------
+function setMode(m) {
+  S.mode = m;
+  $('m-today').setAttribute('aria-pressed', String(m === 'today'));
+  $('m-proposed').setAttribute('aria-pressed', String(m === 'proposed'));
+  document.documentElement.dataset.mode = m;
+  document.documentElement.style.setProperty('--disc', m === 'today' || S.reduced ? '0ms' : `${T.disc}ms`);
+}
+function setReduced(on) {
+  S.reduced = on;
+  $('reduced').checked = on;
+  setMode(S.mode);
+}
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  $('theme').textContent = t === 'dark' ? 'Light' : 'Dark';
+}
+$('m-today').addEventListener('click', () => setMode('today'));
+$('m-proposed').addEventListener('click', () => setMode('proposed'));
+$('reduced').addEventListener('change', (e) => setReduced(e.currentTarget.checked));
+$('theme').addEventListener('click', () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+setTheme(matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+setReduced(S.reduced);
+
+// For the Playwright tests (prototype.spec.mjs).
+window.proto = {
+  setMode, setReduced, setTheme, addTool,
+  burst: (n = 5) => { for (let i = 0; i < n; i += 1) { addTool(); } },
+  get shiftCount() { return shiftCount; },
+  get fresh() { return fresh; },
+};
+</script>
+</body>
+</html>

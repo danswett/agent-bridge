@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #659: a Tools call arriving, frame by frame</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/659-no-pop-motion.md). Frames are drawn from the tokens' curves, not captured. -->
+<div style="width: 1900px; height: 980px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Proposed (pending owner decisions)</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">A Tools call arrives: today it pops, proposed it eases in and the rest eases down</h1>
+  <p style="margin: 0 0 20px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The same 167 ms, five frames apart. Proposed: the list is laid out once; every call below is drawn where it was and moves down over shift (standard, standard), uncovering the new call as it fades in over listItem (standard, decelerate). The dashed box is the new slot. Only a translation and an opacity run.</p>
+  <sc-for list="{{strips}}" as="s">
+    <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 22px">
+      <div style="width: 150px; flex: none; padding-top: 22px">
+        <div style="font-size: 14px; line-height: 20px; font-weight: 600; color: {{s.color}}">{{s.name}}</div>
+        <div style="margin-top: 4px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{s.note}}</div>
+      </div>
+      <sc-for list="{{s.frames}}" as="f">
+        <div style="width: 300px; flex: none">
+          <div style="font-size: 12px; line-height: 16px; color: {{t.text2}}; margin-bottom: 6px"><b style="color: {{t.text}}">{{f.ms}} ms</b> · {{f.note}}</div>
+          <div style="position: relative; width: 300px; height: 226px; border-radius: 8px; border: 1px solid {{t.stroke}}; background: {{t.card}}; overflow: hidden">
+            <div style="height: 32px; box-sizing: border-box; padding: 8px 12px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}; border-bottom: 1px solid {{t.stroke}}">Tools</div>
+            <div style="position: absolute; left: 0; right: 0; top: 33px; bottom: 0; overflow: hidden">
+              <sc-for list="{{f.rows}}" as="r">
+                <div style="{{r.style}}">
+                  <span style="width: 8px; height: 8px; border-radius: 4px; flex: none; background: {{r.dot}}"></span>
+                  <span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: 'Agent Bridge Mono', 'Cascadia Mono', monospace; font-size: 12px"><b style="font-weight: 600">{{r.name}}</b> <span style="color: {{t.text2}}">{{r.sum}}</span></span>
+                  <span style="flex: none; font-size: 12px; color: {{t.text3}}; font-variant-numeric: tabular-nums">{{r.age}}</span>
+                </div>
+              </sc-for>
+              <sc-if value="{{f.trace}}"><div style="position: absolute; left: 6px; right: 6px; top: 1px; height: 28px; border: 1px dashed {{t.text3}}; border-radius: 4px; z-index: 3"></div></sc-if>
+              <sc-if value="{{f.pill}}"><div style="position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 4; padding: 3px 12px; border-radius: 12px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.onBridge}}; background: {{t.bridge}}">↑ {{f.pill}} new</div></sc-if>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1900,"height":980}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', card: '#202428', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', onBridge: '#0B2622', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', active: '#4C9AFF', ok: '#3FB950', neutral: '#8B949E', danger: '#FF6B6B', name: 'Dark' },
+  light: { bg: '#E6E9EC', card: '#F7F8FA', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', onBridge: '#FFFFFF', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', active: '#0B63E5', ok: '#1A7F37', neutral: '#6E7781', danger: '#C9302C', name: 'Light' },
+};
+// cubic-bezier(x1, y1, x2, y2) at progress p, solved for x by bisection.
+const bezier = (x1, y1, x2, y2) => (p) => {
+  const c = (a, b, s) => 3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i += 1) { const m = (lo + hi) / 2; if (c(x1, x2, m) < p) lo = m; else hi = m; }
+  return c(y1, y2, (lo + hi) / 2);
+};
+const standard = bezier(0.33, 0, 0.67, 1), decelerate = bezier(0, 0, 0, 1);
+const ROW = 30, D = 167;
+const CALLS = [
+  ['edit', 'src/list.ts +12 −3', '12s'], ['shell', 'npm test -- list', '31s'], ['view', 'src/list.ts', '44s'],
+  ['grep', '"rowHeight" src/', '1m'], ['view', 'docs/ui.md 270–420', '2m'], ['shell', 'git status', '3m'],
+  ['edit', 'src/motion.ts +40', '4m'], ['view', 'src/motion.ts', '5m'], ['grep', '"animate(" src/', '6m'],
+];
+const NEW = [['shell', 'npm run build', 'now'], ['view', 'dist/app.js', 'now'], ['edit', 'src/app.ts +2', 'now']];
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const t = THEMES[theme];
+    const dot = (n) => ({ edit: t.active, shell: t.ok, view: t.neutral, grep: t.neutral })[n];
+    const row = (c, top, opacity, z) => ({ name: c[0], sum: c[1], age: c[2], dot: dot(c[0]),
+      style: `position: absolute; left: 0; right: 0; top: ${top.toFixed(1)}px; height: ${ROW}px; box-sizing: border-box; padding: 0 12px; display: flex; align-items: center; gap: 8px; background: ${t.card}; opacity: ${opacity.toFixed(2)}; z-index: ${z}` });
+    // n new calls at the top, t ms after they came; scroll keeps the old rows still (anchored).
+    const frame = (ms, n, mode, extra) => {
+      const p = Math.min(ms / D, 1);
+      const shiftBack = mode === 'proposed' ? n * ROW * (1 - standard(p)) : 0;
+      const fade = mode === 'proposed' ? decelerate(p) : 1;
+      const rows = [];
+      if (mode !== 'anchored') NEW.slice(0, n).forEach((c, i) => rows.push(row(c, i * ROW, fade, 1)));
+      const at = mode === 'anchored' ? 0 : n * ROW;
+      CALLS.forEach((c, i) => rows.push(row(c, at + i * ROW - shiftBack, 1, 2)));
+      return Object.assign({ ms, rows, trace: false, pill: 0 }, extra);
+    };
+    const times = [0, 40, 83, 125, 167];
+    const notes = { 0: 'the call comes', 40: '', 83: '', 125: '', 167: 'at rest' };
+    const strips = [
+      { name: 'Today (pop)', color: t.text, note: 'Both clients rebuild the list: the call and the shift land in one frame.',
+        frames: times.map((ms) => frame(ms, ms === 0 ? 0 : 1, 'today', { note: ms === 0 ? 'before' : 'already there' })) },
+      { name: 'Proposed', color: t.bridge, note: 'listItem fades the call in; shift eases every call below down by one row.',
+        frames: times.map((ms) => frame(ms, 1, 'proposed', { note: ms === 0 ? 'laid out; rows drawn where they were' : (ms === 167 ? 'at rest' : `rows ${Math.round(standard(ms / D) * 100)}% down, call ${Math.round(decelerate(ms / D) * 100)}% faded in`), trace: ms === 0 })) },
+      { name: 'Burst and scrolled away', color: t.bridge, note: 'Three calls in one frame are one insertion. Scrolled away, what you read stays put.',
+        frames: [
+          frame(0, 3, 'proposed', { note: 'a burst of 3 comes' }),
+          frame(83, 3, 'proposed', { note: 'one block, one move' }),
+          frame(167, 3, 'proposed', { note: 'at rest, 3 rows down' }),
+          frame(0, 3, 'anchored', { note: 'scrolled away, before the burst' }),
+          frame(167, 3, 'anchored', { note: 'after: nothing moved; a pill counts them', pill: 3 }),
+        ] },
+    ];
+    return { t, theme, strips };
+  }
+}
+</script>
+</body>
+</html>
