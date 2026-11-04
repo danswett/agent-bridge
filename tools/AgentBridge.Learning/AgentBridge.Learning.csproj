@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>agent-bridge-learning</AssemblyName>
+    <RootNamespace>AgentBridge.Learning</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../AgentBridge.Quality/Glob.cs" Link="Glob.cs" />
+    <InternalsVisibleTo Include="AgentBridge.Learning.Tests" />
+  </ItemGroup>
+</Project>

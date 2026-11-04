@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "K-app-caption-paint",
+  "kind": "gotcha",
+  "status": "draft",
+  "category": "app|caption-theme-paint",
+  "paths": ["src/AgentBridge.App/SelfTest.cs"],
+  "owner": "app",
+  "verifiedCommit": "f08087255039bb5de3362c0e49024eed74394e26",
+  "references": ["src/AgentBridge.App/SelfTest.cs", "src/AgentBridge.App/MainWindow.xaml.cs"],
+  "recheckBy": "2027-01-31",
+  "staleWhen": "Caption painting no longer follows the asynchronous ActualThemeChanged event.",
+  "effects": ["Changes test synchronization; does not change application painting."],
+  "guidance": {
+    "do": "Wait with a deadline for all four expected caption colors before asserting them.",
+    "avoid": "Do not treat a fixed delay after RequestedTheme changes as proof that caption painting finished.",
+    "recognize": "The caption assertion sees the previous theme while other theme resources already match.",
+    "why": "ActualThemeChanged can arrive on a later tick. Keep wrong-color mutation controls so waiting does not weaken the assertion."
+  },
+  "evidence": {
+    "failures": ["https://github.com/danswett/agent-bridge/issues/424"],
+    "diagnosis": "The caption assertion ran before the theme event painted the buttons, not during high contrast; the investigation for https://github.com/danswett/agent-bridge/issues/424 is recorded in PR 430.",
+    "fix": "https://github.com/danswett/agent-bridge/pull/430",
+    "verification": ["https://github.com/danswett/agent-bridge/pull/430"]
+  }
+}

@@ -256,6 +256,18 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: learning-tool
+    kind: component
+    ring: 0
+    select: affected
+    platforms: [win-x64, win-arm64, linux-x64, macos-arm64]
+    runner: local
+    project: tests/AgentBridge.Learning.Tests
+    triggers: [quality/learning/**]
+    command: dotnet test tests/AgentBridge.Learning.Tests -c Release
+    where: ci.yml product
+    status: exists
+
   - id: mac-host
     kind: component
     ring: 1
