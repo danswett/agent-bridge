@@ -66,6 +66,7 @@ Signals:
 | A-LOGCAP | 2 | LA `ingestion`, `cap-hit` | Today's ingestion > 80% of the daily cap, or collection stopped (OverQuota) | [log-cap](runbooks/log-cap.md) | #571 | Planned |
 | A-BUDGET | 3 | B | The resource group's month at 50%, 80% or 100% of the $40 budget, or forecast over 100%. Emailed by Cost Management, not the action group | [cost](runbooks/cost.md) | #575 | Built |
 | A-GHA | 3 | W `github-actions` | GitHub's status page shows Actions or Pages not operational, or a run here has been queued over 30 min, in 2 of the last 3 checks (every 5 min, from Azure). A source that can't be reached counts as no evidence, not an outage | [github-outage](runbooks/github-outage.md) | #658 | Built |
+| A-GHA-SILENT | 3 | LA `availabilityResults` | No `github-actions` result in 30 min: the watch stopped, so A-GHA is blind (a metric alert never fires on missing data) | [github-outage](runbooks/github-outage.md) | #658 | Built |
 
 ## Staging and PPE
 

@@ -288,7 +288,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
       contentVersion: '1.0.0.0'
       parameters: {
         ingestUrl: { type: 'String' }
-        iKey: { type: 'String' }
+        iKey: { type: 'SecureString' }
         repository: { type: 'String' }
         stallMinutes: { type: 'Int' }
       }
@@ -311,7 +311,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         status: {
           type: 'Http'
           runAfter: { queued: ['Succeeded'] }
-          inputs: { method: 'GET', uri: 'https://www.githubstatus.com/api/v2/summary.json' }
+          inputs: { method: 'GET', uri: 'https://www.githubstatus.com/api/v2/summary.json', retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' } }
         }
         runs: {
           type: 'Http'
@@ -320,6 +320,8 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
             method: 'GET'
             uri: 'https://api.github.com/repos/@{parameters(\'repository\')}/actions/runs?status=queued&per_page=100'
             headers: { 'User-Agent': 'agent-bridge-ops', Accept: 'application/vnd.github+json' }
+            // One quick retry keeps each check inside its 5 minutes, so a 15-minute window holds 3.
+            retryPolicy: { type: 'fixed', count: 1, interval: 'PT20S' }
           }
         }
         statusAnswered: {
@@ -350,7 +352,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         }
         degraded: {
           type: 'Query'
-          runAfter: { statusAnswered: ['Succeeded'] }
+          runAfter: { statusAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
           inputs: {
             from: '@variables(\'components\')'
             where: '@and(contains(createArray(\'Actions\', \'Pages\'), item()?[\'name\']), not(equals(item()?[\'status\'], \'operational\')))'
@@ -358,8 +360,8 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         }
         degradedNames: {
           type: 'Select'
-          runAfter: { degraded: ['Succeeded'] }
-          inputs: { from: '@body(\'degraded\')', select: '@concat(item()?[\'name\'], \' \', item()?[\'status\'])' }
+          runAfter: { degraded: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          inputs: { from: '@coalesce(body(\'degraded\'), json(\'[]\'))', select: '@concat(item()?[\'name\'], \' \', item()?[\'status\'])' }
         }
         // `queued` is a run waiting for a runner: not `waiting` (an environment approval, such as
         // the production gate) and not `pending` (a concurrency group), which are normal. Timed from
@@ -367,7 +369,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         // run look stalled at once.
         stalled: {
           type: 'Query'
-          runAfter: { runsAnswered: ['Succeeded'] }
+          runAfter: { runsAnswered: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
           inputs: {
             from: '@variables(\'queued\')'
             where: '@less(ticks(coalesce(item()?[\'run_started_at\'], item()?[\'created_at\'])), ticks(addMinutes(utcNow(), mul(-1, parameters(\'stallMinutes\')))))'
@@ -375,7 +377,11 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         }
         report: {
           type: 'Http'
-          runAfter: { degradedNames: ['Succeeded'], stalled: ['Succeeded'] }
+          // Runs whatever happened above, so a malformed answer still reports (as no evidence) rather
+          // than going silent; A-GHA-SILENT catches the watch not reporting at all.
+          runAfter: { degradedNames: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], stalled: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
+          // The instrumentation key stays out of run history.
+          runtimeConfiguration: { secureData: { properties: ['inputs'] } }
           inputs: {
             method: 'POST'
             uri: '@parameters(\'ingestUrl\')'
@@ -393,8 +399,8 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
                     name: 'github-actions'
                     duration: '00:00:01'
                     runLocation: 'azure-logic-app'
-                    success: '@and(equals(length(body(\'degraded\')), 0), equals(length(body(\'stalled\')), 0))'
-                    message: '@{concat(\'status page: \', if(equals(outputs(\'status\')?[\'statusCode\'], 200), if(equals(length(body(\'degradedNames\')), 0), \'Actions and Pages operational\', join(body(\'degradedNames\'), \', \')), \'unreachable\'), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(equals(outputs(\'runs\')?[\'statusCode\'], 200), string(length(body(\'stalled\'))), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\')))}'
+                    success: '@and(equals(length(coalesce(body(\'degraded\'), json(\'[]\'))), 0), equals(length(coalesce(body(\'stalled\'), json(\'[]\'))), 0))'
+                    message: '@{concat(\'status page: \', if(equals(outputs(\'status\')?[\'statusCode\'], 200), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(body(\'degradedNames\'), \', \')), \'unreachable\'), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(equals(outputs(\'runs\')?[\'statusCode\'], 200), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\')))}'
                   }
                 }
               }
@@ -438,6 +444,36 @@ resource githubAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
     actions: [{ actionGroupId: actionGroup.id }]
   }
 }
-
+// A-GHA-SILENT. A metric alert never fires on missing data, so a watch that stopped (disabled,
+// deleted, or failing before it reports) would look exactly like GitHub being fine. This fires
+// when no github-actions result has arrived in 30 minutes. A log alert every 15 minutes costs
+// about $0.50 a month.
+resource githubWatchSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: 'A-GHA-SILENT GitHub watch not reporting'
+  location: location
+  tags: tags
+  kind: 'LogAlert'
+  properties: {
+    description: 'No github-actions result from logic-agent-bridge-github-watch in 30 minutes, so A-GHA is blind. Runbook: ops/runbooks/github-outage.md'
+    severity: 3
+    enabled: true
+    scopes: [appInsights.id]
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT30M'
+    criteria: {
+      allOf: [
+        {
+          query: 'availabilityResults | where name == "github-actions"'
+          timeAggregation: 'Count'
+          operator: 'LessThan'
+          threshold: 1
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: [actionGroup.id] }
+  }
+}
 output appInsightsId string = appInsights.id
 output actionGroupId string = actionGroup.id

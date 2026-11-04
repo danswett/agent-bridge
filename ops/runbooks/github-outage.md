@@ -1,7 +1,7 @@
 # GitHub outage
 
-**Alert:** A-GHA. Also use this page when CI, merges or deploys sit queued and nothing seems wrong
-with them.
+**Alert:** A-GHA; A-GHA-SILENT (the watch itself stopped reporting). Also use this page when CI,
+merges or deploys sit queued and nothing seems wrong with them.
 
 Everything that changes the product runs on GitHub Actions: PR CI, Copilot reviews, `merge-rule`
 and auto-merge, the Windows release, relay deploys (`relay.yml`), Pages, and the daily
@@ -48,15 +48,28 @@ There's nothing to fix on our side. The job is to avoid adding load, and to reco
 
 ## When it's over
 
-1. Cancel superseded runs, so the backlog doesn't run twice: for each branch, keep only the
-   newest run (`gh run list --branch <b>`, then `gh run cancel <id>`). Remember a waiting
-   production deploy blocks newer ones (AGENTS.md "Relay deploys").
+1. Cancel superseded runs, so the backlog doesn't run twice. Go **per workflow and branch**,
+   keeping the newest run of each: `gh run list --repo danswett/agent-bridge --branch <b>
+   --workflow <w>`, then `gh run cancel <id>` for the older ones. Never cancel by branch alone:
+   that would cancel the newest run of every other workflow (CodeQL, merge-rule, a deploy).
+   Leave main's `relay.yml` runs and `ci.yml`'s release alone. A superseded run waiting at the
+   production gate does block newer ones (AGENTS.md "Relay deploys"), but cancelling it is
+   **Owner**.
 2. Re-run what failed because of the outage, rather than pushing again:
    `gh run rerun <id> --failed`.
 3. A CodeQL run that ended `skipped` fails `merge-rule` closed; run it again with
    `gh workflow run codeql.yml --ref <branch>` (AGENTS.md rule 4).
 4. Remove the `hold` labels you added, once each head's checks are green again.
 5. Check that main's last CI run passed. A red main blocks every merge and the Windows release.
+
+## If A-GHA-SILENT fires
+
+The watch hasn't recorded a result in 30 minutes, so A-GHA can't fire. Look at
+`logic-agent-bridge-github-watch` in the portal: is it enabled, and what do the latest runs show
+failed? `az resource show --subscription $sub -g $rg -n logic-agent-bridge-github-watch
+--resource-type Microsoft.Logic/workflows --query properties.state` reads its state. If it was
+disabled or deleted, re-running `infra/deploy.ps1 -Production` restores it (**Owner**). Until it
+reports again, check https://www.githubstatus.com yourself.
 
 ## If A-GHA is noisy
 

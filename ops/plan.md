@@ -192,7 +192,9 @@ Anything on Actions can't report that, so a Logic App in Azure checks every 5 mi
   does.
 
 It records an availability result, `github-actions`, and the alert emails once when it starts and
-once when it clears. About $2 a month. Runbook: [github-outage](runbooks/github-outage.md).
+once when it clears. A second alert, A-GHA-SILENT, fires if the watch stops reporting, since a
+metric alert can't fire on missing data. About $2.50 a month together. Runbook:
+[github-outage](runbooks/github-outage.md).
 
 ### 5.4 Dependency and abuse alerts ([#574](https://github.com/danswett/agent-bridge/issues/574))
 
