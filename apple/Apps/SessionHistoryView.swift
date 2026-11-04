@@ -61,7 +61,9 @@ struct SessionHistoryView: View {
         }
         .onChange(of: connectionID) { loader.connectionChanged(connectionID, load: onLoad) }
         .onChange(of: updatedAt) {
-            if connectionID != nil { loader.refresh(load: onLoad) }
+            if connectionID != nil {
+                loader.refresh(load: onLoad)
+            }
         }
         .onChange(of: loader.value) {
             if let value = loader.value {

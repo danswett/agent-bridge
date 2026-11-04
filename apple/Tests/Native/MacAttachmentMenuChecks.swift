@@ -35,7 +35,7 @@ struct MacAttachmentMenuChecks {
         precondition(actions == [1, 2, 3], "Cancelled or disabled menus cannot invoke attachment actions.")
 
         let control = MacAttachmentMenu(disabled: false, hint: "", help: "",
-                                       attachFile: {}, choosePhoto: {}, pastePhoto: {})
+                                        attachFile: {}, choosePhoto: {}, pastePhoto: {})
         let hosting = NSHostingView(rootView: control)
         hosting.frame = bounds
         hosting.layoutSubtreeIfNeeded()

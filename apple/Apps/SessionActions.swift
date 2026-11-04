@@ -178,7 +178,8 @@ private struct SessionActionContent: View {
                 .padding(.top, 4)
             AttachmentComposer(store: store, host: host, attachments: attachments,
                                disabled: replyHold != nil || attempt?.isSending == true || attempt?.uncertain == true,
-                               compact: true, onBusy: { uploading = $0 }) {
+                               compact: true, onBusy: { uploading = $0 })
+            {
                 composerStatus
                 Spacer(minLength: 4)
                 if let model = session?.model, !model.isEmpty {
@@ -229,9 +230,9 @@ private struct SessionActionContent: View {
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(sendDisabled ? Color.secondary.opacity(0.35) : Color.blue, in: .circle)
-                #if os(iOS)
-                    .frame(minWidth: 44, minHeight: 44)
-                #endif
+            #if os(iOS)
+                .frame(minWidth: 44, minHeight: 44)
+            #endif
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)

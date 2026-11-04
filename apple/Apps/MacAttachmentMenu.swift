@@ -112,7 +112,9 @@
             let disabled: Bool
             let actions: [Int: () -> Void]
 
-            func makeCoordinator() -> Presenter { presenter }
+            func makeCoordinator() -> Presenter {
+                presenter
+            }
 
             func makeNSView(context: Context) -> NSView {
                 let view = NSView()
@@ -122,14 +124,16 @@
                 return view
             }
 
-            func updateNSView(_ view: NSView, context: Context) {
+            func updateNSView(_ view: NSView, context _: Context) {
                 presenter.anchor = view
                 presenter.enabled = !disabled
                 presenter.actions = actions
-                if disabled { presenter.cancel() }
+                if disabled {
+                    presenter.cancel()
+                }
             }
 
-            static func dismantleNSView(_ view: NSView, coordinator: Presenter) {
+            static func dismantleNSView(_: NSView, coordinator: Presenter) {
                 coordinator.cancel()
                 coordinator.anchor = nil
                 coordinator.actions = [:]

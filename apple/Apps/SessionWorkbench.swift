@@ -142,31 +142,31 @@ struct SessionWorkbench: View {
         #if os(iOS)
             .sheet(isPresented: $showingConnection) { ConnectionView(store: store) }
         #endif
-        .sheet(isPresented: $showingMachines) { MachinesView(store: store) }
-        .sheet(isPresented: $showingLaunch) { LaunchView(store: store) }
-        .task {
-            store.onOpenSession = {
-                #if os(macOS)
-                    openWindow(id: "workbench")
-                    NSApp.activate(ignoringOtherApps: true)
-                #endif
+            .sheet(isPresented: $showingMachines) { MachinesView(store: store) }
+            .sheet(isPresented: $showingLaunch) { LaunchView(store: store) }
+            .task {
+                store.onOpenSession = {
+                    #if os(macOS)
+                        openWindow(id: "workbench")
+                        NSApp.activate(ignoringOtherApps: true)
+                    #endif
+                }
+                store.notifications.setForeground(true)
+                store.startOnce()
             }
-            store.notifications.setForeground(true)
-            store.startOnce()
-        }
-        .onChange(of: store.selectedSessionID) {
-            showingMobileInspector = false
-            store.notifications.focus(machineID: selected?.host?.hello?["machine"]?["id"]?.string, sessionID: selected?.session.id)
-            if let selected {
-                store.markRead(selected)
+            .onChange(of: store.selectedSessionID) {
+                showingMobileInspector = false
+                store.notifications.focus(machineID: selected?.host?.hello?["machine"]?["id"]?.string, sessionID: selected?.session.id)
+                if let selected {
+                    store.markRead(selected)
+                }
             }
-        }
-        .onChange(of: selected?.session.updatedAt) {
-            if let selected {
-                store.markRead(selected)
+            .onChange(of: selected?.session.updatedAt) {
+                if let selected {
+                    store.markRead(selected)
+                }
             }
-        }
-        .onChange(of: store.account?.accountId) { store.selectedSessionID = nil }
+            .onChange(of: store.account?.accountId) { store.selectedSessionID = nil }
     }
 
     private func row(_ entry: SessionEntry) -> some View {
@@ -308,24 +308,23 @@ struct SessionWorkbench: View {
         }
     }
 
+    @ViewBuilder
     private var connectionActions: some View {
-        Group {
-            if !store.isSample, !store.isFixture, store.account == nil {
-                Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
-                    showConnection()
-                    if !store.isSigningIn {
-                        store.signIn()
-                    }
+        if !store.isSample, !store.isFixture, store.account == nil {
+            Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
+                showConnection()
+                if !store.isSigningIn {
+                    store.signIn()
                 }
             }
-            #if os(macOS)
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
-            #else
-                Button("Connection Settings", action: showConnection)
-            #endif
-            if !store.isSample {
-                Button("Explore Sample Sessions", action: store.showSamples)
-            }
+        }
+        #if os(macOS)
+            SettingsLink { Label("Settings…", systemImage: "gearshape") }
+        #else
+            Button("Connection Settings", action: showConnection)
+        #endif
+        if !store.isSample {
+            Button("Explore Sample Sessions", action: store.showSamples)
         }
     }
 

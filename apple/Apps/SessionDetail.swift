@@ -147,7 +147,8 @@ struct SessionDetail<InspectorControls: View>: View {
                         DisclosureGroup("Tool history", isExpanded: $historyExpanded) {
                             if historyExpanded {
                                 SessionHistoryView(sessionID: session.id, updatedAt: session.updatedAt,
-                                                   connectionID: historyConnectionID, onLoad: onLoadHistory) {
+                                                   connectionID: historyConnectionID, onLoad: onLoadHistory)
+                                {
                                     fullSession = $0
                                 }
                                 .id(session.id)
