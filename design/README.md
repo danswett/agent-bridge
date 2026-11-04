@@ -171,7 +171,7 @@ glyphs must stay distinguishable in greyscale.
 ### Owner sign-off
 
 A material design change (visual language, interaction or state semantics) needs the owner's
-sign-off before it lands here. The VP of Design posts each proposal's boards and numbered
+sign-off before it lands here. The creative director posts each proposal's boards and numbered
 decisions as a `needs-signoff` issue in the private design studio,
 [danswett/agent-bridge-studio](https://github.com/danswett/agent-bridge-studio/issues?q=is%3Aissue+label%3Aneeds-signoff),
 which is visible to the owner and design collaborators only. The decision is recorded there

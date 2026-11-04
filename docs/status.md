@@ -112,7 +112,7 @@ remain routing references until every active destination is verified.
 - **Triage/readiness** (session 3e736b53, DEV-VM1) maintains canonical routing,
   verifies owner acceptance and consumes the existing single collector. It has no
   merge authority and must not create another periodic GitHub poller.
-- **VP of Design** (session c187cf6c) is additive: audits, proposals and design review
+- **Creative director** (session c187cf6c; formerly titled VP of Design) is additive: audits, proposals and design review
   under [#477](https://github.com/danswett/agent-bridge/issues/477). Material design
   changes still require owner approval; design leadership is not merge authority.
 
