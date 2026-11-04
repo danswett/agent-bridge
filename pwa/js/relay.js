@@ -42,7 +42,9 @@ export class Relay {
   connect(token) {
     return new Promise((resolve, reject) => {
       let ready = false;
-      const ws = new WebSocket(`${this.base.replace(/^http/, 'ws')}/v1/ws`);
+      // admit=1: the relay sends its challenge as the socket opens (#603), so the proof follows the
+      // hello at once and ready is one round trip away, not two. A relay from before it ignores it.
+      const ws = new WebSocket(`${this.base.replace(/^http/, 'ws')}/v1/ws?admit=1`);
       this.#ws = ws;
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', token, pub: hex(this.key.public), name: this.name, kind: this.kind }));
@@ -71,8 +73,12 @@ export class Relay {
       if (m.t === 'challenge') {
         const secret = await this.key.dh(unhex(m.eph));
         const k = await crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-        const mac = new Uint8Array(await crypto.subtle.sign('HMAC', k,
-          concat(utf8.encode('agent-bridge-s4-relay-proof'), unhex(m.nonce), utf8.encode(m.account))));
+        // An early challenge, sent before the hello, names no account and has a proof of its own
+        // (Wire.EarlyProofMac).
+        const signed = m.early === true
+          ? concat(utf8.encode('agent-bridge-relay-early-proof'), unhex(m.nonce))
+          : concat(utf8.encode('agent-bridge-s4-relay-proof'), unhex(m.nonce), utf8.encode(m.account));
+        const mac = new Uint8Array(await crypto.subtle.sign('HMAC', k, signed));
         this.#ws.send(JSON.stringify({ t: 'proof', mac: hex(mac) }));
       } else if (m.t === 'ready') {
         if (m.device !== this.deviceId) { this.close(4000, 'wrong device'); throw new Error('the relay assigned a different device id'); }

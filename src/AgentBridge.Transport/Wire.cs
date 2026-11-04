@@ -19,6 +19,9 @@ public static class Wire
     // Still says s4: the label is part of what the relay checks and the PWA computes, and the
     // live relay and the published PWA were built with it. Changing it is a protocol version.
     const string ProofLabel = "agent-bridge-s4-relay-proof";
+    // The proof to an early challenge (#603), which carries no account: a label of its own, so
+    // neither proof can stand for the other.
+    const string EarlyProofLabel = "agent-bridge-relay-early-proof";
 
     // Self-certifying: a device id is the hash of its static key, so a relay that hands
     // a client someone else's key under a known id is caught by the handshake.
@@ -32,6 +35,11 @@ public static class Wire
         byte[] data = [.. Encoding.UTF8.GetBytes(ProofLabel), .. nonce, .. Encoding.UTF8.GetBytes(accountId)];
         return HMACSHA256.HashData(sharedSecret, data);
     }
+
+    // The same for a challenge sent before the hello (the relay's EarlyChallenge), which names no
+    // account since the relay knows none yet.
+    public static byte[] EarlyProofMac(byte[] sharedSecret, byte[] nonce) =>
+        HMACSHA256.HashData(sharedSecret, [.. Encoding.UTF8.GetBytes(EarlyProofLabel), .. nonce]);
 
     public static string Hex(ReadOnlySpan<byte> b) => Convert.ToHexString(b).ToLowerInvariant();
 

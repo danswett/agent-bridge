@@ -101,12 +101,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
     }
 
-    public async Task RunAsync(WebSocket ws, CancellationToken aborted)
+    // early: the device asked for the challenge with the WebSocket's opening (?admit=1).
+    public async Task RunAsync(WebSocket ws, CancellationToken aborted, bool early = false)
     {
         using var handshakeTimeout = CancellationTokenSource.CreateLinkedTokenSource(aborted);
         handshakeTimeout.CancelAfter(TimeSpan.FromSeconds(15));
         Connection? conn;
-        try { conn = await AdmitAsync(ws, handshakeTimeout.Token); }
+        try { conn = await AdmitAsync(ws, early && options.EarlyChallenge, handshakeTimeout.Token); }
         catch (Exception e) when (e is OperationCanceledException or WebSocketException or JsonException or FormatException or KeyNotFoundException or InvalidOperationException or FrameTooLargeException)
         {
             await RefuseAsync(ws, CloseCodes.Protocol, "bad-hello");
@@ -157,8 +158,17 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         }
     }
 
-    async Task<Connection?> AdmitAsync(WebSocket ws, CancellationToken ct)
+    // hello, challenge, proof, ready: two round trips after the WebSocket opens. With early, the
+    // challenge is sent as soon as it opens, before hello: it arrives with the opening, the device
+    // sends its hello and its proof together, and ready is one round trip later (#603). It carries
+    // no account, since none is known before the token, and the proof is the early one, which
+    // leaves the account out (Wire.EarlyProofMac). Either way the relay's ephemeral key and nonce
+    // are this connection's alone, so a proof is good for nothing else.
+    async Task<Connection?> AdmitAsync(WebSocket ws, bool early, CancellationToken ct)
     {
+        using var eph = P256KeyPair.Generate();
+        var nonce = RandomNumberGenerator.GetBytes(32);
+        if (early) { await SendJsonAsync(ws, new { t = "challenge", eph = Wire.Hex(eph.Public), nonce = Wire.Hex(nonce), early = true }, ct); }
         var hello = await ReceiveControlAsync(ws, ct);
         if (hello.GetProperty("t").GetString() != "hello") { await RefuseAsync(ws, CloseCodes.Protocol, "expected-hello"); return null; }
         var account = tokens.Validate(hello.GetProperty("token").GetString());
@@ -170,12 +180,10 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         if (!Kinds.Contains(kind)) { await RefuseAsync(ws, CloseCodes.Protocol, "bad-kind"); return null; }
         var name = Clean(hello.GetProperty("name").GetString());
 
-        using var eph = P256KeyPair.Generate();
-        var nonce = RandomNumberGenerator.GetBytes(32);
-        await SendJsonAsync(ws, new { t = "challenge", eph = Wire.Hex(eph.Public), nonce = Wire.Hex(nonce), account = account.Id }, ct);
+        if (!early) { await SendJsonAsync(ws, new { t = "challenge", eph = Wire.Hex(eph.Public), nonce = Wire.Hex(nonce), account = account.Id }, ct); }
         var proof = await ReceiveControlAsync(ws, ct);
         var mac = proof.GetProperty("t").GetString() == "proof" ? Wire.Unhex(proof.GetProperty("mac").GetString()!) : [];
-        var expected = Wire.ProofMac(eph.Dh(pub), nonce, account.Id);
+        var expected = early ? Wire.EarlyProofMac(eph.Dh(pub), nonce) : Wire.ProofMac(eph.Dh(pub), nonce, account.Id);
         if (!CryptographicOperations.FixedTimeEquals(mac, expected))
         {
             await RefuseAsync(ws, CloseCodes.ProofFailed, "proof-failed");

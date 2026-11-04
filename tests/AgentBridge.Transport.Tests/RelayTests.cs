@@ -304,6 +304,96 @@ public class RelayTests
         Assert.Equal("restarting", device.Relay.CloseReason);
     }
 
+    // #603: hello, challenge, proof, ready was two round trips after the socket opened. A device
+    // that asks has the challenge as the socket opens, sends hello and proof together, and is
+    // ready one round trip later. Each run of messages one way is a flight; two make a round trip.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    public async Task A_device_that_asks_for_the_challenge_with_the_opening_is_admitted_in_one_round_trip_after_it(bool early, int roundTrips)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        using var key = P256KeyPair.Generate();
+        var flights = new List<string>();
+        using var ws = new ClientWebSocket();
+        await ws.ConnectAsync(early ? new UriBuilder(RelayClient.SocketUri(relay.Url)) { Query = "admit=1" }.Uri : RelayClient.SocketUri(relay.Url), default);
+
+        async Task<JsonElement> ReceiveAsync()
+        {
+            var m = JsonDocument.Parse((await Wire.ReceiveAsync(ws, Wire.MaxControl, default))!.Value.Data).RootElement;
+            flights.Add("relay");
+            return m;
+        }
+        async Task SendAsync(object m)
+        {
+            await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(m), WebSocketMessageType.Text, true, default);
+            flights.Add("device");
+        }
+
+        JsonElement challenge;
+        if (early)
+        {
+            // Here before the device has said anything.
+            challenge = await ReceiveAsync();
+            flights.Clear();
+            await SendAsync(new { t = "hello", token = relay.TokenFor(1, "octo"), pub = Wire.Hex(key.Public), name = "raw", kind = "test" });
+        }
+        else
+        {
+            await SendAsync(new { t = "hello", token = relay.TokenFor(1, "octo"), pub = Wire.Hex(key.Public), name = "raw", kind = "test" });
+            challenge = await ReceiveAsync();
+        }
+        var secret = key.Dh(Wire.Unhex(challenge.GetProperty("eph").GetString()!));
+        var nonce = Wire.Unhex(challenge.GetProperty("nonce").GetString()!);
+        await SendAsync(new { t = "proof", mac = Wire.Hex(early ? Wire.EarlyProofMac(secret, nonce) : Wire.ProofMac(secret, nonce, challenge.GetProperty("account").GetString()!)) });
+        JsonElement ready;
+        do { ready = await ReceiveAsync(); } while (ready.GetProperty("t").GetString() != "ready");
+
+        Assert.Equal(early, challenge.TryGetProperty("early", out var e) && e.GetBoolean());
+        // Nothing about the account goes to a socket that has not shown a token.
+        Assert.Equal(!early, challenge.TryGetProperty("account", out _));
+        Assert.Equal(Wire.DeviceId(key.Public), ready.GetProperty("device").GetString());
+        Assert.Equal("1", ready.GetProperty("account").GetString());
+        var runs = flights.Where((f, i) => i == 0 || flights[i - 1] != f).Count();
+        Assert.Equal(roundTrips, (runs + 1) / 2);
+    }
+
+    // Each proof names what it answers: an early challenge's is not taken for an ordinary one's, or
+    // the other way, so neither can be passed off as the other.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_proof_of_the_other_kind_is_refused(bool early)
+    {
+        await using var relay = await TestRelay.StartAsync();
+        using var key = P256KeyPair.Generate();
+        using var ws = new ClientWebSocket();
+        await ws.ConnectAsync(early ? new UriBuilder(RelayClient.SocketUri(relay.Url)) { Query = "admit=1" }.Uri : RelayClient.SocketUri(relay.Url), default);
+        await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "hello", token = relay.TokenFor(1, "octo"), pub = Wire.Hex(key.Public), name = "raw", kind = "test" }), WebSocketMessageType.Text, true, default);
+        var c = JsonDocument.Parse((await Wire.ReceiveAsync(ws, Wire.MaxControl, default))!.Value.Data).RootElement;
+        var secret = key.Dh(Wire.Unhex(c.GetProperty("eph").GetString()!));
+        var nonce = Wire.Unhex(c.GetProperty("nonce").GetString()!);
+
+        var wrong = early ? Wire.ProofMac(secret, nonce, "1") : Wire.EarlyProofMac(secret, nonce);
+        await ws.SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { t = "proof", mac = Wire.Hex(wrong) }), WebSocketMessageType.Text, true, default);
+        while (await Wire.ReceiveAsync(ws, Wire.MaxControl, default) is not null) { }
+
+        Assert.Equal(CloseCodes.ProofFailed, (int?)ws.CloseStatus);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_device_still_connects_to_a_relay_that_sends_the_challenge_after_the_hello()
+    {
+        await using var relay = await TestRelay.StartAsync(o => o.EarlyChallenge = false);
+
+        await using var device = await relay.ConnectAsync(relay.TokenFor(1, "octo"), "older relay");
+
+        Assert.Equal("1", device.Relay.AccountId);
+    }
+
     // Speaks the hello and proof by hand, so a test can claim one key and prove another.
     static async Task<(int? Code, string? Reason)> RawHelloAsync(TestRelay relay, string token, byte[] claimedPub, P256KeyPair prover)
     {

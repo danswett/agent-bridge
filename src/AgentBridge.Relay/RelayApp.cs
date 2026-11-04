@@ -220,7 +220,7 @@ public static class RelayApp
                 return;
             }
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
-            await hub.RunAsync(ws, ctx.RequestAborted);
+            await hub.RunAsync(ws, ctx.RequestAborted, early: ctx.Request.Query["admit"] == "1");
         }).RequireRateLimiting("connect");
 
         if (blobBackend is LocalBlobBackend local) { MapLocalBlobs(app, local, options.Blobs); }

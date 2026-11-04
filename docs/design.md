@@ -381,6 +381,24 @@ Each connection tries, in order:
    clients connect on demand. Relay frames are `{to: deviceId, from: deviceId,
    ciphertext}`.
 
+   **Admission.** A device proves it holds its key before the relay routes anything for it.
+   It sends `hello` (`token`, `pub`, `name`, `kind`). The relay validates the token and
+   answers `challenge` (`eph`, a fresh P-256 key, `nonce`, 32 random bytes, and `account`).
+   The device answers `proof`: `mac` = HMAC-SHA256 keyed by ECDH(device key, `eph`), over
+   `agent-bridge-s4-relay-proof` ‖ nonce ‖ account. The relay then sends `ready`. That is two
+   round trips after the socket opens.
+
+   From #603, a device that opens the socket at `/v1/ws?admit=1` is sent the challenge as soon as
+   the socket opens, before its hello. That challenge has `"early": true` and no `account`,
+   since the relay knows none before the token. The device's hello and proof then leave together,
+   and `ready` (which names the account) comes one round trip after the opening, not two. The
+   proof to an early challenge is HMAC over `agent-bridge-relay-early-proof` ‖ nonce. Each kind has
+   its own label, so neither proof is taken for the other. Either way, the ephemeral key and nonce
+   belong to that one socket, so a proof cannot be replayed on another. A relay from before #603
+   ignores `admit` and challenges after the hello, and the device proves that challenge as before.
+   Devices that don't ask (Apple's, older versions) are admitted as before. `Relay:EarlyChallenge`
+   (default on) turns it off.
+
 The WebRTC data channel (step 4 of §5.8) is a **core latency path, not a later
 optimization**. It uses the relay for signaling and STUN, connects directly through NAT,
 and the channel upgrades in place from relayed to direct. The relay remains the fallback,
