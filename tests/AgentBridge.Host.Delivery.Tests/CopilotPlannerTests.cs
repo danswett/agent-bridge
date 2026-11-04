@@ -140,8 +140,8 @@ public class CopilotPlannerTests
 
         Assert.Equal([("", true)], Keys(plan));
         Assert.Equal(3, Assert.IsType<Expected.Number>(Assert.Single(plan.Fields).Value).Raw.GetInt32());
-        // As the prompt shows it: 3.0 is the 3 it opened with, and so is "3".
-        Assert.Equal([("", true)], Keys(Plan(Days, Answer(new { days = 3.0 }))));
+        // As the prompt shows it: 3.0 is the 3 it opened with.
+        Assert.Equal([("", true)], Keys(Plan(Days, Answer(Raw("""{ "days": 3.0 }""")))));
         Assert.Equal([("", true)], Keys(Plan(Note, Answer(new { note = "none" }))));
         Assert.Equal("none", Assert.IsType<Expected.Words>(Plan(Note, Answer(new { note = "none" })).Fields[0].Value).Text);
     }
@@ -159,16 +159,108 @@ public class CopilotPlannerTests
         Assert.Contains("pre-filled default", Refusal(PickAndDays, Answer(new { pick = "a" })));
     }
 
+    // Fields as JSON text, so a number keeps the spelling it was given.
+    static JsonElement Raw(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    [Fact]
+    public void A_number_that_only_rounds_to_the_default_is_not_the_default()
+    {
+        Assert.Contains("pre-filled default", Refusal(Days, Answer(Raw("""{ "days": 3.0000000000000000000000000000001 }"""))));
+        Assert.Contains("pre-filled default", Refusal(Days, Answer(Raw("""{ "days": 3e-29 }"""))));
+    }
+
+    [Theory]
+    [InlineData("2.50", "25e-1", true)]
+    [InlineData("100", "1E+2", true)]
+    [InlineData("-0", "0.000", true)]
+    [InlineData("3", "3.0000000000000000000000000000001", false)]
+    [InlineData("1e-29", "0", false)]
+    [InlineData("1e99999999999", "1e99999999999", false)]
+    public void Numbers_are_the_same_only_when_they_are_exactly_equal(string a, string b, bool same)
+    {
+        Assert.Equal(same, CopilotForm.SameScalar(Raw(a), Raw(b)));
+    }
+
+    // ---- fields drawn as Copilot CLI draws them (cli-main.js `tle`), not as their keywords suggest ----
+
+    [Fact]
+    public void A_number_with_an_enum_is_a_number_box_so_its_default_is_kept_by_Enter_and_anything_else_refused()
+    {
+        // Arrows in a number box add or take one: walking it as a list to pick 1 recorded 4.
+        const string Rated = """{ "message": "m", "requestedSchema": { "properties": { "rate": { "type": "integer", "enum": [1, 2, 3], "default": 2 } } } }""";
+
+        Assert.Equal([("", true)], Keys(Plan(Rated, Answer(new { rate = 2 }))));
+        Assert.Contains("pre-filled default", Refusal(Rated, Answer(new { rate = 1 })));
+    }
+
+    [Fact]
+    public void A_number_with_an_enum_and_no_default_opens_empty_and_takes_its_digits_typed()
+    {
+        const string Rated = """{ "message": "m", "requestedSchema": { "properties": { "rate": { "type": "integer", "enum": [1, 2, 3] } } } }""";
+
+        Assert.Equal([("1", true)], Keys(Plan(Rated, Answer(new { rate = 1 }))));
+    }
+
+    [Fact]
+    public void A_string_with_only_anyOf_is_a_text_box_typed_into_only_when_it_opens_empty()
+    {
+        const string Prefilled = """{ "message": "m", "requestedSchema": { "properties": { "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" }, { "const": "y", "title": "Y" } ], "default": "x" } } } }""";
+        const string Empty = """{ "message": "m", "requestedSchema": { "properties": { "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" }, { "const": "y", "title": "Y" } ] } } } }""";
+
+        Assert.Equal([("", true)], Keys(Plan(Prefilled, Answer(new { mode = "x" }))));
+        Assert.Contains("pre-filled default", Refusal(Prefilled, Answer(new { mode = "y" })));
+        Assert.Equal([("y", true)], Keys(Plan(Empty, Answer(new { mode = "y" }))));
+    }
+
+    [Fact]
+    public void A_string_with_enum_or_oneOf_is_still_a_list_walked_with_arrows_and_oneOf_is_read_first_as_the_CLI_reads_it()
+    {
+        Assert.Equal([(U + U + U + D + D + D, true)], Keys(Plan(Pick, Answer(new { pick = "d" }))));
+        const string Both = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"], "oneOf": [ { "const": "b" }, { "const": "a" } ] } } } }""";
+        Assert.Equal([(U, true)], Keys(Plan(Both, Answer(new { pick = "b" }))));
+    }
+
+    [Theory]
+    // Untyped options: the CLI draws a text box.
+    [InlineData("""{ "pick": { "enum": ["a", "b"] } }""")]
+    [InlineData("""{ "pick": { "oneOf": [ { "const": "a" } ] } }""")]
+    // A type it does not know, or one that is not a name.
+    [InlineData("""{ "pick": { "type": "object" } }""")]
+    [InlineData("""{ "pick": { "type": ["string", "null"], "enum": ["a"] } }""")]
+    // An option the CLI would record as nothing, and keywords that are not lists.
+    [InlineData("""{ "pick": { "type": "string", "oneOf": [ { "title": "A" } ] } }""")]
+    [InlineData("""{ "pick": { "type": "string", "enum": "a" } }""")]
+    [InlineData("""{ "many": { "type": "array", "items": { "anyOf": [ { "title": "A" } ] } } }""")]
+    public void A_field_whose_input_cannot_be_told_from_the_CLIs_reading_is_answered_at_the_machine(string properties)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": {{properties}} } }""");
+
+        Assert.EndsWith("answer it at the machine", CopilotForm.Read(doc.RootElement).Problem);
+        Assert.True(QuestionMapper.FromCopilotAskUser("call-1", doc.RootElement, Fixture.T0).AnswerAtMachine);
+    }
+
     [Fact]
     public void A_number_or_text_field_without_a_default_or_with_an_empty_one_is_typed_as_before()
     {
         const string NoDefault = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer" } } } }""";
-        const string NullDefault = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": null } } } }""";
+        const string NullText = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": null } } } }""";
         const string EmptyDefault = """{ "message": "m", "requestedSchema": { "properties": { "note": { "type": "string", "default": "" } } } }""";
+        const string EmptyNumber = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": "" } } } }""";
 
         Assert.Equal([("33", true)], Keys(Plan(NoDefault, Answer(new { days = 33 }))));
-        Assert.Equal([("3", true)], Keys(Plan(NullDefault, Answer(new { days = 3 }))));
+        // A text box shows `default ?? ""`: a null default leaves it empty.
+        Assert.Equal([("hello", true)], Keys(Plan(NullText, Answer(new { note = "hello" }))));
         Assert.Equal([("hello", true)], Keys(Plan(EmptyDefault, Answer(new { note = "hello" }))));
+        Assert.Equal([("3", true)], Keys(Plan(EmptyNumber, Answer(new { days = 3 }))));
+    }
+
+    [Fact]
+    public void A_number_field_with_a_null_default_opens_reading_null_so_nothing_is_typed_into_it()
+    {
+        // The number box shows String(default), and String(null) is "null" (cli-main.js `Lxn`).
+        const string NullNumber = """{ "message": "m", "requestedSchema": { "properties": { "days": { "type": "integer", "default": null } } } }""";
+
+        Assert.Contains("pre-filled default", Refusal(NullNumber, Answer(new { days = 3 })));
     }
 
     [Fact]
@@ -247,7 +339,7 @@ public class CopilotPlannerTests
     [Fact]
     public void Other_in_a_tabbed_form_or_a_checkbox_list_is_refused_because_no_walk_reaches_it()
     {
-        var (form, _) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a"] }, "go": { "type": "boolean" } } } }""");
+        var (form, _) = Ask("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a"] }, "go": { "type": "boolean" } } } }""");
         var (plan, problem) = CopilotPlanner.Plan(form, Answer(new { pick = new { other = "x" }, go = true }));
         Assert.Null(plan);
         Assert.Contains("one option list", problem);
@@ -267,7 +359,7 @@ public class CopilotPlannerTests
     [Fact]
     public void An_optional_text_field_left_out_is_skipped_with_Enter_and_an_option_list_cannot_be()
     {
-        const string Form = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"] }, "notes": { "type": "string" } } } }""";
+        const string Form = """{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"] }, "notes": { "type": "string" } } } }""";
 
         var plan = Plan(Form, Answer(new { pick = "b" }));
         Assert.Equal([(U + D, true), ("", true)], Keys(plan));
@@ -282,14 +374,14 @@ public class CopilotPlannerTests
         using var legacy = JsonDocument.Parse("""{ "question": "Go?", "choices": ["Yes", "No"] }""");
         Assert.Contains("older Copilot format", CopilotForm.Read(legacy.RootElement).Problem);
 
-        using var lost = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "enum": ["a", "b"], "default": "z" } } } }""");
+        using var lost = JsonDocument.Parse("""{ "message": "m", "requestedSchema": { "properties": { "pick": { "type": "string", "enum": ["a", "b"], "default": "z" } } } }""");
         Assert.Contains("not one of its options", CopilotForm.Read(lost.RootElement).Problem);
     }
 
     [Fact]
     public void A_null_default_leaves_the_caret_on_the_first_row_and_a_schema_written_as_text_is_read()
     {
-        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"enum\":[\"a\",\"b\"],\"default\":null}}}" }""", Answer(new { pick = "b" }));
+        var plan = Plan("""{ "message": "m", "requestedSchema": "{\"properties\":{\"pick\":{\"type\":\"string\",\"enum\":[\"a\",\"b\"],\"default\":null}}}" }""", Answer(new { pick = "b" }));
 
         Assert.Equal([(U + D, true)], Keys(plan));
     }

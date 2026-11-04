@@ -13,6 +13,21 @@ public class QuestionMappingTests
     }
 
     [Fact]
+    public void A_field_is_shown_as_the_input_Copilot_draws_for_it_not_as_its_keywords_suggest()
+    {
+        // cli-main.js `tle`: a number with an enum is a number box, and a string with only anyOf
+        // a text box; a client offering them as lists would offer what the host then refuses.
+        var q = Ask(""""
+        { "message": "m", "requestedSchema": { "properties": {
+          "rate": { "type": "integer", "enum": [1, 2, 3], "default": 2 },
+          "mode": { "type": "string", "anyOf": [ { "const": "x", "title": "X" } ] } } } }
+        """");
+
+        Assert.Equal([FieldType.Number, FieldType.Text], q.Fields.Select(f => f.Type));
+        Assert.All(q.Fields, f => Assert.Null(f.Options));
+        Assert.Null(q.AnswerAtMachine);
+    }
+    [Fact]
     public void Every_schema_field_type_maps_onto_the_contract_field_in_order()
     {
         var q = Ask("""
@@ -24,7 +39,6 @@ public class QuestionMappingTests
               "named": { "type": "string", "enum": ["s6", "s7"], "enumNames": ["S6: keys", "S7: relay"] },
               "titled": { "type": "string", "title": "Next step", "description": "Pick one", "default": "a",
                           "oneOf": [ { "const": "a", "title": "Do A (Recommended)" }, { "const": "b", "title": "Do B" } ] },
-              "untyped": { "oneOf": [ { "const": "u", "title": "U" } ] },
               "ok": { "type": "boolean", "default": true },
               "many": { "type": "array", "items": { "type": "string", "enum": ["p", "q"] } },
               "manyTitled": { "type": "array", "items": { "anyOf": [ { "const": "m1", "title": "First" }, { "const": "m2", "title": "Second" } ] } },
@@ -39,22 +53,22 @@ public class QuestionMappingTests
 
         Assert.Equal(QuestionKind.Form, q.Kind);
         Assert.Equal("Tell me", q.Message);
-        Assert.Equal(["plain", "named", "titled", "untyped", "ok", "many", "manyTitled", "count", "ratio", "notes"], q.Fields.Select(f => f.Name));
+        Assert.Equal(["plain", "named", "titled", "ok", "many", "manyTitled", "count", "ratio", "notes"], q.Fields.Select(f => f.Name));
         Assert.Equal(
-            [FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Boolean, FieldType.Multi, FieldType.Multi, FieldType.Number, FieldType.Number, FieldType.Text],
+            [FieldType.Choice, FieldType.Choice, FieldType.Choice, FieldType.Boolean, FieldType.Multi, FieldType.Multi, FieldType.Number, FieldType.Number, FieldType.Text],
             q.Fields.Select(f => f.Type));
+        Assert.Null(q.AnswerAtMachine);
         Assert.Equal([new Option("x"), new Option("y")], q.Fields[0].Options!);
         Assert.Equal([new Option("s6", "S6: keys"), new Option("s7", "S7: relay")], q.Fields[1].Options!);
         var titled = q.Fields[2];
         Assert.Equal(("Next step", "Pick one", "a", true), (titled.Title, titled.Description, titled.Default!.Value.GetString(), titled.Required));
         Assert.Equal([new Option("a", "Do A (Recommended)"), new Option("b", "Do B")], titled.Options!);
-        Assert.Equal([new Option("u", "U")], q.Fields[3].Options!);
-        Assert.True(q.Fields[4].Default!.Value.GetBoolean());
-        Assert.Equal([new Option("p"), new Option("q")], q.Fields[5].Options!);
-        Assert.Equal([new Option("m1", "First"), new Option("m2", "Second")], q.Fields[6].Options!);
-        Assert.Equal(3, q.Fields[7].Default!.Value.GetInt32());
-        Assert.Null(q.Fields[9].Options);
-        Assert.True(q.Fields[9].Required);
+        Assert.True(q.Fields[3].Default!.Value.GetBoolean());
+        Assert.Equal([new Option("p"), new Option("q")], q.Fields[4].Options!);
+        Assert.Equal([new Option("m1", "First"), new Option("m2", "Second")], q.Fields[5].Options!);
+        Assert.Equal(3, q.Fields[6].Default!.Value.GetInt32());
+        Assert.Null(q.Fields[8].Options);
+        Assert.True(q.Fields[8].Required);
         Assert.Null(q.Fields[0].Required);
     }
 

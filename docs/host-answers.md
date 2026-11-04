@@ -10,7 +10,7 @@ how the host does it and what it refuses.
 | Agent | Question | Answered |
 |---|---|---|
 | Copilot CLI | `ask_user` with no form: free text | Yes: the words, then Enter |
-| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`enum`, `oneOf`, `anyOf`), `boolean`, `multi` (`type: array`), `text`, `number`, any number of fields | Yes |
+| Copilot CLI | `ask_user` form (`requestedSchema`): `choice` (`type: string` with `enum` or `oneOf`), `boolean`, `multi` (`type: array`, items `anyOf` or `enum`), `text`, `number`, any number of fields | Yes |
 | Copilot CLI | Other words for a question that is one option list | Yes (`allowOther` is set on exactly that shape) |
 | Copilot CLI | Other in a form of several fields, or in a checkbox list | Refused: no walk reaches it |
 | Copilot CLI | The older `question` / `choices` format | Refused: agent-ha-bridge never drove it, and no current build writes it |
@@ -65,6 +65,14 @@ submit). Arrows are the VT sequences `ESC [ A` / `ESC [ B` typed as characters.
     fills nothing in, and is typed as before. Seen in a real session for a number field; a text field is
     assumed to open the same way. Claude's and Codex's prompts take no typed field values, so
     have no such field.
+  * Every field is read as Copilot CLI draws it, which is by its `type` alone (`cli-main.js`
+    `tle` in 1.0.105): a `number` or `integer` is a number box even with an `enum` (whose Up
+    and Down add or take one, so walking it as a list recorded a different number), and a
+    `string` with only `anyOf` is a text box. Options come from `oneOf` before `enum`, and a
+    checkbox list's from `items.anyOf` before `items.enum`, each by its `const`. A field the CLI
+    would draw as something its schema does not mean (options with no `type`, a `type` it does
+    not know, an option with no `const`) is never typed into, and the question is shown to be
+    answered at the machine.
 * **Other** (a lone option list): Up × (N−1), Down × N as one burst with no Enter, 400 ms
   for Other to hand over the input, then the words, 300 ms, Enter (agent-ha-bridge #240:
   Down on the last option opens Other at once, and an empty Enter returns to the last
