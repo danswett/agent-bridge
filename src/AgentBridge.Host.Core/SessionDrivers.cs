@@ -296,12 +296,18 @@ public sealed partial class SessionDriver
     {
         if (expected is null) { return true; }
         if (full.Activity.UserMessage is not { } m) { return false; }
-        var words = Attachments().Replace(Collapse(m), "");
-        return words == expected
-            || (System.Text.Encoding.UTF8.GetByteCount(m) >= Limits.UserMessage - 4 && words.Length > 0 && expected.StartsWith(words, StringComparison.Ordinal));
+        // The words as they are first: a reply may itself begin with "@README.md" or "[Image #1]".
+        var said = Collapse(m);
+        if (said == expected) { return true; }
+        // Then only what delivery put before them, whole: nothing of the reply's own is taken off.
+        if (said.EndsWith(" " + expected, StringComparison.Ordinal) && Attachments().IsMatch(said[..^(expected.Length + 1)])) { return true; }
+        // Cut to its limit, the shown prompt is the start of what was sent.
+        return System.Text.Encoding.UTF8.GetByteCount(m) >= Limits.UserMessage - 4
+            && (expected.StartsWith(said, StringComparison.Ordinal)
+                || Enumerable.Range(1, said.Length - 1).Any(i => said[i - 1] == ' ' && Attachments().IsMatch(said[..(i - 1)]) && expected.StartsWith(said[i..], StringComparison.Ordinal)));
     }
 
-    [GeneratedRegex(@"^(?:(?:@\S+|\[Image #\d+\])\s*)+")]
+    [GeneratedRegex(@"^(?:@\S+|\[Image #\d+\])(?: (?:@\S+|\[Image #\d+\]))*$")]
     private static partial Regex Attachments();
 
     static string? Prompt(Session full, string? prompt) =>

@@ -374,13 +374,17 @@ public class DriverTests
 
     // Delivery puts an attachment's mention before the reply's words; it is still the reply.
     [Theory]
-    [InlineData("@C:\\staged\\shot.png look at this")]
-    [InlineData("[Image #1] look at this")]
-    public async Task A_reply_delivered_with_its_attachments_before_its_words_is_the_agents(string delivered)
+    [InlineData("look at this", "@C:\\staged\\shot.png look at this")]
+    [InlineData("look at this", "[Image #1] look at this")]
+    // A reply whose own words look like an attachment, with and without one before it.
+    [InlineData("@README.md explain this", "@README.md explain this")]
+    [InlineData("[Image #1] is the old one", "[Image #1] is the old one")]
+    [InlineData("@README.md explain this", "@C:\\staged\\shot.png @README.md explain this")]
+    public async Task A_reply_delivered_with_its_attachments_before_its_words_is_the_agents(string words, string delivered)
     {
         await using var d = new Driven();
         await d.After(Copilot.User("go", 1), Copilot.TurnStart(2), Copilot.TurnEnd(3));
-        await d.ArmAsync("look at this");
+        await d.ArmAsync(words);
 
         var s = await d.After(Copilot.User(delivered, 10), Copilot.TurnStart(11));
 
