@@ -91,6 +91,7 @@ static partial class SelfTest
             CheckDesign(window, Check);
             await CheckInlineMono(window, Check);
             await CheckCodeBlocks(window, Check, outFile);
+            await CheckUnparsableMarkdown(window, Check);
             await CheckShell(window, main, Check);
             await CheckStatusLines(window, main, Check);
             await CheckCurrentTools(window, main, Check);

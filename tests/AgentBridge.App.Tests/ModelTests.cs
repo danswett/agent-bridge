@@ -332,6 +332,175 @@ public sealed class MarkdownTests
 
         Assert.Equal("Copy failed", copy.Label);
     }
+
+    static string Repeat(string s, int n) => string.Concat(Enumerable.Repeat(s, n));
+
+    // Markdig throws "too deeply nested" on the first two, overflowed the stack in our own walk of
+    // the third, and nests quotes 100 deep in the fourth (#440).
+    public static TheoryData<string> Unparsable() => new()
+    {
+        new string('[', 50000),
+        Repeat(" *a", 20000),
+        new string('[', 5000),
+        Repeat("> ", 100) + "deep",
+        Repeat("1. ", 5000) + "deep",
+    };
+
+    [Theory]
+    [MemberData(nameof(Unparsable))]
+    public void Text_the_parser_cannot_take_is_drawn_as_written(string text)
+    {
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdText(text)], p.Inlines);
+    }
+
+    [Fact]
+    public void Text_drawn_as_written_keeps_its_lines()
+    {
+        var text = "\nLook:\r\n" + new string('[', 50000) + "\nend\n";
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdBreak(), new MdText("Look:"), new MdBreak(), new MdText(new string('[', 50000)), new MdBreak(), new MdText("end"), new MdBreak()], p.Inlines);
+    }
+
+    [Fact]
+    public void Text_drawn_as_written_shows_hidden_and_right_to_left_characters_and_a_bare_CR_as_escapes()
+    {
+        // Sent there on purpose (33 `>` on a line is past the nesting limit): an override, a line
+        // separator, a bare CR and Hebrew letters, none of which may act on what is drawn.
+        var quotes = Repeat("> ", 33);
+        var text = quotes + "echo safe\u202Eb\u2028c\rrm\r\n\u05D0\u05D1";
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdText(quotes + "echo safe\\u202Eb\\u2028c\\u000Drm"), new MdBreak(), new MdText("\\u05D0\\u05D1")], p.Inlines);
+    }
+
+    [Fact]
+    public void Text_drawn_as_written_keeps_a_bare_CR_at_its_end_as_an_escape()
+    {
+        var text = Repeat("> ", 33) + "rm\r\nrun\r";
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+
+        Assert.Equal([new MdText(Repeat("> ", 33) + "rm"), new MdBreak(), new MdText("run\\u000D")], p.Inlines);
+    }
+
+    [Theory]
+    [InlineData("[](")]
+    [InlineData("[a](")]
+    [InlineData("(www.a")]
+    [InlineData("*a\n")]
+    [InlineData("|a|b|\n")]
+    public void Runs_of_markup_the_parser_is_quadratic_on_are_read_in_well_under_a_second(string unit)
+    {
+        var text = Repeat(unit, 20000);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var blocks = MarkdownModel.Parse(text);
+        MarkdownModel.Outline(text);
+
+        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
+        Assert.Contains(unit.TrimEnd('\n'), string.Concat(blocks.OfType<MdParagraph>().SelectMany(b => b.Inlines).OfType<MdText>().Select(t => t.Text)));
+    }
+
+    [Fact]
+    public void A_paragraph_the_table_parser_holds_together_is_weighed_whole()
+    {
+        // Each `- |` line joins the paragraph above it, as a table's delimiter row would, so this is
+        // one paragraph of 15,000 lines to Markdig, not thousands of list items.
+        var text = "a\n" + Repeat("- |\n[](\n", 7800);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var p = Assert.IsType<MdParagraph>(Assert.Single(MarkdownModel.Parse(text)));
+        MarkdownModel.Outline(text);
+
+        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
+        Assert.Equal(new MdText("- |"), p.Inlines[2]);
+    }
+
+    [Theory]
+    [InlineData("", "&gt;", 16384)]
+    [InlineData("", "\\\\", 16384)]
+    [InlineData("", "<a>", 16384)]
+    [InlineData("", "\\#", 30000)]
+    [InlineData("", "\\.", 30000)]
+    [InlineData("# ", "\\#", 30000)]
+    [InlineData("", "x\\#", 20000)]
+    [InlineData("", "a&gt;", 13000)]
+    [InlineData("", "&amp;a", 10000)]
+    [InlineData("", "&#33;", 12000)]
+    public void Text_of_one_inline_per_token_is_read_in_bounded_time_and_memory(string prefix, string unit, int count)
+    {
+        var text = prefix + Repeat(unit, count);
+        MarkdownModel.Parse("warm");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var blocks = MarkdownModel.Parse(text);
+
+        Assert.True(clock.ElapsedMilliseconds < 1000, $"{clock.ElapsedMilliseconds} ms");
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"{allocated / (1024 * 1024)} MiB");
+        Assert.NotEmpty(Assert.IsType<MdParagraph>(Assert.Single(blocks)).Inlines);
+    }
+
+    [Fact]
+    public void Thousands_of_inlines_in_one_paragraph_are_joined_in_linear_memory()
+    {
+        // Within the budget, so Markdig reads it: an escape, words and a line break on each of 1,800
+        // lines are thousands of nodes, joined into one run of about 57,600 characters.
+        const string words = "abcdefghijklmnopqrstuvwxyzabcd";
+        var text = Repeat("\\*" + words + "\n", 1800);
+        MarkdownModel.Parse("warm");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var blocks = MarkdownModel.Parse(text);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(allocated < 16 * 1024 * 1024, $"{allocated / (1024 * 1024)} MiB");
+        Assert.Equal([new MdText(string.Join(' ', Enumerable.Repeat("*" + words, 1800)))], Assert.IsType<MdParagraph>(Assert.Single(blocks)).Inlines);
+    }
+
+    [Fact]
+    public void A_summary_of_text_drawn_as_written_is_never_empty()
+    {
+        // Nested too deep to parse, so drawn as written: its first line is a fence's backticks.
+        var question = Make.Form() with { Message = "```\nexample\n```\n" + Repeat("> ", 33) + "Which one?" };
+
+        Assert.Equal("example", NeedsYouEntry.LineOf(question));
+    }
+
+    [Fact]
+    public void A_long_realistic_response_is_still_read_as_markdown()
+    {
+        // About the protocol's 16 KiB: a heading, a list of linked, emphasised items and a table.
+        var text = "# Changed\n\n"
+            + string.Concat(Enumerable.Range(0, 60).Select(i => $"- **src/Area{i}/File_{i}.cs**: [diff](https://example.com/pr/{i}) fixes `Thing{i}()` (see *notes*)\n"))
+            + "\n| File | Tests | Result |\n|---|---|---|\n"
+            + string.Concat(Enumerable.Range(0, 120).Select(i => $"| `File_{i}.cs` | [{i}](https://example.com/t/{i}) | **pass** |\n"))
+            + "\n```csharp\n" + Repeat("var x = list[i] * (y + z) ?? [];\n", 40) + "```\n";
+        Assert.InRange(text.Length, 12_000, 20_000);
+
+        var blocks = MarkdownModel.Parse(text);
+
+        Assert.IsType<MdHeading>(blocks[0]);
+        Assert.Equal(60, Assert.IsType<MdList>(blocks[1]).Items.Count);
+        Assert.Equal(121, Assert.IsType<MdTable>(blocks[2]).Rows.Count);
+        Assert.IsType<MdCode>(blocks[3]);
+    }
+
+    [Fact]
+    public void Text_drawn_as_written_starts_its_summary_at_its_first_words()
+    {
+        var text = "\n\n" + Repeat(" *a", 20000);
+
+        Assert.Equal((2, null), MarkdownModel.Outline(text));
+        var line = NeedsYouEntry.LineOf(Make.Form() with { Message = text });
+        Assert.StartsWith("*a *a", line, StringComparison.Ordinal);
+    }
 }
 
 public sealed class UsageTests
