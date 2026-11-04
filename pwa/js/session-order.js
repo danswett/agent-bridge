@@ -170,6 +170,38 @@ export class SessionOrder {
     return true;
   }
 
+  // Whether a row on screen can be picked up and dragged: in Your order, and placed (a row whose
+  // machine hasn't finished sending has no place yet to move from).
+  canLift(key) {
+    return this.sort === 'yours' && !!this.#group(key) && !this.#shown.pending.has(key);
+  }
+
+  // Whether a row on screen is still waiting for its machine's whole list, and so holds its place.
+  pending(key) { return this.#shown.pending.has(key); }
+
+  // A drop (#592): the row goes to place `index` of `group` ('pinned' or 'sessions') among the
+  // rows on screen there without it, pinned or unpinned by the group, in one change. Rows
+  // remembered for sessions not shown keep their places relative to each other. live: the keys of
+  // the sessions there now, when some on screen may have gone since the list was last drawn (a
+  // card was held meanwhile); those are passed over.
+  moveTo(key, group, index, live = null) {
+    if (this.sort !== 'yours' || !this.#group(key) || this.#shown.pending.has(key) || (group !== 'pinned' && group !== 'sessions')) { return false; }
+    const shown = live ? this.#shown[group].filter((k) => k === key || live.has(k)) : this.#shown[group];
+    const others = shown.filter((k) => k !== key);
+    const at = Math.max(0, Math.min(index, others.length));
+    if (this.#group(key) === group && shown.indexOf(key) === at) { return false; }
+    const before = others[at];
+    const after = others[at - 1];
+    if (before !== undefined && !this.#shown.pending.has(before)) { this.#insert(key, before, false); return true; }
+    if (after !== undefined && !this.#shown.pending.has(after)) { this.#insert(key, after, true); return true; }
+    if (others.some((k) => !this.#shown.pending.has(k))) { return false; }
+    // Into a group with no placed row: the foot of Pinned, or the top of the rest.
+    this.#drop(key);
+    if (group === 'pinned') { this.#state.pinned.push(key); } else { this.#state.order.unshift(key); }
+    this.#save();
+    return true;
+  }
+
   #insert(key, target, after) {
     const s = this.#state;
     this.#drop(key);

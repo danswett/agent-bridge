@@ -42,6 +42,8 @@ static class DesignKeys
         "AbText2",
         "AbText3",
         "AbShadow",
+        "AbDragShadow",
+        "AbDragShadowEdge",
         "AbLink",
         "SystemControlHyperlinkTextBrush",
         "HyperlinkButtonForeground",
@@ -226,6 +228,9 @@ static class DesignKeys
         "AbMotionReorderDuration",
         "AbMotionReorderEase",
         "AbMotionReorderReduced",
+        "AbMotionLiftDuration",
+        "AbMotionLiftEase",
+        "AbMotionLiftReduced",
     ];
 
     // The bundled fonts and their licences, as the app's folder holds them

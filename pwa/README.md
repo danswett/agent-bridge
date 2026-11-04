@@ -68,6 +68,7 @@ Larger files come next.
 | `js/ui/sessions-page.js` | The sessions on screen and everything sent from them, in the live app and the demo alike: each session's answers, replies, files, End session and the launch panel to the machine it is for; which session is chosen (from the address, kept across a resize) and which panes show; the heading, count, empty state and a line per machine that can't be reached |
 | `js/ui/delegates-view.js` | A session's delegates (ui.md §6.3): the strip under the header at three panes and a phone's chip row (an item per delegate the main agent started, "N finished" folded); the Delegates tab's list (a row per delegate under its parent: glyph, name, how long or finished, its latest line); and the delegate opened from any of them, in the inspector or pushed in the tab: Status, Model, Kind and ID, its Task, Latest and Reasoning, its Tools, the delegates it started, and "Ask main agent to stop it", which fills the reply box and sends nothing. Its own words come from `session.get` with `agent`, while it is on screen. Nothing in it replies to or stops a delegate |
 | `js/ui/glyph.js` | The status glyphs at 12, 14, 16, 20 and 24 px and the design icons, drawn from the generated sprite with `<use>`: the role colour from `data-glyph`, the driven diamond over it, and the moving part (`glyph-spin`, `glyph-orbit`) its own group, which `app.css` turns and reduced motion stops |
+| `js/ui/reorder.js` | Moving a session by hand (#592, #593; [ui.md](../docs/design/ui.md) §5.3 Lift and Reorder, §6.1 Moving): one Pointer Events gesture for touch, mouse and pen. A long press (the platform's own: 500 ms on iOS, 400 on Android, 500 elsewhere) or the grip lifts the card itself, with one haptic tick on touch; a finger that moves 10 px first scrolls instead. The cards it passes ease aside on `reorder` and the gap is where it lands; crossing the Sessions header pins or unpins it; the list scrolls near its edges; Escape, a release outside the list or the system taking the pointer (a touch's own touch events carry the drag on) put it back. The order changes at the release (`SessionOrder.place`/`moveTo`) and the card only settles there, so a key or a press during the settle acts on the new order. While a card is held, the list's own updates wait. Each step is announced politely |
 | `js/ui/motion.js` | Motion ([ui.md](../docs/design/ui.md) §5.3, #232): the catalogue's motions that answer a change (push and pop, the inspector, a tab, a disclosure, a row arriving or leaving, a glyph changing, the activity dot, the selection pill, a menu, an acknowledgement, a banner, a reorder, the Needs you lane's mark and outcome, watched from outside the lane), each timed by its generated `--ab-motion-*` token, which reduced motion makes instant or a short cross-fade. Nothing is made untappable while it moves. What leaves is a copy, built node by node (text stays text, every HTML element a plain div or span, no id, class, link, control or script) and drawn with only the computed properties that draw it, clipped to what showed of it, in a closed shadow root that nothing can find or tap. `app.css` draws the rest: a press's release (only while `data-press="released"`), and the disclosure chevron |
 | `js/ui/shell.js` | The shell ([ui.md](../docs/design/ui.md) §7, #179): the 56 px web app bar (mark and name, search, machines online, account) and a rail on a desktop; the page's title row and a bottom navigation bar with a Bridge indicator on a phone. Each page is a route in the hash (`#/sessions`, `#/machines`, `#/launch`, `#/usage`, `#/settings`), so a reload stays on it and the browser's back goes between them. Ctrl/Cmd+K focuses search, which narrows the sessions list |
 | `js/ui/*` | The sessions page's panes (#179, ui.md §5.2): each session's two-line row and its view (header, conversation, reply box, and the inspector's Details and Tools; `session-card.js`), facts joined by separators that never start a line and paths cut in the middle (`meta.js`), the row menu (Move up, Move down, Pin), the question and its answer form, the reply box, End session, the Start a session panel (agent-ha-bridge's launch card, without its 255-character prompt), machines list (offline machines after the online ones, with when each was last seen and Forget, each row two lines: name and state, then at most two facts; #213), the machine tabs over the sessions, the usage page, relative times |
@@ -523,11 +524,27 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   repeat folded; the person's bubble unchanged without the field; a hostile label as text; full
   width on a phone; the Disclosure token, instant under reduced motion; axe in light and dark.
 * `test/order.spec.mjs`, in demo mode (#164): three sessions updating in turn never move a
-  row; a new session at the top once; Alt+Up/Down, a drag by the handle (at 900 and 1440
+  row; a new session at the top once; Alt+Up/Down, a card lifted by its grip (at 900 and 1440
   px), and the row menu from a right-click, Shift+F10 and a long press (at 390 px with
   touch) moving and pinning rows, each surviving a reload; the new activity dot on a
   folded row; Ended · N; the sort menu; blocked storage falling back to Most recent.
   `test/unit/session-order.test.mjs` covers the same below the page.
+* `test/reorder.spec.mjs`, in demo mode (#593): by touch through Chromium's input pipeline,
+  a long press lifting a card with one haptic tick, the cards it passes easing aside and the drop
+  landing in the gap (kept after a reload), a quick swipe scrolling and lifting nothing, a
+  touchcancel and Escape putting the card back, a pointercancel handing the drag to the finger's
+  touches, auto-scroll at the bottom edge, a long press released without moving opening the
+  menu, the grip's hint (shown once by itself, in Your order only, and on a tap), and a card let
+  go over Needs you pressing nothing; the platform's long press (400 ms on Android, 500 on iOS)
+  in both engines; the grips on a laptop with a touchscreen; with a mouse, the card lifting after
+  4 px, `pointercancel`, Alt+Down sliding both cards, crossing into Pinned, the placeholders
+  ("Drop here to keep it pinned", and "Drop here to unpin" with everything pinned or Sessions'
+  last card held), a held session ending (said, and its gap closing), the grip's column in Your
+  order only, a key and a press during a drop's settle acting on the new order, Alt+Down while a
+  card is held putting it back and then moving it, Needs you's answers holding through a lift
+  and for a second after a drop or a move by key (a key answering at once), reduced motion
+  (no scale, shadow or easing), and axe with a card lifted in light and dark.
+  `test/unit/reorder.test.mjs` covers the long press's timing.
 * `test/motion.spec.mjs`, in demo mode (ui.md §5.3, #232): nothing moving as the app starts; every
   motion a desktop and a phone draw (the selection pill, a menu, a reorder, a disclosure, the
   inspector, a glyph, a row arriving and leaving, the activity dot, a tab, push and pop) timed by

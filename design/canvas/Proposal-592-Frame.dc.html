@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: one frame of the reorder storyboard</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+.p592f, .p592f * { box-sizing: border-box; }
+.p592f { display: flex; flex-direction: column; gap: 14px; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; }
+.p592f-dev { position: relative; overflow: hidden; flex: none; }
+.p592f-abs { position: absolute; }
+.p592f-row { display: grid; grid-template-columns: 16px 20px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; align-items: center; height: 100%; padding: 8px 12px 8px 4px; }
+.p592f-title { grid-column: 3; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p592f-sub { grid-column: 3 / span 2; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; }
+.p592f-age { grid-column: 4; grid-row: 1; font-size: 12px; white-space: nowrap; }
+.p592f-chip { grid-column: 4; grid-row: 1; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; height: 20px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; white-space: nowrap; }
+.p592f-grip { grid-column: 1; grid-row: 1 / span 2; display: flex; align-items: center; justify-content: center; }
+.p592f-glyph { grid-column: 2; grid-row: 1 / span 2; width: 20px; height: 20px; display: block; }
+.p592f-cap b { display: block; font-size: 14px; line-height: 20px; font-weight: 600; }
+.p592f-cap p { margin: 4px 0 0; font-size: 12px; line-height: 16px; }
+.p592f-key { display: inline-block; min-width: 28px; padding: 3px 8px; border-radius: 4px; font-size: 12px; line-height: 16px; font-weight: 600; text-align: center; }
+</style>
+</helmet>
+<!-- One frame of the #592 reorder storyboard: a phone or a desktop list pane, laid out from a
+     declarative spec (f) by renderVals. A proposal, not the spec (docs/design/proposals/592-reorder.md). -->
+<div class="p592f" style="width: {{w}}px">
+  <div class="p592f-dev" style="{{devStyle}}">
+    <sc-if value="{{isPhone}}" hint-placeholder-val="{{true}}">
+      <div class="p592f-abs" style="left: 20px; right: 20px; top: 6px; height: 18px; display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: {{t.text}}"><span>9:41</span><span style="width: 64px; height: 18px; border-radius: 9px; background: {{t.notch}}"></span><span>100%</span></div>
+    </sc-if>
+    <sc-if value="{{isDesk}}">
+      <div class="p592f-abs" style="left: 0; right: 0; top: 0; height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; color: {{t.text2}}; background: {{t.shell}}; border-bottom: 1px solid {{t.stroke}}">
+        <span style="width: 14px; height: 14px; border-radius: 3px; background: {{t.bridge}}"></span><span>Agent Bridge</span>
+        <span style="flex: 1"></span><span style="letter-spacing: 14px; color: {{t.text3}}">–□×</span>
+      </div>
+      <div class="p592f-abs" style="left: {{listW}}px; right: 0; top: 32px; bottom: 0; background: {{t.shell}}; border-left: 1px solid {{t.stroke}}; padding: 20px 24px">
+        <div style="height: 12px; width: 60%; border-radius: 6px; background: {{t.subtle2}}"></div>
+        <div style="height: 8px; width: 85%; margin-top: 16px; border-radius: 4px; background: {{t.subtle2}}"></div>
+        <div style="height: 8px; width: 72%; margin-top: 10px; border-radius: 4px; background: {{t.subtle2}}"></div>
+        <div style="height: 8px; width: 78%; margin-top: 10px; border-radius: 4px; background: {{t.subtle2}}"></div>
+      </div>
+    </sc-if>
+    <div class="p592f-abs" style="{{barStyle}}">
+      <span style="flex: 1; font-size: {{barFont}}px; line-height: 28px; font-weight: 600; color: {{t.text}}">Sessions</span>
+      <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: {{t.text2}}">
+        <svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 4h10M5 8h6M7 12h2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>Your order</span>
+    </div>
+    <div class="p592f-abs" style="{{listStyle}}">
+      <sc-for list="{{items}}" as="it">
+        <sc-if value="{{it.isHead}}">
+          <div class="p592f-abs" style="{{it.style}}; padding: 12px 12px 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{it.color}}">{{it.text}}<span style="font-weight: 400; margin-left: 6px">{{it.cue}}</span></div>
+        </sc-if>
+        <sc-if value="{{it.isBox}}">
+          <div class="p592f-abs" style="{{it.style}}; display: flex; align-items: center; justify-content: center; font-size: 12px; color: {{t.text3}}">{{it.text}}</div>
+        </sc-if>
+        <sc-if value="{{it.isZone}}">
+          <div class="p592f-abs" style="{{it.style}}"><span style="position: absolute; left: 12px; top: -9px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.layer}}; border: 1px solid {{t.bridge}}">{{it.text}}</span></div>
+        </sc-if>
+        <sc-if value="{{it.isRow}}">
+          <div class="p592f-abs" style="{{it.style}}">
+            <div style="{{it.face}}">
+              <span class="p592f-abs" style="{{it.bar}}"></span>
+              <div class="p592f-row">
+                <span class="p592f-grip" style="color: {{it.gripColor}}; opacity: {{it.gripOp}}"><svg viewBox="0 0 8 14" width="8" height="14"><g fill="currentColor"><circle cx="2" cy="2" r="1.3"/><circle cx="6" cy="2" r="1.3"/><circle cx="2" cy="7" r="1.3"/><circle cx="6" cy="7" r="1.3"/><circle cx="2" cy="12" r="1.3"/><circle cx="6" cy="12" r="1.3"/></g></svg></span>
+                <svg class="p592f-glyph" viewBox="0 0 48 48" width="20" height="20" style="color: {{it.gc}}">
+                  <rect x="1" y="1" width="46" height="46" rx="11" fill="currentColor" fill-opacity="{{it.g.bg}}"/>
+                  <path d="{{it.g.p1}}" fill="{{it.g.f1}}" fill-opacity="{{it.g.o1}}"/>
+                  <path d="{{it.g.p2}}" fill="currentColor" fill-opacity="{{it.g.o2}}"/>
+                  <g fill="currentColor" fill-opacity="{{it.g.dots}}"><circle cx="24" cy="3.5" r="3.4"/><circle cx="41.754" cy="34.25" r="3.4"/><circle cx="6.246" cy="34.25" r="3.4"/></g>
+                  <rect x="36.65" y="36.65" width="7.2" height="7.2" rx="1.55" transform="rotate(45 40.25 40.25)" fill="currentColor" fill-opacity="{{it.g.dia}}" stroke="{{it.knock}}" stroke-opacity="{{it.g.dia}}" stroke-width="1.3"/>
+                </svg>
+                <span class="p592f-title" style="font-weight: {{it.weight}}; color: {{t.text}}">{{it.title}}</span>
+                <sc-if value="{{it.chip}}">
+                  <span class="p592f-chip" style="{{it.chipStyle}}"><svg viewBox="0 0 16 16" width="12" height="12"><path d="{{it.chipIcon}}" fill="{{it.chipFill}}" stroke="{{it.chipStroke}}" stroke-width="1.6" stroke-linecap="round"/></svg>{{it.chip}}</span>
+                </sc-if>
+                <sc-if value="{{it.age}}">
+                  <span class="p592f-age" style="color: {{t.text2}}">{{it.age}}</span>
+                </sc-if>
+                <span class="p592f-sub" style="color: {{t.text2}}">{{it.sub}}</span>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </sc-for>
+      <sc-if value="{{ptr.touch}}">
+        <div class="p592f-abs" style="left: {{ptr.x0}}px; top: {{ptr.y0}}px; width: 56px; height: 56px; z-index: 7">
+          <svg viewBox="0 0 56 56" width="56" height="56" style="position: absolute; left: 0; top: 0">
+            <circle cx="28" cy="28" r="18" fill="{{t.finger}}" stroke="{{t.fingerStroke}}" stroke-width="1.5"/>
+            <circle cx="28" cy="28" r="25" fill="none" stroke="{{t.bridge}}" stroke-width="3" stroke-linecap="round" stroke-dasharray="{{ptr.dash}}" stroke-opacity="{{ptr.ringOp}}" transform="rotate(-90 28 28)"/>
+          </svg>
+          <sc-if value="{{ptr.up}}">
+            <svg viewBox="0 0 16 40" width="16" height="40" style="position: absolute; left: 20px; top: -44px; color: {{t.text2}}"><path d="M8 38V4M3 9l5-5 5 5" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </sc-if>
+        </div>
+      </sc-if>
+      <sc-if value="{{ptr.mouse}}">
+        <svg class="p592f-abs" viewBox="0 0 14 21" width="14" height="21" style="left: {{ptr.x}}px; top: {{ptr.y}}px; z-index: 7"><path d="M1 1v16l4-3.6 2.8 6.3 2.6-1.1-2.8-6.2H13z" fill="{{t.cursorFill}}" stroke="{{t.cursorStroke}}" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      </sc-if>
+      <sc-if value="{{toast}}">
+        <div class="p592f-abs" style="left: 16px; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 16px; color: {{t.text}}; background: {{t.card}}; border: 1px solid {{t.stroke2}}; box-shadow: {{t.popShadow}}">{{toast}}</div>
+      </sc-if>
+      <sc-if value="{{menu}}">
+        <div class="p592f-abs" style="{{menu.style}}; padding: 4px; border-radius: 8px; background: {{t.card}}; border: 1px solid {{t.stroke2}}; box-shadow: {{t.popShadow}}">
+          <sc-if value="{{menu.title}}"><div style="padding: 6px 12px 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.text2}}">{{menu.title}}</div></sc-if>
+          <sc-for list="{{menu.items}}" as="m"><div style="padding: 8px 12px; border-radius: 4px; font-size: 14px; color: {{t.text}}">{{m}}</div></sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{keys}}">
+        <div class="p592f-abs" style="right: 12px; top: 8px; display: flex; gap: 4px; align-items: center; font-size: 12px; color: {{t.text2}}">
+          <sc-for list="{{keys}}" as="k"><span class="p592f-key" style="color: {{t.text}}; background: {{t.card}}; border: 1px solid {{t.stroke2}}; border-bottom-width: 2px">{{k}}</span></sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{say}}">
+        <div class="p592f-abs" style="left: 12px; right: 12px; bottom: 12px; display: flex; gap: 8px; align-items: flex-start; padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 16px; color: {{t.text}}; background: {{t.card}}; border: 1px solid {{t.bridge}}">
+          <svg viewBox="0 0 16 16" width="16" height="16" style="flex: none; color: {{t.bridge}}"><path d="M2 6h3l4-3v10l-4-3H2zM11.5 5.5a3.5 3.5 0 0 1 0 5M13.2 3.6a6 6 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+          <span>{{say}}</span>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  <div class="p592f-cap" style="color: {{capT.text}}">
+    <b>{{label}}</b>
+    <sc-for list="{{notes}}" as="n"><p style="color: {{capT.text2}}">{{n}}</p></sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"f":{"editor":"json","default":{}},"$preview":{"width":300,"height":720}}'>
+// The S glyph family (design/glyphs/mark-*.svg, #558), on a 48 grid.
+const TOP = 'M42.872 8.625C43.472 8.625 43.679 8.91 43.494 9.481L42.506 12.519C42.321 13.09 41.928 13.375 41.328 13.375L26 13.375C22.919 13.375 19.809 14.264 17.461 16.321C15.473 18.062 14.286 20.445 14.233 23.101C14.25 23.7 13.958 24 13.358 24L10.399 24C9.799 24 9.494 23.7 9.483 23.1C9.536 19.09 11.298 15.421 14.296 12.778C17.522 9.935 21.741 8.625 26 8.625L42.872 8.625Z';
+const BOT = 'M5.128 39.375C4.528 39.375 4.321 39.09 4.506 38.519L5.494 35.481C5.679 34.91 6.072 34.625 6.672 34.625L22 34.625C25.081 34.625 28.191 33.736 30.539 31.679C32.527 29.938 33.714 27.555 33.767 24.899C33.75 24.3 34.042 24 34.642 24L37.601 24C38.201 24 38.506 24.3 38.517 24.9C38.464 28.91 36.702 32.579 33.704 35.222C30.478 38.065 26.259 39.375 22 39.375L5.128 39.375Z';
+const CHECK = 'M46.1 40.5A5.6 5.6 0 0 1 34.9 40.5A5.6 5.6 0 0 1 46.1 40.5ZM37.324 41.256L39.164 43.096A0.8 0.8 0 0 0 40.311 43.08L43.781 39.41A0.8 0.8 0 0 0 42.619 38.31L39.714 41.383L38.456 40.124A0.8 0.8 0 0 0 37.324 41.256Z';
+const FAIL_TOP = 'M42.477 9.761C43.07 9.668 43.319 9.917 43.225 10.51L42.726 13.665C42.632 14.257 42.288 14.601 41.696 14.694L26.556 17.092C23.513 17.574 20.58 18.939 18.583 21.337C16.892 23.369 16.093 25.908 16.456 28.539C16.566 29.128 16.325 29.47 15.732 29.564L12.81 30.027C12.217 30.121 11.868 29.872 11.764 29.282C11.189 25.313 12.355 21.413 14.903 18.334C17.644 15.021 21.607 13.067 25.813 12.401L42.477 9.761Z';
+const NEEDS_S = 'M37.965 12.623C38.409 12.623 38.562 12.834 38.425 13.256L37.695 15.504C37.558 15.926 37.267 16.138 36.823 16.138L25.48 16.138C23.2 16.138 20.898 16.795 19.161 18.317C17.69 19.606 16.812 21.369 16.773 23.334C16.785 23.778 16.569 24 16.125 24L13.936 24C13.492 24 13.265 23.778 13.257 23.334C13.296 20.367 14.601 17.652 16.819 15.696C19.206 13.592 22.328 12.623 25.48 12.623L37.965 12.623ZM10.035 35.378C9.591 35.378 9.438 35.166 9.575 34.744L10.305 32.496C10.442 32.074 10.733 31.863 11.177 31.863L22.52 31.863C24.8 31.863 27.102 31.205 28.839 29.683C30.31 28.394 31.188 26.631 31.227 24.666C31.215 24.222 31.431 24 31.875 24L34.064 24C34.508 24 34.735 24.222 34.743 24.666C34.704 27.633 33.399 30.348 31.181 32.304C28.794 34.408 25.672 35.378 22.52 35.378L10.035 35.378Z';
+const DELEG_S = 'M36.455 13.853C36.851 13.853 36.988 14.041 36.866 14.417L36.214 16.423C36.092 16.799 35.833 16.988 35.437 16.988L25.32 16.988C23.287 16.988 21.234 17.574 19.684 18.932C18.372 20.081 17.589 21.654 17.554 23.406C17.565 23.802 17.373 24 16.977 24L15.024 24C14.628 24 14.426 23.802 14.419 23.406C14.453 20.76 15.617 18.338 17.596 16.594C19.724 14.717 22.509 13.853 25.32 13.853L36.455 13.853ZM11.545 34.148C11.149 34.148 11.012 33.959 11.134 33.583L11.786 31.577C11.908 31.201 12.167 31.013 12.563 31.013L22.68 31.013C24.713 31.013 26.766 30.426 28.316 29.068C29.628 27.919 30.411 26.346 30.446 24.594C30.435 24.198 30.627 24 31.023 24L32.976 24C33.372 24 33.574 24.198 33.581 24.594C33.547 27.24 32.383 29.662 30.404 31.406C28.276 33.283 25.491 34.148 22.68 34.148L11.545 34.148Z';
+const G = (o) => Object.assign({ bg: 0, p1: '', f1: 'currentColor', o1: 1, p2: '', o2: 1, dots: 0, dia: 0 }, o);
+const GLYPHS = {
+  idle: ['neutral', G({ p1: TOP + BOT })],
+  working: ['active', G({ p1: TOP, p2: BOT, o2: 0.3 })],
+  needs: ['needs', G({ bg: 1, p1: NEEDS_S, f1: '#14100A' })],
+  delegating: ['active', G({ p1: DELEG_S, dots: 1 })],
+  finished: ['neutral', G({ p1: TOP + BOT + CHECK })],
+  failed: ['danger', G({ p1: FAIL_TOP + BOT })],
+  driven: ['agent', G({ p1: TOP, o1: 0.3, p2: BOT, dia: 1 })],
+};
+const SESSIONS = {
+  a: ['Release notes for 1.33', 'ULTRA · Working', '2m', 'working'],
+  b: ['Fix the flaky pairing test', 'DEV-VM1 · Needs you', '5m', 'needs', true],
+  c: ['Dashboard card polish', 'ULTRA · Idle', '12m', 'idle'],
+  d: ['Usage poller retries', 'DEV-VM1 · Delegating to 2 agents', '18m', 'delegating'],
+  e: ['First-run guide for the docs', 'ULTRA · Finished', '25m', 'finished', true],
+  f: ['Upgrade Playwright', 'DEV-VM1 · Failed', '40m', 'failed'],
+  g: ['Refactor the session store', 'ULTRA · Working', '1h', 'working'],
+  h: ['Triage open issues', 'ULTRA · Working · Driven by an agent', '1h', 'driven'],
+  i: ['Notification copy review', 'DEV-VM1 · Idle', '2h', 'idle'],
+  j: ['Accessibility audit', 'ULTRA · Finished', '3h', 'finished'],
+  k: ['Export the theme tokens', 'DEV-VM1 · Working', '4h', 'working'],
+};
+const DARK = {
+  shell: '#202326', layer: '#272A2E', card: '#2F3338', stroke: 'rgba(255,255,255,.07)', stroke2: 'rgba(255,255,255,.12)',
+  subtle: 'rgba(255,255,255,.05)', subtle2: 'rgba(255,255,255,.06)', selected: 'rgba(255,255,255,.07)',
+  text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)',
+  bridge: '#2DD4BF', onBridge: '#062621', needs: '#FFB224', active: '#4C9AFF', agent: '#A78BFA', danger: '#FF6B6B', neutral: '#8B949E',
+  tint: 'color-mix(in srgb, #2F3338 95%, #2DD4BF)', shadow: (s) => `0 ${8 * s}px ${16 * s}px rgba(0,0,0,${0.28 * s}), 0 0 ${2 * s}px rgba(0,0,0,${0.24 * s})`,
+  popShadow: '0 8px 16px rgba(0,0,0,.28)', notch: '#000', finger: 'rgba(255,255,255,.16)', fingerStroke: 'rgba(255,255,255,.45)',
+  cursorFill: '#FFFFFF', cursorStroke: '#000000', bezel: '#3A3F45',
+};
+const LIGHT = {
+  shell: '#EEF0F2', layer: '#F9F9F9', card: '#FFFFFF', stroke: 'rgba(0,0,0,.07)', stroke2: 'rgba(0,0,0,.12)',
+  subtle: 'rgba(0,0,0,.03)', subtle2: 'rgba(0,0,0,.06)', selected: 'rgba(0,0,0,.05)',
+  text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)',
+  bridge: '#0B7A6E', onBridge: '#FFFFFF', needs: '#B87700', active: '#0B63E5', agent: '#6D4AE0', danger: '#C9302C', neutral: '#6E7781',
+  tint: 'color-mix(in srgb, #FFFFFF 96%, #0B7A6E)', shadow: (s) => `0 ${8 * s}px ${16 * s}px rgba(0,0,0,${0.14 * s}), 0 0 ${2 * s}px rgba(0,0,0,${0.12 * s})`,
+  popShadow: '0 8px 16px rgba(0,0,0,.14)', notch: '#1A1A1A', finger: 'rgba(0,0,0,.12)', fingerStroke: 'rgba(0,0,0,.4)',
+  cursorFill: '#FFFFFF', cursorStroke: '#000000', bezel: '#C9CDD2',
+};
+// Windows' Night sky contrast theme: what forced colours resolve to (Canvas, CanvasText, GrayText, Highlight).
+const NIGHT_SKY = {
+  shell: '#000', layer: '#000', card: '#000', stroke: '#A6A6A6', stroke2: '#FFFFFF', subtle: '#000', subtle2: '#3A3A3A', selected: '#000',
+  text: '#FFFFFF', text2: '#FFFFFF', text3: '#A6A6A6', bridge: '#D6B4FD', needs: '#FFFFFF', active: '#FFFFFF', agent: '#FFFFFF',
+  danger: '#FFFFFF', neutral: '#FFFFFF', tint: '#000', shadow: () => 'none', popShadow: 'none', notch: '#000',
+  finger: 'rgba(255,255,255,.2)', fingerStroke: '#FFFFFF', cursorFill: '#FFFFFF', cursorStroke: '#000000', bezel: '#FFFFFF',
+};
+const ICON_PIN = 'M6 1.5h4l-.6 4 2.6 2.4V9.5H8.75V14L8 14.75 7.25 14V9.5H4V7.9l2.6-2.4z';
+const ICON_X = 'M4 4l8 8M12 4l-8 8';
+
+class Component extends DCLogic {
+  renderVals() {
+    const f = this.props.f || {};
+    const t = f.hc ? NIGHT_SKY : (this.props.theme === 'light' ? LIGHT : DARK);
+    const phone = f.kind !== 'desktop';
+    const w = f.w || (phone ? 300 : 420), h = f.h || (phone ? 600 : 470);
+    const listW = phone ? w : (f.listW || 340);
+    const top = phone ? 84 : 80;
+    const ROW = 56, HEAD = 32, PAD = 4, GY = f.cols === 2 ? 8 : 2, GX = 8, GGAP = 4;
+    const innerW = listW - PAD * 2;
+    const colW = f.cols === 2 ? (innerW - GX) / 2 : innerW;
+    const scroll = f.scroll || 0;
+
+    // Lay the slots out the way the PWA does: headers span the list, rows flow (row-major in two columns).
+    const pos = [];
+    let y = PAD, k = 0, prevHead = false;
+    const flow = (n) => ({ x: PAD + (f.cols === 2 ? (n % 2) * (colW + GX) : 0), y: y + (f.cols === 2 ? Math.floor(n / 2) : n) * (ROW + GY) });
+    let groupTop = y;
+    for (const s of f.slots || []) {
+      if (s.h) {
+        if (pos.length) { const lines = f.cols === 2 ? Math.ceil(k / 2) : k; y = groupTop + lines * (ROW + GY) + GGAP; }
+        pos.push({ x: 0, y, w: listW, hgt: HEAD }); y += HEAD; groupTop = y; k = 0; prevHead = true;
+      } else {
+        const p = flow(k); pos.push({ x: p.x, y: p.y, w: colW, hgt: ROW, k }); k++;
+      }
+    }
+    const slotPos = (i) => pos[i] || { x: PAD, y: PAD, w: colW, hgt: ROW };
+    const oldPos = (i, t1) => {
+      const p = slotPos(i); if (p.k == null) return { x: p.x, y: p.y + t1 * (ROW + GY) };
+      if (f.cols !== 2) return { x: p.x, y: p.y + t1 * (ROW + GY) };
+      const n = p.k + t1; return { x: PAD + (n % 2) * (colW + GX), y: p.y + (Math.floor(n / 2) - Math.floor(p.k / 2)) * (ROW + GY) };
+    };
+    const box = (x, yy, ww, hh) => `left: ${x}px; top: ${yy - scroll}px; width: ${ww}px; height: ${hh}px`;
+
+    const row = (id, extra) => {
+      const [title, sub, age, kind, unread] = SESSIONS[id];
+      const [role, g] = GLYPHS[kind];
+      return Object.assign({ isRow: true, title, sub, age, weight: unread ? 600 : 400, g, gc: t[role], knock: t.layer }, extra);
+    };
+    const gripOp = (s) => (f.grip === 'hover' ? (s.hover || s.focus ? 1 : 0) : 1);
+    const selBar = (on) => on ? `left: 0; top: 50%; width: 3px; height: 16px; margin-top: -8px; border-radius: 2px; background: ${f.hc ? t.bridge : t.bridge}` : 'display: none';
+
+    const items = [];
+    // Traces first, so rows paint over them: a dashed outline where a neighbour was before it eased.
+    (f.slots || []).forEach((s, i) => {
+      if (s.trace == null) return;
+      const p = slotPos(i), o = oldPos(i, s.trace);
+      items.push({ isBox: true, text: '', style: `${box(o.x, o.y, p.w, p.hgt)}; border-radius: 8px; outline: 1px dashed ${t.stroke2}; outline-offset: -1px; opacity: .9` });
+    });
+    if (f.zone) {
+      const zh = f.zone, lh = h - top;
+      items.push({ isZone: true, text: f.zoneText || '', style: `left: 0; width: ${listW}px; top: ${lh - zh}px; height: ${zh}px; background: linear-gradient(to bottom, transparent, color-mix(in srgb, ${t.bridge} 22%, transparent)); border-top: 1px dashed ${t.bridge}; z-index: 4` });
+    }
+    (f.slots || []).forEach((s, i) => {
+      const p = slotPos(i);
+      if (s.h) {
+        items.push({ isHead: true, text: s.h, cue: s.cue || '', color: s.target ? t.bridge : t.text2, style: box(0, p.y, listW, HEAD) });
+      } else if (s.gap) {
+        const hc = f.hc;
+        items.push({ isBox: true, text: '', style: `${box(p.x, p.y, p.w, p.hgt)}; border-radius: 8px; background: ${hc ? 'transparent' : t.subtle}; ${hc ? `outline: 1px dashed ${t.text3}; outline-offset: -1px` : `box-shadow: inset 0 0 0 1px ${t.stroke}`}` });
+      } else if (s.ph) {
+        items.push({ isBox: true, text: s.ph, style: `${box(p.x, p.y, p.w, p.hgt)}; border-radius: 8px; outline: 1px dashed ${t.stroke2}; outline-offset: -1px` });
+      } else if (s.r) {
+        const sel = s.st === 'sel' || s.sel, sink = s.st === 'sink', press = sink || s.st === 'pressed';
+        let face = `position: relative; height: 100%; border-radius: ${f.cols === 2 ? 8 : 4}px; background: ${press || sel ? t.selected : (f.cols === 2 ? t.subtle : 'transparent')}`;
+        if (sink) face += '; transform: scale(.985)';
+        if (s.focus) face += `; outline: 2px solid ${t.bridge}; outline-offset: -2px`;
+        if (s.vo) face += '; outline: 3px solid #000; outline-offset: -3px; box-shadow: inset 0 0 0 5px #fff';
+        if (f.hc && sel) face += `; outline: 2px solid ${t.bridge}; outline-offset: -2px`;
+        items.push(row(s.r, { style: box(p.x, p.y, p.w, p.hgt), face, bar: selBar(sel), gripColor: s.hover ? t.text2 : t.text3, gripOp: gripOp(s) }));
+      }
+    });
+
+    let ptr = {};
+    if (f.lift) {
+      const L = f.lift, p = slotPos(L.at);
+      const sc = f.rm ? 1 : (L.scale == null ? 1.02 : L.scale), sh = L.shadow == null ? 1 : L.shadow;
+      let face = `position: relative; height: 100%; transform: scale(${sc}); border-radius: 8px`;
+      if (f.rm) face += `; background: ${t.card}; outline: 2px solid ${t.bridge}; outline-offset: -2px`;
+      else if (f.hc) face += `; background: ${t.card}; outline: 2px solid ${t.bridge}; outline-offset: -2px`;
+      else face += `; background: ${t.tint}; box-shadow: ${t.shadow(sh)}; outline: 1px solid ${t.stroke2}; outline-offset: -1px`;
+      if (L.sel && !f.rm && !f.hc) face += `; background-image: linear-gradient(${t.selected}, ${t.selected})`;
+      const chip = L.chip || '';
+      const cancel = chip === 'Cancel';
+      items.push(row(L.r, {
+        style: `${box(p.x + (L.dx || 0), p.y + (L.dy || 0), p.w, p.hgt)}; z-index: 5`, face, bar: selBar(L.sel), gripColor: t.text, gripOp: 1,
+        chip, age: chip ? '' : SESSIONS[L.r][2], chipIcon: cancel ? ICON_X : ICON_PIN, chipFill: cancel ? 'none' : 'currentColor', chipStroke: cancel ? 'currentColor' : 'none',
+        chipStyle: f.hc ? `color: ${t.text}; outline: 1px solid ${t.bridge}` : (cancel ? `color: ${t.text2}; background: ${t.subtle2}` : `color: ${t.onBridge}; background: ${t.bridge}`),
+      }));
+    }
+    if (f.ptr) {
+      const P = f.ptr, p = slotPos(P.at == null ? 0 : P.at);
+      const x = p.x + (P.dx == null ? 180 : P.dx), yy = p.y + (P.dy == null ? 28 : P.dy) - scroll;
+      if (P.kind === 'mouse') ptr = { mouse: true, x, y: yy };
+      else {
+        const c = 2 * Math.PI * 25, r = P.ring || 0;
+        ptr = { touch: true, x0: x - 28, y0: yy - 28, dash: `${(c * r).toFixed(1)} ${c.toFixed(1)}`, ringOp: r > 0 ? 1 : 0, up: !!P.up };
+      }
+    }
+    let menu = null;
+    if (f.menu) {
+      const p = slotPos(f.menu.at);
+      menu = { title: f.menu.title || '', items: f.menu.items, style: `right: 16px; top: ${p.y + (f.menu.dy == null ? 44 : f.menu.dy) - scroll}px; min-width: 180px; z-index: 6` };
+    }
+
+    const radius = phone ? 32 : 8;
+    const devStyle = `width: ${w}px; height: ${h}px; border-radius: ${radius}px; background: ${t.layer}; box-shadow: 0 0 0 ${phone ? 6 : 1}px ${t.bezel}${phone ? '' : ''}`;
+    const barStyle = phone
+      ? `left: 0; right: 0; top: 28px; height: 56px; display: flex; align-items: center; padding: 0 16px 0 16px; border-bottom: 1px solid ${t.stroke}; background: ${t.layer}`
+      : `left: 0; width: ${listW}px; top: 32px; height: 48px; display: flex; align-items: center; padding: 0 12px 0 16px; border-bottom: 1px solid ${t.stroke}; background: ${t.layer}`;
+    const listStyle = `left: 0; top: ${top}px; width: ${listW}px; bottom: 0; overflow: ${f.overflow ? 'visible' : 'hidden'}; z-index: 1`;
+    return {
+      t, capT: this.props.theme === 'light' ? LIGHT : DARK, w, isPhone: phone, isDesk: !phone, listW, devStyle, barStyle, barFont: phone ? 20 : 18, listStyle, items, ptr, menu,
+      toast: f.toast || '', keys: f.keys || null, say: f.say || '', label: f.label || '', notes: f.notes || [],
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -5,12 +5,14 @@ import { SessionCard } from './session-card.js';
 import { RowMenu } from './row-menu.js';
 import { SessionOrder } from '../session-order.js';
 import { ago } from './time.js';
-import { enter, leave, seen, select as showSelection, slide } from './motion.js';
+import { enter, leave, reveal, seen, select as showSelection, slide } from './motion.js';
 import { updateLine, lastLine, canCheck, canInstall } from '../update.js';
+import { Reorder, longPressMs, TOUCH_SLOP } from './reorder.js';
 
-const LONG_PRESS_MS = 500;
-// A finger that moves further than this is scrolling, not pressing.
-const LONG_PRESS_SLOP = 10;
+const GRIP_HINT = 'Press and hold a session to move it. Or use Move up and Move down in its menu.';
+const HINT_MS = 4000;
+// The hint showed by itself once on this device (ui.md §6.1): it never does again.
+const HINT_SHOWN = 'agent-bridge.app.gripHint';
 
 // Keeps one row per session, from every machine shown, in the person's order (session-order.js):
 // Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
@@ -19,9 +21,10 @@ const LONG_PRESS_SLOP = 10;
 // session is its machine's: two machines may each have a session of the same id, and each acts
 // only on its own machine.
 //
-// Rows move only when the person moves them: Alt+Up/Down on a row, a drag by the handle that
-// shows on hover, or the row menu (a long press on a phone, a right-click, Shift+F10). Up and
-// Down alone go from row to row.
+// Rows move only when the person moves them (ui.md §6.1, Moving): a card lifted and dragged
+// (./reorder.js: a long press or the grip on touch, the grip or a 4 px drag with a mouse or pen),
+// Alt+Up/Down on a row, or the row menu (a long press released without moving, a right-click,
+// Shift+F10). Up and Down alone go from row to row.
 export class SessionListView {
   #cards = new Map();
   #scheduled = false;
@@ -31,6 +34,12 @@ export class SessionListView {
   #press = null;
   #swallowClick = false;
   #selected = null;
+  #reorder = null;
+  // A card was held while the list changed: what changed is drawn once it is let go.
+  #waiting = false;
+  #hint = null;
+  #hinted = false;
+  #seen = null;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
 
@@ -61,6 +70,36 @@ export class SessionListView {
     // What a move did, said to a screen reader.
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);
+    this.#reorder = new Reorder(container, {
+      cardOf: (el) => this.#cardOf(el),
+      movable: (card) => this.moving && this.order.canLift(this.#keyOf(card)),
+      fixed: (card) => this.order.pending(this.#keyOf(card)),
+      title: (card) => card.session.title || 'Untitled session',
+      commit: (card, group, index, { before, after }) => {
+        const key = this.#keyOf(card);
+        // By the nearest cards either side still here, so a session that arrived while it was
+        // held, and is drawn only now, doesn't shift where it lands, and those that went meanwhile
+        // are passed over. With none left, the group as it is now, without those that went.
+        const live = new Set(this.sessions.list().map((e) => SessionListView.key(e.hostId, e.session.id)));
+        const near = (c) => live.has(this.#keyOf(c)) && !this.order.pending(this.#keyOf(c));
+        const below = before.find(near);
+        const above = after.find(near);
+        const ok = !!((below && this.order.place(key, this.#keyOf(below), false))
+          || (above && this.order.place(key, this.#keyOf(above), true))
+          || this.order.moveTo(key, group, index, live));
+        if (ok) { this.render(); }
+        return ok;
+      },
+      menu: (card) => { if (!this.#menu.open) { this.openMenu(card); } },
+      hint: () => this.#showHint(),
+      header: (id) => this.#head(id, id === 'pinned' ? 'Pinned' : 'Sessions'),
+      // Held, and let go (dropped, put back or abandoned): what holds Needs you's answers from the
+      // pointer meanwhile, and for a moment after (sessions-page.js).
+      lifted: () => this.onMoving?.(true),
+      dropped: () => this.onMoving?.(false),
+      say: (text) => this.#say(text),
+      drawn: () => { if (this.#waiting) { this.schedule(); } },
+    }, { top: '.appbar', bottom: '#nav' });
     this.#listen();
   }
 
@@ -74,6 +113,7 @@ export class SessionListView {
   }
 
   setSort(sort) {
+    this.#reorder.cancel();
     this.order.setSort(sort);
     this.render();
   }
@@ -84,6 +124,7 @@ export class SessionListView {
   setFilter(query) {
     const q = String(query ?? '').trim().toLowerCase();
     if (q === this.filter) { return; }
+    this.#reorder.cancel();
     this.filter = q;
     this.render();
   }
@@ -100,6 +141,23 @@ export class SessionListView {
 
   render() {
     const entries = this.sessions.list();
+    // While a card is held the list stays as it is (Reorder: the list's own updates are drawn after
+    // the drop); a row's own news (its glyph, its words) still shows. The held session gone ends
+    // the drag, and its card fades where it was held.
+    const held = this.#reorder.held;
+    if (held) {
+      const live = new Set(entries.map((e) => SessionListView.key(e.hostId, e.session.id)));
+      if (live.has(this.#keyOf(held))) {
+        for (const e of entries) {
+          const card = this.#cards.get(SessionListView.key(e.hostId, e.session.id));
+          if (card && card.session !== e.session) { card.update(e.session); }
+        }
+        this.#waiting = true;
+        return;
+      }
+      this.#reorder.cancel({ removed: true });
+    }
+    this.#waiting = false;
     const sort = this.order.sort;
     const arranged = this.order.arrange(entries, { nameOf: (id) => this.machine(id).name, shows: this.shows, settled: this.settled });
     const keep = (e) => this.#matches(e.hostId, e.session);
@@ -122,7 +180,8 @@ export class SessionListView {
     // card) are none of that.
     const arrived = [];
     for (const [key, card] of this.#cards) {
-      if (!live.has(key) && this.#drawn && this.shows(card.hostId) && this.settled(card.hostId)) { leave(card.element, 'listItem'); }
+      // A held card that went has faded where it was held already (./reorder.js).
+      if (!live.has(key) && this.#drawn && this.shows(card.hostId) && this.settled(card.hostId) && !card.element.dataset.left) { leave(card.element, 'listItem'); }
     }
     const cards = (list, isPinned) => {
       for (const entry of list) {
@@ -197,6 +256,7 @@ export class SessionListView {
       if (el?.isConnected) { enter(el, 'listItem'); }
     }
     this.#drawn = true;
+    this.#firstHint();
     // An ended session that matches is a result too: Ended shows it.
     this.shownCount = shown + ended.length;
     this.onRender?.(entries.length);
@@ -237,30 +297,61 @@ export class SessionListView {
 
   // Moves a row and keeps the move in view and in focus.
   #move(card, delta) {
-    if (this.filter || !this.order.move(this.#keyOf(card), delta)) { return false; }
+    if (this.filter) { return false; }
+    // A key or the menu while a card is held (or pressed to be) puts it back first, and then moves
+    // (ui.md §6.1). What the list waited to draw while it was held is drawn first, so the move is
+    // reckoned from the list as it is now, and the pointer's release has no drag left to drop.
+    if (this.#reorder.busy) {
+      this.#reorder.cancel();
+      this.render();
+    }
+    const key = this.#keyOf(card);
+    if (!this.order.move(key, delta)) {
+      // At the end of its group a move moves nothing, and says so (ui.md §6.1).
+      const at = this.order.sort === 'yours' && !this.order.pending(key) ? this.#reorder.where(card.element) : null;
+      if (at && delta < 0 && at.index === 0) { this.#say(`Top of ${at.name}.`); }
+      if (at && delta > 0 && at.index === at.n - 1) { this.#say(`End of ${at.name}.`); }
+      return false;
+    }
+    // Needs you's answers wait a moment after a move, as after a drop (ui.md §6.1, Answers wait).
+    this.onMoving?.(false);
     // Into view before the slide is measured: the slide's first frame puts the row back where it
     // was, and a scroll then would find it already in sight and leave its new place clipped.
-    this.#moved(card.element, () => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });
+    this.#moved(() => { this.render(); card.element.scrollIntoView({ block: 'nearest' }); });
     card.els.open.focus({ preventScroll: true });
-    this.#say(delta < 0 ? 'Moved up' : 'Moved down');
+    const at = this.#reorder.where(card.element);
+    if (at) { this.#say(`Moved to position ${at.index + 1} of ${at.n} in ${at.name}.`); }
     return true;
   }
 
-  // Reorder (ui.md §5.3): the row moved slides to its new place; the rows it passed take theirs
-  // at once, so nothing but the person's row moves.
-  #moved(el, draw) {
-    const before = el.isConnected ? el.getBoundingClientRect() : null;
-    // A move made while the last one still slides goes on from where the row is seen now: the
-    // last slide goes, so the new place is measured without its translation.
-    for (const a of el.getAnimations?.() ?? []) { if (a.id === 'ab-motion-reorder') { a.cancel(); } }
+  // Reorder (ui.md §5.3): by key or menu, the row moved and the row it passed trade places
+  // together, each sliding from where it is seen to its new place. A move made while the last one
+  // still slides goes on from where the rows are seen now: the last slides go, so the new places
+  // are measured without their translation.
+  #moved(draw) {
+    const rows = [...this.container.children];
+    // Within the list: the list scrolled to bring the row into view moves every row on screen,
+    // and that is a scroll, not a move.
+    const where = (el) => {
+      const r = el.getBoundingClientRect();
+      const list = this.container.getBoundingClientRect();
+      return { left: r.left - list.left, top: r.top - list.top };
+    };
+    const before = new Map(rows.map((el) => [el, where(el)]));
+    for (const el of rows) {
+      for (const a of el.getAnimations?.() ?? []) { if (a.id === 'ab-motion-reorder') { a.cancel(); } }
+    }
     draw();
-    if (!before || !el.isConnected) { return; }
-    const after = el.getBoundingClientRect();
-    slide(el, 'reorder', before.left - after.left, before.top - after.top);
+    for (const [el, was] of before) {
+      if (!el.isConnected) { continue; }
+      const now = where(el);
+      slide(el, 'reorder', was.left - now.left, was.top - now.top);
+    }
   }
 
   // back: what has focus after, the row's own button unless the header's Pin was pressed.
   #pin(card, pinned, back = card.els.open) {
+    this.#reorder.cancel();
     this.order.setPinned(this.#keyOf(card), pinned);
     this.render();
     back.focus({ preventScroll: true });
@@ -268,6 +359,44 @@ export class SessionListView {
   }
 
   #say(text) { this.said.textContent = text; }
+
+  // What a tap on the grip says on touch (ui.md §6.1): a toast that leaves by itself.
+  #showHint() {
+    if (!this.#hint) {
+      this.#hint = { el: h('div', { class: 'grip-hint', role: 'status', hidden: true }), timer: 0 };
+      document.body.append(this.#hint.el);
+    }
+    const { el } = this.#hint;
+    el.textContent = GRIP_HINT;
+    clearTimeout(this.#hint.timer);
+    if (el.hidden) { reveal(el, { entry: 'toast', dy: 1 }); }
+    this.#hint.timer = setTimeout(() => { leave(el, 'toast'); el.hidden = true; }, HINT_MS);
+  }
+
+  // The hint shows once by itself (ui.md §6.1, D5, #593): the first time a touch user sees the list
+  // in Your order with 2 sessions or more that can move. A list that comes into view later (back
+  // from a session on a phone, or from another page) counts then.
+  #firstHint() {
+    if (this.#hinted || this.order.sort !== 'yours' || this.filter || !globalThis.matchMedia?.('(any-pointer: coarse)').matches) { return; }
+    if (document.visibilityState === 'hidden' || !this.container.getClientRects().length) {
+      this.#seen ??= new IntersectionObserver((seen) => { if (seen.some((e) => e.isIntersecting)) { this.#firstHint(); } });
+      this.#seen.observe(this.container);
+      return;
+    }
+    let movable = 0;
+    for (const card of this.#cards.values()) {
+      if (card.element.parentElement === this.container && this.order.canLift(this.#keyOf(card))) { movable += 1; }
+    }
+    if (movable < 2) { return; }
+    this.#hinted = true;
+    this.#seen?.disconnect();
+    // Storage that can't be read or written shows it once for this page, rather than every time.
+    try {
+      if (this.order.storage?.getItem(HINT_SHOWN)) { return; }
+      this.order.storage?.setItem(HINT_SHOWN, '1');
+    } catch { /* not kept */ }
+    this.#showHint();
+  }
 
   openMenu(card) {
     const key = this.#keyOf(card);
@@ -301,7 +430,9 @@ export class SessionListView {
       const card = e.target.closest?.('.row-main') ? this.#cardOf(e.target) : null;
       if (!card) { return; }
       e.preventDefault();
-      this.#cancelPress();
+      // A long press's own contextmenu (Android's Chrome sends one) is the press's: it lifts the
+      // card, or opens the menu itself, at the platform's time.
+      if (this.#reorder.busy || this.#press || e.pointerType === 'touch') { return; }
       this.openMenu(card);
     });
     // The tap that ends a long press doesn't open the session.
@@ -309,15 +440,21 @@ export class SessionListView {
       if (this.#swallowClick && e.target.closest?.('.row-main')) { this.#swallowClick = false; e.preventDefault(); e.stopPropagation(); }
     }, true);
     c.addEventListener('pointerdown', (e) => {
-      if (e.target.closest?.('.drag-handle')) { this.#drag(e); return; }
-      if (e.pointerType === 'touch' && e.target.closest?.('.row-main')) { this.#longPress(e); }
+      const target = this.#reorder.target(e);
+      const card = this.#cardOf(target);
+      if (!card || !target.closest?.('.row-main, .drag-handle')) { return; }
+      if (this.moving && this.order.canLift(this.#keyOf(card))) {
+        this.#cancelPress();
+        this.#reorder.press(e, card, target);
+        return;
+      }
+      if (e.pointerType === 'touch' && target.closest('.row-main')) { this.#longPress(e, card); }
     });
   }
 
-  // A long press on a row opens its menu; the tap it ends with doesn't open the session.
-  #longPress(e) {
-    const card = this.#cardOf(e.target);
-    if (!card) { return; }
+  // A long press on a row that can't move now (another sort, search, a machine still sending its
+  // list) opens its menu; the tap it ends with doesn't open the session.
+  #longPress(e, card) {
     this.#cancelPress();
     const press = { id: e.pointerId, x: e.clientX, y: e.clientY };
     press.timer = setTimeout(() => {
@@ -336,9 +473,9 @@ export class SessionListView {
       document.addEventListener('pointerup', lifted, true);
       document.addEventListener('pointercancel', lifted, true);
       if (!this.#menu.open) { this.openMenu(card); }
-    }, LONG_PRESS_MS);
+    }, longPressMs());
     const moved = (ev) => {
-      if (ev.pointerId === press.id && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > LONG_PRESS_SLOP) { this.#cancelPress(); }
+      if (ev.pointerId === press.id && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > TOUCH_SLOP) { this.#cancelPress(); }
     };
     const up = (ev) => { if (ev.pointerId === press.id) { this.#cancelPress(); } };
     document.addEventListener('pointermove', moved);
@@ -357,54 +494,6 @@ export class SessionListView {
     clearTimeout(this.#press.timer);
     this.#press.off();
     this.#press = null;
-  }
-
-  // A drag by the handle, with a mouse or pen, in Your order: a line shows where the row will
-  // go, and Escape puts it back.
-  #drag(e) {
-    const card = this.#cardOf(e.target);
-    if (!card || e.button !== 0 || e.pointerType === 'touch' || !this.moving) { return; }
-    e.preventDefault();
-    const el = card.element;
-    el.classList.add('dragging');
-    let drop = null;
-    const mark = (next) => {
-      if (drop?.el === next?.el && drop?.after === next?.after) { return; }
-      drop?.el.classList.remove('drop-before', 'drop-after');
-      drop = next;
-      drop?.el.classList.add(drop.after ? 'drop-after' : 'drop-before');
-    };
-    const move = (ev) => {
-      if (ev.pointerId !== e.pointerId) { return; }
-      // Rows are a grid of columns on a wide screen: the row under the pointer, in both directions.
-      const over = [...this.container.querySelectorAll(':scope > .session')].find((s) => {
-        const r = s.getBoundingClientRect();
-        return ev.clientX >= r.left - 7 && ev.clientX <= r.right + 7 && ev.clientY >= r.top - 7 && ev.clientY <= r.bottom + 7;
-      });
-      if (!over || over === el) { mark(null); return; }
-      const r = over.getBoundingClientRect();
-      mark({ el: over, after: ev.clientY > r.top + r.height / 2 });
-    };
-    const finish = (commit) => {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
-      document.removeEventListener('pointercancel', cancel);
-      document.removeEventListener('keydown', esc, true);
-      el.classList.remove('dragging');
-      const target = drop;
-      mark(null);
-      if (commit && target && this.order.place(this.#keyOf(card), target.el.dataset.key, target.after)) {
-        this.#moved(el, () => this.render());
-        this.#say('Moved');
-      }
-    };
-    const up = (ev) => { if (ev.pointerId === e.pointerId) { finish(true); } };
-    const cancel = (ev) => { if (ev.pointerId === e.pointerId) { finish(false); } };
-    const esc = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); finish(false); } };
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
-    document.addEventListener('pointercancel', cancel);
-    document.addEventListener('keydown', esc, true);
   }
 
   // Whether a machine takes answers may have changed: every question of its sessions (of every

@@ -1,5 +1,5 @@
 // The person's order (#164, ui.md §1 principle 2 and §6.1), in demo mode: rows never move on
-// their own; Alt+Up/Down, a drag by the handle and the row menu (a long press on a phone, a
+// their own; Alt+Up/Down, a card lifted by its grip and the row menu (a long press on a phone, a
 // right-click) move them and pin them, and every move survives a reload; a new session lands at
 // the top once; a row not open with news gets the dot; ended sessions fold into Ended · N; and the
 // sort menu offers Most recent and Machine.
@@ -77,11 +77,12 @@ test('Alt+Up and Alt+Down move a row from its title, keep focus on it, and the o
   await page.keyboard.press('Alt+ArrowDown');
   expect(await order(page)).toEqual([CLAUDE, CODEX, COPILOT, DELEGATING]);
   await expect(fold).toBeFocused();
-  // Not past either end.
+  // Not past either end: a move there moves nothing, and says so.
   await card(page, CLAUDE).locator('.row-main').press('Alt+ArrowUp');
+  await expect(page.locator('#session-list + [role="status"]')).toHaveText('Top of Sessions.');
   await card(page, DELEGATING).locator('.row-main').press('Alt+ArrowUp');
   expect(await order(page)).toEqual([CLAUDE, CODEX, DELEGATING, COPILOT]);
-  await expect(page.locator('#session-list + [role="status"]')).toHaveText('Moved up');
+  await expect(page.locator('#session-list + [role="status"]')).toHaveText('Moved to position 3 of 4 in Sessions.');
   await reload(page);
   await expect.poll(() => order(page)).toEqual([CLAUDE, CODEX, DELEGATING, COPILOT]);
 });
@@ -248,7 +249,7 @@ test.describe('on a phone', () => {
     await longPress(page, CODEX, 1800);
     await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
     // The click a real finger's release brings.
-    await card(page, CODEX).locator('.row-main').dispatchEvent('click');
+    await card(page, CODEX).locator('.row-main').dispatchEvent('click', { detail: 1 });
     await expect(view(page, CODEX)).toBeHidden();
     await expect(card(page, CODEX).getByRole('menu')).toBeVisible();
   });
@@ -300,7 +301,8 @@ test.describe('on a phone', () => {
     const sort = await page.locator('#session-sort').boundingBox();
     expect(sort.x + sort.width).toBeLessThanOrEqual(head.x + head.width + 0.5);
     expect(sort.height).toBeGreaterThanOrEqual(44);
-    await expect(page.locator('.drag-handle').first()).toBeHidden();
+    // On touch the grip shows on every card in Your order (#592, D5).
+    await expect(page.locator('.drag-handle').first()).toBeVisible();
   });
 });
 
@@ -308,7 +310,7 @@ for (const width of [900, 1440]) {
   test.describe(`at ${width} px`, () => {
     test.use({ viewport: { width, height: 900 } });
 
-    test('a row dragged by its handle goes where it is dropped, and stays there after a reload', async ({ page }) => {
+    test('a card dragged by its grip is lifted, the cards it passes make room, and it lands in the gap, staying there after a reload', async ({ page }) => {
       await openDemo(page);
       // Rows are two lines (#179): every one fits on the screen at once.
       const handle = card(page, DELEGATING).locator('.drag-handle');
@@ -318,12 +320,17 @@ for (const width of [900, 1440]) {
       const target = await card(page, CLAUDE).boundingBox();
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
+      // The grip lifts it at once, with no insertion line anywhere.
+      await expect(card(page, DELEGATING)).toHaveClass(/\blifted\b/);
       await page.mouse.move(target.x + target.width / 2, target.y + 10, { steps: 6 });
-      await expect(card(page, CLAUDE)).toHaveClass(/\bdrop-before\b/);
+      // Claude and Codex eased down a place: the gap they leave is where it lands.
+      await expect.poll(() => card(page, CLAUDE).evaluate((e) => new DOMMatrix(getComputedStyle(e).transform).m42)).toBeGreaterThan(target.height - 1);
+      await expect(page.locator('.drag-gap')).toHaveCount(1);
       await page.mouse.up();
       await expect.poll(() => order(page)).toEqual([COPILOT, DELEGATING, CLAUDE, CODEX]);
-      await expect(page.locator('.drop-before, .drop-after, .dragging')).toHaveCount(0);
-      // The row dropped slides into its place (ui.md §5.3): measured once it is there.
+      await expect(page.locator('.lifted, .drag-gap')).toHaveCount(0);
+      await expect(page.locator('#session-list + [role="status"]')).toHaveText('Moved to position 2 of 4 in Sessions.');
+      // The row dropped settles into its place (ui.md §5.3): measured once it is there.
       await page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-reorder' && a.playState === 'running'));
 
       // Escape puts a drag back.
@@ -333,8 +340,9 @@ for (const width of [900, 1440]) {
       await page.mouse.move(again.x + again.width / 2, again.y + again.height / 2);
       await page.mouse.down();
       await page.mouse.move(onto.x + onto.width / 2, onto.y + 10, { steps: 6 });
-      await expect(card(page, DELEGATING)).toHaveClass(/\bdrop-before\b/);
+      await expect.poll(() => card(page, DELEGATING).evaluate((e) => new DOMMatrix(getComputedStyle(e).transform).m42)).toBeGreaterThan(onto.height - 1);
       await page.keyboard.press('Escape');
+      await expect(page.locator('#session-list + [role="status"]')).toHaveText('Cancelled. Back at position 3 of 4.');
       await page.mouse.up();
       expect(await order(page)).toEqual([COPILOT, DELEGATING, CLAUDE, CODEX]);
 
@@ -350,15 +358,23 @@ for (const width of [900, 1440]) {
       expect(sort.x).toBeGreaterThan(head.x + head.width / 2);
     });
 
-    test('in high contrast the grip and the drop line keep system colours', async ({ page, browserName }) => {
+    test('in high contrast the grip, the lifted card and the gap keep system colours', async ({ page, browserName }) => {
       test.skip(browserName !== 'chromium', 'forced colours are emulated in Chromium only');
       await page.emulateMedia({ forcedColors: 'active' });
       await openDemo(page);
       await card(page, CLAUDE).hover();
       const grip = card(page, CLAUDE).locator('.drag-handle');
       expect(await grip.evaluate((e) => getComputedStyle(e).forcedColorAdjust)).toBe('none');
-      await card(page, CLAUDE).evaluate((e) => e.classList.add('drop-before'));
-      expect(await card(page, CLAUDE).evaluate((e) => getComputedStyle(e, '::before').forcedColorAdjust)).toBe('none');
+      expect(await grip.evaluate((e) => getComputedStyle(e, '::before').forcedColorAdjust)).toBe('none');
+      const box = await grip.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await expect(card(page, CLAUDE)).toHaveClass(/\blifted\b/);
+      const lifted = await card(page, CLAUDE).evaluate((e) => { const s = getComputedStyle(e); return [s.outlineStyle, s.outlineWidth, s.boxShadow]; });
+      expect(lifted).toEqual(['solid', '2px', 'none']);
+      expect(await page.locator('.drag-gap').evaluate((e) => getComputedStyle(e).outlineStyle)).toBe('dashed');
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
     });
 
     test('group headings and Ended span the whole list, never sharing a line with a row', async ({ page }) => {

@@ -509,6 +509,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: var(--type-section); line-height: var(--type-section-line); min-height: var(--tap); padding: 0 var(--ab-space-3); display: flex; align-items: center; }
 .ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-3) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
+/* Under the rows' titles, which the grip's column moves along in Your order. */
+.session-list[data-sort="yours"] .ended { padding-left: calc(var(--ab-space-6) + 16px + var(--ab-space-3)); }
 .ended-title { color: var(--ab-text); overflow-wrap: anywhere; min-width: 0; }
 .ended-meta { font-size: var(--type-meta); }
 /* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
@@ -553,30 +555,106 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
 }
-/* Moving rows: a grip on hover with a mouse, and a line where a dragged row will go. */
+/* Moving sessions (ui.md §5.3 Lift and Reorder, §6.1 Moving; #592, #593). A card can't be
+   selected, called out or dragged by the system, so a long press is the app's own. Its grip is
+   its leading 24, the card's full height: on hover with a mouse or pen, always on touch (D5) and
+   on a device with a touchscreen too. */
+.session-list { position: relative; }
+.session-list > .session {
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+.session-list > .session .row-main { touch-action: pan-y pinch-zoom; -webkit-user-drag: none; }
 .drag-handle { display: none; }
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
+  display: block; position: absolute; left: 0; top: 0; bottom: 0; width: var(--ab-space-6); z-index: 1;
+  cursor: grab; color: var(--ab-text3); touch-action: none;
+}
+.session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle::before {
+  content: ""; position: absolute; left: 6px; top: var(--ab-space-2); width: 12px; height: 24px;
+  background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
+  background-size: 6px 6px; background-position: center;
+}
 @media (hover: hover) and (pointer: fine) {
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle {
-    display: block; position: absolute; left: 0; top: 8px; width: 12px; height: 24px; z-index: 1;
-    cursor: grab; opacity: 0; color: var(--ab-text2);
-    background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.6px);
-    background-size: 6px 6px; background-position: center;
-  }
-  .session-list[data-sort="yours"]:not([data-filtered="true"]) .session:hover .drag-handle { opacity: 1; }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { opacity: 0; color: var(--ab-text2); }
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) :is(.session:hover, .session.lifted) .drag-handle { opacity: 1; }
 }
-.session.dragging { opacity: .6; }
-.session.dragging .drag-handle { cursor: grabbing; }
-.session.drop-before::before, .session.drop-after::after {
-  content: ""; position: absolute; left: 0; right: 0; height: 2px; border-radius: 1px; background: var(--ab-bridge);
+/* A touchscreen besides (a laptop's): a grip takes a touch whole, with no scroll, so it shows
+   wherever it is, as on touch. */
+@media (hover: hover) and (pointer: fine) and (any-pointer: coarse) {
+  .session-list[data-sort="yours"]:not([data-filtered="true"]) .drag-handle { opacity: 1; color: var(--ab-text3); }
 }
-.session.drop-before::before { top: -2px; }
-.session.drop-after::after { bottom: -2px; }
-/* High contrast drops background images and colours: the grip and the drop line keep system
-   colours so they can still be seen. */
+.session.lifted .drag-handle { color: var(--ab-text); cursor: grabbing; }
+:root[data-reordering] * { -webkit-user-select: none; user-select: none; }
+:root:is([data-reordering="mouse"], [data-reordering="pen"]) * { cursor: grabbing !important; }
+/* While a touch holds a card, before it lifts: the pressed fill at once, and a sink over the
+   hold (reorder.js leaves the sink out with reduced motion). */
+.session.holding .row-main { background: var(--ab-selected); }
+.session-list > .session { --ab-hold: 500ms; }
+.session.sinking { scale: .985; transition: scale var(--ab-hold) linear; }
+/* Lift: the card rises above the rows and headers (below the bars, menus and toasts). The cards
+   it passes ease aside on `reorder`; the gap they leave is where it lands. */
+.session.lifted {
+  z-index: 10; scale: 1.02;
+  background: var(--ab-card); background: color-mix(in srgb, var(--ab-card) 96%, var(--ab-bridge));
+  box-shadow: 0 8px 16px var(--ab-drag-shadow), 0 0 2px var(--ab-drag-shadow-edge);
+  border-radius: var(--ab-radius-card); outline: 1px solid var(--ab-stroke2); outline-offset: -1px;
+  transition: scale var(--ab-motion-lift-duration) var(--ab-motion-lift-ease), box-shadow var(--ab-motion-lift-duration) var(--ab-motion-lift-ease),
+    background-color var(--ab-motion-lift-duration) var(--ab-motion-lift-ease), border-radius var(--ab-motion-lift-duration) var(--ab-motion-lift-ease);
+}
+@media (prefers-color-scheme: dark) {
+  .session.lifted { background: color-mix(in srgb, var(--ab-card) 95%, var(--ab-bridge)); }
+}
+.session:is(.lifted, .settling) .row-main { border-radius: var(--ab-radius-card); }
+/* Let go, it lowers as it settles into its place, on `reorder`. */
+.session.settling {
+  z-index: 10;
+  transition: scale var(--ab-motion-reorder-duration) var(--ab-motion-reorder-ease), box-shadow var(--ab-motion-reorder-duration) var(--ab-motion-reorder-ease),
+    background-color var(--ab-motion-reorder-duration) var(--ab-motion-reorder-ease), border-radius var(--ab-motion-reorder-duration) var(--ab-motion-reorder-ease);
+}
+.session-list.reordering > :is(.session:not(.lifted), .list-group, .ended-group),
+.drag-gap, .drag-keep { transition: transform var(--ab-motion-reorder-duration) var(--ab-motion-reorder-ease); }
+.drag-gap, .drag-keep { position: absolute; left: 0; right: 0; top: 0; pointer-events: none; border-radius: var(--ab-radius-card); }
+.drag-gap { background: var(--ab-subtle); box-shadow: inset 0 0 0 1px var(--ab-stroke); }
+.drag-keep {
+  display: flex; align-items: center; justify-content: center; outline: 1px dashed var(--ab-stroke2); outline-offset: -1px;
+  color: var(--ab-text2); font-size: var(--type-meta); line-height: var(--type-meta-line);
+}
+/* Crossing into the other group: its header says what the drop does, and so does a chip in
+   place of the age. Outside the list, the chip says the drop cancels. The chip is a Bridge fill
+   with bridge-on text: Bridge text on a 14% Bridge fill, as #592 drew it, is about 4.2:1 on the
+   lifted card in light, under AA for 12 px text. */
+.list-group.drop-target { color: var(--ab-bridge); }
+.group-cue { font-weight: 400; }
+.drag-chip {
+  display: none; grid-column: 3; grid-row: 1; justify-self: end; align-self: start; padding: 0 var(--ab-space-2);
+  border-radius: var(--ab-radius-pill); font-size: var(--type-meta); line-height: var(--type-row-line); font-weight: 600;
+  color: var(--ab-bridge-on); background: var(--ab-bridge);
+}
+.session:is(.crossing, .outside) .drag-chip { display: block; }
+.session:is(.crossing, .outside) :is(.row-age, .unread-dot) { visibility: hidden; }
+.session.outside .drag-chip { color: var(--ab-text2); background: var(--ab-subtle); }
+/* Reduced motion: no sink, growth, shadow or tint; a 2 px Bridge outline marks the lifted card. */
+@media (prefers-reduced-motion: reduce) {
+  .session.lifted { scale: none; box-shadow: none; background: var(--ab-card); outline: 2px solid var(--ab-bridge); outline-offset: -2px; }
+}
+/* High contrast drops shadows, fills and background images: the grip, the lifted card, the gap,
+   the target header and the chip keep system colours so they can still be seen. */
 @media (forced-colors: active) {
-  .drag-handle { forced-color-adjust: none; color: CanvasText; }
-  .session.drop-before::before, .session.drop-after::after { forced-color-adjust: none; background: Highlight; }
+  .drag-handle, .drag-handle::before { forced-color-adjust: none; color: CanvasText; }
+  .session.lifted { box-shadow: none; outline: 2px solid Highlight; outline-offset: -2px; }
+  .drag-gap { box-shadow: none; outline: 1px dashed GrayText; outline-offset: -1px; }
+  .list-group.drop-target { color: Highlight; }
+  .drag-chip { color: Highlight; outline: 1px solid CanvasText; }
 }
+/* What a tap on the grip says on touch: a toast above the bottom bar, gone by itself. */
+.grip-hint {
+  position: fixed; z-index: 30; left: 0; right: 0; bottom: calc(var(--tabbar) + var(--safe-bottom) + var(--ab-space-3));
+  width: fit-content; max-width: min(92vw, 420px); margin: 0 auto; padding: 10px 14px; box-sizing: border-box;
+  border-radius: var(--ab-radius-card); background: var(--ab-card); color: var(--ab-text); border: 1px solid var(--ab-stroke2);
+  box-shadow: 0 8px 16px var(--ab-shadow); font-size: var(--type-row); line-height: var(--type-row-line); pointer-events: none;
+}
+@media (min-width: 760px) { .grip-hint { bottom: var(--ab-space-6); } }
+.grip-hint[hidden] { display: none; }
 .row-menu {
   position: absolute; right: var(--ab-space-2); top: calc(100% - var(--ab-space-1)); z-index: 5; min-width: 168px;
   display: grid; padding: 4px; background: var(--ab-card); border: 1px solid var(--ab-stroke2);
@@ -595,14 +673,17 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
-   activity dot at the trailing edge. A grid item is min-width:auto, so a long unbroken title or
-   path would otherwise make the row wider than the screen. */
+   activity dot at the trailing edge. In Your order its leading 24 is the grip's (§6.1, §9, #592),
+   on touch and with a mouse alike, so rows don't shift as the grip comes and goes; in the other
+   sorts rows don't move, so there is no grip and no column. A grid item is min-width:auto, so a long unbroken
+   title or path would otherwise make the row wider than the screen. */
 .session { position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
 .row-main {
   display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: var(--ab-space-3); align-items: start;
   width: 100%; min-height: var(--tap); padding: var(--ab-space-2) var(--ab-space-3); margin: 0;
   font: inherit; color: var(--ab-text); text-align: left; background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
 }
+.session-list[data-sort="yours"] > .session .row-main { padding-left: var(--ab-space-6); }
 .row-main:hover { background: var(--ab-subtle); }
 /* The glyph sits on line 1, centred on its line, never on the row's middle (§5.1). */
 .row-glyph { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: var(--type-row-line); }
