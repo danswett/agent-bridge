@@ -339,7 +339,8 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
      10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
      and builds main and reads the pull request only through the API. Each run judges every open
-     pull request, one run at a time, so a late red flips the verdict and no stale read lands last.
+     pull request, one run at a time, so a run starting turns a head pending, a late red flips the
+     verdict, and no stale read lands last.
      Changing the rule means changing `quality/`, `.github/` or the tool,
      all sensitive, so it takes an independent review and only applies once merged. Reviews reach
      it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the

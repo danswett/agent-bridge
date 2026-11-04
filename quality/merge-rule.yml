@@ -79,6 +79,12 @@ sensitive_paths:
   - src/AgentBridge.Host/HostSettings.cs # authorization settings
   - src/AgentBridge.App.Core/Transfers.cs # signs commands
   - pwa/js/transfer.js # signs commands
+  # Trust consent, launch permissions, approval eligibility and delivery to the right session.
+  - pwa/js/launch.js
+  - pwa/js/ui/launch-view.js
+  - pwa/js/answers.js
+  - pwa/js/answer-service.js
+  - pwa/js/host-session.js
   # The PWA's build and its packages: what's served to every phone.
   - pwa/tools/build-site.mjs
   - pwa/package.json

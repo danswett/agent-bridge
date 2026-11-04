@@ -15,11 +15,13 @@ name: Merge rule
 #    labelled or unlabelled.
 #  - status: a receipt or any other status posted on a head (statuses this workflow posts with its
 #    own token start no workflow, so it can't loop).
-#  - workflow_run: any other workflow finished on a pull request, so a late red flips the verdict
-#    (a test keeps the list complete). That includes the review relay in merge-rule-review.yml:
-#    pull_request_review runs the pull request's copy of a workflow, which mustn't post statuses.
-#  - check_suite: a check from an app other than GitHub Actions finished (code scanning's
-#    CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run above.
+#  - workflow_run: any other workflow started or finished on a pull request. Started, so a new run
+#    or a rerun on an already-green head turns the verdict pending at once (Perf, dispatched by
+#    hand, is required by nothing else); finished, so a late red flips it. A test keeps the list
+#    complete. That includes the review relay in merge-rule-review.yml: pull_request_review runs
+#    the pull request's copy of a workflow, which mustn't post statuses.
+#  - check_suite: a check from an app other than GitHub Actions was requested or finished (code
+#    scanning's CodeQL). Actions' own suites start no check_suite workflow, hence workflow_run.
 #  - schedule and workflow_dispatch: a backstop for anything the events missed. That includes
 #    Dependabot's: runs it triggers may get a read-only token, so their posts can fail (allowed
 #    below), and the next scheduled run posts instead.
@@ -35,9 +37,9 @@ on:
   status:
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI, CodeQL, Dependencies, HA contract drift, IaC scan, Merge rule review relay, Pages, Perf, Relay deploy, Workflow lint]
-    types: [completed]
+    types: [requested, in_progress, completed]
   check_suite:
-    types: [completed]
+    types: [requested, rerequested, completed]
   schedule:
     # Every 10 minutes. GitHub may run it later under load; the events above do the prompt work.
     - cron: '*/10 * * * *'
