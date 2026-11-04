@@ -10,6 +10,8 @@ public static class HostOps
     public const string Capability = "host.manage";
     public const string AgentReadinessCapability = "host.agents";
     public const string AgentsRefresh = "host.agents.refresh";
+    public const string AgentSetupCapability = "host.agents.setup";
+    public const string AgentsSetup = "host.agents.setup";
 
     public const string Status = "host.status";
     // Answers with the status, then sends a host.status event whenever it changes.
@@ -139,3 +141,9 @@ public sealed record SettingsRequest(bool? RemoteApproval = null, string? Name =
     IReadOnlyList<string>? RemoteFolderTrustDevicesWas = null, bool? DevBoxKeepAwake = null);
 
 public sealed record SettingsResult(HostSettingsView Settings, bool RestartRequired, bool Conflict = false);
+
+public sealed record AgentSetupRequest(string Agent, string Action);
+
+// A failure can leave owned, repairable partial work. Neither completion nor a restart is
+// evidence of authentication, hook trust or a successful fresh session.
+public sealed record AgentSetupResult(bool Completed, string Detail, bool RestartRequired);

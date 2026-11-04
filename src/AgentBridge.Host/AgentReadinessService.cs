@@ -27,7 +27,8 @@ public sealed class AgentReadinessService(
     readonly CancellationTokenSource stop = new();
     AgentReadinessReport? report;
     Task loop = Task.CompletedTask;
-    long revision;
+    long scanStarted;
+    long scanCompleted;
     int started;
 
     public TimeSpan Interval { get; init; } = TimeSpan.FromMinutes(10);
@@ -77,15 +78,17 @@ public sealed class AgentReadinessService(
         finally { intake.Unsubscribe(notices); }
     }
 
-    public async Task<AgentReadinessReport> RefreshAsync(CancellationToken ct = default)
+    public async Task<AgentReadinessReport> RefreshAsync(CancellationToken ct = default, bool fresh = false)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, ct);
-        var before = Interlocked.Read(ref revision);
+        var before = fresh ? Interlocked.Read(ref scanStarted) : Interlocked.Read(ref scanCompleted);
         await scan.WaitAsync(lifetime.Token);
         try
         {
-            // Overlapping checks share the scan that just finished instead of running the CLIs twice.
-            if (Interlocked.Read(ref revision) != before && Snapshot is { } checkedAlready) { return checkedAlready; }
+            // Explicit checks may share a scan only if it started after their request, so
+            // queued callers observe mutations without adding another full scan each.
+            if (Interlocked.Read(ref scanCompleted) > before && Snapshot is { } checkedAlready) { return checkedAlready; }
+            var currentScan = Interlocked.Increment(ref scanStarted);
             var (state, problem) = IntakeState.Load(profile);
             var rows = new List<AgentReadiness>();
             foreach (var launcher in Launchers.All)
@@ -94,7 +97,7 @@ public sealed class AgentReadinessService(
                 rows.Add(await CheckAsync(launcher, state, problem, lifetime.Token));
             }
             Volatile.Write(ref report, new AgentReadinessReport(time.GetUtcNow(), rows, readOnly()));
-            Interlocked.Increment(ref revision);
+            Interlocked.Exchange(ref scanCompleted, currentScan);
         }
         finally { scan.Release(); }
         Changed?.Invoke();

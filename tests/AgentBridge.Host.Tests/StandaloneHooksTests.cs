@@ -10,6 +10,7 @@ using AgentBridge.Protocol;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Host.Delivery.Launch;
 using AgentBridge.Host.Migration;
+using AgentBridge.Local;
 using Xunit;
 
 public sealed class StandaloneHooksTests : IDisposable
@@ -91,6 +92,96 @@ public sealed class StandaloneHooksTests : IDisposable
         await Setup.InstallAsync(agent, true, TextWriter.Null);
         Assert.Equal(before, Listing());
         Assert.All(codex.Calls, c => Assert.Equal("list", c[2]));
+    }
+
+    [Fact]
+    public async Task Settings_setup_uses_the_owned_backend_and_requires_an_explicit_restart()
+    {
+        var service = new AgentSetupService(Setup, () => null);
+
+        var installed = await service.ApplyAsync(new AgentSetupRequest("agency", "install"));
+
+        Assert.True(installed.Completed);
+        Assert.True(installed.RestartRequired);
+        Assert.True(service.RestartRequired);
+        Assert.True(File.Exists(Owner("copilot")));
+        Assert.NotNull(IntakeState.Load(Profile).State);
+        Assert.Contains("start new agent sessions", installed.Detail);
+
+        var removed = await service.ApplyAsync(new AgentSetupRequest("copilot", "remove"));
+
+        Assert.True(removed.Completed);
+        Assert.False(File.Exists(Registration("copilot")));
+        Assert.True(File.Exists(Hook));
+    }
+
+    [Fact]
+    public async Task A_failed_Settings_setup_reports_partial_work_and_can_be_repaired()
+    {
+        var service = new AgentSetupService(Setup, () => null);
+        codex.FailPlugin = true;
+
+        var failed = await service.ApplyAsync(new AgentSetupRequest("codex", "install"));
+
+        Assert.False(failed.Completed);
+        Assert.Contains("incomplete", failed.Detail);
+        Assert.True(File.Exists(Owner("codex")));
+        Assert.Null(IntakeState.Load(Profile).State);
+        codex.FailPlugin = false;
+
+        Assert.True((await service.ApplyAsync(new AgentSetupRequest("codex", "install"))).Completed);
+        Assert.NotNull(IntakeState.Load(Profile).State);
+    }
+
+    [Fact]
+    public async Task Settings_setup_refuses_read_only_and_host_shutdown_without_writes()
+    {
+        var before = Listing();
+        var service = new AgentSetupService(Setup, () => "fixture read-only host");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ApplyAsync(new AgentSetupRequest("claude", "install")));
+        using var stop = new CancellationTokenSource();
+        await stop.CancelAsync();
+        var stopped = new AgentSetupService(Setup, () => null, stop.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.ApplyAsync(new AgentSetupRequest("claude", "install")));
+
+        Assert.Equal(before, Listing());
+        Assert.False(service.RestartRequired);
+        Assert.False(stopped.RestartRequired);
+    }
+
+    [Fact]
+    public async Task Settings_setup_serializes_agents_and_rechecks_read_only_after_waiting()
+    {
+        Directory.CreateDirectory(Homes.Codex);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        codex.WaitOnList = async () => { entered.TrySetResult(); await release.Task; };
+        var service = new AgentSetupService(Setup, () => active);
+        var first = service.ApplyAsync(new AgentSetupRequest("copilot", "install"));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = service.ApplyAsync(new AgentSetupRequest("claude", "install"));
+        Assert.False(second.IsCompleted);
+        active = "fixture read-only change while queued";
+        release.SetResult();
+
+        Assert.False((await first).Completed);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => second);
+        Assert.False(File.Exists(Owner("copilot")));
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Theory]
+    [InlineData("unknown", "install")]
+    [InlineData("claude", "unknown")]
+    public async Task Unknown_Settings_setup_actions_do_not_mutate_configuration(string agent, string action)
+    {
+        var before = Listing();
+        var service = new AgentSetupService(Setup, () => null);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.ApplyAsync(new AgentSetupRequest(agent, action)));
+
+        Assert.Equal(before, Listing());
+        Assert.False(service.RestartRequired);
     }
 
     [Fact]
@@ -866,28 +957,30 @@ public sealed class StandaloneHooksTests : IDisposable
         public bool FailMarketplace;
         public bool FailListing;
         public Action? OnList;
+        public Func<Task>? WaitOnList;
         public string? LegacyMarketplace;
         public readonly List<string[]> Calls = [];
-        public Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
+        public async Task<CommandResult> RunAsync(string executable, IReadOnlyList<string> arguments, TimeSpan timeout, CancellationToken cancellationToken)
         {
             Calls.Add(arguments.ToArray());
             if (arguments.SequenceEqual(new[] { "plugin", "marketplace", "list", "--json" }))
             {
                 OnList?.Invoke();
-                if (FailListing) { return Task.FromResult(new CommandResult(true, false, 1, "private-cli-output")); }
+                if (WaitOnList is { } wait) { await wait().WaitAsync(cancellationToken); }
+                if (FailListing) { return new CommandResult(true, false, 1, "private-cli-output"); }
                 var path = OperatingSystem.IsWindows() ? @"\\?\" + Root : Root;
                 var entry = new JsonObject { ["name"] = "agent-bridge", ["root"] = path };
                 var marketplaces = Present ? new JsonArray(entry) : new JsonArray();
                 if (LegacyMarketplace is { } legacy) { marketplaces.Add(new JsonObject { ["name"] = legacy, ["root"] = Path.Combine(Root, "missing-legacy") }); }
-                return Task.FromResult(new CommandResult(true, false, 0,
-                    new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString()));
+                return new CommandResult(true, false, 0,
+                    new JsonObject { ["marketplaces"] = marketplaces }.ToJsonString());
             }
             if (arguments[1] == "marketplace")
             {
-                if (FailMarketplace) { return Task.FromResult(new CommandResult(true, false, 1, "private-cli-output")); }
+                if (FailMarketplace) { return new CommandResult(true, false, 1, "private-cli-output"); }
                 Present = arguments[2] == "add";
             }
-            return Task.FromResult(new CommandResult(true, false, FailPlugin && arguments[1] == "add" ? 1 : 0, ""));
+            return new CommandResult(true, false, FailPlugin && arguments[1] == "add" ? 1 : 0, "");
         }
     }
 }

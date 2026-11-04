@@ -211,6 +211,35 @@ public sealed class AgentReadinessTests : IDisposable
     }
 
     [Fact]
+    public async Task A_fresh_check_after_setup_does_not_reuse_a_scan_that_started_before_the_mutation()
+    {
+        locator.Installed["claude"] = "claude.exe";
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        commands.Run = async ct => { entered.TrySetResult(); return await release.Task.WaitAsync(ct); };
+        await using var service = Service(timeout: TimeSpan.FromMinutes(1));
+
+        var beforeSetup = service.RefreshAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Task<AgentReadinessReport> afterSetup;
+        Task<AgentReadinessReport> overlappingCheck;
+        try
+        {
+            new IntakeState(f.Runtime, Path.Combine(f.Root, "bridge"), "test", f.Time.GetUtcNow()) { Homes = Homes }.Save(Profile);
+            Directory.CreateDirectory(f.ClaudeHome);
+            File.WriteAllText(Path.Combine(f.ClaudeHome, "agent-bridge-owner.json"), JsonSerializer.Serialize(new { version = 1, profile = Profile }));
+            afterSetup = service.RefreshAsync(fresh: true);
+            overlappingCheck = service.RefreshAsync(fresh: true);
+        }
+        finally { release.TrySetResult(new CommandResult(true, false, 0, "1.2.3")); }
+        var reports = await Task.WhenAll(beforeSetup, afterSetup, overlappingCheck).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Contains("owned setup record", Agent(reports[1], "claude").Hooks.Detail);
+        Assert.Contains("owned setup record", Agent(reports[2], "claude").Hooks.Detail);
+        Assert.Equal(2, commands.Calls.Count);
+    }
+
+    [Fact]
     public async Task A_runner_that_ignores_its_timeout_cannot_hold_a_scan_forever()
     {
         locator.Installed["claude"] = "claude.exe";

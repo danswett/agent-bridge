@@ -490,8 +490,17 @@ async Task<int> ServeAsync(HostHandover handover)
     PublishCredential();
     // agent-ha-bridge's state for the app's status, looked for at most every few seconds.
     var agentHaCached = haProbe is null ? () => null : HostControl.Cached(() => OperatingSystem.IsWindows() ? haProbe.Active() : null, () => Environment.TickCount64);
-    await using var agentReadiness = new AgentReadinessService(identity.Folder,
-        new IntakeState.AgentHomes(options.CopilotHome, options.ClaudeHome, options.CodexHome),
+    var agentHomes = new IntakeState.AgentHomes(options.CopilotHome, options.ClaudeHome, options.CodexHome)
+    {
+        ClaudeConfigDirExplicit = options.ClaudeConfigDirExplicit,
+    };
+    var codexEnvironment = new Dictionary<string, string> { ["CODEX_HOME"] = agentHomes.Codex };
+    var agentSetup = OperatingSystem.IsWindows() ? new AgentSetupService(new StandaloneHooks(identity.Folder,
+        agentHomes, Path.Combine(AppContext.BaseDirectory, "agent-bridge-host-hook.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agent-ha-bridge"),
+        ServeReadOnly, agentLocator, new BatchFileRunner(new CommandRunner(codexEnvironment), codexEnvironment)),
+        ServeReadOnly, stop.Token) : null;
+    await using var agentReadiness = new AgentReadinessService(identity.Folder, agentHomes,
         settings.Launch, agentLocator, new VersionCommandRunner(), ServeReadOnly, intake);
     var control = new HostControl(new HostControlOptions
     {
@@ -521,6 +530,7 @@ async Task<int> ServeAsync(HostHandover handover)
         ReadOnly = () => ReadOnlyReason() ?? agentHaCached(),
         ReadOnlyNow = ServeReadOnly,
         Agents = agentReadiness,
+        AgentSetup = agentSetup,
         SignIn = async (relay, show, ct) =>
         {
             using var http = new HttpClient();

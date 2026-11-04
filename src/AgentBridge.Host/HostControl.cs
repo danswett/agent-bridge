@@ -53,6 +53,7 @@ public sealed class HostControlOptions
     public Func<string?> ReadOnly { get; init; } = () => null;
     public Func<string?>? ReadOnlyNow { get; init; }
     public AgentReadinessService? Agents { get; init; }
+    public AgentSetupService? AgentSetup { get; init; }
 }
 
 // The host's management ops (AgentBridge.Local.HostOps), for the desktop app on the local
@@ -80,6 +81,7 @@ public sealed class HostControl
         running = options.Running;
         if (options.Updates is { } updates) { updates.AsksChanged += Changed; }
         if (options.Agents is { } agents) { agents.Changed += Changed; }
+        if (options.AgentSetup is { } setup) { setup.Changed += Changed; }
         relay = options.LocalOnly ? new RelayStatus(RelayState.Off, Detail: "this host serves this machine's apps only (--local-only)")
             : options.Account() is null ? new RelayStatus(RelayState.SignedOut, options.Relay()?.ToString())
             : new RelayStatus(RelayState.Connecting, options.Relay()?.ToString());
@@ -111,6 +113,7 @@ public sealed class HostControl
     }
 
     public bool HasAgentReadiness => options.Agents is not null;
+    public bool HasAgentSetup => options.AgentSetup is not null;
 
     HostStatus StatusLocked(bool fresh = false)
     {
@@ -132,7 +135,7 @@ public sealed class HostControl
             AgentHaBridge = options.AgentHaBridge(),
             HomeAssistant = options.HomeAssistant(),
             Settings = now,
-            RestartRequired = now != running,
+            RestartRequired = now != running || options.AgentSetup?.RestartRequired == true,
             Log = options.Log,
             UpdateAsks = options.Updates?.Asks is { Count: > 0 } asks ? asks : null,
             ReadOnly = fresh && options.ReadOnlyNow is { } afresh ? afresh() : options.ReadOnly(),
@@ -170,7 +173,10 @@ public sealed class HostControl
             case HostOps.Subscribe:
                 return Subscribe(channel);
             case HostOps.AgentsRefresh when options.Agents is not null:
-                return await options.Agents.RefreshAsync();
+                return await options.Agents.RefreshAsync(fresh: true);
+            case HostOps.AgentsSetup when options.AgentSetup is not null:
+                return await options.AgentSetup.ApplyAsync(Read<AgentSetupRequest>(data)
+                    ?? throw new ArgumentException("Agent setup needs an agent and an action."));
             case HostOps.SignIn:
                 return await SignInAsync(Read<SignInRequest>(data) ?? new SignInRequest());
             case HostOps.SignInCancel:
