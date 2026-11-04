@@ -3,8 +3,10 @@ using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Core.Usage;
 using AgentBridge.Protocol;
+using AgentBridge.Relay;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -94,6 +96,13 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     static async Task SeeAsync(Device who, string peer) => await who.Relay.WaitForPeerAsync(p => p.Id == peer, Patience);
+
+    async Task AnnounceAsync(Device watcher)
+    {
+        var before = watcher.Relay.Snapshot;
+        await relay.App.Services.GetRequiredService<RelayHub>().RosterChangedAsync(watcher.Relay.AccountId);
+        await Wait.UntilAsync(() => !ReferenceEquals(before, watcher.Relay.Snapshot), "a new presence message", Patience);
+    }
 
     static JsonElement Result(JsonElement response)
     {
@@ -445,6 +454,43 @@ public sealed class UsageSharingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task One_missing_snapshot_keeps_usage_and_only_two_consecutive_wire_snapshots_forget_it()
+    {
+        var desk = await HostAsync("Desk", []);
+        var old = await relay.ConnectAsync(token, "Old laptop", "host");
+        await SeeAsync(desk.Device, old.Id);
+        Assert.Equal(1, desk.Store.Take([Claude(12, Now)], new UsageReader(old.Id, "Old laptop")));
+        await old.DisposeAsync();
+        await Wait.UntilAsync(() => desk.Device.Relay.Snapshot.Known?.Any(k => k.Id == old.Id) == true, "the offline laptop", Patience);
+        var roster = relay.App.Services.GetRequiredService<MachineRoster>();
+
+        Assert.Null(roster.Forget("1", old.Id, _ => false));
+        await AnnounceAsync(desk.Device);
+        Assert.DoesNotContain(desk.Device.Relay.Snapshot.Presence, p => p.Id == old.Id);
+        Assert.DoesNotContain(desk.Device.Relay.Snapshot.Known!, k => k.Id == old.Id);
+        Assert.Equal(0, await desk.Peers.PassAsync());
+        Assert.Single(desk.Store.Entries);
+        // Polling the same message again must not confirm a transient omission.
+        Assert.Equal(0, await desk.Peers.PassAsync());
+        Assert.Single(desk.Store.Entries);
+
+        await roster.ConnectedAsync("1", old.Id, "Old laptop", "host");
+        roster.Disconnected("1", old.Id, "host");
+        await AnnounceAsync(desk.Device);
+        Assert.Contains(desk.Device.Relay.Snapshot.Known!, k => k.Id == old.Id);
+        // Skip a usage pass over this recovery: the next pass must still see that it happened.
+        Assert.Null(roster.Forget("1", old.Id, _ => false));
+        await AnnounceAsync(desk.Device);
+        Assert.Equal(0, await desk.Peers.PassAsync());
+        Assert.Single(desk.Store.Entries);
+
+        await AnnounceAsync(desk.Device);
+        Assert.Null(desk.Device.Relay.Snapshot.Previous!.Previous);
+        Assert.Equal(0, await desk.Peers.PassAsync());
+        Assert.Empty(desk.Store.Entries);
+    }
+
+    [Fact]
     public async Task A_reading_taken_by_a_machine_the_account_has_forgotten_is_neither_kept_nor_taken_from_another_host()
     {
         var desk = await HostAsync("Desk", [() => Copilot(40, Now)]);
@@ -460,6 +506,7 @@ public sealed class UsageSharingTests : IAsyncLifetime
 
         Assert.Null(await phone.Relay.ForgetAsync(oldId));
         await Wait.UntilAsync(() => desk.Device.Relay.Known is { } k && k.All(m => m.Id != oldId), "the desk to hear it was forgotten", Patience);
+        await AnnounceAsync(desk.Device);
         await SeeAsync(desk.Device, vm.Device.Id);
         Assert.Equal(1, await desk.Peers.PassAsync());
 

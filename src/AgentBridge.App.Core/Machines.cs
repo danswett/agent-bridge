@@ -518,8 +518,7 @@ public sealed class RelayFleetLink : IFleetLink
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
 
-    // Both from one presence message (RelayClient.Snapshot, #206), so a machine coming online is
-    // in one list or the other, never neither, which would read as forgotten.
+    // Capture one presence message rather than mix the lists from before and after a reconnect.
     public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot
     {
         get

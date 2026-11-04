@@ -143,11 +143,12 @@ public sealed class UsagePeers : IAsyncDisposable
         return since >= MinimumGap && seen.GetValueOrDefault(id) > at;
     }
 
-    // A machine forgotten from the account's roster takes the readings it took with it. Only with a
-    // roster to say so: without one (an older relay, or one not yet read) nothing is inferred.
+    // An older relay can briefly omit a disconnecting host from both lists. Require two actual
+    // consecutive presence messages, both with a roster, before dropping its cached readings.
     void ForgetGone(PresenceSnapshot snap)
     {
-        if (Members(snap) is not { } account) { return; }
+        if (Members(snap) is not { } account || snap.Previous is not { } before || Members(before) is not { } previous) { return; }
+        account.UnionWith(previous);
         if (store.Forget(account.Contains) is > 0 and var n) { log($"usage: dropped {n} reading(s) taken by machines no longer the account's"); }
     }
 

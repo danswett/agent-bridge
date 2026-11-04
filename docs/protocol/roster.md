@@ -63,12 +63,23 @@ after a newer one. So the last `presence` a device has received is the account a
 two in a row are in the order things happened. (Before #151 they could arrive out of order, and an
 older one arriving last listed a machine forgotten a moment earlier until the next change.)
 
-The .NET transport publishes both lists together as `RelayClient.Snapshot`. Readers that
-infer account membership, including host usage sharing and the app's fleet, capture that
-snapshot once rather than read `Presence` and `Known` separately: those reads could straddle
-a reconnect and briefly mistake the returning host for a forgotten one (#206). A captured
-snapshot remains unchanged by later messages. Its `Known` stays null when absent on the
-wire, so an older relay never causes cached usage to be forgotten.
+The relay captures `devices` under the account's devices lock, but the roster has its own
+lock. Disconnect bookkeeping therefore happens before removing the device slot, under
+the devices lock; Forget uses the same lock order. Admission publishes the new slot before
+recording the host, so the device remains visible during roster loading. `known` excludes
+the captured device slots, not the roster's separate online counts: a replaced socket
+can still be finishing after its replacement leaves. Closing or kicking a socket uses
+the same disconnect path. A host is thus visible in at least one list across these transitions.
+
+The .NET transport publishes both lists together as `RelayClient.Snapshot`. Membership
+readers capture it once rather than combine separate reads across messages (#206).
+Captured snapshots stay unchanged. `Previous` holds exactly the preceding wire message,
+with no older history. Host usage sharing retains any machine present in either list of
+either snapshot: only two consecutive roster-bearing messages omitting it confirm
+forgetting. Repeated polls of one snapshot do not count twice, and an intervening valid
+message breaks the omission even if a poll skipped it. This protects cached readings
+from an older relay's disconnect window. Missing `known` remains null and breaks that
+confirmation; a relay without a roster never causes cached usage to be forgotten.
 
 ## `forget` and `forget-result`
 

@@ -383,6 +383,27 @@ public class RosterTests
     static RosterDocument Read(MemoryRosterStore store, MachineRoster roster, string account) =>
         JsonSerializer.Deserialize<RosterDocument>(store.ReadAsync(roster.NameOf(account), default).Result!.Body, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_host_leaving_presence_is_known_even_while_disconnect_or_replacement_bookkeeping_lags(bool replaced)
+    {
+        var (roster, _) = Replica(new MemoryRosterStore(), Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+        var host = Id();
+        await roster.ConnectedAsync("1", host, "desk", "host");
+        if (replaced) { await roster.ConnectedAsync("1", host, "desk replacement", "host"); }
+        var devices = new HashSet<string>(StringComparer.Ordinal) { host };
+        Assert.Empty(roster.Known("1", devices.Contains)!);
+
+        // The old hub could remove the slot before updating Online; an older replaced socket
+        // can also keep that count above zero after the replacement leaves.
+        devices.Remove(host);
+        Assert.Contains(roster.Known("1", devices.Contains)!, m => m.Id == host);
+        roster.Disconnected("1", host, "host");
+        Assert.Contains(roster.Known("1", devices.Contains)!, m => m.Id == host);
+        if (replaced) { roster.Disconnected("1", host, "host"); }
+    }
+
     [Fact]
     public async Task A_host_in_a_reconnect_loop_costs_one_write_per_interval_and_a_reader_writes_nothing()
     {

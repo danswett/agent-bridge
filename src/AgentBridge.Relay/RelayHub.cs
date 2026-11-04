@@ -147,9 +147,13 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
         catch (Exception e) when (e is WebSocketException or OperationCanceledException) { end = "dropped"; }
         finally
         {
+            // Update roster bookkeeping before removing the slot, under the broadcast lock.
             // Only remove this connection: a replacement may already hold the slot.
-            lock (devices) { ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn)); }
-            roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+            lock (devices)
+            {
+                roster.Disconnected(conn.Account.Id, conn.DeviceId, conn.Kind);
+                ((ICollection<KeyValuePair<string, Connection>>)devices).Remove(new(conn.DeviceId, conn));
+            }
             await conn.CloseAsync((int)WebSocketCloseStatus.NormalClosure, "");
             metrics.Disconnected(end);
             log.LogInformation("disconnect {Conn} ({End}) after {Seconds:F0}s; frames in {In} out {Out}, bytes in {BytesIn} out {BytesOut}",
@@ -284,7 +288,10 @@ public sealed class RelayHub(RelayOptions options, Tokens tokens, PushGateway pu
             metrics.Roster("forget", "not-allowed");
             error = "not-allowed";
         }
-        else { error = roster.Forget(conn.Account.Id, machine, devices.ContainsKey); }
+        else
+        {
+            lock (devices) { error = roster.Forget(conn.Account.Id, machine, devices.ContainsKey); }
+        }
         log.LogInformation("forget {Conn} {Kind}: {Outcome}", conn.Tag, conn.Kind, error ?? "ok");
         await conn.SendJsonAsync(new { t = "forget-result", id, machine = Wire.IsDeviceId(machine) ? machine!.ToLowerInvariant() : null, error });
         if (error is null) { await BroadcastPresenceAsync(conn.Account.Id); }

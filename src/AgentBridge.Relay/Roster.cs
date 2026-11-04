@@ -329,7 +329,9 @@ public sealed class MachineRoster
         lock (a)
         {
             if (!a.Loaded) { return null; }
-            return [.. a.Machines.Values.Where(m => !online(m.Id) && !a.Online.ContainsKey(m.Id)).OrderByDescending(m => m.LastSeen)];
+            // Presence's slots are authoritative. Online counts can still include a replaced
+            // socket whose teardown lags behind its replacement leaving the slots.
+            return [.. a.Machines.Values.Where(m => !online(m.Id)).OrderByDescending(m => m.LastSeen)];
         }
     }
 

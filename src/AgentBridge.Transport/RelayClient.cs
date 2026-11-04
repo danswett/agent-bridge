@@ -12,11 +12,13 @@ public sealed record PresenceEntry(string Id, string Name, string Kind, DateTime
 // (docs/protocol/roster.md).
 public sealed record KnownMachine(string Id, string Name, string Kind, DateTimeOffset LastSeen);
 
-// One presence message's two lists, published together (#206): read as one, a machine coming
-// online is in one list or the other, never neither, so it never reads as forgotten in between.
-// Two properties read one after the other could straddle a message, and the x64 store order the
-// readers once leaned on is not Arm64's.
-public sealed record PresenceSnapshot(IReadOnlyList<PresenceEntry> Presence, IReadOnlyList<KnownMachine>? Known);
+// One presence message's lists, published together (#206), never mixed across messages.
+public sealed record PresenceSnapshot(IReadOnlyList<PresenceEntry> Presence, IReadOnlyList<KnownMachine>? Known)
+{
+    // Exactly one preceding wire message, not a poll: older relays can omit a host transiently.
+    // Its own Previous is null, so the latest snapshot does not retain an unbounded history.
+    public PresenceSnapshot? Previous { get; init; }
+}
 
 public sealed record PushResult(int Status, string? Error);
 
@@ -393,7 +395,8 @@ public sealed class RelayClient : IAsyncDisposable
                 d.GetProperty("id").GetString()!, d.GetProperty("name").GetString()!,
                 d.GetProperty("kind").GetString()!, d.GetProperty("lastSeen").GetDateTimeOffset()))]
             : null;
-        Volatile.Write(ref snapshot, new PresenceSnapshot(presence, known));
+        var previous = Snapshot with { Previous = null };
+        Volatile.Write(ref snapshot, new PresenceSnapshot(presence, known) { Previous = previous });
         PresenceChanged?.Invoke(presence);
     }
 
