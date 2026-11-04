@@ -579,8 +579,8 @@ internal sealed class BackgroundWork
     }
 
     // The main agent's own delegates still kept (those with no parent), by id, with their names,
-    // and the task calls that started them: all of them, not the Limits.Subagents listed, for
-    // history's reports of delegates whose starts are on an older page.
+    // and the task calls that started every delegate kept: all of them, not the Limits.Subagents
+    // listed, for history's reports of delegates whose starts are on an older page.
     public (Dictionary<string, string?> Names, Dictionary<string, string> Calls) MainAgents()
     {
         var names = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -591,7 +591,8 @@ internal sealed class BackgroundWork
         var calls = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (call, key) in _agentByCall)
         {
-            if (_agents.TryGetValue(key, out var a) && a.Parent is null) { calls[call] = a.Id; }
+            // Nested delegates' calls too: history ends a synchronous one when its call returns.
+            if (_agents.TryGetValue(key, out var a)) { calls[call] = a.Id; }
         }
         return (names, calls);
     }
@@ -613,6 +614,9 @@ internal sealed class BackgroundWork
         }
         return owners;
     }
+
+    // The delegates kept that run synchronously: their task call returning ends them.
+    public HashSet<string> SyncAgents() => [.. _agents.Values.Where(a => !a.Background).Select(a => a.Id)];
 
     // session.get { id, agent }: the entry with its own words and tools.
     public Subagent? Detail(string agentId, DateTimeOffset? processStartedAt, IReadOnlySet<string> waiting)

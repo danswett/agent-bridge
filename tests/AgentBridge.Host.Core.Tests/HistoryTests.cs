@@ -599,6 +599,61 @@ public class HistoryTests
         Assert.Equal(Enumerable.Range(0, 6).Select(i => "p" + i), seen);
     }
 
+    // Found in review of #292: a synchronous delegate's task call failing ends it, and live drops
+    // what it was asking (BackgroundWork.TaskCallDone); history left the approval pending.
+    [Fact]
+    public async Task A_synchronous_delegates_approval_is_withdrawn_when_its_task_call_fails_as_live()
+    {
+        await using var s = new Copilot_();
+        var session = await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Helper", prompt = "help" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2, mode: "sync"),
+            Copilot.ToolStart("c7", "powershell", new { command = "git push" }, 3, agentId: "agent-1"),
+            Copilot.Permission("req7", "c7", Copilot.Prompts["commands"], 4, agentId: "agent-1"),
+            Copilot.Event("tool.execution_complete", new { toolCallId = "t1", success = false, error = new { message = "failed" } }, 5));
+
+        Assert.Null(session.Question);
+        var asked = (await s.Page()).Turns!.Single().Parts.Single(p => p.Kind == HistoryPartKind.Question);
+        Assert.Equal(("agent-1", QuestionOutcome.Cancelled), (asked.Question!.Agent, asked.Outcome!.Value));
+    }
+
+    [Fact]
+    public async Task A_synchronous_delegate_started_on_an_older_page_still_withdraws_its_approval_when_its_call_fails()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Helper", prompt = "help" }, 2),
+            Copilot.SubagentStarted("t1", "agent-1", 2, mode: "sync"),
+            Copilot.User("meanwhile", 3),
+            Copilot.Permission("req7", "c7", Copilot.Prompts["commands"], 4, agentId: "agent-1"),
+            Copilot.Event("tool.execution_complete", new { toolCallId = "t1", success = false, error = new { message = "failed" } }, 5));
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var together = (await s.Page(limit: 2)).Turns![1];
+        Assert.Equal(QuestionOutcome.Cancelled, alone.Parts.Single(p => p.Kind == HistoryPartKind.Question).Outcome);
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+    }
+
+    // Found in review of #292: a delegate's start was named from its task call when that call
+    // was on the page, and from the start's own description when not.
+    [Fact]
+    public async Task A_delegate_start_has_the_same_name_whatever_page_its_task_call_is_on()
+    {
+        await using var s = new Copilot_();
+        await s.After(
+            Copilot.User("go", 1),
+            Copilot.ToolStart("t1", "task", new { description = "Lead job", prompt = "lead" }, 2),
+            Copilot.User("next", 3),
+            Copilot.SubagentStarted("t1", "agent-1", 4));
+
+        var alone = (await s.Page(limit: 1)).Turns!.Single();
+        var together = (await s.Page(limit: 2)).Turns![1];
+        Assert.Equal("Lead job", alone.Parts.Single(p => p.Delegate is not null).Delegate!.Name);
+        Assert.Equal(JsonSerializer.Serialize(together, ProtocolJson.Options), JsonSerializer.Serialize(alone, ProtocolJson.Options));
+    }
+
     // Found in review of #292: who made a delegate's call was known only from the page's own
     // records, so its permission prompt in the next turn lost whose it was when read alone.
     [Fact]

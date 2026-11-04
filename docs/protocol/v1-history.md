@@ -257,6 +257,15 @@ does not; one whose first 4 KiB carry a turn's bytes is an `unreadable` turn, wh
 live parser can see of it too. A host reads at most two pages at once; a further request waits
 its turn.
 
+The worst case for one request, every budget spent: it **parses** at most 72 MiB, the 32 MiB above
+plus the one line it always examines (at most 32 MiB) and the one turn it always builds (at most
+8 MiB); it holds at most one line (32 MiB) in memory at a time. It **reads** at most 256 MiB back from
+the cursor or the end looking for prompts, plus one 1 MiB chunk; 64 MiB forward from the start
+twice (the start's time, and whether the oldest turn found is the first); 256 MiB forward from a
+`before` to find its line's end, and that line (at most 32 MiB) to check its id; and the turns it
+builds (at most 40 MiB, by the parsing budget). Each is a fixed ceiling, whatever the transcript
+holds.
+
 ### The cursor
 
 `before` is **opaque and host-issued**. A client stores it and sends it back unchanged with the
@@ -323,9 +332,9 @@ turn was the latest, with the same `from`.
 | `response` | `assistant.message` `content`, main agent's | `assistant` `text` blocks | `agent_message`; `item_completed` `AgentMessage`; an assistant `message` response item; `task_complete`'s `last_agent_message`. Codex writes a reply in more than one of these: the same text is one part |
 | `reasoning` | `assistant.message` `reasoningText`, main agent's | `thinking` blocks | `agent_reasoning`; a `reasoning` response item's `summary`; `Reasoning` `summary_text` (only when the user asked for summaries); one part per summary, the same text once |
 | `tool` | `tool.execution_start` and `_complete`, main agent's | `tool_use`, ended by its `tool_result` | `exec_command_*`, `patch_apply_*`, `mcp_tool_call_*`, `CommandExecution`, function, custom, shell and web search calls |
-| `question` (form) | `ask_user`'s `tool.execution_start`, a delegate's too (with its `agent`, as live; the delegate's call is no `tool` part); `answered` at `human_response.recorded` (its content is the `answer`) or the call's end; `cancelled` when the delegate asking aborts, shuts down or fails | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
-| `question` (approval) | `permission.requested`; `approved` or `denied` from `permission.completed`'s `result.kind` | not in the transcript (agent-ha-bridge's hook only): none | `exec_approval_request`, `apply_patch_approval_request`, always `answerAtMachine`; `approved` when the call then starts, else `unknown` |
-| `delegate` `started` | `subagent.started` with no parent, named from its `task` call; not one whose `task` call a delegate made (a nested delegate's start may name its parent only by that call's stamp) | an `Agent` call's `tool_result` with `async_launched` | `CollabAgentToolCall` `spawn_agent` the session itself called |
+| `question` (form) | `ask_user`'s `tool.execution_start`, a delegate's too (with its `agent`, as live; the delegate's call is no `tool` part); `answered` at `human_response.recorded` (its content is the `answer`) or the call's end; `cancelled` when the delegate asking aborts, shuts down or fails, or its synchronous `task` call returns, as live | `AskUserQuestion`'s `tool_use`; `answered` at its `tool_result` (its text is the `answer`) | none: Codex asks nothing as a form |
+| `question` (approval) | `permission.requested`; `approved` or `denied` from `permission.completed`'s `result.kind`; `cancelled` as a form question's, for a delegate's; a main agent's left with no `permission.completed` stays `unknown` in the latest turn, as it stays pending live, and is `cancelled` once a later prompt starts | not in the transcript (agent-ha-bridge's hook only): none | `exec_approval_request`, `apply_patch_approval_request`, always `answerAtMachine`; `approved` when the call then starts, else `unknown` |
+| `delegate` `started` | `subagent.started` with no parent, named as the session names it, else from its `task` call; not one whose `task` call a delegate made (a nested delegate's start may name its parent only by that call's stamp) | an `Agent` call's `tool_result` with `async_launched` | `CollabAgentToolCall` `spawn_agent` the session itself called |
 | `delegate` `reported` | `subagent.completed` (`done`), `subagent.failed` (`failed`), or an `agent_idle` notification (`done`) | a task notification Claude marked as one | a `subagent_notification` that says it completed (`done`), errored or was interrupted (`failed`), or the session's own multi-agent call (a wait) returning that state |
 | The start | the first record's time | the first record's time | `session_meta`'s time |
 

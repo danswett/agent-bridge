@@ -29,6 +29,9 @@ internal sealed record HistorySeed(IReadOnlyDictionary<string, string?> Delegate
     // Who made the delegates' calls the session keeps (BackgroundWork.CallOwners): a permission
     // prompt or a nested start naming a call made on an older page is still that delegate's.
     public IReadOnlyDictionary<string, string> CallOwners { get; init; } = new Dictionary<string, string>();
+
+    // The delegates the session knows run synchronously (BackgroundWork.SyncAgents).
+    public IReadOnlySet<string> SyncAgents { get; init; } = new HashSet<string>();
 }
 
 // One request's read of a session's transcript (docs/protocol/v1-history.md): backwards from the
@@ -56,7 +59,7 @@ internal sealed class HistoryReader(HistoryBudgets budgets, byte[] key)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         using (handle)
         {
-            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners), seed.AgentTurns).Page(before, limit); }
+            try { return new Pass(this, handle, sessionId, dialect, new HistoryContext(seed.Delegates, seed.Calls, remoteApproval, seed.CallOwners, seed.SyncAgents), seed.AgentTurns).Page(before, limit); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return HistoryResult.NotAvailable(NotRead); }
         }
     }

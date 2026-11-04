@@ -8,7 +8,7 @@ namespace AgentBridge.Host.Core.Conversation;
 // What one read of a session's history knows beyond the turn it is building: the delegates it has
 // seen start and what each is called, the main agent's task calls, whose tool calls are whose. One
 // per request; turns are built oldest first, so a start is known before its report.
-internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null)
+internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed, IReadOnlyDictionary<string, string> calls, bool remoteApproval, IReadOnlyDictionary<string, string>? owners = null, IReadOnlySet<string>? sync = null)
 {
     // The main agent's own delegates, by id, with their names: those this read saw start, and those
     // the session lists now (its subagents with no parent), whose starts may be on an older page.
@@ -22,6 +22,10 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
     readonly Dictionary<string, string> _callAgent = new(owners ?? new Dictionary<string, string>(), StringComparer.Ordinal);
     readonly Dictionary<string, string> _callDelegate = new(calls, StringComparer.Ordinal);
     readonly Dictionary<string, string> _permissions = new(StringComparer.Ordinal);
+    // Delegates known to run synchronously, whose task call returning ends them: those this read
+    // saw start, and those the session knows (BackgroundWork.SyncAgents), so it does not depend on
+    // the page.
+    readonly HashSet<string> _sync = new(sync ?? new HashSet<string>(), StringComparer.Ordinal);
     const int Keep = 4096;
 
     // A delegate's runs as the main agent hears of them within one turn, as BackgroundWork keeps
@@ -72,8 +76,20 @@ internal sealed class HistoryContext(IReadOnlyDictionary<string, string?> listed
 
     public bool IsMain(string agent) => _main.ContainsKey(agent);
 
+    public void KnowMode(string agent, bool background)
+    {
+        if (background) { _sync.Remove(agent); }
+        else if (_sync.Count < Keep) { _sync.Add(agent); }
+    }
+
+    public bool IsSync(string agent) => _sync.Contains(agent);
+
     public void Started(TurnBuilder turn, string agent, string? name, SubagentKind kind, DateTimeOffset at)
     {
+        // The session's name for it first, as a report's: the task call that gave the name may be
+        // on an older page, and the start's own description is not always the same (found in
+        // review of #292).
+        if (listed.TryGetValue(agent, out var known) && known is not null) { name = known; }
         if (_main.Count < Keep || _main.ContainsKey(agent)) { _main[agent] = name ?? _main.GetValueOrDefault(agent); }
         if (RunOf(agent) is { } run) { (run.Working, run.Said, run.Owed) = (true, false, 0); }
         turn.Delegate(new DelegateEvent { Agent = agent, Event = DelegateEventKind.Started, Name = name, Kind = kind }, at);
@@ -216,6 +232,10 @@ internal sealed class CopilotHistory : HistoryDialect
                     var id = Json.Str(data, "toolCallId");
                     var failed = Json.Bool(data, "success") == false || Json.Get(data, "error") is not null;
                     turn.ToolEnded(id, !failed, at);
+                    // A synchronous delegate's task call returning ends it, failed or not
+                    // (BackgroundWork.TaskCallDone): what it was still asking is asked of no one,
+                    // as live, instead of left pending (found in review of #292).
+                    if (context.DelegateOfCall(id) is { } ended && context.IsSync(ended)) { turn.Withdrawn(ended, at); }
                     if (id is not null && turn.Pending(id))
                     {
                         var result = Json.Obj(data, "result") is { } r ? Json.Str(r, "content") : null;
@@ -246,15 +266,18 @@ internal sealed class CopilotHistory : HistoryDialect
                 }
             // Only the main agent's own delegates: a nested one's start names its parent, or its
             // task call was made by a delegate (the parent then is only that call's stamp).
-            case "subagent.started" when agent is not null && Json.Str(data, "parentId") is null or "":
+            case "subagent.started" when agent is not null:
                 {
                     var call = Json.Str(data, "toolCallId");
+                    context.KnowMode(agent, Json.Str(data, "executionMode") == "background");
+                    var parented = Json.Str(data, "parentId") is { Length: > 0 };
                     if (call is not null)
                     {
-                        var nested = context.AgentOfCall(call) is not null;
+                        var nested = parented || context.AgentOfCall(call) is not null;
                         context.CallStarted(call, agent);
                         if (nested) { break; }
                     }
+                    if (parented) { break; }
                     var name = DelegateName.Clean(context.TaskDescription(call)) ?? DelegateName.Clean(Json.Str(data, "agentDescription"))
                         ?? DelegateName.Clean(Json.Str(data, "agentDisplayName"))
                         ?? DelegateName.Clean(Json.Str(data, "agentType") ?? Json.Str(data, "agentName"));
