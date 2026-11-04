@@ -25,6 +25,13 @@ namespace AgentBridge.Host.Core.Parsing;
 //     null default opens Other too, with the caret on it; Up there is the Other box's `onExit`,
 //     which puts the caret on the LAST option, so a walk counted from the top row ends a row off.
 //     Only an absent default, or one naming an option, leaves Other closed (#700).
+//   * ask_user's form is drawn with `enforceSchemaConstraints` false (its elicitation has no
+//     source, so `elicitationSource !== JD` is false), and the Yes / No list (`Oxn`) then has a
+//     third row, Other (`_ = !d`, `A = EK`). A string default opens on that row: a non-empty one
+//     with Other's box open and the text in it (`C`, `useState(_ && C !== void 0)`), an empty
+//     one with the caret on it (`typeof r == "string" ? _ ? EK : 0`). The walk's Up then leaves
+//     the caret on No (the box's exit, `G`, or Up from the row), so Yes recorded No, and No's Down
+//     reopened Other (#768). A boolean, null or absent default opens on Yes or No.
 //
 // Problem is set for a field whose input cannot be planned with certainty (keywords the CLI
 // reads differently, or not at all); Input is then what the CLI would draw.
@@ -66,7 +73,7 @@ public static partial class CopilotFieldSchema
             case "number" or "integer":
                 return (Input.Number, [], null);
             case "boolean":
-                return (Input.Boolean, [new(Literal(true), null), new(Literal(false), null)], null);
+                return (Input.Boolean, [new(Literal(true), null), new(Literal(false), null)], YesOrNo(p));
             case null when !Has(p, "enum") && !Has(p, "oneOf") && !Has(p, "anyOf"):
                 return (Input.Text, [], null);
             default:
@@ -125,6 +132,13 @@ public static partial class CopilotFieldSchema
         if (def.ValueKind == JsonValueKind.Null) { return "opens on its Other box (its default is null)"; }
         return choices.Count(c => SameScalar(c.Value, def)) == 1 ? null : "has a default that is not one of its options";
     }
+
+    // A Yes / No list's default: absent, null, true or false. Anything else is not walked: a string
+    // opens it on its Other row, and any other value is not one the host has read the list with.
+    static string? YesOrNo(JsonElement p) =>
+        !p.TryGetProperty("default", out var def) || def.ValueKind is JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null
+            ? null
+            : "has a default that is not Yes or No (a text default opens it on its Other row)";
 
     // A checkbox list's default: absent or null (nothing ticked), or a list naming its options,
     // each once.

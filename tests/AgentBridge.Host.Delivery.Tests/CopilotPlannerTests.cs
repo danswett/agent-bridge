@@ -494,6 +494,39 @@ public class CopilotPlannerTests
         Assert.Equal([(U, true)], Keys(plan));
     }
 
+    [Theory]
+    // ask_user's Yes / No list has a third row, Other (`Oxn` with enforceSchemaConstraints off).
+    // A text default opens it there, and the walk's Up leaves the caret on No: Yes recorded No,
+    // and No's Down reopened Other (#768). Refused before any key, for either answer.
+    [InlineData("\"yes\"")]
+    [InlineData("\"\"")]
+    [InlineData("1")]
+    [InlineData("{}")]
+    public void A_yes_or_no_field_whose_default_is_not_yes_or_no_is_refused_before_any_key(string @default)
+    {
+        using var doc = JsonDocument.Parse($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": {{@default}} } } } }""");
+
+        var (form, problem) = CopilotForm.Read(doc.RootElement);
+
+        Assert.Null(form);
+        Assert.Contains("not Yes or No", problem);
+        Assert.Contains("answer it at the machine", problem);
+    }
+
+    [Theory]
+    // A boolean default opens on its own row (`Oxn`: N = r === void 0 || r ? 0 : 1); the walk's
+    // one Up reaches Yes either way, and a Down then picks No, never past it into Other.
+    [InlineData("true", true, U)]
+    [InlineData("true", false, U + D)]
+    [InlineData("false", true, U)]
+    [InlineData("false", false, U + D)]
+    public void A_yes_or_no_field_whose_default_is_yes_or_no_is_walked_to_either_answer(string @default, bool answer, string keys)
+    {
+        var plan = Plan($$"""{ "message": "m", "requestedSchema": { "properties": { "ok": { "type": "boolean", "default": {{@default}} } } } }""", Answer(new { ok = answer }));
+
+        Assert.Equal([(keys, true)], Keys(plan));
+    }
+
     [Fact]
     public void A_form_that_reads_differently_from_the_question_the_client_saw_does_not_match()
     {
