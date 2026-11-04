@@ -58,7 +58,7 @@ on a running client. "Pops" means the element, or what is next to it, changes in
 | Details values | §6.2; ages and counts in place | `ItemsControl` synced by key, SessionCardViewModel.Panes.cs:41-65; values are text bindings; type ramp is tabular (DesignResources.xaml:174-206) | Facts rebuilt with `replaceChildren`, session-card.js:836 | Yes (as specified) |
 | Status words (row, header, strip) | §5.3 Status glyph: "The words change at once" | Glyph cross-fades, StatusGlyphView.xaml.cs:119-120; words bind | Glyph cross-fades, glyph.js:42-68; words set | Words pop (as specified) |
 | Title weight (unread) | §5.3 Activity dot: "The title's weight changes at once" | Dot fades, SessionRow.xaml.cs:133-134 | Dot `enter`/`leave`, session-card.js:882-884 | Weight pops (as specified) |
-| Banners (offline, update, replaced, stuck) | §5.3 Toast and banner: slides 12 in and fades, leaves the same way | `Motion.Banner`: enters with Toast, MainWindow.xaml.cs:43-44, SessionsPage.xaml.cs:26; **no exit**; content below jumps | `reveal()` enters, motion.js:110-114 (main.js:206, 229, 655); **hiding sets `hidden` at once**; content below jumps | **Leaving pops on both, contrary to the spec**; content below jumps on both |
+| Banners (offline, update, replaced, stuck) | §5.3 Toast and banner: slides 12 in and fades, leaves the same way | `Motion.Banner`: enters with Toast, MainWindow.xaml.cs:43-44, SessionsPage.xaml.cs:26; **no exit**; content below jumps | `reveal()` enters, motion.js:110-114. Since #677 (merged at f3cde89b), `conceal()` (motion.js:119, through `hideStatus`, main.js:207) makes a leaving banner fade and rise 12 toward its edge as an inert copy, **but its space closes at once, so the content below jumps up**, as the Toast and banner row's PWA cell now says | Windows: **leaving pops, contrary to the spec**, and content below jumps. PWA: the banner no longer pops, but **the content below still jumps** (a known contradiction of this proposal). Proposed: the space eases closed over `shift` as the copy leaves, and what was below eases up with it (Easing aside) |
 | Host and offline notes | Toast and banner | `FleetNote`, an InfoBar in `ListNotes` (SessionsPage.xaml:153-160), enters through `Motion.Banner` (SessionsPage.xaml.cs:26) and closes at once | `hidden`, sessions-page.js:715-716, 762-763 | **Leaving, yes** (Windows); **both ways** (PWA) |
 | Toasts | Toast and banner | System notifications (the OS's own) | None in-app | n/a |
 | Menus (row, Sort, overflow) | §5.3 Menu and flyout | `MenuFlyout`'s own | `enter`/`leave` with `menu`, row-menu.js:50, 61 | No |
@@ -79,8 +79,15 @@ From the table, against the signed-off text (not this proposal):
    in the strip".
 3. **Windows: Needs you is still a lane,** where §6.1 (#253) made it a toggle, and the lane's
    box appears by `Visibility`.
-4. **Windows and PWA: a banner leaves at once,** where Toast and banner says it "leaves the same
-   way, quicker". The PWA's host and offline notes don't use `reveal()` at all.
+4. **Windows: a banner leaves at once,** where Toast and banner says it "leaves the same way,
+   quicker". The PWA's app banners have left that way since #677 (f3cde89b); its host and
+   offline notes still don't use `reveal()` at all.
+
+Known contradiction of this proposal, shipped to spec: **the PWA's app banners close their space
+at once** (#677, f3cde89b). The banner fades and rises 12 as it goes, but the content below
+jumps up into its space. Under this proposal that space eases closed over `shift` while the
+banner leaves, and what was below eases up with it; the Toast and banner row's PWA cell changes
+to match (§9, the PWA issue).
 
 Not a contradiction, but loose: the `disclosure` token has a `fast out` exit, which neither the
 row's text ("closes the space at once") nor either client uses; closing just removes the content.
@@ -319,8 +326,9 @@ Tested with Playwright 1.56 in Chromium and WebKit
 - **PWA.** `motion.js` gains `flip(container, mutate)`: measure the children, run `mutate`,
   measure again, and `animate()` each moved child's translate from the old place, cancelling
   and retargeting a running one from its current transform. Tools and timeline events move
-  from `replaceChildren` to a keyed merge. `reveal()` gets a `conceal()`, and every banner and
-  note uses them. `watchDisclosures` gains the space (clip) and the exit fade. `watchMoves`
+  from `replaceChildren` to a keyed merge. `conceal()` (#677) eases the banner's space closed
+  over `shift` instead of closing it at once, and every banner and note uses `reveal()` and
+  `conceal()`. `watchDisclosures` gains the space (clip) and the exit fade. `watchMoves`
   (session-card.js) already sees geometry changes; it needs to count a running shift as moving
   until it ends.
 - **Apple (later).** `withAnimation(.spring(response: 0.25, dampingFraction: 1))` around list
@@ -428,9 +436,9 @@ Once the owner decides, the proposal banner comes off §5.3 and these issues get
    prompt's space eases closed; banners leave (4) and push; Details values and
    status words cross-fade; the click guard re-arms on a shift.
 2. **Windows app: Needs you as a toggle** (3), if not already tracked under #253.
-3. **PWA: nothing pops.** `flip()` and `conceal()` in motion.js; Tools and timeline events as
-   keyed lists; the #489 prompt line fades in; the disclosure's space and exit fade (Show
-   prompt included); banners and notes through
+3. **PWA: nothing pops.** `flip()` in motion.js; Tools and timeline events as keyed lists;
+   the #489 prompt line fades in; the disclosure's space and exit fade (Show prompt
+   included); `conceal()` (#677) eases a banner's space closed, and notes go through
    `reveal`/`conceal` (4); value cross-fades; usage bars ease; `watchMoves` counts a shift; and
    motion.spec.mjs tests for each.
 4. **Apple and Android:** nothing to file until they are built; their columns in §5.3 are
