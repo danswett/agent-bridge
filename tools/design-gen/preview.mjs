@@ -19,12 +19,20 @@ const GLYPHS = [
   ['needs', 'needs'], ['working', 'active'], ['delegating', 'active'], ['idle', 'neutral'], ['done', 'neutral'], ['failed', 'danger'],
   ['ended', 'neutral'], ['working', 'agent', 'working + driven'],
 ];
+// The Slipgates status marks (docs/design/brand.md, Status glyphs): [glyph, role, caption, badge, badge's role].
+const MARKS = [
+  ['mark-needs', 'needs', 'needs'], ['mark-working', 'active', 'working'], ['mark-delegating', 'active', 'delegating'],
+  ['mark-idle', 'neutral', 'idle'], ['mark-finished', 'neutral', 'finished'], ['mark-failed', 'danger', 'failed'],
+  ['mark-ended', 'neutral', 'ended'], ['mark-driven', 'agent', 'working + driven'],
+  ['mark-finished', 'neutral', 'finished + driven', 'mark-finished-badge', 'agent'], ['mark-background', 'active', 'background'],
+  ['mark-offline', 'neutral', 'offline'], ['mark-connecting', 'neutral', 'connecting'],
+];
 
 export function previewHtml(root = repoRoot) {
   const design = path.join(root, 'design');
   const tokens = loadTokens(design);
   const glyphs = readDesignDir(path.join(design, 'glyphs'), 'glyph');
-  const icons = readDesignDir(path.join(design, 'icons'), 'icon').filter((i) => i.name !== 'mark');
+  const icons = readDesignDir(path.join(design, 'icons'), 'icon').filter((i) => !i.name.startsWith('mark'));
   const roles = roleTokens(tokens);
   const surfaces = surfaceTokens(tokens);
   const vars = (theme) => [...roles, ...surfaces].map((t) => `${t.css}: ${t[theme]};`).join(' ');
@@ -50,6 +58,10 @@ export function previewHtml(root = repoRoot) {
     <h2>Status glyphs (16 grid, shown at 32)</h2>
     <div class="grid">${GLYPHS.map(([g, role, label]) => `
       <figure class="${role}"><span class="glyph">${use(`glyph-${g}`)}${label ? use('glyph-driven-badge') : ''}</span><figcaption>${label ?? g}</figcaption></figure>`).join('')}
+    </div>
+    <h2>Slipgates status marks (48 grid, shown at 32)</h2>
+    <div class="grid">${MARKS.map(([g, role, label, badge, badgeRole]) => `
+      <figure class="${role}"><span class="glyph">${use(`glyph-${g}`)}${badge ? use(`glyph-${badge}`, badgeRole) : ''}</span><figcaption>${label}</figcaption></figure>`).join('')}
     </div>
     <h2>Icons (20 grid, shown at 28)</h2>
     <div class="grid">${icons.map((i) => `

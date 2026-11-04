@@ -1180,23 +1180,27 @@ question, as choosing its row does.
     the window narrows to a phone's with one open. Forward to it opens the delegate again,
     finished meanwhile or not.
 
-**App icon (#167):** the mark ([`mark.svg`](../../design/icons/mark.svg)) on a dark plate
-(`#0F1F22`), in each platform's container. It is one icon in every theme, since no platform
-swaps an app icon with the theme, so the mark is always Bridge's dark value. The sizes are in
+**App icon (#167):** the Slipgates mark ([`mark.svg`](../../design/icons/mark.svg),
+[brand.md §4](brand.md#4-the-mark)) in white on an ink plate
+(`#0E1114`), in each platform's container. It is one icon in every theme, since no platform
+swaps an app icon with the theme. The sizes are in
 `tokens.json` `appIcon`, on each container's own grid, and `tools/design-gen` draws every
 file from them ([design/README.md](../../design/README.md#app-icon)).
 - **Windows:** a tile: a rounded square with radius 14 on a 72 grid, a 1-unit edge
-  (`#23464A`) inside it so the tile still shows on a dark taskbar, and the mark 44 across. At
-  24 px and under, the tile has radius 3 on a 16 grid, no edge, and the mark 13 across, so
-  the ring stays a pixel thick. The app's `.ico` holds every size Windows asks for, from 16 to
-  256, and serves the exe, the window, the tray and the installer.
+  (`#2A2F36`) inside it so the tile still shows on a dark taskbar, and the mark 44 across. At
+  24 px and under, the tile has no edge and draws the mark's native cut for its size
+  ([`mark-16`, `mark-20` and `mark-24`](brand.md#42-clear-space-and-sizes)), so every bar
+  lands on whole pixels. The app's `.ico` holds every size Windows asks for, from 16 to 256,
+  and serves the exe, the window, the tray and the installer.
 - **macOS:** a rounded square on Apple's 1024 grid, 824 across with radius 185 and the mark
-  504 across. Its drop shadow comes with the asset catalog (P5).
+  504 across. Its drop shadow comes with the asset catalog (P5). The menu bar draws the
+  native 16 px cut as a template image. Both are generated into `design/apple/Assets.xcassets`.
 - **iOS:** full bleed and opaque, with the mark 44 across on a 72 grid. The system masks it
-  to its squircle.
+  to its squircle. Its dark and tinted appearances are the mark alone on transparency.
 - **Android:** an adaptive icon on the 108 dp grid: the plate is the background layer, the
   mark 40 across is the foreground, and the mark in white is the monochrome layer for themed
-  icons.
+  icons. The notification icon is the native 24 px cut in white. Both are generated into
+  `design/android`.
 - **PWA:** the Windows tile as the favicon and the manifest's `any` icons (192 and 512), the
   iOS icon at 180 as `apple-touch-icon`, and maskable icons (192 and 512) that are full bleed
   with the mark 35 across on a 72 grid. That keeps the mark inside the safe zone at Android's
