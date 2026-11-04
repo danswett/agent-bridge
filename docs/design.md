@@ -411,7 +411,9 @@ Why this specific suite:
 
 Per-message: compress-then-encrypt (deflate per message, so there is no
 cross-message dictionary that mixes attacker-chosen and secret text). Each frame carries
-a sequence number, so replay and reorder inside a session are rejected.
+a sequence number, so replay and reorder inside a session are rejected. Deflate is in from #603,
+negotiated in the handshake's introductions so older peers are unaffected
+([v1-sessions.md](protocol/v1-sessions.md#deflate)).
 
 **Spike S2 result (2026-10-27, `danswett/agent-bridge#2`): GO.** Independent .NET (BCL
 only) and WebCrypto (no WASM) implementations of `Noise_XX_P256_AESGCM_SHA256` agree

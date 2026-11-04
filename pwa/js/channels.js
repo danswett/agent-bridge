@@ -11,6 +11,60 @@ export const KIND = Object.freeze({ msg1: 1, msg2: 2, msg3: 3, transport: 4, clo
 export const HEADER = 9;
 const EMPTY = new Uint8Array(0);
 
+// Per-message deflate, as src/AgentBridge.Transport/MessageDeflate.cs (#603): a message's
+// plaintext is JSON, which starts with '{', or MARKER and raw DEFLATE. Each message on its own,
+// compressed and then encrypted, and only to a host whose introduction said it inflates.
+export const MARKER = 1;
+export const MIN_DEFLATE = 512;
+// What a sender may send uncompressed (a Noise message less its tag), and so the most a deflated
+// one may inflate to.
+const MAX_MESSAGE = 65535 - 16;
+export const DEFLATES = (() => {
+  try { return typeof CompressionStream === 'function' && typeof DecompressionStream === 'function' && !!new CompressionStream('deflate-raw'); } catch { return false; }
+})();
+
+const drain = async (readable, max = Infinity) => {
+  const reader = readable.getReader();
+  const parts = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) { return concat(...parts); }
+    total += value.length;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`a deflated message inflates to more than ${max} bytes`);
+    }
+    parts.push(value);
+  }
+};
+
+// The message to send: deflated, or as it is where that is not smaller.
+export async function pack(plain) {
+  if (plain.length < MIN_DEFLATE) { return plain; }
+  const z = await drain(new Blob([plain]).stream().pipeThrough(new CompressionStream('deflate-raw')));
+  return z.length + 1 < plain.length ? concat(new Uint8Array([MARKER]), z) : plain;
+}
+
+// Fed to the inflater 1 KiB at a time, as it asks: one chunk of deflate inflates to about 1 MiB at
+// most, so a bomb is stopped there rather than after its whole 64 KB has inflated (to ~64 MiB).
+const slices = (bytes, size = 1024) => {
+  let at = 0;
+  return new ReadableStream({
+    pull(c) {
+      if (at >= bytes.length) { c.close(); return; }
+      c.enqueue(bytes.slice(at, at += size));
+    },
+  });
+};
+
+// The JSON a received message carries; a deflated one may inflate to no more than a sender may
+// send uncompressed, so a small message cannot unpack into a large one.
+export async function unpack(message, max = MAX_MESSAGE) {
+  if (message.length === 0 || message[0] !== MARKER) { return message; }
+  return drain(slices(message.subarray(1)).pipeThrough(new DecompressionStream('deflate-raw')), max);
+}
+
 // Binds the handshake to both routing ids and the channel id, so a relay cannot splice one
 // channel's messages into another or present a channel to a different device.
 export const prologue = (initiator, responder, channelId) =>
@@ -23,7 +77,7 @@ export class Channel {
   closed = false;
 
   constructor(set, peerId, id, hs) {
-    Object.assign(this, { set, peerId, id, hs, peerName: '', peerKind: '' });
+    Object.assign(this, { set, peerId, id, hs, peerName: '', peerKind: '', peerInflates: false });
     this.ready = new Promise((res, rej) => { this.resolveReady = res; this.rejectReady = rej; });
     // Nobody may be awaiting `ready` when a channel fails; that is not an unhandled error.
     this.ready.catch(() => {});
@@ -39,7 +93,8 @@ export class Channel {
   send(message) {
     if (this.closed) { return Promise.reject(new Error('the channel is closed')); }
     const p = this.#sendChain.then(async () => {
-      this.frame(KIND.transport, await this.hs.send.encryptWithAd(EMPTY, utf8.encode(JSON.stringify(message))));
+      const plain = utf8.encode(JSON.stringify(message));
+      this.frame(KIND.transport, await this.hs.send.encryptWithAd(EMPTY, this.peerInflates ? await pack(plain) : plain));
     });
     this.#sendChain = p.catch(() => {});
     return p;
@@ -122,10 +177,11 @@ export class ChannelSet {
         if (await deviceIdOf(ch.hs.remoteStatic) !== ch.peerId) { throw new Error("the peer's key does not match its device id"); }
         ch.peerName = String(intro.name ?? '');
         ch.peerKind = String(intro.kind ?? '');
-        ch.frame(KIND.msg3, await ch.hs.writeMessage(utf8.encode(JSON.stringify({ name: this.name, kind: 'pwa' }))));
+        ch.peerInflates = DEFLATES && intro.deflate === true;
+        ch.frame(KIND.msg3, await ch.hs.writeMessage(utf8.encode(JSON.stringify({ name: this.name, kind: 'pwa', ...(DEFLATES ? { deflate: true } : {}) }))));
         ch.resolveReady(ch);
       } else if (kind === KIND.transport && ch.hs.isComplete) {
-        const message = JSON.parse(fromUtf8.decode(await ch.hs.receive.decryptWithAd(EMPTY, body)));
+        const message = JSON.parse(fromUtf8.decode(await unpack(await ch.hs.receive.decryptWithAd(EMPTY, body))));
         // The channel may have been closed while this was being decrypted.
         if (!ch.closed) { ch.onmessage?.(message); }
       } else if (kind === KIND.close) {

@@ -162,6 +162,26 @@ that took its first event, or the first after subscribing again, as the baseline
 events lost just then). If it sees a gap (it shouldn't, since Noise is ordered),
 it calls `sessions.subscribe` again.
 
+### Deflate
+
+Each message above is one Noise transport message whose plaintext is its JSON. From #603 a
+larger one may go deflated instead: the byte `0x01`, then the JSON as raw DEFLATE (RFC 1951, no
+zlib header; `CompressionStream("deflate-raw")` in a browser). It is compressed first and then
+encrypted, each message on its own with no dictionary carried over from another. Session JSON
+deflates to well under half.
+
+* A peer says it inflates in its handshake introduction, `"deflate": true`, beside `name` and
+  `kind`. A message goes deflated only to a peer that said so. Older peers say nothing, and get
+  JSON as before.
+* A sender deflates only messages of 512 bytes or more, and sends the deflated form only when it
+  is smaller.
+* The limit on a message is unchanged: its JSON must fit one transport message, deflated or not.
+  A receiver refuses one that inflates past that. It also refuses one that does not inflate at
+  all, and either ends the channel, as a frame that fails to decrypt does.
+
+Round trips are unchanged. Fewer bytes cross, which matters most for the first snapshot over a
+slow link.
+
 ## Ops
 
 ### `hello`

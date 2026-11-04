@@ -50,6 +50,8 @@ public sealed class SecureChannel : IProtocolChannel
     public bool Initiator { get; }
     public string PeerName { get; internal set; } = "";
     public string PeerKind { get; internal set; } = "";
+    // The peer's introduction said it inflates (MessageDeflate): larger messages go to it deflated.
+    public bool PeerInflates { get; internal set; }
     public byte[]? PeerStatic => Handshake.RemoteStatic;
     public byte[] HandshakeHash => Handshake.HandshakeHash;
     // The relay connection this channel runs over: its account, and the presence it reports.
@@ -135,6 +137,9 @@ public sealed class SecureChannel : IProtocolChannel
         if (plain.Length > MaxMessageBytes) { throw new MessageTooLargeException(plain.Length); }
         ThrowIfClosed();
         var send = Handshake.Send ?? throw new InvalidOperationException("the channel is not open yet");
+        // Deflated before it is encrypted: ciphertext does not compress. Never larger than plain,
+        // so what fit above still fits.
+        var body = PeerInflates ? MessageDeflate.Pack(plain) : plain;
         var encrypted = false;
         try
         {
@@ -146,7 +151,7 @@ public sealed class SecureChannel : IProtocolChannel
                 hub.RequirePeer(this);
                 ThrowIfClosed();
                 encrypted = true;
-                return send.EncryptWithAd([], plain);
+                return send.EncryptWithAd([], body);
             }, ct);
         }
         catch (Exception e) when (encrypted)
