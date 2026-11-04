@@ -16,8 +16,11 @@ public static class Program
         // First: Velopack starts the installed exe with hook arguments on install, update and
         // uninstall, and Run() handles those and exits. The host lives in the app's folder, so
         // it is stopped before an update replaces the folder and started by the new version;
-        // uninstall takes away everything the app put outside it.
+        // uninstall takes away everything the app put outside it. Never a release downloaded
+        // earlier applied at start (Velopack's default): it would skip the release halt list read
+        // just before installing (#580, HaltListUpdater) and the idle rules; AutoUpdater installs it.
         VelopackApp.Build()
+            .SetAutoApplyOnStartup(false)
             .OnBeforeUpdateFastCallback(_ => Lifecycle.BeforeUpdate())
             .OnAfterUpdateFastCallback(_ => Lifecycle.AfterUpdate())
             .OnBeforeUninstallFastCallback(_ => Lifecycle.BeforeUninstall())

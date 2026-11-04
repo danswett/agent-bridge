@@ -1,4 +1,5 @@
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using Microsoft.Win32;
 using Velopack;
 using Velopack.Sources;
@@ -19,6 +20,16 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     public static string FeedFile => Path.Combine(Paths.AppData, "feed.txt");
 
+    // feed.txt's content, "" for the repository's GitHub releases.
+    public static string Feed => File.Exists(FeedFile) ? File.ReadAllText(FeedFile).Trim() : "";
+
+    static readonly HttpClient Rollout = new() { Timeout = TimeSpan.FromSeconds(30) };
+
+    // The release halt list for the feed releases come from now (#580, HaltListUpdater): the
+    // `rollout` release's rollout.json, or the one beside feed.txt's feed.
+    public static Task<ReleaseRollout> ReadRolloutAsync(CancellationToken cancellationToken) =>
+        ReleaseRollout.ReadAsync(ReleaseRollout.Location(Feed, Repository), Rollout, cancellationToken);
+
     public string? InstalledVersion
     {
         get
@@ -30,7 +41,7 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
 
     UpdateManager Manager()
     {
-        var feed = File.Exists(FeedFile) ? File.ReadAllText(FeedFile).Trim() : "";
+        var feed = Feed;
         var key = $"{feed}|{prereleases()}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.HomeAssistant;
+using AgentBridge.Host.Core.Updates;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
@@ -17,21 +18,33 @@ namespace AgentBridge.Host;
 // the package (the app, whose update hook stops the host it manages), replaces the version, and
 // starts the app again in the background for this host's profile, which starts this host. So
 // handing the release over is followed by this host stopping, as serve does on Ctrl+C.
+//
+// Behind the release halt list (#580, ReleaseRollout), as the app's updater is (HaltListUpdater):
+// a check that finds a halted release fails saying so, a list that cannot be read fails it too,
+// and the list is read again once the release is downloaded, just before it is handed over, so a
+// release halted meanwhile is never applied. Nothing here downgrades: a host on a halted release
+// stays on it until a newer one is published.
 sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, Action<string> log, IVelopackLocator? locator = null) : IHostUpdates
 {
     public const string Repository = "https://github.com/danswett/agent-bridge";
+    // Longer than handing over takes, short enough that the list read is the one that decided.
+    static readonly TimeSpan ConfirmedFor = TimeSpan.FromMinutes(5);
+    static readonly HttpClient Rollout = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly object gate = new();
     UpdateManager? manager;
     string? source;
 
     // A release as a check found it, carried in the UpdateRelease the check returned: the install
     // downloads and applies exactly that, from the manager (and so the feed) that found it, never a
-    // same-numbered release another check found since.
-    sealed class Found(UpdateManager manager, UpdateInfo info)
+    // same-numbered release another check found since. Confirmed: when the halt list, read after
+    // the download, last did not halt it.
+    sealed class Found(UpdateManager manager, UpdateInfo info, string feed)
     {
         public UpdateManager Manager { get; } = manager;
         public UpdateInfo Info { get; } = info;
+        public string Feed { get; } = feed;
         public volatile bool Downloaded;
+        public DateTimeOffset? Confirmed;
     }
 
     static Found Of(UpdateRelease release) =>
@@ -73,14 +86,16 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return true; }
     }
 
-    UpdateManager Manager()
+    // The manager for the feed configured now, and that feed ("" for GitHub), whose halt list goes
+    // with what it finds.
+    (UpdateManager Manager, string Feed) Manager()
     {
         lock (gate)
         {
             var feed = Feed();
             var prereleases = Prereleases();
             var key = $"{feed}|{prereleases}";
-            if (manager is not null && source == key) { return manager; }
+            if (manager is not null && source == key) { return (manager, feed); }
             IUpdateSource from = feed.Length == 0
                 ? new GithubSource(Repository, null, prereleases, null)
                 : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
@@ -89,7 +104,7 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
             source = key;
             // The platform's own locator rather than VelopackLocator.Current, which only
             // VelopackApp.Build().Run() sets: that is the app's entry point, and the host has none.
-            return manager = new UpdateManager(from, null, Locator());
+            return (manager = new UpdateManager(from, null, Locator()), feed);
         }
     }
 
@@ -123,18 +138,38 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
         // whatever Velopack does before its first await, would otherwise run on the connector's
         // pass, where the heartbeat waits for it and no timeout reaches it.
         await Task.Yield();
-        var m = Manager();
+        var (m, feed) = Manager();
         var info = await m.CheckForUpdatesAsync().WaitAsync(cancellationToken);
         if (info is null) { return null; }
         var target = info.TargetFullRelease;
-        return new UpdateRelease(target.Version.ToString(), target.NotesMarkdown, ReleasesUrl) { Handle = new Found(m, info) };
+        var version = target.Version.ToString();
+        // Throws when the list cannot be read: nothing is downloaded.
+        if ((await ReadRolloutAsync(feed, cancellationToken)).Halts(version))
+        {
+            log($"update: {version} is on the release halt list ({ReleaseRollout.FileName}); it is not downloaded or installed");
+            throw new ReleaseHaltedException(version);
+        }
+        return new UpdateRelease(version, target.NotesMarkdown, ReleasesUrl) { Handle = new Found(m, info, feed) };
     }
 
+    // The halt list beside the feed the release came from: the `rollout` release's for GitHub.
+    static Task<ReleaseRollout> ReadRolloutAsync(string feed, CancellationToken cancellationToken) =>
+        ReleaseRollout.ReadAsync(ReleaseRollout.Location(feed, Repository), Rollout, cancellationToken);
+
+    // The list read again once downloaded, which may have taken a while: a release halted since is
+    // not handed over (ApplyAndRestart refuses one not confirmed here moments before).
     public async Task DownloadAsync(UpdateRelease release, Action<int> progress, CancellationToken cancellationToken)
     {
         var found = Of(release);
+        found.Confirmed = null;
         await found.Manager.DownloadUpdatesAsync(found.Info, progress, cancellationToken);
         found.Downloaded = true;
+        if ((await ReadRolloutAsync(found.Feed, cancellationToken)).Halts(release.Version))
+        {
+            log($"update: {release.Version}, downloaded, is now on the release halt list ({ReleaseRollout.FileName}); it is not installed");
+            throw new ReleaseHaltedException(release.Version);
+        }
+        found.Confirmed = DateTimeOffset.UtcNow;
     }
 
     // The updater serve hands the connector: none on a read-only host, which may be driven from no
@@ -151,6 +186,11 @@ sealed class VelopackHostUpdates(string dataRoot, string profile, Action stop, A
     {
         var found = Of(release);
         if (!found.Downloaded) { throw new InvalidOperationException($"{release.Version} has not been downloaded here"); }
+        if (found.Confirmed is not { } at || DateTimeOffset.UtcNow - at > ConfirmedFor)
+        {
+            throw new InvalidOperationException($"the release halt list was not read just before installing {release.Version}, so nothing was installed; try again");
+        }
+        found.Confirmed = null;
         found.Manager.WaitExitThenApplyUpdates(found.Info.TargetFullRelease, silent: true, restart: true, RestartArguments(profile));
         log($"updating to {release.Version}: Velopack applies it once this host has exited, and starts the app again, which starts the host");
         stop();

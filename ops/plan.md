@@ -321,7 +321,8 @@ we have. #451 builds the Dev and Beta channels for every platform. Ops adds thre
 its promotion gate:
 - **per-version health:** refusals and disconnects per device for the Dev build, from OBS-2's
   version label, must not exceed the Beta build's;
-- **the halt list** (§6.4) must not name the build;
+- **the halt list** (§6.4) must not name the build, read when the promotion runs; if it can't
+  be read, nothing is promoted;
 - **no hidden coupling to the relay:** a client feature that needs a new relay capability
   checks that the relay advertises it, or is behind a flag (§6.0, "Ordering without
   coupling"). So Beta promotion never waits for a relay approval;
@@ -337,18 +338,27 @@ A promotion re-publishes the same bytes, so a build that's stopped is simply not
 
 ### 6.4 Halt and roll forward ([#580](https://github.com/danswett/agent-bridge/issues/580))
 
-Installs never downgrade (#451). So a bad build is **stopped** by not promoting it and by
-hiding it, and **fixed** by rolling forward. `rollout.json`, published beside the releases,
-lists halted versions:
-- the updater never installs a halted version, even one already downloaded;
-- if the document can't be fetched, it installs nothing new, rather than guessing;
-- a machine already on a halted build gets the fix through an **expedited promotion** of the
-  revert: Dev, then Beta at once, with the reason recorded.
+Installs never downgrade (#451), **not even from a halted build**: the owner's decision on
+#580 dropped the last-known-good downgrade first proposed here. So a bad build is **stopped**
+by not promoting it and by halting it, and **fixed** only by rolling forward. The halt list is
+`rollout.json`, the one asset of the repository's pinned `rollout` pre-release (never marked
+latest), at `releases/download/rollout/rollout.json`; a test machine's feed folder
+(`feed.txt`) carries its own beside `releases.<channel>.json`. It's `{"halt": ["<version>"]}`:
+- the app and the host read it before they download a release, and again just before they
+  install one, so a halted version is never installed, even one already downloaded;
+- if it can't be read, or isn't that shape, they install nothing new and say why, rather than
+  taking it as "nothing halted";
+- a machine already on a halted build stays on it until a newer release, which it takes by the
+  ordinary idle rules. The fix is that release: the revert, through an **expedited promotion**
+  (Dev, then Beta at once, with the reason recorded) once #451's channels exist.
 
-An automatic downgrade to last-known-good would be faster for a host that can't start, but it
-breaks the owner's no-downgrade rule. It's proposed only as an owner-approved exception, and
-only from a halted version (#580, decision 7 on #568). Without it, a machine whose new host
-won't start is reached by a roll-forward sooner instead: REL-3 in §8.
+The owner halts a build with `ops/tools/release-halt.ps1`, which updates the list and marks the
+release's notes as withdrawn; the runbook is
+[runbooks/windows-release.md](runbooks/windows-release.md). The list exists before the first
+build that reads it ships: until it does, those builds install nothing.
+
+A machine whose new host won't start is reached by that roll-forward sooner, never by going
+back: REL-3 in §8.
 
 ### 6.5 PWA ([#582](https://github.com/danswett/agent-bridge/issues/582))
 

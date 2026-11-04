@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentBridge.App.Core;
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 using Microsoft.Extensions.Time.Testing;
@@ -1257,5 +1258,148 @@ public sealed class AutoUpdaterTests : IAsyncLifetime
         Assert.Equal(AutoUpdater.NotInstalled, auto.State.Unavailable);
         Assert.False(auto.State.Installer);
         Assert.Equal(0, updater.Checks);
+    }
+
+    // The release halt list (#580), as the app reads it: what `halt` holds now, null for a list that
+    // cannot be fetched. The app's updater behind it, as App composes it.
+    string? halt = """{"halt":[]}""";
+
+    void BehindTheHaltList() =>
+        shared = new ObservedUpdater(new HaltListUpdater(updater, _ => Task.Run(() =>
+            ReleaseRollout.Parse(halt ?? throw new RolloutUnavailableException("the release halt list could not be fetched: HTTP 404"))), log.Add, time), time);
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_halted_release_is_not_downloaded_and_a_press_is_told_it_was_withdrawn()
+    {
+        prefs = prefs with { AutoUpdate = false };
+        halt = """{"halt":["v0.2.0"]}""";
+        BehindTheHaltList();
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Install);
+        await TwoIdleTicksAsync();
+
+        Assert.Equal(0, updater.Downloads);
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        var last = auto.State.Last!;
+        Assert.Equal((UpdateOutcome.Refused, "0.2.0", Press), (last.Outcome, last.To, last.Request));
+        Assert.Contains("halted", last.Reason);
+        Assert.Null(auto.State.Available);
+    }
+
+    // Halted after it was downloaded, while it waited for the sessions to go idle (or the list lost
+    // meanwhile): the list read again just before the host is stopped keeps it from installing,
+    // then and at every check after.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData("""{"halt":["0.2.0"]}""")]
+    [InlineData(null)]
+    [InlineData("{}")]
+    public async Task A_release_halted_after_it_was_downloaded_is_never_installed_and_the_host_is_not_stopped(string? then)
+    {
+        BehindTheHaltList();
+        await StartAsync();
+        await auto.TickAsync();
+        Assert.Equal(("0.2.0", 1), (auto.Pending, updater.Downloads));
+
+        halt = then;
+        time.Advance(AutoUpdater.IdleFor);
+        await auto.TickAsync();
+
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Null(auto.Pending);
+        Assert.Contains(log, l => l.StartsWith("auto-update: not installing 0.2.0:", StringComparison.Ordinal));
+
+        time.Advance(AutoUpdater.CheckEvery);
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+        Assert.Equal(1, updater.Downloads);
+        Assert.Empty(host.Sent(HostOps.Stop));
+    }
+
+    // No list from the start: nothing is downloaded, rather than taking it as nothing halted.
+    [Theory]
+    [Trait("Category", "Network")]
+    [InlineData(null)]
+    [InlineData("not json")]
+    [InlineData("""{"halt":["0.2"]}""")]
+    public async Task Without_a_halt_list_to_read_nothing_is_downloaded_or_installed(string? list)
+    {
+        halt = list;
+        BehindTheHaltList();
+        await StartAsync();
+
+        await TwoIdleTicksAsync();
+
+        Assert.Equal((1, 0), (updater.Checks, updater.Downloads));
+        Assert.False(updater.Applied);
+        Assert.Empty(host.Sent(HostOps.Stop));
+        Assert.Contains(log, l => l.StartsWith("auto-update: the release halt list", StringComparison.Ordinal));
+    }
+
+    // A list naming other releases changes nothing: the ordinary idle rules decide.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_release_the_halt_list_does_not_name_installs_by_the_ordinary_idle_rules()
+    {
+        halt = """{"halt":["0.1.5"],"note":"ignored"}""";
+        BehindTheHaltList();
+        await StartAsync(null, Make.Session("s1", SessionStatus.Working));
+
+        await TwoIdleTicksAsync();
+        Assert.False(updater.Applied);
+
+        await GoIdleAsync("s1");
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+        Assert.Single(host.Sent(HostOps.Stop));
+    }
+
+    // The owner's rule (#451, #580): never a downgrade, not even from a halted release. A machine on
+    // one is left on it (the feed offers nothing older, and the list never asks for it), and a newer
+    // release rolls it forward by the ordinary rules.
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_machine_on_a_halted_release_stays_on_it_until_a_newer_release_rolls_it_forward()
+    {
+        updater.InstalledVersion = "0.2.0";
+        updater.Found = null;
+        halt = """{"halt":["0.2.0"],"lastKnownGood":"0.1.0"}""";
+        BehindTheHaltList();
+        await StartAsync();
+
+        await AskedAsync(UpdateAskKind.Install);
+        await TwoIdleTicksAsync();
+        Assert.Equal((UpdateOutcome.Current, Press), (auto.State.Last!.Outcome, auto.State.Last.Request));
+        Assert.Equal(0, updater.Downloads);
+        Assert.Empty(host.Sent(HostOps.Stop));
+
+        updater.Found = "0.2.1";
+        time.Advance(AutoUpdater.CheckEvery);
+        await TwoIdleTicksAsync();
+        Assert.True(updater.Applied);
+        Assert.Equal("0.2.0", prefs.UpdatedFrom);
+    }
+
+    // Settings, or anything else, applying without reading the list just before: refused.
+    [Fact]
+    public async Task Nothing_is_applied_that_the_halt_list_was_not_read_for_moments_before()
+    {
+        var gated = new HaltListUpdater(updater, _ => Task.FromResult(ReleaseRollout.Parse(halt!)), log.Add, time);
+        Assert.Equal("0.2.0", await gated.CheckAsync());
+        await gated.DownloadAsync(_ => { });
+
+        Assert.Throws<InvalidOperationException>(gated.ApplyAndRestart);
+        await gated.ConfirmAsync();
+        time.Advance(HaltListUpdater.ConfirmedFor + TimeSpan.FromSeconds(1));
+        Assert.Throws<InvalidOperationException>(gated.ApplyAndRestart);
+        Assert.False(updater.Applied);
+
+        await gated.ConfirmAsync();
+        gated.ApplyAndRestart();
+        Assert.True(updater.Applied);
     }
 }

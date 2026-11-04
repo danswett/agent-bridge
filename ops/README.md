@@ -14,6 +14,7 @@ The SRE plan, and the tools to carry it out, for the relay and everything else w
 | [templates/](templates/) | Incident and review templates |
 | [queries/relay.kql](queries/relay.kql) | Saved Log Analytics queries for the relay |
 | [tools/relay-probe.ps1](tools/relay-probe.ps1) | Read-only outside-in check of a relay |
+| [tools/release-halt.ps1](tools/release-halt.ps1) | **Owner.** Halts a Windows release (the halt list, plan §6.4), and creates that list once with `-Initialize`; `-DryRun` changes nothing |
 
 ## The probe
 

@@ -699,6 +699,14 @@ current, as stage 1 did; so does a host with `homeAssistant.updates.checkForUpda
 looks nothing up, and a read-only host (`delivery.readOnly`), which acts on nothing from another
 device.
 
+Both checks and installs go behind the release halt list (#580, `rollout.json`,
+[app-windows.md](app-windows.md) "The halt list", [ops/plan.md](../ops/plan.md) §6.4): a check
+whose release is halted, or that cannot read the list, is a check that could not be made (below),
+its notes saying `<version> has been halted…` or why the list could not be read, so nothing is
+downloaded; and an install reads the list again once its release is downloaded, and hands over
+none halted since (`failed`, with that reason), nor one whose list was not read moments before.
+Nothing is downgraded: a host already on a halted version stays on it until a newer release.
+
 * **Checks.** At start, every `homeAssistant.updates.checkHours` (0.5, as the daemon's
   `updates.checkHours`; at least 0.1), and on a press of Check, beside the passes so a slow feed
   holds up no card. Until the first answer the entity reports the version installed as current

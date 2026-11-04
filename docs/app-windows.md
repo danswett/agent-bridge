@@ -254,7 +254,25 @@ into one folder with one version. An app update is a host update, so they never 
 * Feed: GitHub Releases of `danswett/agent-bridge` (pre-releases included unless turned
   off; every merge to main publishes one, below), or a folder or URL holding
   `releases.<channel>.json` (`releases.win.json` for x64, `releases.win-arm64.json` for Arm64) in
-  `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM).
+  `%LOCALAPPDATA%\AgentBridge\app\feed.txt` (for testing on a VM), with a halt list,
+  `rollout.json`, beside them (below).
+* **The halt list** (#580, [ops/plan.md](../ops/plan.md) §6.4): the app and the host read
+  `rollout.json`, `{"halt": ["<version>"]}`, before downloading a release they found, and again
+  just before installing one, so a version halted even after it was downloaded is never
+  installed (`ReleaseRollout`, `HaltListUpdater`, `HostUpdates`). From GitHub it's the one asset
+  of the pinned `rollout` pre-release, `releases/download/rollout/rollout.json`, maintained only
+  by the owner with `ops/tools/release-halt.ps1` (which also marks the halted release's notes as
+  withdrawn; [runbook](../ops/runbooks/windows-release.md)); from a `feed.txt` folder or URL,
+  `rollout.json` in it. Read uncached, without the feed's query string in any message. If it
+  can't be read, is over 64 KB, or isn't an object with a `halt` array of versions, nothing new
+  is downloaded or installed, and the check says why (a failed check in Settings and the app's
+  log; `failed` to a device's press), rather than taking it as "nothing halted". A check that
+  finds only a halted release says so ("withdrawn", `refused` to a device's press) and installs
+  nothing. **Nothing is ever downgraded, not even from a halted build** (the owner's decision on
+  #580, and #451's rule): a copy already on a halted version stays on it until a newer release,
+  which it takes by the ordinary rules below. Velopack's install of a downloaded release at app
+  start is off (`SetAutoApplyOnStartup(false)`, Program.cs), since it would skip the list and the
+  idle wait; a downloaded release installs only through the rules below.
 * **One channel per architecture** (#222, `build/app-channels.ps1`). x64 is in Velopack's default
   channel, `win`, as every copy installed before Arm64 builds was packed; Arm64 is in
   `win-arm64`. The channel is recorded in the installed package (`current\sq.version`), and

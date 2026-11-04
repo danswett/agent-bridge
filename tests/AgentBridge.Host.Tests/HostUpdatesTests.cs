@@ -1,5 +1,6 @@
 using AgentBridge.HomeAssistant;
 using AgentBridge.Host;
+using AgentBridge.Host.Core.Updates;
 using Velopack.Locators;
 using Xunit;
 
@@ -98,6 +99,7 @@ public sealed class HostUpdatesTests : IDisposable
             $$"""{"Assets":[{"PackageId":"AgentBridgeApp","Version":"{{version}}","Type":"Full","FileName":"{{file}}","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}]}""";
         File.WriteAllText(Path.Combine(feed, "releases.win.json"), Feed("0.1.601", "AgentBridgeApp-0.1.601-full.nupkg"));
         File.WriteAllText(Path.Combine(feed, "releases.win-arm64.json"), Feed("0.1.602", "AgentBridgeApp-0.1.602-win-arm64-full.nupkg"));
+        File.WriteAllText(Path.Combine(feed, ReleaseRollout.FileName), """{"halt":[]}""");
         Directory.CreateDirectory(Path.Combine(root, "app"));
         File.WriteAllText(Path.Combine(root, "app", "feed.txt"), feed);
         var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
@@ -107,6 +109,98 @@ public sealed class HostUpdatesTests : IDisposable
         var found = await updates.CheckAsync(CancellationToken.None);
 
         Assert.Equal(offered, found?.Version);
+    }
+
+    // An x64 copy at `installed`, reading a feed folder holding `releases` (the halt list beside
+    // it, rollout.json, as halt says: null for none there).
+    VelopackHostUpdates Copy(string installed, string? halt, Action? stopped = null, params string[] releases)
+    {
+        Publish(releases);
+        Halt(halt);
+        Directory.CreateDirectory(Path.Combine(root, "app"));
+        File.WriteAllText(Path.Combine(root, "app", "feed.txt"), Path.Combine(root, "releases"));
+        var packages = Directory.CreateDirectory(Path.Combine(root, "packages")).FullName;
+        var copy = new TestVelopackLocator("AgentBridgeApp", installed, packages, null, null, null, "win");
+        return new VelopackHostUpdates(root, "default", stopped ?? (() => { }), _ => { }, copy);
+    }
+
+    void Publish(params string[] releases)
+    {
+        var feed = Directory.CreateDirectory(Path.Combine(root, "releases")).FullName;
+        var assets = string.Join(",", releases.Select(v =>
+            $$"""{"PackageId":"AgentBridgeApp","Version":"{{v}}","Type":"Full","FileName":"AgentBridgeApp-{{v}}-full.nupkg","SHA1":"0000000000000000000000000000000000000000","SHA256":"0000000000000000000000000000000000000000000000000000000000000000","Size":1}"""));
+        File.WriteAllText(Path.Combine(feed, "releases.win.json"), $$"""{"Assets":[{{assets}}]}""");
+    }
+
+    void Halt(string? halt)
+    {
+        var file = Path.Combine(root, "releases", ReleaseRollout.FileName);
+        if (halt is null) { File.Delete(file); }
+        else { File.WriteAllText(file, halt); }
+    }
+
+    // #580: a halted release is never downloaded, and Home Assistant is told why.
+    [Fact]
+    public async Task A_halted_release_fails_the_check_saying_so_and_nothing_is_downloaded()
+    {
+        var updates = Copy("0.1.600", """{"halt":["v0.1.601"]}""", null, "0.1.601");
+
+        var halted = await Assert.ThrowsAsync<ReleaseHaltedException>(() => updates.CheckAsync(CancellationToken.None));
+
+        Assert.Equal("0.1.601", halted.Version);
+        Assert.Contains("halted", halted.Message);
+    }
+
+    // No halt list, or one that is not a list, is never taken as "nothing halted" (#580).
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("{}")]
+    [InlineData("""{"halts":[]}""")]
+    [InlineData("""{"halt":"0.1.601"}""")]
+    [InlineData("""{"halt":[601]}""")]
+    [InlineData("""{"halt":["latest"]}""")]
+    [InlineData("""["0.1.601"]""")]
+    public async Task A_halt_list_that_is_missing_or_not_a_list_fails_the_check(string? halt)
+    {
+        var updates = Copy("0.1.600", halt, null, "0.1.601");
+
+        await Assert.ThrowsAsync<RolloutUnavailableException>(() => updates.CheckAsync(CancellationToken.None));
+    }
+
+    // #580 and the owner's no-downgrade rule (#451): a copy on a halted release is not offered the
+    // older one before it, only a newer one, which rolls it forward.
+    [Fact]
+    public async Task A_copy_on_a_halted_release_is_never_offered_an_older_one_only_a_newer_one()
+    {
+        var updates = Copy("0.1.601", """{"halt":["0.1.601"]}""", null, "0.1.600", "0.1.601");
+        Assert.Null(await updates.CheckAsync(CancellationToken.None));
+
+        Publish("0.1.600", "0.1.601", "0.1.602");
+        Assert.Equal("0.1.602", (await updates.CheckAsync(CancellationToken.None))?.Version);
+    }
+
+    // A release found, and halted (or the list gone) by the time it is downloaded: the list is read
+    // again then, and nothing is handed over. The package already on disk is the case of one
+    // downloaded before the halt.
+    [Theory]
+    [InlineData("""{"halt":["0.1.601"]}""", typeof(ReleaseHaltedException))]
+    [InlineData(null, typeof(RolloutUnavailableException))]
+    public async Task A_release_halted_after_the_check_is_not_installed_even_when_already_downloaded(string? halt, Type refused)
+    {
+        var stopped = false;
+        var updates = Copy("0.1.600", """{"halt":[]}""", () => stopped = true, "0.1.601");
+        var release = await updates.CheckAsync(CancellationToken.None);
+        Assert.Equal("0.1.601", release?.Version);
+        File.WriteAllText(Path.Combine(root, "packages", "AgentBridgeApp-0.1.601-full.nupkg"), "downloaded before the halt");
+        Halt(halt);
+
+        var e = await Assert.ThrowsAnyAsync<Exception>(() => updates.DownloadAsync(release!, _ => { }, CancellationToken.None));
+
+        Assert.IsType(refused, e);
+        Assert.Throws<InvalidOperationException>(() => updates.ApplyAndRestart(release!));
+        Assert.False(stopped);
     }
 
     [Fact]

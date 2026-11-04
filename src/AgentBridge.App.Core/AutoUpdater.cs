@@ -1,3 +1,4 @@
+using AgentBridge.Host.Core.Updates;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
 
@@ -360,6 +361,7 @@ public sealed class AutoUpdater
             // feed): still the release downloaded, or nothing is stopped. Should it change even
             // while the host stops, ApplyAndRestart refuses it and the host is started again.
             if (Stale()) { return; }
+            if (!await ConfirmedAsync()) { return; }
             await InstallAsync(asked ? "another device asked for it and no session is busy"
                 : idleSince is not null ? "no session is busy" : $"it has waited {WaitAtMost.TotalHours:0} hours");
         }
@@ -427,8 +429,19 @@ public sealed class AutoUpdater
         if (found is null)
         {
             Pending = null;
-            Finish(ref checkRequest, check, UpdateOutcome.Current, null);
-            Finish(ref installRequest, install, UpdateOutcome.Current, null);
+            // The newest release is on the halt list (#580): said, rather than "up to date". This
+            // machine stays where it is until a newer release rolls it forward.
+            if (updater.Halted is { } halted)
+            {
+                var reason = new ReleaseHaltedException(halted).Message;
+                Finish(ref checkRequest, check, UpdateOutcome.Refused, reason);
+                Finish(ref installRequest, install, UpdateOutcome.Refused, reason, halted);
+            }
+            else
+            {
+                Finish(ref checkRequest, check, UpdateOutcome.Current, null);
+                Finish(ref installRequest, install, UpdateOutcome.Current, null);
+            }
         }
         else
         {
@@ -461,6 +474,28 @@ public sealed class AutoUpdater
         Pending = null;
         checkedAt = null;
         return true;
+    }
+
+    // The release halt list read again just before the host is stopped (#580): a release downloaded
+    // hours ago and halted since is never installed, and a list that cannot be read installs nothing.
+    // Either way the release is dropped until the next check finds it again.
+    async Task<bool> ConfirmedAsync()
+    {
+        try
+        {
+            await updater.ConfirmAsync();
+            return true;
+        }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            var to = Pending;
+            log($"auto-update: not installing {to}: {e.Message}");
+            Pending = null;
+            checkedAt = time.GetUtcNow();
+            Finish(ref installRequest, Asked(UpdateAskKind.Install), e is ReleaseHaltedException ? UpdateOutcome.Refused : UpdateOutcome.Failed, e.Message, to);
+            Changed();
+            return false;
+        }
     }
 
     bool Refused(string? why)

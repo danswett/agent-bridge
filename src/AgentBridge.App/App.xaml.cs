@@ -82,8 +82,10 @@ public partial class App : Application
         }
 
         // One updater for Settings and the automatic updates alike, observed so that what either
-        // does is what the account's other devices are told (#51).
-        var updater = new ObservedUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile));
+        // does is what the account's other devices are told (#51), and behind the release halt list
+        // (#580), so neither downloads or installs a withdrawn release.
+        var updater = new ObservedUpdater(new HaltListUpdater(new VelopackUpdater(() => prefs.Prereleases, ui, options.Profile),
+            VelopackUpdater.ReadRolloutAsync, AppLog.Write));
         IAppAtSignIn atSignIn = installed ? new RunKey(Paths.Exe) : new NoRunKey();
         var settings = new SettingsViewModel(connection, manager, updater, atSignIn, Prefs, SavePrefs, version, HostDefaults.Relay);
 

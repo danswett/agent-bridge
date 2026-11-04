@@ -16,6 +16,13 @@ public interface IUpdater
     // The release downloaded and ready to apply: the one the last check found, once downloaded.
     // Null when a later check (or a change of feed) has found another since, or none.
     string? Ready { get; }
+    // The newest release the last check found and the release halt list stops (#580): that check
+    // reported nothing to install. Null when it stopped none.
+    string? Halted => null;
+    // Reads the release halt list again for the release downloaded, just before the host is stopped
+    // to install it: throws ReleaseHaltedException when it has been halted since, and
+    // RolloutUnavailableException when the list cannot be read (#580, HaltListUpdater).
+    Task ConfirmAsync() => Task.CompletedTask;
     // Exits the app, replaces it, and starts the new version.
     void ApplyAndRestart();
 }
@@ -535,7 +542,10 @@ public sealed class SettingsViewModel : Observable
         if (updater.InstalledVersion is null) { UpdateStatus = "Updates are off in a development copy."; return; }
         UpdateStatus = "Checking…";
         updateVersion = await updater.CheckAsync();
-        UpdateStatus = updateVersion is { } v ? $"Version {v} is available." : $"Up to date ({updater.InstalledVersion}).";
+        UpdateStatus = updateVersion is { } v ? $"Version {v} is available."
+            // The newest release has been withdrawn (#580): this copy stays until a newer one.
+            : updater.Halted is { } halted ? $"Version {halted} has been withdrawn, so it is not installed; staying on {updater.InstalledVersion} until a newer release."
+            : $"Up to date ({updater.InstalledVersion}).";
         Raise(nameof(UpdateAvailable));
     });
 
@@ -560,6 +570,16 @@ public sealed class SettingsViewModel : Observable
         {
             updateVersion = null;
             throw new InvalidOperationException("the update found has changed since; check for updates again");
+        }
+        // The release halt list read again (#580): one withdrawn since the check, or a list that
+        // cannot be read, installs nothing, and the host is not stopped.
+        try { await updater.ConfirmAsync(); }
+        catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
+        {
+            if (!manager.UpdateUnderWay) { AutoUpdater.Failed(prefs, savePrefs, updater, updateVersion, $"not installing {updateVersion}: {e.Message}", recorded: false); }
+            updateVersion = null;
+            Raise(nameof(UpdateAvailable));
+            throw;
         }
         UpdateStatus = "Stopping the host to update it…";
         try

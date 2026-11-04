@@ -35,6 +35,9 @@ public sealed class ObservedUpdater(IUpdater inner, TimeProvider? time = null) :
     public string? InstalledVersion => inner.InstalledVersion;
     public string? PendingNotes => inner.PendingNotes;
     public string? Ready => inner.Ready;
+    public string? Halted => inner.Halted;
+
+    public Task ConfirmAsync() => inner.ConfirmAsync();
 
     public async Task<string?> CheckAsync()
     {
