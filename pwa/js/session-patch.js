@@ -21,12 +21,25 @@ const has = (o, k) => Object.hasOwn(o, k);
 const put = (o, k, v) => Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
 const strings = (v) => Array.isArray(v) && v.every((s) => typeof s === 'string');
 // A lone surrogate, which the C# reader can't decode (Received refuses the whole patch for one):
-// applied here, the PWA would show a session the Windows app never had.
+// applied here, the PWA would show a session the Windows app never had. And nesting no session has,
+// deeper than the C# reader reads a whole message (System.Text.Json's 64 levels): walked without
+// recursion, so a deep patch is refused rather than overflowing the stack and closing the channel.
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-const decodable = (v) => {
-  if (typeof v === 'string') { return !LONE_SURROGATE.test(v); }
-  if (Array.isArray(v)) { return v.every(decodable); }
-  if (v !== null && typeof v === 'object') { return Object.entries(v).every(([k, x]) => !LONE_SURROGATE.test(k) && decodable(x)); }
+const MAX_DEPTH = 64;
+const decodable = (root) => {
+  const stack = [[root, 0]];
+  while (stack.length > 0) {
+    const [v, depth] = stack.pop();
+    if (typeof v === 'string') {
+      if (LONE_SURROGATE.test(v)) { return false; }
+    } else if (v !== null && typeof v === 'object') {
+      if (depth >= MAX_DEPTH) { return false; }
+      for (const [k, x] of Object.entries(v)) {
+        if (!Array.isArray(v) && LONE_SURROGATE.test(k)) { return false; }
+        stack.push([x, depth + 1]);
+      }
+    }
+  }
   return true;
 };
 

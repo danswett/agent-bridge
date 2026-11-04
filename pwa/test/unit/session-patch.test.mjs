@@ -267,3 +267,22 @@ test('an event without a number says nothing of what was lost before it, so it m
 
   assert.equal(store.resumeFrom('run-1'), null);
 });
+
+test('a patch nested deeper than any session is dropped whole and the list subscribed again, never overflowing the stack', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1', { title: 'Before' }) });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 4 } });
+  let deep = {};
+  for (let i = 0; i < 6000; i++) { deep = { a: deep }; }
+
+  // Handed over as it is: the fake's JSON round trip would itself recurse that deep.
+  t.onmessage({ ev: 'session.patch', seq: 3, data: { id: 's1', base: 1, revision: 5, set: { title: 'After', deep } } });
+  await flush();
+
+  assert.equal(store.get('s1').title, 'Before');
+  assert.equal(t.requests('sessions.subscribe').length, 2);
+  assert.deepEqual(t.lastRequest('sessions.subscribe').data, { patch: true });
+  assert.ok(readPatch({ id: 's1', set: { activity: { background: { counts: { a: 1 } } } } }));
+});
