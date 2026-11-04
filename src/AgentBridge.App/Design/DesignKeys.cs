@@ -44,6 +44,8 @@ static class DesignKeys
         "AbText2",
         "AbText3",
         "AbShadow",
+        "AbDragShadow",
+        "AbDragShadowEdge",
         "AbLink",
         "SystemControlHyperlinkTextBrush",
         "HyperlinkButtonForeground",

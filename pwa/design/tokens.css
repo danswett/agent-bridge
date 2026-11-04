@@ -111,6 +111,8 @@
   --ab-text2: rgba(0, 0, 0, 0.62);
   --ab-text3: rgba(0, 0, 0, 0.58);
   --ab-shadow: rgba(0, 0, 0, 0.18);
+  --ab-drag-shadow: rgba(0, 0, 0, 0.14);
+  --ab-drag-shadow-edge: rgba(0, 0, 0, 0.12);
 
   /* The glyph parts drawn from a token rather than currentColor (design/README.md). The
      knockout is the surface behind the glyph: set it where a glyph sits on another one. */
@@ -249,6 +251,8 @@
     --ab-text2: rgba(255, 255, 255, 0.72);
     --ab-text3: rgba(255, 255, 255, 0.54);
     --ab-shadow: rgba(0, 0, 0, 0.18);
+    --ab-drag-shadow: rgba(0, 0, 0, 0.28);
+    --ab-drag-shadow-edge: rgba(0, 0, 0, 0.24);
   }
 }
 
@@ -292,6 +296,8 @@
     --ab-text2: CanvasText;
     --ab-text3: CanvasText;
     --ab-shadow: CanvasText;
+    --ab-drag-shadow: CanvasText;
+    --ab-drag-shadow-edge: CanvasText;
   }
 }
 
