@@ -61,6 +61,8 @@ public sealed partial class SessionRow : UserControl
         Settle();
         NameRow();
         ShowWords();
+        // A row given another session's item as the list redraws for a move (#410).
+        TakeFocus();
     }
 
     // Shown for another session, or again: what was moving was the last state's, not news.
@@ -161,19 +163,37 @@ public sealed partial class SessionRow : UserControl
 
     // After a keyboard or menu move the row is drawn in its new place, perhaps by a new control: its
     // list item takes focus back there, so the next Alt+Up/Down moves the same row.
-    // Asked for again by whichever row shows the card when it attaches, and cleared only once focus
-    // has landed: a row parked for reuse while this was queued still holds the card, and clearing
-    // it there left the row drawn for it unfocused, the next Alt+Up/Down going elsewhere.
+    // Asked for again by whichever row shows the card when it attaches or is given the card, and
+    // cleared only once focus has landed: a row parked for reuse while this was queued still holds
+    // the card, and clearing it there left the row drawn for it unfocused, the next Alt+Up/Down
+    // going elsewhere.
+    // #410: the list redraws its rows for a move in a layout pass, keeping the moved session's old
+    // item off screen, and this control may sit in that item, or in one the pass gives another
+    // session: focus put there ended off screen or on another row. The pass is run first, and focus
+    // goes to the item the list draws the session in; SessionsPage.KeepFocusWithSession covers a
+    // pass that comes later.
     void TakeFocus()
     {
         if (parked || !attached || Card is not { WantsRowFocus: true } c) { return; }
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (parked || !attached || !c.WantsRowFocus || Card != c || !IsLoaded) { return; }
-            if (Container is not { } item || !ReferenceEquals(item.Content, c) || !item.Focus(FocusState.Keyboard)) { return; }
+            if (parked || !attached || !c.WantsRowFocus || Card != c || !IsLoaded || ListOf(this) is not { } list) { return; }
+            list.UpdateLayout();
+            // Not drawn (scrolled away): drawn, and the row given it asks again as it is.
+            if (list.ContainerFromItem(c) is not ListViewItem item) { list.ScrollIntoView(c); return; }
+            if (!ReferenceEquals(item.Content, c) || !item.Focus(FocusState.Keyboard)) { return; }
             c.WantsRowFocus = false;
             item.StartBringIntoView();
         });
+    }
+
+    static ListViewBase? ListOf(DependencyObject node)
+    {
+        for (var up = VisualTreeHelper.GetParent(node); up is not null; up = VisualTreeHelper.GetParent(up))
+        {
+            if (up is ListViewBase list) { return list; }
+        }
+        return null;
     }
 
     // Shift+F10 or the menu key on the list item: the row's own menu, as right-click opens it.

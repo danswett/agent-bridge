@@ -31,6 +31,29 @@ public sealed partial class SessionsPage : UserControl
         // The list shown for the first time (one column, after a session opened at start).
         List.SizeChanged += (_, _) => Ready();
         List.Loaded += (_, _) => WatchListScroll();
+        List.GettingFocus += (_, e) => (focusItem, focusRow) = e.NewFocusedElement is ListViewItem item && (item.Content ?? List.ItemFromContainer(item)) is SessionCardViewModel card ? (item, card) : (null, null);
+        List.LayoutUpdated += KeepFocusWithSession;
+    }
+
+    // The list item given keyboard focus last, and the session it drew then. Taken as focus moves
+    // (GettingFocus), not after: GotFocus comes a tick later, after a layout pass that may have
+    // handed the item to another session.
+    ListViewItem? focusItem;
+    SessionCardViewModel? focusRow;
+
+    // Keyboard focus stays with a session, not with the list item that drew it (#410). A move
+    // reaches the list as one Move, and in a layout pass or two it hands its items to sessions
+    // again, keeping the moved session's old item off screen (y −14274) until it recycles it. Focus
+    // stays with an item, so it was left on that item, or on an item given another session, and
+    // the next Alt+Up/Down or arrow key went to the wrong row. Seen on a slow Arm64 runner, where a
+    // pass can come after the row's own focus (SessionRow.TakeFocus). After each pass, focus still
+    // on the item it was given, which no longer draws that session, goes to the item that does.
+    void KeepFocusWithSession(object? sender, object e)
+    {
+        if (focusRow is not { } card || focusItem is not { } item || XamlRoot is null) { return; }
+        if (!ReferenceEquals(FocusManager.GetFocusedElement(XamlRoot), item)) { return; }
+        if (List.ContainerFromItem(card) is not ListViewItem drawn || ReferenceEquals(drawn, item)) { return; }
+        if (drawn.Focus(item.FocusState == FocusState.Unfocused ? FocusState.Programmatic : item.FocusState)) { (focusItem, focusRow) = (drawn, card); }
     }
 
     // Nothing moves as the app starts (ui.md §5.3): not the first rows, not a session a toast
