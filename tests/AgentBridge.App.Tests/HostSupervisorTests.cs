@@ -53,7 +53,7 @@ public sealed class HostSupervisorTests
 
         Assert.Equal(0, exit);
         Assert.Single(codes);
-        Assert.Contains(logged, l => l.Contains("stopped from the Agent Bridge app", StringComparison.Ordinal));
+        Assert.Contains($"the host was stopped from the {Product.App}; not starting it again", logged);
     }
 
     [Fact]

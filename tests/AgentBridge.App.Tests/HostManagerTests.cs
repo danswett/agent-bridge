@@ -594,7 +594,9 @@ public sealed class HostManagerTests : IAsyncLifetime
         processes.Alive.Add(77);
         processes.Others.Add((77, startedUtc.Ticks));
 
-        await m.StopAsync();
+        // Bounded: without both looked for, the wait after ending the task never moves the fake
+        // clock, so a regression would hang rather than fail.
+        await m.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal([m.TaskName], tasks.Ended);
         Assert.Equal([77], processes.Killed);

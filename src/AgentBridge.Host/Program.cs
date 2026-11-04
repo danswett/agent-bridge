@@ -597,7 +597,7 @@ async Task<int> ServeAsync(HostHandover handover)
     // pipe or the launcher (HostHandover.StoppedFromTheApp, #420): not served at all.
     if (handover.StoppedFromTheApp(identity.Folder))
     {
-        Log("stopped from the Agent Bridge app while starting; not serving");
+        Log($"stopped from the {Product.App} while starting; not serving");
         return 0;
     }
     Log($"watching {source.Snapshot().Count} live session(s) as \"{name}\" ({machine.Id[..8]}); local {(local is null ? "API off" : $"pipe {local.Endpoint.Address}")}; {(push is null ? "notifications off (push.enabled)" : $"{push.Subscribers} device(s) to notify")}");
