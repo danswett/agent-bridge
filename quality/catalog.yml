@@ -256,6 +256,20 @@ suites:
     where: flake-hunt.yml hunt, classify, report
     status: exists
 
+  - id: merge-rule
+    kind: static
+    ring: 1
+    select: always
+    # The merge rule GitHub enforces (quality/README.md §4.9): main's copy of merge-rule.yml judges
+    # every open pull request into main against main's quality/merge-rule.yml and posts the
+    # merge-rule status main's ruleset requires. Never a pull request's own run, so it can't loosen
+    # its own gate. Its logic is quality-tool's MergeRule.cs, tested there.
+    platforms: [linux-x64]
+    runner: hosted
+    command: see merge-rule.yml (a dry run of the same verdict, posting nothing - dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N)
+    where: merge-rule.yml evaluate; merge-rule-review.yml relay
+    status: exists
+
   - id: mac-host
     kind: component
     ring: 1

@@ -1,0 +1,21 @@
+name: Merge rule review relay
+
+# A review submitted or dismissed changes what the merge-rule workflow decides (merge-rule.yml),
+# but pull_request_review runs the pull request's own copy of a workflow, which mustn't be what
+# posts the pull request's status. So this run does nothing but finish: its completion starts
+# merge-rule.yml's workflow_run trigger, which runs main's copy with main's evaluator and reads
+# the review from the API. It has no permissions and reads nothing from the event.
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hand over to merge-rule.yml
+        run: echo "A review changed; merge-rule.yml judges this head next (workflow_run)."

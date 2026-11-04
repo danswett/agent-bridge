@@ -307,8 +307,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      pull request, as ci.yml does.
 
    A final `quality-gate` job (`if: always()`) needs all of them and fails if any failed or
-   was cancelled; skipped is fine. It's the check to make required, so skipped jobs never
-   leave branch protection waiting (§9: the owner decides when). `publish-gate` needs every
+   was cancelled; skipped is fine. It's the required check (on `main` since 2026-11-03, with
+   `merge-rule` beside it in main's ruleset, item 9), so skipped jobs never leave a pull request
+   waiting. `publish-gate` needs every
    check job on `main` to have passed (`product` and `app` to have succeeded, and none failed
    or cancelled), and on `main` they all run, so a selection miss, or any red suite, is caught
    before a release publishes.
@@ -317,6 +318,69 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    failure, a nightly job asks whether ring 1's selection for that PR would have included
    the failing test. A **selection miss** is a bug in the catalog. It gets an issue, and the
    rate is a tracked metric (target: zero).
+9. **The merge rule, enforced (#452):** main's ruleset ([`ruleset-main.json`](ruleset-main.json))
+   requires two checks from GitHub Actions, `quality-gate` and `merge-rule`, plus resolved
+   threads, squash merges and no force pushes or deletion, with no bypass, and asks Copilot to
+   review each push. Auto-merge stays off, and the merge coordinator merges by hand, until a GitHub
+   App posts `merge-rule` (last bullet); then sessions turn it on, and GitHub merges when both are
+   green.
+   - `merge-rule` is a commit status that main's copy of `.github/workflows/merge-rule.yml` posts
+     on each open pull request's head, from `agent-bridge-quality merge-rule` (`MergeRule.cs`) and
+     the rules in [`merge-rule.yml`](merge-rule.yml): not a draft; no `hold` or `do-not-merge`
+     label; a Copilot review whose commit is the head; CodeQL's latest run on the head green and
+     code scanning's `CodeQL` check not failed; every other check run and status on the head
+     passed (success, skipped or neutral), since `apple.yml`, `codeql.yml`, `relay.yml`,
+     `dependencies.yml`, `workflow-lint.yml` and `perf.yml` sit outside `quality-gate`, each
+     workflow counting by its latest run on the head; and, when a changed path is in
+     `sensitive_paths` (or is one GitHub couldn't decode, or holds a control character), or the
+     title starts with `Security` or the `security` label is on, an `independent-review` status
+     on the head whose latest from a listed poster is success. The files are those of the exact
+     commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while
+     Copilot, CodeQL or a check is on its way, failure otherwise, with the missing piece named in
+     its description and the run's summary. Pull requests that
+     share a head get the worst of their verdicts, since a status belongs to the commit.
+   - A pull request can't loosen its own gate (#487, Finding 1): every trigger
+     (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
+     10-minute `schedule`, `workflow_dispatch`) runs main's copy of the workflow, which checks out
+     and builds main and reads the pull request only through the API. Each run judges every open
+     pull request, one run at a time, so a run starting turns a head pending, a late red flips the
+     verdict, and no stale read lands last.
+     Changing the rule means changing `quality/`, `.github/` or the tool,
+     all sensitive, so it takes an independent review and only applies once merged. Reviews reach
+     it through a relay workflow (`merge-rule-review.yml`), since `pull_request_review` runs the
+     pull request's copy. The schedule is the backstop, Dependabot's pull requests included.
+   - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
+     languages CodeQL skips uploads no results, and that rule would wait for them forever.
+     A CodeQL run that ended `skipped` (a pull request opened seconds before `ready_for_review`,
+     say) fails closed, and stays failed until CodeQL runs again on the head: start one with
+     `gh workflow run codeql.yml --ref <branch>`, or close and reopen the pull request.
+   - Locally, `dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N`
+     (or `--all`) prints the verdict and posts nothing; only `--post` posts. Run it from a
+     freshly fetched `origin/main` checkout (`git fetch origin`, then `git switch --detach
+     origin/main` in a worktree kept for it), never a pull request's worktree: it builds and
+     reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
+     judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
+     with no local changes to them (`--allow-non-main` judges anyway, with a warning).
+   - A head whose facts can't be read gets `error`, which fails the required check like failure,
+     so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
+     When the open list itself stops partway, no head gets success from that run: a held pull
+     request on it could be among the unread.
+   - Budget: `GITHUB_TOKEN` has 1,000 GraphQL points an hour for the repository. A run costs
+     about one point per page of the open list plus one per pull request that isn't already
+     failing (15 points and 13 REST calls with 25 open on 2026-11-03), and prints what it spent.
+     Runs go one at a time, and an event-driven run waits 45 seconds first so a push's burst of
+     events folds into the one run queued behind it: at about 2.5 minutes a run, at most 24 an hour,
+     so under 400 points an hour at worst and nearer 150 usually (the schedule's 6 plus events).
+     Below 200 points left, a run warns in its log.
+   - The receipts and the status are honest-mistake guards for sessions sharing the owner's
+     account, not a defence against that account: it can post any status. A workflow added by a
+     same-repo pull request could, with `statuses: write`, post its own `merge-rule` from GitHub
+     Actions, which the ruleset can't tell from main's. So auto-merge stays off, and the merge
+     coordinator merges by hand after its own local `merge-rule --pr N`, run from a freshly
+     fetched `origin/main` checkout (receipts from listed posters only), until a GitHub App with
+     only `statuses: write`,
+     whose key only `main` can reach (an environment), posts `merge-rule` and the ruleset pins it
+     to that App ([docs/merge-rule-app.md](../docs/merge-rule-app.md)).
 
 Later, once per-test coverage is collected (§5), selection can narrow from projects to
 individual test classes in the slow projects. Project-level selection already captures most
@@ -529,6 +593,9 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
    device cloud (BrowserStack, for iPhone Safari) and Lighthouse CI's server are optional.
    Each would see code or results from a public repository, which is fine for code but
    worth a decision for anything with tokens.
-5. **Required checks.** Moving branch protection to the single `quality-gate` check, and when
-   each advisory gate (diff coverage, axe, perf) becomes required.
+5. **Required checks.** Decided 2026-11-03 (#357, #452): `main` requires `quality-gate`, then
+   also `merge-rule`, which holds the rest of the merge rule and CodeQL (§4.9), through a
+   ruleset with no bypass, and sessions use auto-merge once a GitHub App posts `merge-rule`
+   (until then the merge coordinator merges by hand; §4.9). Open: when each advisory gate (diff
+   coverage, axe, perf) becomes required.
 6. **Lab budget.** A monthly ceiling for `rg-agent-bridge-lab`.

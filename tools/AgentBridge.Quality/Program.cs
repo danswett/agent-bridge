@@ -24,7 +24,7 @@ static class Program
               issue list --json number,title,body,labels,author); only the hunt's own and
               --owner's count. Exits 1 when a test failed every run on some OS, or a run broke
               outside any test.
-        """;
+        """ + "\n" + MergeRuleCommand.Usage;
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -48,6 +48,9 @@ static class Program
             output.WriteLine(Usage);
             return args.Length == 0 ? 2 : 0;
         }
+        // Reads GitHub, not the catalog or the project graph, so it loads neither.
+        if (args[0] == "merge-rule")
+            return MergeRuleCommand.Run(args[1..], output, GhCli.Instance);
         var options = ParseOptions(args.Skip(1));
         // The flake hunt's reporter reads test results, not the catalog, so it runs anywhere.
         if (args[0] == "flakes")
