@@ -15,10 +15,14 @@ for (const f of fs.readdirSync(projectDir)) if (f.endsWith('.dc.html')) sources[
 // (src: url(../../docs/....woff2)); the page is built from strings, so such URLs are inlined,
 // only for the board being rendered and the boards it imports.
 const fontUrl = /url\((['"]?)((?:\.\.?\/)[^'")]+\.(woff2|ttf|otf))\1\)/g;
-const mime = { woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf' };
+const mime = { woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf', png: 'image/png' };
+// And an <img> by a relative path (src="../../docs/....png"): a proposal board can lay out
+// screenshots of the real app beside its measurements.
+const imgUrl = /\bsrc=(["'])((?:\.\.?\/)[^"']+\.(png))\1/g;
 const inlined = {};
 const inline = f => inlined[f] ??= sources[f].replace(fontUrl, (_, q, rel, ext) =>
-  `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`);
+  `url(data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')})`)
+  .replace(imgUrl, (_, q, rel, ext) => `src=${q}data:${mime[ext]};base64,${fs.readFileSync(path.join(projectDir, rel)).toString('base64')}${q}`);
 function filesFor(file, out = {}) {
   if (out[file] || !sources[file]) return out;
   out[file] = inline(file);

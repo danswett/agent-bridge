@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #544: is Slipgates Sans too condensed?</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+@font-face{font-family:'Board Sans';src:url(../../design/fonts/slipgates-sans/woff2/SlipgatesSans.woff2) format('woff2');font-weight:100 900;font-style:normal}
+@font-face{font-family:'Board Sans';src:url(../../design/fonts/slipgates-sans/woff2/SlipgatesSans-Italic.woff2) format('woff2');font-weight:100 900;font-style:italic}
+.w544{width:3540px;height:6960px;background:#F4F5F7;color:#15181C;font-family:'Board Sans',sans-serif;font-synthesis:none;padding:56px 60px;box-sizing:border-box}
+.w544 h1{font-size:44px;line-height:52px;font-weight:600;margin:0}
+.w544 h2{font-size:30px;line-height:38px;font-weight:600;margin:56px 0 8px}
+.w544 .lede{font-size:22px;line-height:32px;max-width:2400px;margin:12px 0 0;color:#2B3036}
+.w544 .sub{font-size:19px;line-height:28px;color:#4A525C;margin:0 0 20px;max-width:2600px}
+.w544 table{border-collapse:collapse;font-size:19px;line-height:26px;font-variant-numeric:tabular-nums;margin-top:20px}
+.w544 th{font-weight:600;text-align:left;padding:10px 18px;border-bottom:2px solid #15181C;vertical-align:bottom}
+.w544 td{padding:9px 18px;border-bottom:1px solid #D3D7DD;vertical-align:top}
+.w544 td.n,.w544 th.n{text-align:right}
+.w544 tr.grp td{background:#E6E9ED;font-weight:600;padding-top:12px}
+.w544 tr.b td:first-child{border-left:6px solid #0F8577}
+.w544 .row{display:flex;gap:40px;align-items:flex-start}
+.w544 .cap{font-size:20px;line-height:28px;margin:0 0 10px}
+.w544 .cap b{font-weight:600}
+.w544 .cap span{color:#4A525C}
+.w544 img{display:block;box-shadow:0 0 0 1px rgba(0,0,0,0.18)}
+.w544 .na{width:824px;height:1830px;box-sizing:border-box;border:2px dashed #9AA3AD;display:flex;align-items:center;justify-content:center;text-align:center;font-size:22px;line-height:32px;color:#4A525C;padding:60px}
+.w544 .notes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:40px;margin-top:20px}
+.w544 .notes div{font-size:19px;line-height:28px}
+.w544 .notes p{margin:0 0 12px}
+.w544 .notes b{font-weight:600}
+.w544 code{font-family:'Slipgates Mono',monospace;font-size:0.95em}
+</style>
+</helmet>
+<div class="w544">
+  <h1>Is Slipgates Sans too condensed? The PWA today, beside B</h1>
+  <p class="lede">Measured, B is not narrow: at the same pixel size a line of B is 7% longer than the system face the PWA uses today (Segoe UI on Windows, Roboto on Android), and its overall width per x-height equals Segoe UI's. Two things do read narrower: B's round letters against its tall x-height (o/x 0.91, where Segoe UI is 0.98), and the opsz display cut that Apple and Android select by themselves for large titles. The interim wordmark face, Inter Tight, is the narrowest face measured.</p>
+
+  <h2>1 · Measurements</h2>
+  <p class="sub">avg/em: the mean advance of a–z per em. width/x: avg/em over the x-height, the proportion read as wide or narrow. o/x: the o's drawn width over the x-height. Lengths: one 209-character paragraph at 15 px set on one line in Chromium, and one title at 20 px and 34 px SemiBold. Fonts: the files themselves (measure/width.py, width.mjs). Every face is drawn from real weights and its own italic, with font-synthesis: none.</p>
+  <table>
+    <tr><th>Face</th><th>Where it is today</th><th class="n">avg/em</th><th class="n">x/em</th><th class="n">width/x</th><th class="n">o/x</th><th class="n">SemiBold<br>width/x</th><th class="n">15 px paragraph</th><th class="n">chars per<br>770 px line</th><th class="n">title 20 px<br>SemiBold</th><th class="n">title 34 px<br>SemiBold</th><th class="n">Vietnamese</th></tr>
+    <tr class="grp"><td colspan="12">The PWA today: <code>system-ui, -apple-system, "Segoe UI", Roboto, sans-serif</code></td></tr>
+    <tr><td>Segoe UI</td><td>PWA on Windows (Chromium's system-ui)</td><td class="n">0.493</td><td class="n">0.500</td><td class="n">0.987</td><td class="n">0.984</td><td class="n">1.025</td><td class="n">1333 px</td><td class="n">121</td><td class="n">243 px</td><td class="n">413 px</td><td class="n">104/104</td></tr>
+    <tr><td>Segoe UI Variable Text</td><td>the Windows app</td><td class="n">0.493</td><td class="n">0.500</td><td class="n">0.987</td><td class="n">0.984</td><td class="n">1.025</td><td class="n">1329 px</td><td class="n">121</td><td class="n">243 px</td><td class="n">411 px</td><td class="n">104/104</td></tr>
+    <tr><td>Roboto</td><td>PWA and app on Android</td><td class="n">0.499</td><td class="n">0.528</td><td class="n">0.945</td><td class="n">0.910</td><td class="n">0.957</td><td class="n">1330 px</td><td class="n">121</td><td class="n">243 px</td><td class="n">412 px</td><td class="n">104/104</td></tr>
+    <tr><td>SF Pro</td><td>PWA and app on iPhone, iPad and Mac</td><td colspan="10">Not shown and not measured: SF Pro cannot be rendered or opened on this machine, and no published source for its per-glyph widths was available. No other face stands in for it on this board.</td></tr>
+    <tr class="grp"><td colspan="12">Slipgates Sans (B)</td></tr>
+    <tr class="b"><td>B as it ships</td><td>text cut, opsz 14: Windows and the web</td><td class="n">0.538</td><td class="n">0.546</td><td class="n">0.985</td><td class="n">0.912</td><td class="n">1.018</td><td class="n">1424 px</td><td class="n">113</td><td class="n">262 px</td><td class="n">445 px</td><td class="n">104/104</td></tr>
+    <tr class="b"><td>B, opsz automatic</td><td>Apple and Android variable TTF as shipped</td><td class="n">0.522 · 0.491</td><td class="n">0.536 · 0.516</td><td class="n">0.974 · 0.951</td><td class="n">0.917 · 0.928</td><td class="n">1.013 · 1.004</td><td class="n">1417 px</td><td class="n">114</td><td class="n">256 px</td><td class="n">416 px</td><td class="n">104/104</td></tr>
+    <tr class="b"><td>B, tracked</td><td>+1% text, +2% titles and SemiBold</td><td class="n">0.548</td><td class="n">0.546</td><td class="n">1.004</td><td class="n">0.912</td><td class="n">1.055</td><td class="n">1455 px</td><td class="n">111</td><td class="n">272 px</td><td class="n">463 px</td><td class="n">104/104</td></tr>
+    <tr class="b"><td>B, text cut forced</td><td>opsz 14 at every size, every platform</td><td class="n">0.538</td><td class="n">0.546</td><td class="n">0.985</td><td class="n">0.912</td><td class="n">1.018</td><td class="n">1424 px</td><td class="n">113</td><td class="n">262 px</td><td class="n">445 px</td><td class="n">104/104</td></tr>
+    <tr class="grp"><td colspan="12">Wider OFL alternatives, and references</td></tr>
+    <tr><td>IBM Plex Sans</td><td>alternative (RFN “Plex”)</td><td class="n">0.505</td><td class="n">0.516</td><td class="n">0.979</td><td class="n">0.903</td><td class="n">1.011</td><td class="n">1352 px</td><td class="n">119</td><td class="n">252 px</td><td class="n">429 px</td><td class="n">104/104</td></tr>
+    <tr><td>Noto Sans</td><td>alternative (no RFN)</td><td class="n">0.530</td><td class="n">0.536</td><td class="n">0.989</td><td class="n">0.925</td><td class="n">1.022</td><td class="n">1421 px</td><td class="n">113</td><td class="n">266 px</td><td class="n">453 px</td><td class="n">104/104</td></tr>
+    <tr><td>Atkinson Hyperlegible Next</td><td>measured; fails Vietnamese</td><td class="n">0.487</td><td class="n">0.496</td><td class="n">0.981</td><td class="n">0.960</td><td class="n">1.036</td><td class="n">1332 px</td><td class="n">121</td><td class="n">250 px</td><td class="n">425 px</td><td class="n">12/104</td></tr>
+    <tr><td>Inter Tight</td><td>the interim wordmark and brand-board headings (#558)</td><td class="n">0.486</td><td class="n">0.546</td><td class="n">0.890</td><td class="n">0.907</td><td class="n">0.944</td><td class="n">1279 px</td><td class="n">126</td><td class="n">242 px</td><td class="n">412 px</td><td class="n">104/104</td></tr>
+    <tr><td>Verdana</td><td>a wide reference</td><td class="n">0.562</td><td class="n">0.545</td><td class="n">1.030</td><td class="n">0.923</td><td class="n">1.162 (Bold)</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">104/104</td></tr>
+  </table>
+  <p class="sub" style="margin-top:12px">B, opsz automatic: the first value is opsz 20 (a 20 pt title), the second opsz 32 (a 34 pt Large Title). Its lengths are what Chromium draws with automatic optical sizing, as CoreText does on Apple. B, tracked: the advances include the added spacing. Vietnamese: the 104 precomposed letters (ă â đ ê ô ơ ư and U+1EA0–1EF9).</p>
+
+  <h2>2 · What you’ll see: the PWA on an Android phone, before and after</h2>
+  <p class="sub">The real PWA in its demo mode, Chromium with an Android phone’s viewport (412 × 915, 2×). Before: the branch’s base, with Roboto drawn as Android’s system-ui and the previous mono. After: this branch, Slipgates Sans and Slipgates Mono. The demo’s turn is followed by two paragraphs added to the same element, so the app’s own CSS sets them.</p>
+  <div class="row">
+    <div><p class="cap"><b>Before · Roboto</b> <span>· Sessions, light</span></p><img src="../../docs/design/proposals/544-custom-sans/width/phone-before-list.png" width="824" height="1830" alt=""></div>
+    <div><p class="cap"><b>After · Slipgates Sans</b> <span>· Sessions, light</span></p><img src="../../docs/design/proposals/544-custom-sans/width/phone-after-list.png" width="824" height="1830" alt=""></div>
+    <div><p class="cap"><b>Before · Roboto</b> <span>· a session, dark</span></p><img src="../../docs/design/proposals/544-custom-sans/width/phone-before-view.png" width="824" height="1830" alt=""></div>
+    <div><p class="cap"><b>After · Slipgates Sans</b> <span>· a session, dark</span></p><img src="../../docs/design/proposals/544-custom-sans/width/phone-after-view.png" width="824" height="1830" alt=""></div>
+  </div>
+
+  <h2>3 · What you’ll see: the PWA on a Windows desktop, before and after</h2>
+  <p class="sub">1440 × 900 at 100%, dark. Before: Segoe UI, which is what Chromium’s system-ui resolves to on Windows (Segoe UI Variable is the Windows app’s face; its widths match to within 0.5%). After: Slipgates Sans. Note the first row’s title now truncates in the 320 px list.</p>
+  <div class="row">
+    <div><p class="cap"><b>Before · Segoe UI</b> <span>· 100%, dark</span></p><img src="../../docs/design/proposals/544-custom-sans/width/desktop-before-dark.png" width="1440" height="900" alt=""></div>
+    <div><p class="cap"><b>After · Slipgates Sans</b> <span>· 100%, dark</span></p><img src="../../docs/design/proposals/544-custom-sans/width/desktop-after-dark.png" width="1440" height="900" alt=""></div>
+  </div>
+  <div class="row" style="margin-top:40px">
+    <div><p class="cap"><b>Before · Segoe UI</b> <span>· 150%, light</span></p><img src="../../docs/design/proposals/544-custom-sans/width/desktop-before-light-150.png" width="1584" height="660" alt=""></div>
+    <div><p class="cap"><b>After · Slipgates Sans</b> <span>· 150%, light</span></p><img src="../../docs/design/proposals/544-custom-sans/width/desktop-after-light-150.png" width="1584" height="660" alt=""></div>
+  </div>
+
+  <h2>4 · iPhone and Mac: SF Pro is not shown</h2>
+  <p class="sub">On Apple devices the PWA today draws SF Pro (system-ui and -apple-system). SF Pro is licensed only for Apple platforms and is not on this machine, so it is not rendered here and nothing stands in for it. After, Apple devices draw the same Slipgates Sans as in section 2, from the variable TTF, whose opsz CoreText sets from the point size (row “B, opsz automatic”).</p>
+
+  <h2>5 · The options, in the same session view (desktop, 100%, dark)</h2>
+  <p class="sub">The list and the conversation from the PWA, cropped. Each override replaces the text face only, matches inline mono to that face’s x-height as the app does, and sets font-synthesis: none.</p>
+  <div class="row">
+    <div><p class="cap"><b>B as it ships</b> <span>· text cut, opsz 14</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-b-now.png" width="1056" height="440" alt=""></div>
+    <div><p class="cap"><b>B, tracked</b> <span>· +1% text, +2% titles and SemiBold</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-b-tracked.png" width="1056" height="440" alt=""></div>
+    <div><p class="cap"><b>B, opsz automatic</b> <span>· as Apple and Android draw it today; “text cut forced” is the first panel</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-b-auto-opsz.png" width="1056" height="440" alt=""></div>
+  </div>
+  <div class="row" style="margin-top:40px">
+    <div><p class="cap"><b>IBM Plex Sans</b> <span>· as released</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-plex.png" width="1056" height="440" alt=""></div>
+    <div><p class="cap"><b>Noto Sans</b> <span>· as released</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-noto.png" width="1056" height="440" alt=""></div>
+    <div><p class="cap"><b>Segoe UI</b> <span>· the PWA today on Windows, the reference</span></p><img src="../../docs/design/proposals/544-custom-sans/width/alt-segoe.png" width="1056" height="440" alt=""></div>
+  </div>
+
+  <h2>6 · Trade-offs, recommendation and the wordmark</h2>
+  <div class="notes">
+    <div>
+      <p><b>B as it ships.</b> Lines run 7% longer than the system face (113 against 121 characters per 770 px line). The reading column was already widened 8% for this, so the measure holds. No synthesis: done. Work: none.</p>
+      <p><b>B, text cut forced.</b> Windows and the web already draw opsz 14. On Apple and Android, the variable TTF lets the engine choose the display cut for large titles, which are then 6.5% narrower (416 px against 445 px at 34 px). Pinning opsz 14 in the Apple and Android outputs removes this, and the files get smaller. Line length is unchanged. No synthesis: unaffected. Work: small, a design-gen change and its tests.</p>
+      <p><b>B, tracked.</b> Titles open up visibly. Body lines run 2% longer again (111 characters), so the reading column would need about +10% in total, not +8%. Tracking is spacing, not synthesis. Work: a letter-spacing token per role, emitted on four platforms (CSS letter-spacing, WinUI CharacterSpacing, Apple tracking, Android letterSpacing), with tests.</p>
+    </div>
+    <div>
+      <p><b>IBM Plex Sans.</b> Its lines are shorter than B’s (119 characters) and its rounds are narrower (o/x 0.903). So it is not wider in the way the eye reads. There is no tailed-l alternate and there are no open-digit alternates, so both would be drawn on every master, and the Reserved Font Name “Plex” means the modified build is renamed. That rename is allowed, and Slipgates Sans is one. Vietnamese is complete. Work: it reopens all of #557 (build, hinting, four platform outputs, tests, boards), so days.</p>
+      <p><b>Noto Sans.</b> Its line length is the same as B’s, and its rounds are slightly rounder (0.925). There is no tailed-l alternate (only a serifed I) and there are no open-digit alternates. It has no RFN and complete Vietnamese, but the variable files are 2 MB before subsetting. Work: the same as Plex.</p>
+      <p><b>Atkinson Hyperlegible Next</b> has the roundest o (0.96), but only 12 of the 104 Vietnamese letters, so it fails a requirement already decided.</p>
+    </div>
+    <div>
+      <p><b>Recommendation: keep B.</b> Force the text cut on Apple and Android, add +2% tracking to SemiBold titles only, and leave body text untracked, so the reading measure holds. Plex is not wider than B where it counts, Noto only by 1–2% (o/x 0.925 against 0.912), and either one reopens #557.</p>
+      <p>If the round letters still read narrow after that, the remaining fix is to draw B’s rounds about 4–6% wider in its sources (o c e d b p q g). That is a type-design change, not a setting.</p>
+      <p><b>The wordmark.</b> The brand boards set it in Inter Tight, the narrowest face here (width/x 0.890, against B’s 0.985). That is the likeliest source of the “condensed” impression. With B kept, the wordmark moves to Slipgates Sans SemiBold, text cut, +2%, as planned once #557 merges. With Plex or Noto, it would move to that face’s SemiBold, with the same tracking.</p>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":3540,"height":6960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

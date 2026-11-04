@@ -12,6 +12,10 @@
 > wins. A and C were not chosen. Their fonts, and B's proposal build, stay in
 > [544-custom-sans/fonts/](544-custom-sans/fonts/) only so the boards still render; nothing ships
 > or loads them.
+>
+> **Held, 2026-11-03.** The owner asked whether B reads "a bit too condensed", and the merge of
+> #557 is held until that's answered. The measurements, the PWA before and after, and the options
+> are in [§11](#11-addendum-is-slipgates-sans-too-condensed).
 
 *Written as a draft for the owner, from the design track.* Issues:
 [#544](https://github.com/danswett/agent-bridge/issues/544) (this),
@@ -398,3 +402,127 @@ What #557 did with them:
 - The checks: a Playwright test in the PWA, and a DirectWrite and rendered-advance check in the
   Windows self-test. The Apple and Android clients don't exist yet, so their checks are
   follow-ups, as is a ClearType check on real hardware at 100% scale.
+
+## 11. Addendum: is Slipgates Sans too condensed?
+
+The owner worried that B reads "a bit too condensed". This section compares it with what the PWA
+draws today. On `main`, `pwa/app.css` sets
+`--font-text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`, so the PWA uses each
+platform's system face. Everything below is on one board,
+[proposal-544-width.png](544-custom-sans/proposal-544-width.png), drawn from
+`Proposal-544-Width.dc.html`.
+
+### 11.1 What you'll see
+
+The real PWA in its demo mode, before and after. "Before" is the branch's base, with the system
+stack; "after" is this branch. Two paragraphs are added after the demo's one-line turn, in the
+same element, so the app's own CSS sets them.
+
+- **On an Android phone** (412 × 915 at 2×; before is Roboto, Android's system-ui):
+  - [list before](544-custom-sans/width/phone-before-list.png) and
+    [after](544-custom-sans/width/phone-after-list.png);
+  - [session before](544-custom-sans/width/phone-before-view.png) and
+    [after](544-custom-sans/width/phone-after-view.png).
+- **On a Windows desktop**: before is Segoe UI, which is what Chromium's system-ui resolves to.
+  - 100%, dark: [before](544-custom-sans/width/desktop-before-dark.png) and
+    [after](544-custom-sans/width/desktop-after-dark.png). The first row's title now truncates
+    in the 320 px list.
+  - 150%, light: [before](544-custom-sans/width/desktop-before-light-150.png) and
+    [after](544-custom-sans/width/desktop-after-light-150.png).
+- **On iPhone, iPad and Mac**, the PWA today draws SF Pro. SF Pro is licensed only for Apple
+  platforms and isn't on the rendering machine, so it is **not shown**, and no face stands in
+  for it. No published source for its per-glyph widths was available, so it isn't measured
+  either.
+  - The earlier iPhone and Mac boards (§4) drew their "before" in Inter, labelled as a stand-in.
+    Treat those as layout only, not as SF.
+
+### 11.2 Measurements
+
+[measure/width.py](544-custom-sans/measure/width.py) reads the font files. The columns are:
+
+- **avg/em**: the mean advance of a–z per em.
+- **width/x**: avg/em over the x-height, the proportion the eye reads as wide or narrow.
+- **o/x**: the o's drawn width over the x-height.
+- **Lengths** come from [measure/width.mjs](544-custom-sans/measure/width.mjs) in Chromium:
+  - one 209-character paragraph at 15 px, set on one line, which gives the characters per
+    770 px line;
+  - one title at 20 px and at 34 px, SemiBold.
+
+Results are in [measure/results/](544-custom-sans/measure/results/).
+
+| Face | Where it is today | avg/em | width/x | o/x | SemiBold width/x | 15 px paragraph | chars / 770 px | title 20 px | title 34 px | Vietnamese |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Segoe UI | PWA on Windows | 0.493 | 0.987 | 0.984 | 1.025 | 1333 px | 121 | 243 px | 413 px | 104/104 |
+| Segoe UI Variable Text | the Windows app | 0.493 | 0.987 | 0.984 | 1.025 | 1329 px | 121 | 243 px | 411 px | 104/104 |
+| Roboto | PWA on Android | 0.499 | 0.945 | 0.910 | 0.957 | 1330 px | 121 | 243 px | 412 px | 104/104 |
+| SF Pro | PWA on Apple | not shown, not measured | | | | | | | | |
+| **B as it ships** (text cut, opsz 14) | Windows, web | 0.538 | 0.985 | 0.912 | 1.018 | 1424 px | 113 | 262 px | 445 px | 104/104 |
+| B, opsz automatic (20 · 32) | Apple, Android TTF | 0.522 · 0.491 | 0.974 · 0.951 | 0.917 · 0.928 | 1.013 · 1.004 | 1417 px | 114 | 256 px | 416 px | 104/104 |
+| B, tracked (+1% text, +2% titles) | option | 0.548 | 1.004 | 0.912 | 1.055 | 1455 px | 111 | 272 px | 463 px | 104/104 |
+| B, text cut forced | option | 0.538 | 0.985 | 0.912 | 1.018 | 1424 px | 113 | 262 px | 445 px | 104/104 |
+| IBM Plex Sans | alternative | 0.505 | 0.979 | 0.903 | 1.011 | 1352 px | 119 | 252 px | 429 px | 104/104 |
+| Noto Sans | alternative | 0.530 | 0.989 | 0.925 | 1.022 | 1421 px | 113 | 266 px | 453 px | 104/104 |
+| Atkinson Hyperlegible Next | measured | 0.487 | 0.981 | 0.960 | 1.036 | 1332 px | 121 | 250 px | 425 px | 12/104 |
+| Inter Tight | interim wordmark (#558) | 0.486 | 0.890 | 0.907 | 0.944 | 1279 px | 126 | 242 px | 412 px | 104/104 |
+| Verdana | wide reference | 0.562 | 1.030 | 0.923 | 1.162 (Bold) | – | – | – | – | 104/104 |
+
+These figures use the mean advance. Weighting by letter frequency, or measuring ink widths,
+gives lower absolute numbers. But the comparison holds under every definition tried:
+
+- **B is wider per em than every system face.** A line of B is 7% longer than the same line in
+  Segoe UI or Roboto.
+- **Per x-height, B matches Segoe UI overall and is wider than Roboto.**
+- **Two things do measure narrower:**
+  - B's round letters against its tall x-height: o/x is 0.912, against Segoe UI's 0.984, about
+    the same as Roboto's 0.910;
+  - the opsz display cut that Apple and Android choose by themselves for large titles: 6.5%
+    narrower at 34 px.
+- **Inter Tight, the interim wordmark face, is the narrowest face measured**, at width/x 0.890.
+
+### 11.3 The options
+
+The options are drawn in the same PWA session view on the board. Every face has real weights and
+its own italic, and every override sets `font-synthesis: none`.
+
+| Option | Line length and the reading column | No synthesis | Work | The wordmark |
+| --- | --- | --- | --- | --- |
+| **B as it ships** | 7% longer than the system face; the 8% wider column (770 px) already holds the measure | done | none | Slipgates Sans SemiBold |
+| **B, text cut forced** | unchanged on Windows and the web; Apple and Android large titles are 7% wider than now (445 against 416 px at 34 px) | unaffected | small: design-gen pins opsz 14 in the Apple and Android TTF (smaller files), with tests | unchanged |
+| **B, tracked** | body lines 2% longer again (111 characters), so the column needs about +10% in total; titles open up | tracking is spacing, not synthesis | a letter-spacing token per role on four platforms: CSS `letter-spacing`, WinUI `CharacterSpacing`, Apple tracking, Android `letterSpacing` | +2% |
+| **IBM Plex Sans** | lines 5% shorter than B (119); rounds narrower (0.903) | real italic and weights | **reopens #557** (days). There is no tailed-l alternate and there are no open-digit alternates, so both are drawn on every master. The Reserved Font Name "Plex" means a modified build is renamed; Slipgates Sans is such a rename | Plex SemiBold |
+| **Noto Sans** | the same as B (113); rounds 0.925 | real italic and weights | **reopens #557**. There is no tailed-l alternate (only a serifed I) and there are no open-digit alternates. It has no RFN, but the variable files are 2 MB before subsetting | Noto SemiBold |
+| Atkinson Hyperlegible Next | – | – | fails Vietnamese (12/104) | – |
+
+### 11.4 Recommendation
+
+**Keep B**, and do three things:
+
+- Force the text cut (opsz 14) on Apple and Android too.
+- Add +2% tracking to SemiBold titles only. Leave body text untracked, so the 770 px measure
+  holds.
+- Move the wordmark from Inter Tight to Slipgates Sans SemiBold, with the text cut and +2%, as
+  already planned once #557 merges. Inter Tight is the likeliest source of the "condensed"
+  impression on the brand boards.
+
+IBM Plex Sans is not wider than B where the eye reads it. Noto Sans is wider only by 1–2% (o/x 0.925 against 0.912; titles 2% longer), which is too little to justify reopening #557, as either alternative would.
+
+If B's round letters still read narrow after this, the remaining fix is to draw its rounds
+(o c e d b p q g) about 4–6% wider in its sources. That is a type-design change, not a setting.
+
+### 11.5 Decisions for the owner
+
+1. **The text face:**
+   - (a) **Keep B** with the text cut forced everywhere and +2% on SemiBold titles
+     (recommended).
+   - (b) Keep B as it ships.
+   - (c) B with +1% body and +2% titles, with the column widened to about +10%.
+   - (d) Rebuild on IBM Plex Sans.
+   - (e) Rebuild on Noto Sans.
+2. **The wordmark:**
+   - (a) **Slipgates Sans SemiBold**, text cut, +2% (recommended).
+   - (b) Keep Inter Tight.
+3. **If the rounds still read narrow after 1 (a):**
+   - (a) **Widen B's rounds 4–6%** in a follow-up issue (recommended).
+   - (b) Accept them as they are.
+
+Board for all three: [proposal-544-width.png](544-custom-sans/proposal-544-width.png).
