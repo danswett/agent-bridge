@@ -17,7 +17,9 @@ the held message) were decided by the owner on 2026-11-03 and added here (§6.7)
 and the boards are in [proposals/519-collaborators.md](proposals/519-collaborators.md). The
 accessibility contract (§9.1) gathers the accessibility rules already decided here and the WCAG
 requirements they rest on, each with the check that enforces it, and the rules the owner
-approved for it on 2026-11-04 (#707).* The
+approved for it on 2026-11-04 (#707). The Apple layout adoption (§6.2, §6.5, §7) was decided
+by the owner on 2026-11-04 (D1–D6); the reasoning is in
+[proposals/apple-layout-adoption.md](proposals/apple-layout-adoption.md).* The
 owner's mock-ups live in a private design canvas, "Agent Bridge — Session Workbench", and
 proposals wait for the owner's sign-off in the private design studio
 ([design/README.md](../../design/README.md#owner-sign-off)).
@@ -604,7 +606,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     opens its menu. Touch and the mouse reach More as any button.
   - It holds at the narrowest list (264, §5.2) and in one column. The PWA's tabs still scroll
     sideways (#351).
-- macOS: a "Machines" sidebar section.
+- macOS: in the sidebar's filter menu (D6, §7), not a sidebar section.
 - iOS: a toolbar button.
 - Android: filter chips.
 
@@ -618,10 +620,10 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
 - **Phone:** Back (to the list) leads the header, and Pin, Details and End session are in its
   overflow menu.
 - **Details** is a property list: Agent, Machine, Repository, Branch (mono), Folder (mono, and
-  a long path gives up its middle, never a word), Model, Started, how long in this state,
+  a long path gives up its middle, never a word), Model, Started, In this state, Updated,
   background agents and commands, turns, compactions and the process id; then End session.
-  At three panes it heads the inspector, over Tools (each call: glyph, name and arguments in
-  mono, age). Below three panes Tools is a tab beside Conversation, and Details takes the
+  At three panes it heads the inspector, over Tools (a Running card, then each call in two
+  lines, as below). Below three panes Tools is a tab beside Conversation, and Details takes the
   conversation's place until pressed again. Delegates (#176) join the inspector and the tabs: a
   delegate chosen takes the inspector in place of Details and Tools (§6.3).
 - **An `ask_user` call in Tools** (#253) is one line without its summary. While its question
@@ -632,6 +634,30 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   menu discloses the `summary` the host sent (at most 200 bytes; the protocol sends no
   arguments), for diagnosis, closed by default. The call an approval holds keeps its summary: it
   is the action, not the question.
+- *Decided by the owner on 2026-11-04 ([proposals/apple-layout-adoption.md](proposals/apple-layout-adoption.md)),
+  adopted from the Apple workbench (#588):*
+  - **Details** says Started, Updated and **In this state** on every client.
+    - Started and Updated are relative ("2h ago"; D4).
+    - In this state is a duration ("4 min"; D5), shown in every state, idle included. It
+      replaces "For" (Windows) and "Status since" (Apple).
+    - Each one's tooltip, long-press and accessible name give the absolute date and time, in
+      the device's time zone. For In this state, that's when the state began.
+  - **End session** is one button in the destructive colour. For a session that isn't idle,
+    the first press turns it into "End session: press again" for ten seconds, its accessible
+    name counting the seconds down, and a second press ends it, as the host requires
+    (`sessions.stop`). There is no "Force End", and no heading over it.
+  - **Tools** opens with a **Running** card (D3) holding every call still running, pinned above
+    the history, so what the session is doing now never scrolls away. The history keeps
+    today's order, newest started first. A call that ends leaves the card and takes its place
+    in that order, by when it started, not at the top. It eases as #659 says, never popping.
+  - **Each call is two lines (D2):**
+    - line 1 is its `summary` in the text face;
+    - line 2 is meta, the tool's name in mono, then "Failed" in the Failed colour for a call
+      that failed, then the age.
+
+    The glyph says Done, and the card says Running, so neither is spelt out. The history keeps
+    the order of events and isn't grouped by status. An `ask_user` call, and the call an
+    approval holds, keep their form above, and a question waiting isn't a running call.
 
 ### 6.3 Delegates (#84)
 
@@ -879,6 +905,14 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   - macOS: a capsule field.
   - iOS: a capsule field over the keyboard.
   - Android: a filled field on `surfaceContainer`.
+- *Decided by the owner on 2026-11-04 ([proposals/apple-layout-adoption.md](proposals/apple-layout-adoption.md)):*
+  - **The model** (D1) is read-only, in text 3, at the footer's trailing edge before Send, so
+    you can see which model you are writing to without opening Details. The box shows no
+    status: the header says it (§6.2).
+  - **Attach** opens the platform's own picker, a menu where the platform offers more than one
+    source (macOS: Attach File…, Choose Photo…, Paste Photo).
+  - **A limit** (files, size) is said when it is hit, at the box, not in the menu.
+  - **The receipt** is #617's: one line under the box.
 
 ### 6.6 Machines
 
@@ -1123,16 +1157,24 @@ question, as choosing its row does.
     button, or the page (§9.1 A4). Nothing is announced.
 
 **macOS (SwiftUI, #260):**
-- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions,
-  Machines), 28 px rows, and a Bridge fill on the selected row. The toolbar's filter menu has
-  the same toggle.
+- **Sidebar:** a translucent source list (a Needs You · N filter item, Pinned, Sessions), 28 px
+  rows, and a Bridge fill on the selected row. The toolbar's filter menu has the same toggle.
+  The machine filter is in that menu (D6, below), not in a sidebar section.
 - **Menu bar:** an extra whose label is N. Its menu names the waiting sessions (machine and
   title, oldest first, at most 8) and Open Agent Bridge. An item opens its session at the
   question. The menu never shows a question's words or answers one.
 - **Dock:** the badge is N.
 - **Toolbar:** unified, with title and subtitle, search, and icon buttons.
-- **Inspector:** a property grid with right-aligned labels.
+- **Inspector:** Details as a grouped inset list, with labels leading and values trailing.
 - **Keyboard:** ⌘↩ sends.
+- *Decided by the owner on 2026-11-04 ([proposals/apple-layout-adoption.md](proposals/apple-layout-adoption.md)),
+  from #588:*
+  - **Inspector:** the toggle is named "Inspector", and the pane needs no visible heading.
+  - **Search:** a trailing toolbar field, "Search all machines", is §7's one search.
+  - **The sidebar's filter menu** (D6) holds Needs You · N, the machine filter (§6.1), Sort
+    (#605) and "Show sessions from" (#566).
+  - **Machines** is a toolbar button.
+  - **The toolbar's subtitle** carries §6.2's meta line.
 
 **iOS (SwiftUI, #260):**
 - **Sessions:** large title with the filter and New buttons on the title row (no empty
@@ -1380,3 +1422,7 @@ The collaborator surfaces (#519) are drawn on the Proposal #519 boards
 The states #253 added (the toggle's states, rows, the question card's forms, Tools and the
 delegate inspector) are drawn on the Proposal #253 boards, which stay on the canvas as their
 reference ([proposals/253-attention/](proposals/253-attention/)).
+
+The Proposal · Apple layout boards (decided on 2026-11-04) show the Windows app
+before and after, the PWA at desktop and phone widths, and the macOS workbench of #588 with
+each element's verdict ([proposals/apple-layout-adoption/](proposals/apple-layout-adoption/)).

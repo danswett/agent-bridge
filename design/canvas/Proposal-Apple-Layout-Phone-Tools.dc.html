@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apple layout adoption: PWA phone, Tools, proposed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/apple-layout-adoption.md). Pink numbered pins
+     are annotations keyed to the proposal's inventory, never UI. Sample data only. -->
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #202326; color: #FFFFFF; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; position: relative">
+  <div style="height: 44px; flex: none"></div>
+  <div style="display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 44px; color: rgba(255,255,255,0.72)"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import><span style="flex: 1"></span><dc-import name="Icon" icon="more" size="20" hint-size="20px,20px"></dc-import></div>
+  <div style="padding: 0 16px; flex: none">
+    <div style="font-size: 24px; line-height: 32px; font-weight: 600">Fix flaky upload test</div>
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px"><dc-import name="Glyph" kind="working" theme="dark" size="14" hint-size="14px,14px"></dc-import><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Working · WORKSTATION · contoso/widgets</span></div>
+    <div style="display: flex; gap: 20px; margin-top: 12px; font-size: 14px; color: rgba(255,255,255,0.72); border-bottom: 1px solid rgba(255,255,255,0.07)"><span>Conversation</span><span>Delegates</span><span style="color: #FFFFFF; border-bottom: 2px solid #2DD4BF; padding-bottom: 6px">Tools</span></div>
+  </div>
+  <div style="flex: 1; padding: 16px; overflow: hidden"><div style="position: relative; border-radius: 6px; background: #2F3338; border: 1px solid rgba(255,255,255,0.07); padding: 8px 10px; margin-bottom: 12px">
+      <span aria-hidden="true" style="position: absolute; right: -8px; top: -8px; min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 10px; background: #E5398A; color: #fff; font: 600 11px/20px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; text-align: center; z-index: 5">A3</span>
+      <div style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72); margin-bottom: 4px">Running</div>
+      <div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px">
+        <span style="padding-top: 3px"><dc-import name="Glyph" kind="working" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+        <span><span style="display: block; font-size: 14px; line-height: 20px">Run the upload tests 20 times</span>
+        <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">powershell</span> · 40s</span></span>
+      </div>
+    </div>
+    <div style="position: relative"><span aria-hidden="true" style="position: absolute; right: -8px; top: -2px; min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 10px; background: #E5398A; color: #fff; font: 600 11px/20px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; text-align: center; z-index: 5">A4</span><div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; padding: 4px 0">
+    <span style="padding-top: 3px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span><span style="display: block; font-size: 13px; line-height: 18px">src/Upload/UploadClient.cs</span>
+    <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">view</span> · 2m</span></span></div><div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; padding: 4px 0">
+    <span style="padding-top: 3px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span><span style="display: block; font-size: 13px; line-height: 18px">src/Upload/UploadClient.cs</span>
+    <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">edit</span> · 3m</span></span></div><div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; padding: 4px 0">
+    <span style="padding-top: 3px"><dc-import name="Glyph" kind="failed" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span><span style="display: block; font-size: 13px; line-height: 18px">Build the solution</span>
+    <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">powershell</span> · <span style="color: #FF9494">Failed</span> · 6m</span></span></div><div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; padding: 4px 0">
+    <span style="padding-top: 3px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span><span style="display: block; font-size: 13px; line-height: 18px">TimeoutException</span>
+    <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">grep</span> · 7m</span></span></div><div style="display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; padding: 4px 0">
+    <span style="padding-top: 3px"><dc-import name="Glyph" kind="done" theme="dark" size="12" hint-size="12px,12px"></dc-import></span>
+    <span><span style="display: block; font-size: 13px; line-height: 18px">tests/Upload/UploadTests.cs</span>
+    <span style="display: block; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)"><span style="font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace">view</span> · 8m</span></span></div></div></div><div style="flex: none; padding: 12px 12px 20px; display: flex; flex-direction: column; align-items: center">
+    <div style="width: 100%; max-width: 100%">
+      <div style="position: relative; background: #2F3338; border: 1px solid rgba(255,255,255,0.07); border-bottom: 2px solid #2DD4BF; border-radius: 8px; padding: 10px 12px 8px">
+        <div style="font-size: 14px; line-height: 20px; color: rgba(255,255,255,0.54); min-height: 40px">Message the main agent</div>
+        <div style="display: flex; align-items: center; gap: 12px"><span style="color: rgba(255,255,255,0.72); display: flex"><dc-import name="Icon" icon="attach" size="16" hint-size="16px,16px"></dc-import></span><span style="flex: 1"></span>
+       <span title="Model" style="position: relative; font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.54)">gpt-5.6-sol</span>
+       <span style="width: 32px; height: 32px; border-radius: 4px; background: #2DD4BF; color: #062621; display: grid; place-items: center"><dc-import name="Icon" icon="send" size="16" hint-size="16px,16px"></dc-import></span></div>
+      </div>
+      <div style="position: relative; display: flex; align-items: center; gap: 6px; padding: 6px 4px 0; font-size: 12px; line-height: 16px; color: #2DD4BF"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="#2DD4BF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Delivered</div>
+    </div>
+  </div>
+  <span style="position: absolute; right: 10px; top: 14px; font-size: 10px; line-height: 14px; padding: 1px 6px; border-radius: 4px; background: #E5398A; color: #fff">Proposed</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Apple layout adoption: PWA phone, Details, proposed</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button,textarea,input{font:inherit}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/apple-layout-adoption.md). Pink numbered pins
+     are annotations keyed to the proposal's inventory, never UI. Sample data only. -->
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #202326; color: #FFFFFF; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 20px; font-variant-numeric: tabular-nums; display: flex; flex-direction: column; overflow: hidden; position: relative">
+  <div style="height: 44px; flex: none"></div>
+  <div style="display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 44px; color: rgba(255,255,255,0.72)"><dc-import name="Icon" icon="back" size="20" hint-size="20px,20px"></dc-import><span style="flex: 1"></span><dc-import name="Icon" icon="more" size="20" hint-size="20px,20px"></dc-import></div>
+  <div style="padding: 0 16px; flex: none">
+    <div style="font-size: 24px; line-height: 32px; font-weight: 600">Fix flaky upload test</div>
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px"><dc-import name="Glyph" kind="working" theme="dark" size="14" hint-size="14px,14px"></dc-import><span style="font-size: 12px; line-height: 16px; color: rgba(255,255,255,0.72)">Working · WORKSTATION · contoso/widgets</span></div>
+    <div style="margin-top: 12px; font-size: 14px; font-weight: 600">Details</div>
+  </div>
+  <div style="flex: 1; padding: 16px 16px 16px 40px; overflow: hidden"><dl style="margin: 0; display: grid; grid-template-columns: 96px 1fr; row-gap: 6px; column-gap: 12px; font-size: 13px; line-height: 18px">
+    <dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Status</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">Working</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Agent</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">Copilot</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Machine</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">WORKSTATION</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Model</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">gpt-5.6-sol</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Repository</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">contoso/widgets</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Branch</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">fix/upload-retry</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Folder</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">C:\src\widgets</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Turns</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">12</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Process</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">4120</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Started</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">2h ago<span aria-hidden="true" style="position: absolute; right: 0; top: -1px; min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 10px; background: #E5398A; color: #fff; font: 600 11px/20px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; text-align: center; z-index: 5">A5</span></dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">In this state</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">4 min<span aria-hidden="true" style="position: absolute; right: 0; top: -1px; min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box; border-radius: 10px; background: #E5398A; color: #fff; font: 600 11px/20px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; text-align: center; z-index: 5">A6</span></dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">Updated</dt><dd style="margin: 0; position: relative;  white-space: nowrap; text-overflow: ellipsis">just now</dd>
+<dt style="color: rgba(255,255,255,0.72); font-size: 12px; position: relative">ID</dt><dd style="margin: 0; position: relative; font-family: 'Agent Bridge Mono', 'Cascadia Mono', ui-monospace, monospace; font-size: 12px; white-space: nowrap; text-overflow: ellipsis">7c1e…a42f</dd>
+  </dl>
+  <div style="margin-top: 14px"><span style="display: inline-block; height: 32px; padding: 0 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.12); color: #FF9494; font-size: 13px; line-height: 32px">End session</span></div></div>
+  <span style="position: absolute; right: 10px; top: 14px; font-size: 10px; line-height: 14px; padding: 1px 6px; border-radius: 4px; background: #E5398A; color: #fff">Proposed</span>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
