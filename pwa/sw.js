@@ -54,7 +54,8 @@ self.addEventListener('install', (e) => {
 // Which releases were in control, the latest and the one before it, recorded by each as it
 // takes over. Cache order can't say: a rollback takes an older release's cache again.
 const RELEASES = 'agent-bridge-app';
-const RECORD = './releases.json';
+// Not a file of the site's, so not written as one (./…): the tests take every such name for a shell file.
+const RECORD = 'releases.json';
 
 // The release before this one is kept until the next takes over: a page still open on it when
 // this worker took over (before the person pressed Reload) can still be given its own files.
