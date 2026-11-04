@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnswerService } from '../../js/answer-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
+import { recentTimings } from '../../js/timing.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const ANSWER = { fields: { answer: 'a' } };
@@ -281,4 +282,19 @@ test('a stage from an attempt given up on is not shown on the next', async (t) =
   assert.equal(conn.client.calls.length, 2);
   first.progress({ stage: 'typed', working: false });
   assert.equal(service.get('h1', 's1', 'q1').stage, null);
+});
+
+test("a stage replayed behind one reached adds nothing to the answer's timing marks", async () => {
+  const { conn, submit } = setup({ marks: 'answer' });
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  call.progress({ stage: 'typed', working: true });
+  call.progress({ stage: 'received', working: false });
+  call.progress({ stage: 'typed', working: true });
+  call.resolve({ outcome: 'delivered', reason: null, timings: { typed: 40 } });
+  await flush();
+  const record = recentTimings().at(-1);
+  assert.deepEqual(record.client.map(([mark]) => mark), ['sent', 'queued', 'result']);
+  assert.deepEqual(record.host, { typed: 40 });
 });
