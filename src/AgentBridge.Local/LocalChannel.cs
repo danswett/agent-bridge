@@ -15,7 +15,7 @@ public sealed class LocalChannel : IClientChannel
 {
     readonly Stream stream;
     readonly SemaphoreSlim sendLock = new(1, 1);
-    readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
+    readonly ConcurrentDictionary<long, TaskCompletionSource<(JsonElement, long)>> pending = new();
     readonly Channel<ChannelEvent> events;
     readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource stop = new();
@@ -24,6 +24,8 @@ public sealed class LocalChannel : IClientChannel
     Exception? closeReason;
     long nextRequest;
     long lastEventSeq;
+    // The seq of the last event read, kept by the read loop alone: each response is stamped with it.
+    long lastReceivedSeq = -1;
     Task reader = Task.CompletedTask;
 
     public string PeerId { get; }
@@ -56,11 +58,14 @@ public sealed class LocalChannel : IClientChannel
 
     internal void Start() => reader = Task.Run(ReadLoopAsync);
 
-    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
+        (await RequestOrderedAsync(op, data, timeout, ct)).Response;
+
+    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         ThrowIfClosed();
         var id = Interlocked.Increment(ref nextRequest);
-        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = tcs;
         try
         {
@@ -138,13 +143,14 @@ public sealed class LocalChannel : IClientChannel
                 // peer and is ignored, as on the relay.
                 if (message.TryGetProperty("re", out var re))
                 {
-                    if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult(message.Clone()); }
+                    if (pending.TryRemove(re.GetInt64(), out var tcs)) { tcs.TrySetResult((message.Clone(), lastReceivedSeq)); }
                 }
                 else if (message.TryGetProperty("ev", out var ev))
                 {
                     var name = ev.GetString() ?? throw new JsonException("an event without a name");
                     var seq = message.GetProperty("seq").GetInt64();
                     var data = message.TryGetProperty("data", out var d) ? d.Clone() : default;
+                    lastReceivedSeq = seq;
                     events.Writer.TryWrite(new ChannelEvent(name, seq, data));
                 }
                 else if (message.TryGetProperty("op", out var op) && handler is not null)

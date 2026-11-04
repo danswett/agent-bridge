@@ -384,6 +384,149 @@ test('a machine back from offline takes nothing until its first whole snapshot, 
   assert.deepEqual(opened, ['a', 'b', 'b']);
 });
 
+// The real HostClient over a transport playing a host that answers hello, sessions.subscribe and
+// session.answer at once; the test sends its events. subscribeOk(n): whether a channel's nth
+// sessions.subscribe is taken.
+function playedHost(transports, { subscribeOk = () => true } = {}) {
+  return (ch, store) => {
+    let subscribes = 0;
+    const t = {
+      sent: [],
+      onmessage: null,
+      onclose: null,
+      close() { ch.close(); },
+      send(m) {
+        t.sent.push(m);
+        const reply = (r) => setImmediate(() => t.onmessage?.(r));
+        if (m.op === 'hello') { reply({ re: m.id, ok: true, result: { protocol: 1, machine: { name: ch.peerId }, capabilities: ['sessions.read', 'sessions.answer'] } }); }
+        if (m.op === 'sessions.subscribe') {
+          reply(subscribeOk(++subscribes) ? { re: m.id, ok: true, result: { revision: 1, count: 1 } } : { re: m.id, ok: false, error: 'not now' });
+        }
+        if (m.op === 'session.answer') { reply({ re: m.id, ok: true, result: { outcome: 'delivered' } }); }
+        return Promise.resolve();
+      },
+      host(m) { t.onmessage(m); },
+      ops(op) { return t.sent.filter((m) => m.op === op); },
+    };
+    transports.push(t);
+    return new HostClient(t, { store });
+  };
+}
+
+const asking = (id) => ({ id, agent: 'copilot', status: 'waiting', updatedAt: '2026-11-03T09:00:00.000Z', activity: {}, question: { id: 'q1', kind: 'form', message: 'Which?', fields: [] } });
+
+async function playedMachine(options = {}) {
+  const connection = fakeConnection(hosts('a'));
+  const transports = [];
+  const s = new HostSession({ connection, storage: null, makeClient: playedHost(transports, options), reopenMs: 5 });
+  const opened = [];
+  s.onOpen((id) => opened.push(id));
+  s.select('a');
+  await flush();
+  connection.opens[0].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  const t = transports[0];
+  t.host({ ev: 'session.upsert', seq: 1, data: asking('s1') });
+  t.host({ ev: 'session.upsert', seq: 2, data: asking('s2') });
+  // whole: false leaves the first snapshot under way.
+  if (options.whole !== false) { t.host({ ev: 'sessions.synced', seq: 3, data: { revision: 1 } }); }
+  return { connection, transports, s, opened, t };
+}
+
+test('after a gap in a machine\'s events nothing is sent to it, an answer included, until the snapshot it asks for again is whole', async () => {
+  const { s, opened, t } = await playedMachine();
+  const answers = new AnswerService({ current: (h) => s.route(h), accepts: (h) => !!s.route(h), retryMs: 10 });
+  s.onOpen((id) => answers.ready(id));
+  assert.ok(s.route('a'), 'routed once its first snapshot is whole');
+  assert.deepEqual(opened, ['a']);
+
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  assert.equal(s.route('a'), null, 'held from the gap on');
+  assert.deepEqual(s.staleOf('a'), { reason: 'confirming', since: null });
+  assert.equal(answers.submit({ hostId: 'a', sessionId: 's1', questionId: 'q1', answer: { text: 'yes' } }), null);
+  await flush();
+  assert.equal(t.ops('sessions.subscribe').length, 2, 'subscribed again on the same channel');
+  t.host({ ev: 'session.upsert', seq: 6, data: asking('s1') });
+  await flush();
+  assert.equal(s.route('a'), null, 'half a snapshot confirms nothing');
+  assert.deepEqual([t.ops('session.answer'), opened], [[], ['a']], 'nothing sent, and nothing waiting resent, before the snapshot is whole');
+
+  t.host({ ev: 'sessions.synced', seq: 7, data: { revision: 2 } });
+  assert.equal(s.staleOf('a'), null);
+  assert.deepEqual(opened, ['a', 'a'], 'what waits to be resent goes once it is whole');
+  assert.ok(s.route('a'), 'routed again');
+  assert.equal(answers.submit({ hostId: 'a', sessionId: 's1', questionId: 'q1', answer: { text: 'yes' } }).state, 'sending');
+  await until(() => answers.get('a', 's1', 'q1')?.state === 'done', 'the answer');
+  assert.equal(t.ops('session.answer').length, 1);
+});
+
+test('a recovery snapshot that loses an event before its sessions.synced confirms nothing, resends nothing, drops nothing, and is asked for again', async () => {
+  const { s, opened, t } = await playedMachine();
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  await flush();
+  await flush();
+  t.host({ ev: 'session.upsert', seq: 6, data: asking('s1') });
+  // seq 7, s2's upsert, is lost.
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.deepEqual([s.route('a'), s.staleOf('a')?.reason, opened], [null, 'confirming', ['a']], 'held, and nothing waiting resent');
+  assert.ok(s.sessions.get('a', 's2'), 'not taken for ended by half a snapshot');
+  await flush();
+  await flush();
+  assert.equal(t.ops('sessions.subscribe').length, 3, 'asked for again');
+  t.host({ ev: 'session.upsert', seq: 9, data: asking('s1') });
+  t.host({ ev: 'session.upsert', seq: 10, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 11, data: { revision: 3 } });
+  assert.ok(s.route('a'));
+  assert.deepEqual(opened, ['a', 'a']);
+});
+
+test('a recovery snapshot that loses its first upsert is not taken as whole: nothing pruned, nothing resent, and it is asked for again', async () => {
+  const { s, opened, t } = await playedMachine();
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  await flush();
+  await flush();
+  // seq 6, the new snapshot's first upsert (s1's), is lost; s2's and the end arrive.
+  t.host({ ev: 'session.upsert', seq: 7, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.deepEqual([s.route('a'), opened], [null, ['a']]);
+  assert.ok(s.sessions.get('a', 's1'), 'not pruned by a snapshot missing its upsert');
+  await flush();
+  await flush();
+  assert.equal(t.ops('sessions.subscribe').length, 3);
+});
+
+test('a sessions.synced from the subscription before, still on its way when a gap asked again, does not end the new snapshot', async () => {
+  const { s, opened, t } = await playedMachine({ whole: false });
+  t.host({ ev: 'session.upsert', seq: 4, data: asking('s2') });
+  // The first snapshot's end, sent before the host had the new subscribe: it answers that only
+  // after stopping the first.
+  t.host({ ev: 'sessions.synced', seq: 5, data: { revision: 1 } });
+  assert.deepEqual([s.route('a'), opened], [null, []]);
+  await flush();
+  await flush();
+  t.host({ ev: 'session.upsert', seq: 6, data: asking('s1') });
+  assert.equal(s.route('a'), null, 'the new snapshot is under way');
+  t.host({ ev: 'session.upsert', seq: 7, data: asking('s2') });
+  t.host({ ev: 'sessions.synced', seq: 8, data: { revision: 2 } });
+  assert.ok(s.route('a'));
+  assert.deepEqual(opened, ['a']);
+  assert.deepEqual(s.sessions.list().map((e) => e.session.id).sort(), ['s1', 's2']);
+});
+
+test('a gap whose resubscription the machine refuses closes the channel and opens a new one, rather than holding the machine for good', async () => {
+  const { connection, transports, s, t } = await playedMachine({ subscribeOk: (n) => n === 1 });
+  t.host({ ev: 'session.upsert', seq: 5, data: asking('s1') });
+  assert.equal(s.route('a'), null);
+  for (let i = 0; i < 4; i++) { await flush(); }
+  assert.equal(connection.opens[0].channel.closed, true);
+  await until(() => connection.opens.length === 2, 'a new channel');
+  connection.opens[1].resolve();
+  for (let i = 0; i < 4; i++) { await flush(); }
+  transports[1].host({ ev: 'session.upsert', seq: 1, data: asking('s1') });
+  transports[1].host({ ev: 'sessions.synced', seq: 2, data: { revision: 2 } });
+  assert.equal(s.route('a')?.client.closed, false, 'routed on the new channel once its snapshot is whole');
+});
+
 test('an answer, reply, stop or launch is refused unsent for a machine that takes nothing now', () => {
   let stale = true;
   const sent = [];

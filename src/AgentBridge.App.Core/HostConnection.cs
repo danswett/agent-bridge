@@ -83,10 +83,18 @@ public sealed class HostConnection : IAsyncDisposable
 
     public bool Can(string capability) => Capabilities.Contains(capability);
 
+    // Raised on the UI thread when this connection's events skip some (a gap), before anything
+    // after the gap is applied: its sessions may be missing changes until the snapshot the recovery
+    // asks for is whole. That snapshot begins only once the recovery has read hello, status, usage
+    // and updates again, so until then the list still reads as complete (#427).
+    public event Action? Gapped;
+
     public void Start() => loop = Task.Run(() => RunAsync(stop.Token));
 
     // The current connection's gap signal, while there is one.
     SemaphoreSlim? resync;
+    // The channel whose events are being followed now.
+    IClientChannel? pumping;
 
     // Reads everything again on the connection there is, as after a gap in its events, the
     // sessions with a new snapshot; nothing without one (the next connection subscribes afresh).
@@ -157,6 +165,7 @@ public sealed class HostConnection : IAsyncDisposable
                 // SemaphoreSlim whose wait handle was never asked for holds nothing to free.
                 var gaps = new SemaphoreSlim(0);
                 Volatile.Write(ref resync, gaps);
+                Volatile.Write(ref pumping, ch);
                 var pump = Task.Run(() => PumpAsync(ch, gaps, ct), ct);
                 Volatile.Write(ref current, new Current(ch, null));
                 ui.Post(() => Hello = hello);
@@ -262,11 +271,13 @@ public sealed class HostConnection : IAsyncDisposable
 
     async Task SubscribeSessionsAsync(IClientChannel ch, CancellationToken ct)
     {
-        // The snapshot is marked before the request goes, so no upsert of it is missed.
-        ui.Post(Sessions.BeginSnapshot);
+        // The snapshot is marked before the request goes, so no upsert of it is missed. Only a
+        // sessions.synced received after the response, on this channel, ends it (SessionStore).
+        ui.Post(() => Sessions.BeginSnapshot(ch));
         // Its result (revision, count) is not used: read strictly, a result the app could not read
         // ended the connection, and every reconnect asked again (#446).
-        await ch.CallAsync(Ops.SessionsSubscribe, ct: ct);
+        var (_, before) = await ch.CallOrderedAsync(Ops.SessionsSubscribe, ct: ct);
+        ui.Post(() => Sessions.Answered(ch, before));
     }
 
     // The account's other machines' readings too, where the host keeps them (usage.shared, #172).
@@ -346,9 +357,27 @@ public sealed class HostConnection : IAsyncDisposable
                 // A gap means the buffer dropped events while the UI was slow: the sessions
                 // are subscribed again, which resends them all. Each connection numbers its
                 // events from 1, so a first event above 1 is a gap too.
-                if (ev.Seq != last + 1) { gaps.Release(); }
+                // Before anything of the event is applied: the snapshot under way is no longer the
+                // whole of anything, so nothing ends it, not even this event when it is the
+                // sessions.synced (#427).
+                if (ev.Seq != last + 1)
+                {
+                    var at = ev.Seq;
+                    ui.Post(() =>
+                    {
+                        // The snapshot only if it is this channel's (AbandonSnapshot checks): an old channel's
+                        // own snapshot must still end unfinished, or its sessions.synced, read next, ends it.
+                        Sessions.AbandonSnapshot(ch, at);
+                        // Gapped only for the channel followed now. RunAsync doesn't wait for a pump to
+                        // finish, so one draining a channel already replaced could read a gap after the new
+                        // channel's snapshot began, and unconfirm rows whose recovery it can't ask for (that
+                        // goes to its own channel's gap signal), holding them for good.
+                        if (ReferenceEquals(Volatile.Read(ref pumping), ch)) { Gapped?.Invoke(); }
+                    });
+                    gaps.Release();
+                }
                 last = ev.Seq;
-                Apply(ev);
+                Apply(ch, ev);
             }
         }
         catch (OperationCanceledException) { }
@@ -358,9 +387,9 @@ public sealed class HostConnection : IAsyncDisposable
     // JsonException ended the pump and the connection with it, and the snapshot after the
     // reconnect sent the same record again: one malformed session kept the app reconnecting for
     // good, its other sessions frozen. Logged once per kind of event, without the record itself.
-    void Apply(ChannelEvent ev)
+    void Apply(IClientChannel ch, ChannelEvent ev)
     {
-        try { ApplyOne(ev); }
+        try { ApplyOne(ch, ev); }
         catch (Exception e) when (e is JsonException or InvalidOperationException or FormatException or NotSupportedException) { Refused(ev.Name, e); }
     }
 
@@ -377,7 +406,7 @@ public sealed class HostConnection : IAsyncDisposable
     // Host records are read as the spec says (Received): a field that cannot be read is absent,
     // unless the record is filed or decided on by it. The host's own status, a local-pipe record
     // the app alone reads, stays strict: its process id and start say which host it is.
-    void ApplyOne(ChannelEvent ev)
+    void ApplyOne(IClientChannel ch, ChannelEvent ev)
     {
         switch (ev.Name)
         {
@@ -393,7 +422,8 @@ public sealed class HostConnection : IAsyncDisposable
                         ui.Post(Sessions.Refuse);
                         throw;
                     }
-                    ui.Post(() => Sessions.Upsert(s, exact));
+                    var seq = ev.Seq;
+                    ui.Post(() => Sessions.Upsert(s, exact, ch, seq));
                     break;
                 }
             case Events.SessionRemove:
@@ -407,7 +437,8 @@ public sealed class HostConnection : IAsyncDisposable
                     // Read like any other record: one the app cannot read ends no snapshot, so it
                     // removes no session and lifts no discovery hold.
                     var held = Received.Read<SessionsSynced>(ev.Data).DiscoveryHeld;
-                    ui.Post(() => Sessions.EndSnapshot(held));
+                    var seq = ev.Seq;
+                    ui.Post(() => Sessions.EndSnapshot(held, ch, seq));
                     break;
                 }
             case Events.DiscoveryChanged:
@@ -472,18 +503,74 @@ public sealed class SessionStore
 
     public void SetHeld(DiscoveryHeld? held)
     {
+        // A discovery.changed read after a sessions.synced that still waits on its subscribe's
+        // answer is the newer word: finishing that snapshot later must not put the synced's older
+        // hold back, which hid a newly reported hold until the next change.
+        if (early is { } e) { early = (e.Seq, held); }
+        ApplyHeld(held);
+    }
+
+    void ApplyHeld(DiscoveryHeld? held)
+    {
         if (held?.Reason == Held?.Reason && (held?.Agents ?? []).SequenceEqual(Held?.Agents ?? [])) { return; }
         Held = held;
         HeldChanged?.Invoke();
     }
 
-    public void BeginSnapshot()
+    // Which subscription the snapshot under way belongs to: the channel it was asked on, and, once
+    // its response has come, the seq of the last event received before it. Only a sessions.synced
+    // on that channel with a higher seq ends it (#427). A host stops one subscription before
+    // answering the next, so a synced before the response is an earlier subscription's, which
+    // ended this one early with half its sessions; one from an earlier channel ends nothing now.
+    object? snapshotOn;
+    long? snapshotAfter;
+    // A synced on the right channel that was read before the response was known.
+    (long Seq, DiscoveryHeld? Held)? early;
+    // Upserts on that channel read before the response was known: counted towards the snapshot
+    // once it is, if they came after it. An earlier subscription's upsert counted, and a session
+    // that ended before the new snapshot was taken stayed on the list for good.
+    List<(long Seq, string Id)>? earlyIds;
+
+    public void BeginSnapshot() => BeginSnapshot(null);
+
+    // on: the channel the subscribe goes on; null for a snapshot whose synced is taken whenever it
+    // comes.
+    public void BeginSnapshot(object? on)
     {
         snapshot = new HashSet<string>(StringComparer.Ordinal);
+        snapshotOn = on;
+        snapshotAfter = on is null ? long.MinValue : null;
+        early = null;
+        earlyIds = null;
         Complete = false;
         refused = false;
         Snapshots++;
         SnapshotBegun?.Invoke();
+    }
+
+    // The subscribe on that channel was answered after the event numbered before (-1: none).
+    public void Answered(object on, long before)
+    {
+        if (snapshot is null || !ReferenceEquals(on, snapshotOn) || snapshotAfter is not null) { return; }
+        snapshotAfter = before;
+        foreach (var (seq, id) in earlyIds ?? []) { if (seq > before) { snapshot.Add(id); } }
+        earlyIds = null;
+        if (early is { } e)
+        {
+            early = null;
+            if (e.Seq > before) { Finish(e.Held); }
+        }
+    }
+
+    // Events were lost on that channel at seq: the snapshot under way, if its response came before
+    // them or is not known yet, can't be whole, so nothing ends it. The next subscribe begins
+    // another. Lost before its response, they were the earlier subscription's, which it covers.
+    public void AbandonSnapshot(object on, long seq)
+    {
+        if (snapshot is null || !ReferenceEquals(on, snapshotOn) || seq <= snapshotAfter) { return; }
+        snapshot = null;
+        early = null;
+        earlyIds = null;
     }
 
     // How many snapshots have begun: one that began after a moment (Machine.Unconfirm) and has
@@ -508,9 +595,21 @@ public sealed class SessionStore
 
     public void Upsert(Session s) => Upsert(s, exact: true);
 
-    public void Upsert(Session s, bool exact)
+    public void Upsert(Session s, bool exact) => Upsert(s, exact, null, 0);
+
+    // One read on a channel at seq: it counts towards the snapshot under way only if it came after
+    // that snapshot's subscribe was answered, on its channel (on: null counts it whatever).
+    public void Upsert(Session s, bool exact, object? on, long seq)
     {
-        snapshot?.Add(s.Id);
+        if (snapshot is not null)
+        {
+            if (on is null || snapshotOn is null) { snapshot.Add(s.Id); }
+            else if (ReferenceEquals(on, snapshotOn))
+            {
+                if (snapshotAfter is not { } after) { (earlyIds ??= []).Add((seq, s.Id)); }
+                else if (seq > after) { snapshot.Add(s.Id); }
+            }
+        }
         sessions[s.Id] = s;
         if (exact) { unsure.Remove(s.Id); } else { unsure.Add(s.Id); }
         Upserted?.Invoke(s);
@@ -528,11 +627,29 @@ public sealed class SessionStore
 
     public void EndSnapshot(DiscoveryHeld? held)
     {
+        if (snapshot is null) { return; }
+        Finish(held);
+    }
+
+    // A sessions.synced read on a channel at seq.
+    public void EndSnapshot(DiscoveryHeld? held, object on, long seq)
+    {
+        if (snapshot is null || !ReferenceEquals(on, snapshotOn)) { return; }
+        if (snapshotAfter is not { } after)
+        {
+            if (early is not { } e || seq > e.Seq) { early = (seq, held); }
+            return;
+        }
+        if (seq > after) { Finish(held); }
+    }
+
+    void Finish(DiscoveryHeld? held)
+    {
         if (snapshot is not { } seen) { return; }
         snapshot = null;
         Complete = true;
         foreach (var id in sessions.Keys.Where(id => !seen.Contains(id)).ToList()) { Remove(id); }
-        SetHeld(held);
+        ApplyHeld(held);
         Synced?.Invoke();
     }
 }

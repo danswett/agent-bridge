@@ -33,9 +33,13 @@ export class HostClient {
   #transferTimeoutMs;
   #listeners = new Map();
   #lastSeq = null;
-  // While a subscription's snapshot is arriving: the ids received since subscribing.
+  // The sessions.subscribe whose response is awaited (its request id), and, from that response
+  // on, the ids its snapshot has delivered. A host stops one subscription before answering the
+  // next, so events before the response are an earlier subscription's: nothing before it counts
+  // towards the snapshot or completes it (#427), or an earlier sessions.synced still on its way
+  // would end the new snapshot with half its sessions.
+  #subscribing = null;
   #snapshot = null;
-  #resubscribing = null;
   #usageSubscribed = false;
   #usageShared = false;
   #updateSubscribed = false;
@@ -71,10 +75,13 @@ export class HostClient {
     }
   }
 
-  request(op, data = {}, { timeoutMs = this.#timeoutMs } = {}) {
-    if (this.closed) { return Promise.reject(new HostError(op, 'the channel is closed')); }
+  request(op, data = {}, options = {}) { return this.#request(op, data, options).done; }
+
+  // The request's id too, known as soon as it is made.
+  #request(op, data = {}, { timeoutMs = this.#timeoutMs } = {}) {
+    if (this.closed) { return { id: null, done: Promise.reject(new HostError(op, 'the channel is closed')) }; }
     const id = ++this.#next;
-    return new Promise((resolve, reject) => {
+    const done = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.#pending.delete(id)) { reject(new HostError(op, 'timed out')); }
       }, timeoutMs);
@@ -86,6 +93,7 @@ export class HostClient {
         if (p) { this.#pending.delete(id); clearTimeout(p.timer); reject(new HostError(op, e.message)); }
       });
     });
+    return { id, done };
   }
 
   async hello() { return readHello(await this.request(Ops.hello)); }
@@ -178,10 +186,11 @@ export class HostClient {
   // one upsert per live session and `sessions.synced`. Upserts are shown as they arrive;
   // on synced, any session from before that the snapshot did not include is dropped.
   async subscribe() {
-    this.#snapshot = new Set();
-    this.#lastSeq = null;
+    this.#snapshot = null;
     this.synced = false;
-    return this.request(Ops.sessionsSubscribe);
+    const { id, done } = this.#request(Ops.sessionsSubscribe);
+    this.#subscribing = id;
+    try { return await done; } finally { if (this.#subscribing === id) { this.#subscribing = null; } }
   }
 
   // usage.get: the machine's latest usage report (docs/protocol/v1-usage.md). shared: with the
@@ -227,6 +236,12 @@ export class HostClient {
       if (!p) { return; }
       this.#pending.delete(m.re);
       clearTimeout(p.timer);
+      // Here, in the order of the channel, not when the awaiting code next runs: every event
+      // after this response is the new subscription's, and none before it.
+      if (m.re === this.#subscribing) {
+        this.#subscribing = null;
+        if (m.ok === true) { this.#snapshot = new Set(); }
+      }
       if (m.ok === true) { p.resolve(m.result); }
       else { p.reject(new HostError(p.op, typeof m.error === 'string' ? m.error : 'failed', { fromHost: true })); }
       return;
@@ -239,9 +254,17 @@ export class HostClient {
     // way back to a known state is a fresh snapshot.
     let gap = false;
     if (Number.isInteger(m.seq)) {
-      gap = this.#lastSeq !== null && m.seq !== this.#lastSeq + 1;
+      // A channel numbers its events from 1 and a later subscribe carries on from where it is, so
+      // the next is always one more than the last, and the first is 1. Taking whatever came first,
+      // on a channel or after subscribing again, as the baseline missed events lost just then.
+      gap = m.seq !== (this.#lastSeq ?? 0) + 1;
       this.#lastSeq = m.seq;
     }
+    // Before anything of this event is applied or told: the snapshot under way is no longer the
+    // whole of anything, so nothing may complete it, not even this event when it is the
+    // sessions.synced. Told after, a listener confirmed the list, and resent what waited,
+    // before hearing it was not whole (#427).
+    if (gap) { this.#resubscribe(m.seq); }
     const data = m.data !== null && typeof m.data === 'object' ? m.data : {};
     switch (m.ev) {
       case Events.sessionUpsert: {
@@ -282,17 +305,19 @@ export class HostClient {
         break;
     }
     this.#emit('event', m);
-    if (gap) { this.#resubscribe(m.seq); }
   }
 
+  // 'gap' carries resync, which settles true once the host has taken the new subscription and
+  // false if it never did: a listener holding the list until the new snapshot is whole (#427)
+  // learns that it will never be on this channel. A subscribe still awaiting its response covers
+  // the gap (its snapshot is everything after that response); one already answered doesn't, as
+  // its snapshot is what the gap broke.
   #resubscribe(seq) {
-    if (this.#resubscribing || this.closed) { return; }
-    this.#emit('gap', { seq });
+    if (this.#subscribing !== null || this.closed) { return; }
     // An update lost in the gap is replaced by the current report.
     if (this.#usageSubscribed) { this.subscribeUsage({ shared: this.#usageShared }).then((r) => this.#emit('usage', r), (e) => this.#emit('error', e)); }
     if (this.#updateSubscribed) { this.subscribeUpdate().then((r) => this.#emit('update', r), (e) => this.#emit('error', e)); }
-    this.#resubscribing = this.subscribe()
-      .catch((e) => this.#emit('error', e))
-      .finally(() => { this.#resubscribing = null; });
+    const resync = this.subscribe().then(() => true, (e) => { this.#emit('error', e); return false; });
+    this.#emit('gap', { seq, resync });
   }
 }

@@ -375,6 +375,37 @@ public sealed class FleetTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_gap_in_another_machines_events_holds_its_rows_until_the_snapshot_its_recovery_asks_for_is_whole()
+    {
+        remoteHost.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Delivered));
+        await BothMachinesAsync();
+        var question = Card("there")!.Question!;
+        Assert.True(TestUi.Read(() => question.CanAnswer && main.Waiting == 1));
+        // The recovery reads usage again before it subscribes; held there, the moment between the
+        // gap and the new snapshot beginning (which the rows already waited out) is seen.
+        using var usage = new ManualResetEventSlim();
+        remoteHost.On(UsageProtocol.Get, _ => { usage.Wait(FakeHost.Patience); return UsageReport.Empty; });
+
+        foreach (var ch in remoteHost.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(3); }
+        await remoteHost.SendAsync(Events.SessionUpsert, remoteHost.Sessions[0]);
+        await Wait.UntilAsync(() => remoteHost.Sent(UsageProtocol.Get).Count > 0, "the recovery under way");
+
+        TestUi.Read(() =>
+        {
+            Assert.False(Remote().Current);
+            Assert.False(question.CanAnswer);
+            Assert.Equal(0, main.Waiting);
+            return true;
+        });
+        var early = TestUi.Read(() => Remote().Deliveries.Submit(question.Key, Ops.SessionAnswer, r => new AnswerRequest { Id = "there", Question = "q1", Request = r, Text = "sqlite" }, _ => true));
+        Assert.Equal(Deliveries.Held, early.Outcome);
+
+        usage.Set();
+        await Wait.UntilAsync(() => Remote().Current && question.CanAnswer && main.Waiting == 1, "the rows confirmed by the new snapshot");
+        Assert.Empty(remoteHost.Sent(Ops.SessionAnswer));
+    }
+
+    [Fact]
     public async Task A_question_that_ended_while_its_machine_was_offline_goes_without_ever_being_answerable()
     {
         await BothMachinesAsync();

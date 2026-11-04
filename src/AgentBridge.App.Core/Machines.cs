@@ -33,6 +33,10 @@ public sealed class Machine : IAsyncDisposable
             if (up && !now) { Unconfirm(); }
             up = now;
         };
+        // Nor are rows a gap in its events may have left out of date (#427): the recovery's snapshot
+        // begins only once it has read hello, status and usage again, and until then the list looked
+        // whole, so answers, replies, End session and toasts' buttons went on against it.
+        host.Gapped += Unconfirm;
     }
 
     // "local" for this machine; another machine's relay device id.
@@ -56,7 +60,8 @@ public sealed class Machine : IAsyncDisposable
     public DateTimeOffset? OfflineSince { get; private set; }
     public bool Offline => OfflineSince is not null;
 
-    // The first snapshot that can confirm its rows: one begun after it was last away.
+    // The first snapshot that can confirm its rows: one begun after it was last away, or after the
+    // last gap in its events.
     long confirmFrom;
 
     internal void GoOffline(DateTimeOffset at)
@@ -79,7 +84,8 @@ public sealed class Machine : IAsyncDisposable
 
     // Whether its rows are its host's word now, and so can be acted on: this machine's always (an
     // answer there waits for the host over the pipe, as before #269); another's only while it is in
-    // the relay's presence and connected, and a snapshot begun since it was last away has completed.
+    // the relay's presence and connected, and a snapshot begun since it was last away (or since a
+    // gap in its events) has completed.
     // Never on the copy kept while it was gone: a question that ended meanwhile is not answerable.
     public bool Current => IsLocal || (OfflineSince is null && Host.State == LinkState.Connected && Host.Sessions.Complete && Host.Sessions.Snapshots >= confirmFrom);
 

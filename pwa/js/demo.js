@@ -57,6 +57,8 @@ const now = () => new Date().toISOString();
 class DemoTransport {
   onmessage = null;
   onclose = null;
+  // Its own seq, as each channel to a real host numbers its events from 1.
+  seq = 0;
   constructor(host) { this.host = host; }
   send(message) {
     // Asynchronous, like a real channel, so ordering bugs show up here too.
@@ -126,7 +128,6 @@ export class DemoHost {
   // What each delegate said in full, by its id, for session.get with agent; a test changes it.
   delegateWords = clone(DELEGATE_WORDS);
   failDelegateGets = 0;
-  seq = 0;
   revision = 0;
 
   // Each session.answer request: its outcome, by request UUID, as a host keeps them.
@@ -656,7 +657,7 @@ export class DemoHost {
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session stopped answering' : 'from a newer host') };
   }
 
-  #event(t, ev, data) { t.deliver({ ev, seq: ++this.seq, data }); }
+  #event(t, ev, data) { t.deliver({ ev, seq: ++t.seq, data }); }
 
   // The next presses' refusals, in order (their reasons); none scripted, a press is taken.
   scriptUpdates(reasons) { this.#updateScript.push(...reasons); }
@@ -720,11 +721,16 @@ export class DemoHost {
     this.#broadcast('discovery.changed', held ? { discoveryHeld: held } : {});
   }
 
+  // The last seq sent on its channels: the one a client shows, in tests.
+  get seq() { return Math.max(0, ...[...this.transports].map((t) => t.seq)); }
+
   // A frame exactly as given, for testing what the client does with odd ones. A frame
-  // with a numeric seq moves this host's counter on to it.
+  // with a numeric seq moves each channel's counter on to it.
   frame(f) {
-    if (Number.isInteger(f.seq)) { this.seq = f.seq; }
-    for (const t of this.transports) { t.deliver(f); }
+    for (const t of this.transports) {
+      if (Number.isInteger(f.seq)) { t.seq = f.seq; }
+      t.deliver(f);
+    }
   }
 
   get(id) { return this.sessions.get(id); }

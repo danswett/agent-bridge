@@ -13,6 +13,10 @@ public interface IClientChannel : IProtocolChannel, IAsyncDisposable
     ChannelReader<ChannelEvent> Events { get; }
     Exception? CloseReason { get; }
     Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default);
+    // The same, with the seq of the last event this end had received when the response came (-1
+    // for none): events with a higher seq came after the response. A subscribe's snapshot is the
+    // events after its response; one before belongs to an earlier subscription (#427).
+    Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default);
 }
 
 // A channel this device opened through the relay, as a client holds it: disposing it closes
@@ -32,9 +36,12 @@ public sealed class RelayClientChannel(ChannelHub hub, SecureChannel channel) : 
     // open channel, an authenticated frame that is malformed) is a lost connection to whoever
     // holds it: the pipe's callers recover from IOException, and would otherwise stop for good, or
     // leave an answer sending. Anything else, with the channel still open, is left as it is.
-    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
+        (await RequestOrderedAsync(op, data, timeout, ct)).Response;
+
+    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
-        try { return await channel.RequestAsync(op, data, timeout, ct); }
+        try { return await channel.RequestOrderedAsync(op, data, timeout, ct); }
         catch (Exception e) when (Ended(e)) { throw new IOException($"the channel to {channel.PeerName} failed: {e.Message}", e); }
     }
 

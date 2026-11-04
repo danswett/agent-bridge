@@ -26,6 +26,13 @@ sealed class FakeHost : IAsyncDisposable
     public TaskCompletionSource? HoldSynced { get; set; }
     // What sessions.subscribe answers in place of its result, when set.
     public object? SubscribeReply { get; set; }
+    // Called with each sessions.subscribe's number (from 1) before it is answered: a test can send
+    // what an earlier subscription still had on its way.
+    public Action<int>? OnSubscribe { get; set; }
+    int subscribes;
+    // How many sessions.synced have been sent.
+    public int SyncedSent => Volatile.Read(ref syncedSent);
+    int syncedSent;
     public HostStatus Status { get; set; } = StatusOf();
 
     public FakeHost()
@@ -89,6 +96,8 @@ sealed class FakeHost : IAsyncDisposable
         Channels.Add(ch);
         if (op == Ops.SessionsSubscribe)
         {
+            var n = Interlocked.Increment(ref subscribes);
+            OnSubscribe?.Invoke(n);
             List<Session> snapshot;
             lock (Sessions) { snapshot = [.. Sessions]; }
             var hold = HoldSynced;
@@ -97,6 +106,7 @@ sealed class FakeHost : IAsyncDisposable
                 foreach (var s in snapshot) { await c.SendEventAsync(Events.SessionUpsert, s); }
                 if (hold is not null) { await hold.Task; }
                 await c.SendEventAsync(Events.SessionsSynced, new SessionsSynced(1, Held));
+                Interlocked.Increment(ref syncedSent);
             }));
         }
         return ops.TryGetValue(op, out var answer) ? answer(data) : Task.FromResult<object?>(null);

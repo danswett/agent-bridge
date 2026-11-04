@@ -31,12 +31,15 @@ public sealed class SecureChannel : IProtocolChannel
     // Every outgoing message (request, response, event) is encrypted and sent under this
     // one lock, so frames leave in nonce order and events in seq order.
     readonly SemaphoreSlim sendLock = new(1, 1);
-    readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> pending = new();
+    readonly ConcurrentDictionary<long, TaskCompletionSource<(JsonElement, long)>> pending = new();
     readonly Channel<ChannelEvent> events;
     readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     Exception? closeReason;
     long nextRequest;
     long lastEventSeq;
+    // The seq of the last event delivered, set by the hub's one receive loop that also completes
+    // responses: each response is stamped with it.
+    long lastReceivedSeq = -1;
 
     internal XXHandshake Handshake { get; }
     internal TaskCompletionSource Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -77,11 +80,16 @@ public sealed class SecureChannel : IProtocolChannel
 
     // Sends {id, op, data} and waits for the response with the same id: the whole response,
     // {re, ok, result} or {re, ok: false, error}. Any number may be outstanding at once.
-    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
+        (await RequestOrderedAsync(op, data, timeout, ct)).Response;
+
+    // The same, with the seq of the last event received before the response (-1 for none): an
+    // event with a higher seq came after it (IClientChannel.RequestOrderedAsync).
+    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         ThrowIfClosed();
         var id = Interlocked.Increment(ref nextRequest);
-        var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = tcs;
         try
         {
@@ -165,7 +173,7 @@ public sealed class SecureChannel : IProtocolChannel
 
     internal void Complete(JsonElement response)
     {
-        if (pending.TryRemove(response.GetProperty("re").GetInt64(), out var tcs)) { tcs.TrySetResult(response); }
+        if (pending.TryRemove(response.GetProperty("re").GetInt64(), out var tcs)) { tcs.TrySetResult((response, lastReceivedSeq)); }
     }
 
     internal void Deliver(JsonElement message)
@@ -173,6 +181,7 @@ public sealed class SecureChannel : IProtocolChannel
         var name = message.GetProperty("ev").GetString() ?? throw new JsonException("an event without a name");
         var seq = message.GetProperty("seq").GetInt64();
         var data = message.TryGetProperty("data", out var d) ? d.Clone() : default;
+        lastReceivedSeq = seq;
         events.Writer.TryWrite(new ChannelEvent(name, seq, data));
     }
 

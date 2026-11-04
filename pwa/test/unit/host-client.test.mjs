@@ -124,19 +124,35 @@ test('a gap in seq subscribes again, once, and the new snapshot replaces the lis
 test('a duplicate or backwards seq is a gap too', async () => {
   const t = fakeTransport();
   await subscribed(t, new SessionsStore());
-  t.host({ ev: 'session.upsert', seq: 3, data: session('a') });
-  t.host({ ev: 'session.upsert', seq: 3, data: session('a') });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('a') });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('a') });
   await flush();
   assert.equal(t.sent.filter((m) => m.op === 'sessions.subscribe').length, 2);
 });
 
-test('the first event after subscribing sets the baseline, whatever its seq', async () => {
+test('a channel\'s first event above 1 is a gap: the events before it were lost', async () => {
   const t = fakeTransport();
   await subscribed(t, new SessionsStore());
   t.host({ ev: 'session.upsert', seq: 41, data: session('a') });
-  t.host({ ev: 'session.upsert', seq: 42, data: session('b') });
   await flush();
-  assert.equal(t.sent.filter((m) => m.op === 'sessions.subscribe').length, 1);
+  assert.equal(t.sent.filter((m) => m.op === 'sessions.subscribe').length, 2);
+});
+
+test('events lost just after subscribing again are a gap too, as seq carries on across subscriptions', async () => {
+  const t = fakeTransport();
+  const client = await subscribed(t, new SessionsStore());
+  const synced = [];
+  client.on('synced', () => synced.push(true));
+  t.host({ ev: 'sessions.synced', seq: 1, data: { revision: 1 } });
+  t.host({ ev: 'session.upsert', seq: 4, data: session('a') });
+  await flush();
+  const subs = () => t.sent.filter((m) => m.op === 'sessions.subscribe');
+  assert.equal(subs().length, 2);
+  t.host({ re: subs().at(-1).id, ok: true, result: { revision: 2, count: 1 } });
+  // 5, the new snapshot's first upsert, is lost.
+  t.host({ ev: 'sessions.synced', seq: 6, data: { revision: 2 } });
+  await flush();
+  assert.deepEqual([subs().length, synced.length], [3, 1], 'asked again, and the snapshot not taken as whole');
 });
 
 test('unknown events are ignored but still count for seq', async () => {

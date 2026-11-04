@@ -110,6 +110,25 @@ public class EventTests
     }
 
     [Fact]
+    public async Task A_response_says_which_events_came_before_it_however_far_behind_the_reader_is()
+    {
+        var (relay, host, _, atClient) = await ChannelAsync();
+        await using var __ = relay;
+        host.Hub.Handler = async (ch, op, _) =>
+        {
+            if (op == "work") { for (var i = 0; i < 2; i++) { await ch.SendEventAsync("session.upsert", new { i }); } }
+            return new { done = true };
+        };
+
+        var (_, none) = await atClient.RequestOrderedAsync("ping");
+        var (_, two) = await atClient.RequestOrderedAsync("work");
+
+        // Neither event has been read: the stamp is where the response came among them, which
+        // is what a subscribe's snapshot is told apart from an earlier one's by (#427).
+        Assert.Equal((-1L, 2L), (none, two));
+    }
+
+    [Fact]
     public async Task A_replys_follow_up_events_go_after_its_response_as_the_subscribe_snapshot_needs()
     {
         var (relay, host, _, atClient) = await ChannelAsync();

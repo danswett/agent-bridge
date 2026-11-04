@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
+using AgentBridge.Transport;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -264,6 +265,198 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => host.Sent(Ops.SessionsSubscribe).Count == before + 1, "the sessions to be subscribed again");
         await Wait.UntilAsync(() => connection.Status?.Relay.State == RelayState.Connected, "the status to be read again");
         Assert.NotEmpty(host.Sent(UsageProtocol.Get));
+    }
+
+    [Fact]
+    public async Task A_snapshot_whose_sessions_synced_comes_after_lost_events_is_not_taken_as_whole_and_is_asked_for_again()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.Sessions.Add(Make.Session("b"));
+        other.Start();
+        await using var conn = other.Connect(start: false);
+        var synced = 0;
+        conn.Sessions.Synced += () => Interlocked.Increment(ref synced);
+        conn.Start();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+
+        // A gap asks for the sessions again, and events are lost before that snapshot's end.
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var third = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.OnSubscribe = n => other.HoldSynced = n switch { 2 => second, 3 => third, _ => null };
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 2, "the sessions asked for again");
+        Skip(other, 1);
+        second.SetResult();
+
+        await Wait.UntilAsync(() => other.Sent(Ops.SessionsSubscribe).Count == 3, "the sessions asked for a third time");
+        Assert.Equal(1, Volatile.Read(ref synced));
+        Assert.False(conn.Sessions.Complete);
+        third.SetResult();
+        await Wait.UntilAsync(() => conn.Sessions.Complete, "the third snapshot whole");
+        Assert.Equal(2, Volatile.Read(ref synced));
+    }
+
+    [Fact]
+    public async Task A_sessions_synced_the_subscription_before_still_had_on_its_way_does_not_end_the_snapshot_a_gap_asked_for()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.Sessions.Add(Make.Session("b"));
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        other.OnSubscribe = n =>
+        {
+            other.HoldSynced = n == 1 ? first : null;
+            // Asked again before the first snapshot ended: its end goes out ahead of this answer,
+            // as a host's does when it stops one subscription to answer the next.
+            if (n == 2)
+            {
+                first.SetResult();
+                SpinWait.SpinUntil(() => other.SyncedSent == 1, FakeHost.Patience);
+            }
+        };
+        other.Start();
+        await using var conn = other.Connect(start: false);
+        var synced = 0;
+        var removed = new List<string>();
+        conn.Sessions.Synced += () => Interlocked.Increment(ref synced);
+        conn.Sessions.Removed += id => { lock (removed) { removed.Add(id); } };
+        conn.Start();
+        await Wait.UntilAsync(() => conn.Sessions.Get("a") is not null && conn.Sessions.Get("b") is not null, "the first snapshot's sessions");
+
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+
+        await Wait.UntilAsync(() => other.SyncedSent == 2 && conn.Sessions.Complete, "the second snapshot whole");
+        lock (removed) { Assert.Empty(removed); }
+        Assert.Equal(1, Volatile.Read(ref synced));
+        Assert.NotNull(conn.Sessions.Get("b"));
+    }
+
+    [Fact]
+    public async Task An_upsert_the_subscription_before_sent_ahead_of_the_new_answer_does_not_keep_its_session_past_the_new_snapshot()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.OnSubscribe = n =>
+        {
+            // Asked again: the old subscription's last word is an upsert of a session that ends
+            // before the new snapshot is taken, so the new one doesn't list it.
+            // Sent on the channel only: FakeHost.SendAsync would list it, and the new snapshot with it.
+            if (n == 2)
+            {
+                foreach (var ch in other.Channels.Distinct().Where(c => c.IsOpen)) { ch.SendEventAsync(Events.SessionUpsert, Make.Session("ghost")).GetAwaiter().GetResult(); }
+            }
+        };
+        other.Start();
+        await using var conn = other.Connect();
+        await Wait.UntilAsync(() => conn.State == LinkState.Connected && conn.Sessions.Complete, "the first snapshot");
+
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+
+        await Wait.UntilAsync(() => other.SyncedSent == 2 && conn.Sessions.Complete, "the second snapshot whole");
+        Assert.Null(conn.Sessions.Get("ghost"));
+        Assert.NotNull(conn.Sessions.Get("a"));
+    }
+
+    [Fact]
+    public async Task A_gap_the_replaced_channel_reads_late_does_not_hold_the_rows_of_the_channel_that_replaced_it()
+    {
+        await using var other = new FakeHost();
+        other.Sessions.Add(Make.Session("a"));
+        other.Start();
+        var ui = new LockedDispatcher();
+        var channels = new List<GatedChannel>();
+        await using var conn = new HostConnection(async ct =>
+        {
+            var g = new GatedChannel(await LocalClient.ConnectAsync(other.Endpoint, TimeSpan.FromSeconds(1), ct));
+            lock (channels) { channels.Add(g); }
+            return g;
+        }, ui) { RetryDelay = TimeSpan.FromMilliseconds(100) };
+        var machine = new Machine("remote-id", conn, new CardContext { Deliveries = new Deliveries(conn, ui), Folds = new FoldStore(null), Capabilities = () => conn.Capabilities, Host = conn });
+        conn.Start();
+        await Wait.UntilAsync(() => machine.Current, "the first channel's rows confirmed");
+
+        // Its pump falls behind with a gap still to read, and the channel is replaced meanwhile.
+        var first = channels[0];
+        first.Hold();
+        Skip(other, 3);
+        await other.SendAsync(Events.SessionUpsert, Make.Session("a"));
+        await Wait.UntilAsync(() => first.Holding > 0, "the gap read off the first channel");
+        await other.StopAsync();
+        other.Start();
+        await Wait.UntilAsync(() => channels.Count == 2 && machine.Current, "the second channel's rows confirmed");
+
+        first.Release();
+        await Wait.UntilAsync(() => first.Drained, "the first channel's pump to read the gap");
+        await Task.Delay(300);
+        Assert.True(TestUi.Read(() => machine.Current));
+    }
+
+    // A channel whose events the test can hold back from the app's pump, as a pump that falls behind.
+    sealed class GatedChannel : IClientChannel
+    {
+        readonly IClientChannel inner;
+        readonly System.Threading.Channels.Channel<AgentBridge.Transport.ChannelEvent> events = System.Threading.Channels.Channel.CreateUnbounded<AgentBridge.Transport.ChannelEvent>();
+        volatile TaskCompletionSource? held;
+        int holding;
+
+        public GatedChannel(IClientChannel inner)
+        {
+            this.inner = inner;
+            _ = Task.Run(async () =>
+            {
+                await foreach (var e in inner.Events.ReadAllAsync())
+                {
+                    if (held is { } h) { Interlocked.Increment(ref holding); await h.Task; }
+                    events.Writer.TryWrite(e);
+                }
+                events.Writer.TryComplete();
+            });
+        }
+
+        public int Holding => Volatile.Read(ref holding);
+        // Everything passed on and read by the pump.
+        public bool Drained => events.Reader.Completion.IsCompleted;
+        public void Hold() => held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void Release() { var h = held; held = null; h?.TrySetResult(); }
+
+        public System.Threading.Channels.ChannelReader<AgentBridge.Transport.ChannelEvent> Events => events.Reader;
+        public Exception? CloseReason => inner.CloseReason;
+        public string PeerId => inner.PeerId;
+        public string PeerName => inner.PeerName;
+        public string PeerKind => inner.PeerKind;
+        public bool IsOpen => inner.IsOpen;
+        public Task Closed => inner.Closed;
+        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) => inner.RequestAsync(op, data, timeout, ct);
+        public Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) => inner.RequestOrderedAsync(op, data, timeout, ct);
+        public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => inner.SendEventAsync(name, data, ct);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
+    [Fact]
+    public void A_discovery_hold_reported_after_a_sessions_synced_that_waits_on_its_answer_is_not_undone_when_the_snapshot_finishes()
+    {
+        var store = new SessionStore();
+        var on = new object();
+        var older = new DiscoveryHeld("the claude processes could not be listed", [AgentKind.Claude]);
+        var newer = new DiscoveryHeld("an unrecognised copilot process (pid 4120)", [AgentKind.Copilot]);
+        store.BeginSnapshot(on);
+        // Read on the pump before the subscribe's answer is applied: the synced waits for it.
+        store.EndSnapshot(older, on, 5);
+        store.SetHeld(newer);
+
+        store.Answered(on, 4);
+
+        Assert.True(store.Complete);
+        Assert.Equal(newer, store.Held);
+    }
+
+    static void Skip(FakeHost h, long count)
+    {
+        foreach (var ch in h.Channels.OfType<LocalChannel>().Where(c => c.IsOpen).Distinct()) { ch.SkipEventSeq(count); }
     }
 
     [Fact]
