@@ -128,6 +128,7 @@ static class StallWatch
         // About ten seconds of counts, to say what happened over a stall that began before it was seen.
         var history = new Queue<Counts>();
         var lastStacks = long.MinValue / 2;
+        var lastHeld = long.MinValue / 2;
         while (true)
         {
             // From just before the sleep, so the time a stack reading took is not counted as the
@@ -156,9 +157,13 @@ static class StallWatch
                     // The runtime suspended (a GC, or the JIT's or a profiler's suspension) or the
                     // OS not running the process: what was counted meanwhile tells which.
                     Note(now, $"[stall watch +{now} ms] the watch itself woke {late} ms late, so the whole process was held; {counts.Since(previous)}");
+                    lastHeld = now;
                     continue;
                 }
 
+                // A wait held only by that is not a stall of its own: stacks are read only once the
+                // watch has woken on time for a whole Gap.
+                if (now - lastHeld < Gap.TotalMilliseconds) { continue; }
                 var stalled = looks.Keys.Where(l => now - l.Last >= Gap.TotalMilliseconds).OrderBy(l => l.Last).ToList();
                 if (stalled.Count == 0 || now - lastStacks < Between.TotalMilliseconds) { continue; }
                 lastStacks = now;
@@ -173,6 +178,7 @@ static class StallWatch
                 {
                     Volatile.Write(ref readingSince, now);
                     try { text.Append(Stacks()); }
+                    catch (Exception e) { text.AppendLine($"  (stacks could not be read: {e.GetType().Name}: {e.Message})"); }
                     finally { Volatile.Write(ref readingSince, -1); }
                 }
                 else { text.Append($"  (stacks were read {MaxStacks} times already)\n"); }
