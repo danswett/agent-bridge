@@ -990,6 +990,27 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ steps.browsers.outputs.cache-primary-key }}
       - run: npx playwright test --project="$PROJECT" --shard="$SHARD" --fully-parallel
+      # Renders of the demo for design review (pwa/test/renders): captures, not checks, so they
+      # never fail the job, and they are kept whatever the tests did. Design signs a state off
+      # against what the product draws, and nothing runs on an owner's machine, so CI draws them.
+      # Chromium alone: the engine that emulates forced colours.
+      # Throwaway (#729): the harness lives in .github/actions/pwa-renders-616, outside pwa/, so the PWA tree is #616's exactly; copied in
+      # here. Chromium draws the matrix; WebKit's first shard draws Send's ring once.
+      - name: Renders of the demo
+        if: ${{ !cancelled() && (matrix.project == 'chromium' || matrix.shard == '1/3') }}
+        continue-on-error: true
+        run: |
+          cp ../.github/actions/pwa-renders-616/playwright.renders.config.mjs .
+          mkdir -p test/renders
+          cp ../.github/actions/pwa-renders-616/renders/* test/renders/
+          npx playwright test --config playwright.renders.config.mjs --project="$PROJECT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && (matrix.project == 'chromium' || matrix.shard == '1/3') }}
+        with:
+          name: pwa-renders-${{ matrix.project }}
+          path: pwa/renders/
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
