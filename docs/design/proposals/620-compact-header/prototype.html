@@ -251,6 +251,13 @@
     phone.dataset.state = hidden === 0 ? (s > 0 ? 'returned' : 'rest') : hidden >= room ? 'compact' : 'riding';
   }
 
+  // The header never expands over the focused control: on a short screen it waits, still counting, until that control would stay in view.
+  const coversFocus = () => {
+    const el = document.activeElement;
+    if (!el || el === scroller || !scroller.contains(el)) return false;
+    return el.getBoundingClientRect().top < $('stage').getBoundingClientRect().top + fullH;
+  };
+
   function onScroll() {
     const max = scroller.scrollHeight - scroller.clientHeight;
     const s = Math.min(Math.max(scroller.scrollTop, 0), Math.max(max, 0)); // ignore rubber-band overscroll
@@ -271,7 +278,7 @@
     if (s <= 0) { returned = false; run = 0; held = null; }
     else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
     else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
-    else if ((!returned || fading) && dir < 0 && run >= UP && s > room) setReturned(true);   // 64 up also cancels a fade under way
+    else if ((!returned || fading) && dir < 0 && run >= UP && s > room && !coversFocus()) setReturned(true);   // 64 up also cancels a fade under way
     render();
   }
 

@@ -1564,7 +1564,7 @@ and is never a precedent. **Not yet enforced** names the issue that tracks a rul
   The folded parts stay in the tree and the tab order, focus reaching them brings the header
   back, and collapsing is never announced. The bar's one-line copy is drawn only: the title is
   read from the h2 and the status from the meta line. Nothing focused in the conversation
-  lands under the header. In high contrast the bar is `Canvas` with a `CanvasText` hairline.
+  lands under the header, and the header never expands over the focused control. In high contrast the bar is `Canvas` with a `CanvasText` hairline.
 - **Keyboard:** desktop lists move with arrows, Alt+↑/↓ reorders (#164), Shift+F10 or the
   menu key opens a row's menu, and Ctrl/⌘+K focuses search. The shortcut is named where
   search is (the Windows search box's tooltip, on hover or when Tab reaches it) and nowhere
