@@ -376,7 +376,7 @@ public sealed class DecisionContractTests
 
         var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
         Assert.True(sent.AnswerOnTap);
-        Assert.Equal((string)c["message"]!, sent.Question);
+        Assert.Equal((string)c["message"]!, Source(sent.Question));
 
         var legacy = HaDecision.Plan(Approval((string)c["legacy"]!), AgentKind.Codex);
         Assert.True(legacy.TerminalOnly);
@@ -415,7 +415,7 @@ public sealed class DecisionContractTests
 
         var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
         Assert.True(sent.AnswerOnTap);
-        Assert.Equal((string)c["message"]!, sent.Question);
+        Assert.Equal((string)c["message"]!, Source(sent.Question));
     }
 
     [Fact]
