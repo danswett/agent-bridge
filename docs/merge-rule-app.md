@@ -5,7 +5,8 @@ Main's ruleset requires the `merge-rule` status (quality/README.md §4.9). Today
 pull request can add a workflow of its own with `statuses: write` and post `merge-rule:
 success` on its own head, also as GitHub Actions, and the ruleset can't tell the two apart.
 So, until this App exists, **auto-merge stays off** and the merge coordinator merges by hand
-after running `merge-rule --pr <n>` locally (AGENTS.md, "Pull requests", rule 4).
+after running `merge-rule --pr <n>` locally from a freshly fetched `origin/main` checkout,
+never the pull request's worktree (AGENTS.md, "Pull requests", rule 4).
 
 The App closes the gap: only it posts `merge-rule`, the ruleset accepts `merge-rule` only from
 it, and its private key sits in an environment that only `main` can deploy from, so no pull
@@ -13,11 +14,11 @@ request's workflow can reach the key.
 
 ## What the App may do
 
-- Repository permissions: **Commit statuses: Read and write**, **Pull requests: Read-only**
-  (and Metadata: Read-only, which GitHub adds to every App). Nothing else.
+- Repository permissions: **Commit statuses: Read and write** (and Metadata: Read-only, which
+  GitHub adds to every App). Nothing else: every read uses the workflow's `GITHUB_TOKEN`.
 - No webhook, no user authorization, installed on this account's `agent-bridge` only.
-- Reading checks, workflow runs and labels stays with the workflow's own read-only
-  `GITHUB_TOKEN`; the App's token is used only to post (`MERGE_RULE_POST_TOKEN`).
+- Reading pull requests, checks, workflow runs and labels stays with the workflow's own
+  read-only `GITHUB_TOKEN`; the App's token is used only to post (`MERGE_RULE_POST_TOKEN`).
 
 ## Owner's steps (about 10 minutes, all in the browser)
 
@@ -31,8 +32,8 @@ Create the App:
 4. Leave **Callback URL** empty, and leave **Request user authorization (OAuth) during
    installation** and **Enable Device Flow** unchecked.
 5. **Webhook:** uncheck **Active**.
-6. **Permissions → Repository permissions:** set **Commit statuses** to **Read and write** and
-   **Pull requests** to **Read-only**. Leave everything else at **No access** (Metadata shows
+6. **Permissions → Repository permissions:** set **Commit statuses** to **Read and write**.
+   Leave everything else at **No access**, Pull requests included (Metadata shows
    as Read-only; that's mandatory). Leave Organization and Account permissions at No access,
    and subscribe to no events.
 7. **Where can this GitHub App be installed?** **Only on this account**.

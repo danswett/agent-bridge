@@ -420,7 +420,8 @@ agent-ha-bridge releases from this work:
   status as advice. Once they're applied, change this line to say so, with the date. Auto-merge
   stays off even then, until the merge-rule GitHub App posts the status (docs/merge-rule-app.md):
   a same-repo PR's own workflow could forge it. Until then the coordinator merges by hand, after its
-  own local `merge-rule --pr <n>`, which counts only `danswett`'s receipts.
+  own local `merge-rule --pr <n>`, which counts only `danswett`'s receipts, run from a freshly
+  fetched `origin/main` checkout, never the PR's worktree (the tool refuses anything else).
 
 ## 9. Decision log (after design.md §10)
 

@@ -335,8 +335,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      `sensitive_paths` (or is one GitHub couldn't decode, or holds a control character), or the
      title starts with `Security` or the `security` label is on, an `independent-review` status
      on the head whose latest from a listed poster is success. The files are those of the exact
-     commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while Copilot, CodeQL or a check is on its way, failure otherwise,
-     with the missing piece named in its description and the run's summary. Pull requests that
+     commit judged (`compare/main...<sha>`), not the pull request's latest. Pending while
+     Copilot, CodeQL or a check is on its way, failure otherwise, with the missing piece named in
+     its description and the run's summary. Pull requests that
      share a head get the worst of their verdicts, since a status belongs to the commit.
    - A pull request can't loosen its own gate (#487, Finding 1): every trigger
      (`pull_request_target`, `status`, `workflow_run` of every other workflow, `check_suite`, a
@@ -350,8 +351,16 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      pull request's copy. The schedule is the backstop, Dependabot's pull requests included.
    - CodeQL is judged here, not by a `code_scanning` rule: since #464 a pull request whose
      languages CodeQL skips uploads no results, and that rule would wait for them forever.
+     A CodeQL run that ended `skipped` (a pull request opened seconds before `ready_for_review`,
+     say) fails closed, and stays failed until CodeQL runs again on the head: start one with
+     `gh workflow run codeql.yml --ref <branch>`, or close and reopen the pull request.
    - Locally, `dotnet run --project tools/AgentBridge.Quality -c Release -- merge-rule --pr N`
-     (or `--all`) prints the verdict and posts nothing; only `--post` posts.
+     (or `--all`) prints the verdict and posts nothing; only `--post` posts. Run it from a
+     freshly fetched `origin/main` checkout (`git fetch origin`, then `git switch --detach
+     origin/main` in a worktree kept for it), never a pull request's worktree: it builds and
+     reads that checkout's evaluator and `quality/merge-rule.yml`, so a pull request's own would
+     judge it. It prints the commit they came from, and refuses unless that's `origin/main`'s
+     with no local changes to them (`--allow-non-main` judges anyway, with a warning).
    - A head whose facts can't be read gets `error`, which fails the required check like failure,
      so an earlier success doesn't stand; a hold label, read with the open list, still fails it.
      When the open list itself stops partway, no head gets success from that run: a held pull
@@ -367,8 +376,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      account, not a defence against that account: it can post any status. A workflow added by a
      same-repo pull request could, with `statuses: write`, post its own `merge-rule` from GitHub
      Actions, which the ruleset can't tell from main's. So auto-merge stays off, and the merge
-     coordinator merges by hand after its own local `merge-rule --pr N` (receipts from listed
-     posters only), until a GitHub App with only `statuses: write` and `pull_requests: read`,
+     coordinator merges by hand after its own local `merge-rule --pr N`, run from a freshly
+     fetched `origin/main` checkout (receipts from listed posters only), until a GitHub App with
+     only `statuses: write`,
      whose key only `main` can reach (an environment), posts `merge-rule` and the ruleset pins it
      to that App ([docs/merge-rule-app.md](../docs/merge-rule-app.md)).
 

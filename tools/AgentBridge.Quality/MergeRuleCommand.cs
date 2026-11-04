@@ -70,12 +70,16 @@ static class MergeRuleCommand
 {
     internal const string Usage = """
           merge-rule (--pr N | --sha SHA | --all) [--slug OWNER/REPO] [--config FILE]
-                     [--post] [--target-url URL] [--summary FILE]
+                     [--post] [--target-url URL] [--summary FILE] [--allow-non-main]
               Judges open pull requests into main against quality/merge-rule.yml: those on the
               numbered one's head, those whose head is SHA, or all of them. Prints each verdict;
               with --post, also sets each head's merge-rule status to the worst verdict on it
               (unless the workflow already posted the same), and with --summary, appends a
               Markdown table to FILE. A dry run (no --post) changes nothing.
+              The evaluator and its rules are this checkout's, so it refuses unless HEAD is
+              origin/main's commit with no local changes to them: run it from a freshly
+              fetched origin/main checkout, never a pull request's worktree, which would judge
+              itself. --allow-non-main judges anyway, with a warning.
         """;
 
     // Two reads (#524's review, GITHUB_TOKEN's GraphQL budget): the open list without checks or
@@ -160,7 +164,33 @@ static class MergeRuleCommand
         public string Cost => $"GraphQL {GraphQLPoints} point(s){(GraphQLRemaining is { } left ? $", {left} left this hour" : "")}; REST {RestCalls} call(s)";
     }
 
-    public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github)
+    /// <summary>
+    /// Where the evaluator and its rules come from: the checkout's HEAD, the base branch's
+    /// remote-tracking commit (null when it isn't fetched), whether the rules or the evaluator
+    /// differ from HEAD in the working tree, and whether --config named rules from elsewhere.
+    /// </summary>
+    internal sealed record CheckoutFacts(string Head, string? BaseCommit, bool Dirty, bool OtherRules = false);
+
+    static CheckoutFacts ReadCheckout(string baseBranch, string configPath)
+    {
+        var root = ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
+        var otherRules = !string.Equals(Path.GetFullPath(configPath), Path.GetFullPath(Path.Combine(root, "quality", "merge-rule.yml")),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var head = ChangedFiles.Git(root, "rev-parse", "HEAD").Trim();
+        string? baseCommit;
+        try
+        {
+            baseCommit = ChangedFiles.Git(root, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{baseBranch}^{{commit}}").Trim();
+        }
+        catch (InvalidOperationException)
+        {
+            baseCommit = null;
+        }
+        var dirty = ChangedFiles.Git(root, "status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality").Trim().Length > 0;
+        return new(head, baseCommit, dirty, otherRules);
+    }
+
+    public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, Func<string, CheckoutFacts>? checkout = null)
     {
         var options = ParseOptions(args);
         var modes = new[] { "pr", "sha", "all" }.Count(options.ContainsKey);
@@ -169,6 +199,21 @@ static class MergeRuleCommand
         var configPath = options.GetValueOrDefault("config")
             ?? Path.Combine(ChangedFiles.RepoRoot(Directory.GetCurrentDirectory()), "quality", "merge-rule.yml");
         var config = MergeRuleConfig.Load(configPath);
+
+        // Run from a pull request's worktree, the pull request's own evaluator and rules would
+        // judge it (#524's delta review): say whose they are, and refuse unless they're main's.
+        var origin = checkout is not null ? checkout(config.Base) : ReadCheckout(config.Base, configPath);
+        var where = $"{origin.Head}{(origin.Dirty ? " with local changes" : "")}{(origin.OtherRules ? $", rules from {configPath}" : "")}";
+        output.WriteLine($"Evaluator and rules from {where}; origin/{config.Base} is {origin.BaseCommit ?? "not fetched"}.");
+        if (origin.Dirty || origin.OtherRules || origin.BaseCommit is null || !SameSha(origin.Head, origin.BaseCommit))
+        {
+            if (!options.ContainsKey("allow-non-main"))
+            {
+                output.WriteLine($"Refusing: these aren't origin/{config.Base}'s evaluator and rules, so a pull request could be judging itself. Run it from a freshly fetched origin/{config.Base} checkout (git fetch origin, then git switch --detach origin/{config.Base} in a worktree kept for it), never a pull request's worktree, or pass --allow-non-main to judge with these anyway.");
+                return 2;
+            }
+            output.WriteLine($"::warning::merge-rule: judging with the evaluator and rules from {where}, not origin/{config.Base}'s.");
+        }
         var slug = options.GetValueOrDefault("slug") ?? Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? "danswett/agent-bridge";
         var post = options.ContainsKey("post");
         var session = new Session(github, config, slug);
@@ -650,7 +695,7 @@ static class MergeRuleCommand
         return (parts[0], parts[1]);
     }
 
-    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "post", "all" };
+    static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "post", "all", "allow-non-main" };
     static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "pr", "sha", "slug", "config", "target-url", "summary" };
 
     static Dictionary<string, string> ParseOptions(IReadOnlyList<string> args)

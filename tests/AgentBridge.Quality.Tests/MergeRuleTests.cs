@@ -31,6 +31,10 @@ public class MergeRuleTests
 
     static readonly ReviewFact Copilot = new("copilot-pull-request-reviewer", IsBot: true, "COMMENTED", Head);
     static readonly RunFact Green = new("COMPLETED", "SUCCESS");
+    const string MainCommit = "1111111123456789abcdef0123456789abcdef01";
+
+    // The command's checkout as on a freshly fetched origin/main: its evaluator and rules are main's.
+    static readonly Func<string, MergeRuleCommand.CheckoutFacts> OnMain = _ => new(MainCommit, MainCommit, Dirty: false);
 
     static PullRequestFacts Pr(
         string[]? files = null,
@@ -193,10 +197,10 @@ public class MergeRuleTests
         try
         {
             var dry = new StringWriter();
-            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config], dry, github));
-            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github));
+            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config], dry, github, OnMain));
+            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain));
             var changed = new FakeGitHub(GraphQLPullRequest(Head, mergeRule: ("pending", "Waiting for a Copilot review of abcdef0")));
-            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post", "--target-url", "https://run"], new StringWriter(), changed));
+            Assert.Equal(0, MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post", "--target-url", "https://run"], new StringWriter(), changed, OnMain));
 
             Assert.Contains("dry run, not posted", dry.ToString(), StringComparison.Ordinal);
             // The files are the evaluated head's, from compare, and a renamed file's old path counts.
@@ -226,7 +230,7 @@ public class MergeRuleTests
         try
         {
             var output = new StringWriter();
-            MergeRuleCommand.Run(["--pr", "42", "--config", config], output, github);
+            MergeRuleCommand.Run(["--pr", "42", "--config", config], output, github, OnMain);
 
             Assert.Contains("failure: The independent review of abcdef0 failed: sec-42 found a bypass", output.ToString(), StringComparison.Ordinal);
         }
@@ -243,7 +247,7 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal([$"{Head} failure merge-rule Held by the label 'hold' "], github.Posted);
         }
@@ -262,7 +266,7 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github);
+            MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal([$"{Head} failure merge-rule #7: Held by the label 'hold' "], github.Posted);
         }
@@ -279,7 +283,7 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Single(github.Posted);
         }
@@ -327,7 +331,7 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            var exit = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            var exit = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal(1, exit);
             Assert.Equal([$"{Head} error merge-rule Couldn't read #42 on abcdef0: gh: HTTP 502 ", $"{Older} failure merge-rule Held by the label 'hold' "], github.Posted);
@@ -346,8 +350,8 @@ public class MergeRuleTests
         try
         {
             var shown = new StringWriter();
-            var all = MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github);
-            var one = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github);
+            var all = MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github, OnMain);
+            var one = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal((1, 1), (all, one));
             Assert.Equal(2, github.Posted.Count);
@@ -372,9 +376,39 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
 
             Assert.Equal([$"{Older} failure merge-rule Held by the label 'hold' ", $"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Theory]
+    [InlineData(Older, MainCommit, false, false)] // a pull request's worktree
+    [InlineData(MainCommit, MainCommit, true, false)] // main's commit, with the rules edited locally
+    [InlineData(MainCommit, MainCommit, false, true)] // main's commit, but --config names other rules
+    [InlineData(MainCommit, null, false, false)] // origin/main never fetched
+    public void Run_anywhere_but_origin_mains_checkout_it_refuses_unless_told_to_judge_anyway(string head, string? main, bool dirty, bool otherRules)
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head));
+        var config = WriteConfig();
+        try
+        {
+            var refused = new StringWriter();
+            var exit = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], refused, github, _ => new(head, main, dirty, otherRules));
+            var allowed = new StringWriter();
+            var allowedExit = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--allow-non-main"], allowed, github, _ => new(head, main, dirty, otherRules));
+
+            Assert.Equal(2, exit);
+            Assert.Contains($"Evaluator and rules from {head}", refused.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Refusing", refused.ToString(), StringComparison.Ordinal);
+            Assert.Empty(github.Posted);
+            Assert.Equal(0, allowedExit);
+            Assert.Contains("::warning::merge-rule: judging with the evaluator and rules from", allowed.ToString(), StringComparison.Ordinal);
+            Assert.Contains("#42 abcdef0", allowed.ToString(), StringComparison.Ordinal);
         }
         finally
         {
