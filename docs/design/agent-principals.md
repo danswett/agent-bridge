@@ -10,6 +10,11 @@ made. It builds on the signed device roster proposed for #55 in PR #391,
 (revision 2, head `ed9ca862`, not yet merged). In this note, "#391 §n" means a section of that
 note, and a bare "§n" means a section of this one.
 
+§8 covers the owner-requested overlap with connectors: Home Assistant as the first client of the
+third-party connector API, and #388's headless identity. That section is the one place where
+the three principal kinds (agents, connectors and cross-account peers) are set against each
+other. It covers what they share, what each needs from #55, and who owns each piece.
+
 ## Contents
 
 1. [Goals, non-goals and the owner's decisions](#1-goals-non-goals-and-the-owners-decisions)
@@ -19,9 +24,10 @@ note, and a bare "§n" means a section of this one.
 5. [Policy](#5-policy)
 6. [Display and attribution](#6-display-and-attribution)
 7. [Cross-account federation](#7-cross-account-federation)
-8. [Threat model](#8-threat-model)
-9. [Phasing and dependencies](#9-phasing-and-dependencies)
-10. [Open questions for the owner](#10-open-questions-for-the-owner)
+8. [Three principal kinds: shared foundations, dependencies and ownership](#8-three-principal-kinds-shared-foundations-dependencies-and-ownership)
+9. [Threat model](#9-threat-model)
+10. [Phasing and dependencies](#10-phasing-and-dependencies)
+11. [Open questions for the owner](#11-open-questions-for-the-owner)
 
 ---
 
@@ -72,6 +78,10 @@ note, and a bare "§n" means a section of this one.
   (A → B → A → …) and fan-out (an agent launching agents launching agents).
 * **G6. Federation-ready.** The envelope, policy and display carry an account from day one, so
   cross-account federation (§7) is an extension, not a redesign.
+* **G7. One verification machinery, three principal kinds** (the owner's direction of 15:30 PT):
+  session agents, connectors (Home Assistant first) and peers on other accounts. They share
+  verification, key-purpose separation and the host's authorization entry point, but never
+  authority or lifecycle (§8).
 
 ### 1.3 Non-goals
 
@@ -280,7 +290,7 @@ host T ──result──▶ host M ──▶ agent
 
 For a target on the **same machine**, nothing is signed. The host applies the same policy, rate
 limits, chain rules and attribution to the agent connection directly, and audits it the same way.
-So the local slice (§9) exercises every rule except the signature.
+So the local slice (§10) exercises every rule except the signature.
 
 ### 4.2 What signs it (Q1)
 
@@ -476,7 +486,7 @@ non-disclosing first). Each refusal is audited with its reason:
   §6.3's: within a relay-maintained partition, a removed host can keep being served there.
 * A **revoked credential** is local to the issuer. T can't see it, and needs not to: the issuer
   refuses to sign for it. A compromised issuer host can sign for any of its sessions, or invent
-  one. That is the "compromised machine" row of §8, and the target's policy (which origin
+  one. That is the "compromised machine" row of §9, and the target's policy (which origin
   machines may do what) is the bound.
 
 ---
@@ -901,11 +911,216 @@ external marker. F5: spaces as named sets of links (optional).
 
 ---
 
-## 8. Threat model
+## 8. Three principal kinds: shared foundations, dependencies and ownership
+
+Added at the owner's request (coordinator, 2026-11-03 17:02 PT), to fold in the overlap with the
+Home Assistant client and #388's generic headless identity raised by session D (d5ac689c) in
+[#519 comment 6617769351](https://github.com/danswett/agent-bridge/issues/519#issuecomment-6617769351).
+This is the one design for all three kinds. #388 and D keep the connector-specific work (§8.9).
+
+### 8.1 The owner's direction
+
+The owner's direction, recorded on #519 at 15:30 PT
+([comment 6618194806](https://github.com/danswett/agent-bridge/issues/519#issuecomment-6618194806)):
+
+> * **Home Assistant is one client of a documented, versioned, third-party connector API.** Anyone
+>   can build connectors on it.
+> * **Connector identity:** each connector is its own service principal, as D proposed. Read-only
+>   by default, independently revocable, owner-approved, and never allowed to answer approvals or
+>   folder trust.
+> * **Three principal kinds, one verification machinery:** agents, connectors and peers on other
+>   accounts. Each has its own lifecycle and grants.
+> * **First slice:** likely the read-only connector API with its spec and conformance suite, with
+>   Home Assistant as its first consumer.
+
+Existing work this section cites rather than repeats:
+* PR #394, `docs/protocol/headless-enrollment-proposal.md` (head `d9382fd3`): the generic
+  service-enrollment proposal and implementation audit. It is unapproved. Its local-only scope
+  clarification (`5af51c40`, PR #394 comment 6611743599) is not yet published.
+* #407 (merged): the default-off trusted-peer floor, whose `service` role is exactly the first
+  grant below. `RemoteAuthorization.cs:10` (`Reads`), `TrustedPeerStore.cs:15-21`;
+  host-config.md:143-200.
+* PR #534: the draft connector read profile and conformance fixtures (`docs/protocol/connector-read.md`).
+* agent-bridge-home-assistant PRs #9 (fixed-suite Python Noise, `277339d7`) and #10 (stateless
+  channel codecs, `5766a934`), with their independent crypto review. These are transport only:
+  no enrollment, credentials or runtime.
+
+### 8.2 The principal kinds and their distinct lifecycles
+
+People's devices and hosts (#55) are listed for completeness. The three new kinds share
+verification but **never** share authority or lifecycle. A kind never gains another kind's
+grants because both are "not a person".
+
+| | **Session agent** (#519) | **Connector** (#388; Home Assistant first) | **Cross-account peer** (#519 §7) | Person's device / host (#55) |
+|---|---|---|---|---|
+| What it is | One live agent session, vouched for by its owning host. Not a device: no key, no channel | An **unattended service** with its own persistent P-256 static key. Not a person, not a PWA, not a host, not an adopted session | Another account's host, carrying its agents' signed commands under a link | The account's own devices |
+| Key | None. The host signs for it (§4.2) | The connector's, generated by it and kept in **protected persistent storage on the connector's side** (HA's storage, for HA; its protection and restore are #388's lifecycle work) | The peer host's `sign` and `dh` keys, from the peer's link statement | `dh` (+ `sign` for people), #391 §3.1 |
+| Issued by | The host, at launch or adoption, under the machine's policy (§3.2, §3.5) | **The owner**, approving the full public key at the **selected host** (full-key transfer, #394 "Proposed enrollment sequence", steps 1-3), and in the roster after #55 (§8.7) | Both owners: link code plus each side's presence-signed statement (§7.3) | Person's devices, mutual codes (#391 §4) |
+| Authenticates as | `AGENT_BRIDGE_TOKEN` + process ancestry on the local pipe (§3.4); its host's channel for remote | Noise static key (full key, not routing id), plus a **key-bound scoped relay credential** for admission (#394, "Grant and enforcement") | Noise static key as a relay guest (§7.3), plus the envelope signature | Noise static key, plus the account token |
+| Grants | read, reply, launch (`ask`) through the owning host, under the target's policy (§5) | **First grant: read-only on one selected host** (§8.6). Nothing else, whatever agents may do | Each side's `expose` scope (§7.4) | design.md §5.6 |
+| Never | Approvals, folder trust, stop, transfer, allow-all, administration | Approvals, folder trust, **any write**, administration, blobs, push, usage, delegation | All of those | Person-only actions need person commands (#391 §7.2) |
+| Lifetime | The session's process, ≤ 7 days (§3.3) | An owner-set grant expiry at the host. Short access credentials renewed by proving the same key, never extending the grant (#394 "Expiry, revocation and failures": ≤ 15 min proposed) | Link expiry (30 days) | Until removed |
+| Revoked by | Process exit, resume, owner at the machine, policy change, expiry (§3.4) | **The owner at the host, even with the relay down**. Also relay revocation of the credential, and roster removal after #55. Closes its channels and subscriptions at once (#394) | Either owner, alone (§7.7) | Roster removal (#391 §6) |
+| Restart and restore | Hash records bound to pid and start time. A restored record is dead because its process is gone (§3.3, Q4) | Host store fails closed when unreadable. A restore needs an owner trust reset and re-approval: no automatic reactivation of old grants (#394; #407's store generations) | Statement versions are monotone, and an older version is refused | #391 §6.3 freshness, §7.2 replay floor |
+| Rotation | A new process gets a new credential | A new key is a new enrollment and generation; the old one is revoked | A new link statement version | Remove and re-add |
+| Attribution | `driver: agent`, `driverFrom` (§6) | Reads only. Logged as `service@<device id>` (#394's label). **Never** changes `driver` or `userMessageFrom` | `driverFrom` with the external marker (§6.2) | `driver: person` |
+| Unattended | No: tied to a live session | **Yes** | n/a | No |
+
+### 8.3 Transport authentication is not operation authorization
+
+Each layer proves one thing, and only the host's last two layers authorize.
+
+| Layer | Proves | Authorizes |
+|---|---|---|
+| Relay admission (account token, or a scoped or guest credential) | The key's holder had a credential the relay issued | **Nothing at a host.** It is routing and abuse control only, and an honest-relay narrowing at most. A displayed `kind` or `name` authorizes nothing (`RelayHub.cs:169-171`; #391 §1) |
+| Noise handshake | The peer holds the static key it presents, and the channel is between those two ids (design.md:452-454) | Nothing by itself |
+| **Principal resolution** at the host | The host looks the **full** authenticated static key up in its own trust state (the roster after #55; #407's pins before), on **every** request, in both channel directions (#394, "Owner-approved host-only foundation") | Determines the *kind*: person, host, connector, peer guest, or unknown (none) |
+| **Grant and per-op allowlist** | The kind's grant, at this host | The op, or refusal. An unknown op is denied |
+| **Nested principal** | For `agent.command`: the envelope's agent principal, evaluated against the agent policy (§4.7). The carrier host's own grant authorizes only the `agent.command` op itself | The inner op. A principal inside a request **never inherits the carrier's authority** (#394's nested-principal rule) |
+| The op's own checks | Unchanged (§4.7 step 11) | |
+
+### 8.4 Shared foundations: the reuse matrix
+
+The **Owner** column is the issue proposed to own the shared piece (§8.9). **#55?** says
+whether the foundation needs #55/#391 to be *built*. **Now** is the work that can proceed today
+without it.
+
+| Foundation | Agents use it for | Connectors use it for | Cross-account peers use it for | Owner | #55? | Now |
+|---|---|---|---|---|---|---|
+| **Device and roster trust** | Verifying the issuing host's `sign` key, and its revocation (§4.7 steps 1, 5, 6) | Production trust anchor for the connector key (§8.7, Q16 (a)) | Each side's own hosts: a link is recorded against the own roster (§7.3) | #55 | **Is** #55 | #391 review and decisions |
+| **Principal and key-purpose separation** | `"agent-bridge agent command v1"` and the `sign` key's purposes (§4.2, §8.5) | Connector key purposes: Noise, admission proof, claim proof (#394) | `"agent-bridge link v1"`, link keys | Shared registry, kept by #55 (§8.5) | No (a document and vectors) | Yes: the label registry and negative vectors |
+| **Owner-controlled issuance** | Launch or adoption at the machine (§3.2, §3.5) | Full-key approval at the selected host (#394 steps 1-3) | Link code plus a presence-signed statement on each side | Per kind: #519, #388, #519 | Agents' local issuance: no. Connector production: §8.7. Links: yes (person commands) | Agent issuance: AP1. Connector: disposable hosts only (#407) |
+| **Narrowly scoped host policy**, at one entry point | `agents` policy (§5) | `connector` grant: exact allowlist (§8.6) | `links[].expose` (§7.4) | One host authorization module, extending #407's `RemoteAuthorization`: device kinds #55, connector grants #388, agent policy #519 | The module: no (#407 exists). Its roster-backed lookup: yes | Yes, behind #407's floor on disposable hosts |
+| **Expiry and renewal** | Credential ≤ process, ≤ 7 days | Grant expiry at the host. Access credential ≤ 15 min, renewal by proving the key, no widening (#394) | Link 30 days, statements 24 h freshness | Per kind | No | Design and tests |
+| **Replay and lost-reply rules** | Durable `(machine, request)` store and `agent.outcome` (§4.4) | Reads are idempotent. Subscriptions recover with snapshot and seq (v1-sessions.md "Channel framing"). Enrollment claims bind request id, key, scope and host, and a lost reply never enrolls twice (#394 steps 3, 5) | As agents | Durable store: #55 (R6). Claim rules: #388 | Durable store: **yes** (R6) | Connector claim design: yes |
+| **Durable revocation and freshness** | Credential deletion (local). Host removal via roster (§4.7) | Host-side grant generations, durable and fail-closed (#407). Relay revocation across every serving deployment (#394). Roster removal after #55 | Unilateral link removal. Peer statement freshness (§7.5) | #55 (roster freshness). #388 (grant and credential revocation). #519 (links) | Roster freshness: yes. Host-side grant revocation: no (#407) | Yes, for host-side grants |
+| **Restart, rotation and rollback** | §8.2 row | §8.2 row: restore requires an owner trust reset | §8.2 row | Per kind, with a common rule (below) | No | Yes |
+| **Old-validator and mixed-fleet rejection** | Agent tokens never reach the relay, and `Tokens.Validate` rejects them structurally (one part, no `.`: `Tokens.cs:33-36`). `agent.command` goes only to hosts advertising it in `enforce` (§4.6) | Scoped credentials use a separate signing-key domain and a structurally distinct encoding, so unmodified older account-token validators reject them. Tested against the audited-base validator. Production gate: every account-reachable host enforces (#394 "Scope and trust boundary") | Guest credentials: same framework. Old hosts never get guest channels | Credential framework: #388 (Q17). Mixed-fleet gate: #55 (the R8 cutover) | Gate: satisfied by #55's cutover, or by Q16 (b)'s manual gate | Rejection tests: yes |
+| **Relay credential purposes** (account, scoped connector, guest, bound account) | Not used (local only) | Scoped connector credential | Guest credential (§7.3) | #388, reviewed by #55 (Q17) | No for design. Production deploy needs owner approval | Design and staging |
+
+**Common rule for restart and rollback.** No restored or stale state ever *grants* more than the
+live state did. Unreadable is not absence: it fails closed. A restored grant, pin, credential
+record or link statement is honoured only if its generation or version is not older than the
+host's durable high-water mark, which is the #407 store generation for connectors and the
+version mark for links. Otherwise it waits for an owner reset. Agents are safe by construction,
+since a restored credential's bound process no longer exists.
+
+### 8.5 Signing and credential domains
+
+A restricted service or agent credential must never act as an unrestricted account token, and no
+signature made for one purpose may verify for another. Each key, label and credential below has
+exactly one purpose, and each verifier checks it.
+
+| Item | Purpose | Cannot become |
+|---|---|---|
+| Relay account token (HMAC under `Relay:TokenKey`, `Tokens.cs:9-45`) | Account admission | Anything else. #391 §7.6 binds it to a key |
+| **Scoped connector credential** (#394) | Admission of one connector key, to its permitted hosts, for its expiry | An account token: a **separate signing-key domain** and **structurally distinct encoding**, so the audited-base `Tokens.Validate` rejects it. It can't choose `app`, `pwa` or `host`, authorize another key, reach account-management endpoints or mint another credential (#394 step 6) |
+| **Guest link credential** (§7.3) | Admission of listed peer host keys, routed only to the link's hosts | Same framework as the connector credential. A guest has no account on the target relay |
+| `AGENT_BRIDGE_TOKEN` (`abat1_…`) | Local pipe only, one session | Never sent to any relay or channel. Structurally invalid as an account token (`Tokens.cs:33-36`). Useless from another session (§3.4) |
+| `F("agent-bridge roster entry v1" / "roster cosign v1" / "person command v1" / "presence v1" / "roster head v1", …)` | #391 | — |
+| `F("agent-bridge agent command v1", body)`, host `sign` key | Agent envelopes (§4.3) | A roster entry or person command: a different label, and those verifiers require a person kind (#391 §3.2, §7.2) |
+| `F("agent-bridge session instance v1", …)` | A hash, not a signature (§3.1) | — |
+| `F("agent-bridge link v1", …)`, per-link key | Link codes and peer host statements (§7.3) | Anything in the peer's own roster |
+| `"agent-bridge command v1"` (`CommandMac` salt) | Person transfer and folder-trust MACs, retired by #391 R6 | Agent commands use their own salt under Q1 (b) |
+| Connector admission and claim proofs | #394 step 4: a separate purpose label binding request id, key, account, host and purpose | Today's `Wire.ProofMac` alone (#394, "Grant and enforcement") |
+
+The registry of labels is shared. Adding one is a reviewed change with negative vectors proving
+each verifier refuses the others' bytes.
+
+### 8.6 The connector's first grant (Home Assistant)
+
+* **Same account, one selected host, read-only**, enforced **by that host**: `hello`,
+  `sessions.list`, `session.get` and `sessions.subscribe`. That is #407's `service` role exactly
+  (`RemoteAuthorization.cs:10`), and #534's read profile.
+* `hello` advertises only the intersection of the host's capabilities and the grant.
+  Subscriptions belong to the grant, and end on revocation or expiry (#394).
+* **Denied:** every other op, including unknown future ones. That covers `session.reply`,
+  `session.answer` (approvals included), `launch.*`, `launch.trust.answer`, `session.stop`,
+  transfers, `attachment.*` and blobs, `push.*`, `usage.*`, `update.*`, `host.*`, roster,
+  account and credential administration, `agent.command`, and every agent op of §4.
+* **Not inherited from agents.** That agents may reply and launch gives connectors nothing. A
+  later connector write grant (action parity) is a separate reviewed design with its own
+  attribution (#388's "automation" kind), not a reuse of the agent policy.
+* **Never an authority signal:** relay routing, presence, displayed `kind` or name, or an HA
+  user or automation label.
+* **Attribution:** reads are logged as `service@<device id>`, and never touch `driver`,
+  `driverFrom` or `userMessageFrom`.
+
+### 8.7 Dependencies: what needs #55/#391, and what doesn't
+
+**Agents** (owner decision 4, unchanged): local agent messaging (AP1-AP3) needs nothing from #55.
+Cross-machine messaging (AP5) needs #391 R1, R3 and R6, and hosts in `enforce`. There is **no**
+interim signed-in-device or trusted-peer route (Q11).
+
+**Connectors.** Host-side enforcement of the read-only grant needs no roster: #407's
+`RemoteAuthorization` already resolves the full key per request and limits `service` to the four
+reads. What production issuance needs is a **trust anchor that also covers the rest of the
+account's peers**. On an enforcing host, every other peer (each person's device, each host) must
+also be known by full key, or a relabelled key or lying relay gets past a service-only check.
+And **every account-reachable host must enforce**, or an older host trusts any admitted key as a
+person (#394, "Scope and trust boundary"). Two routes:
+
+| | (a) **Roster anchor** (recommended for production) | (b) **Local pins only**: #407's floor as the production anchor |
+|---|---|---|
+| What | The connector is enrolled in the #55 roster as a new kind, `connector` (an amendment to #391's kind set, like the host `sign` key), approved by a presence-proven person's device. The **per-host grant** stays a local record at the selected host, so the roster says *what* the key is, and the host says *what it may read here* | The owner pins the connector's full key as `service` at the selected host, *and* pins every person's device and host at every account-reachable host, which all run in `permissions.trustedPeers` enforcing mode |
+| Mixed-fleet gate | Met by #391's cutover (R8): every host enforces the roster | Met only by manually pinning everything everywhere, verified over authenticated channels (#394) |
+| Revocation reach | Account-wide, announced on every device (#391 §6) | Per host, by hand |
+| Status | Needs #391 R1 + R3 + R8, and the `connector` kind | A **proposed architecture decision**, not an authorized exception. #407 is approved only for disposable-host evaluation (host-config.md:145-148) |
+
+The **grant record** is anchor-agnostic in both routes: the full key, `connector` role, grant id
+and generation, allowlist, expiry and revocation. So moving from (b) to (a) re-anchors a grant
+rather than re-enrolling. Q16 asks the owner to choose.
+
+**What proceeds now, independently of #55** (design, test, disposable-only):
+* the read profile and conformance suite (#534), which is also the owner's likely first slice;
+* the Python Noise transport and codecs (HA #9, #10);
+* host-side connector grant enforcement and revocation-owned subscriptions behind #407, on
+  disposable hosts;
+* the relay credential framework's design, encodings and old-validator rejection tests, on
+  staging only;
+* the label registry and its negative vectors (§8.5);
+* AP1-AP3 (local agents).
+
+**What waits for #55/#391:** production connector issuance under (a), the `connector` roster
+kind, cross-machine agent messaging (AP5), and federation (F1-F5, which need person commands for
+link statements).
+
+**What waits for the owner** whichever route: any production relay deploy of a new credential
+purpose, decommissioning or re-keying older relay deployments that share the account-token key
+(#394), and Q16.
+
+### 8.8 The federation boundary
+
+* **Connectors are same-account only.** A link (§7) exposes a side's shared sessions to the
+  *peer's hosts carrying agent envelopes*. It never admits a connector, and a connector never uses
+  a link. A connector for another account's sessions would be that account's own connector.
+* **What connectors and federation share** is only the relay credential framework (the guest
+  credential is a further purpose), the label registry and the host's single authorization entry
+  point. All three are designed so purposes can be added. **None of them needs federation to be
+  built first**, so the connector's first grant doesn't wait on federation.
+* Federation's read projection (§7.4) may later be a scope offered to connectors as well. It is
+  not part of the first grant.
+
+### 8.9 Ownership: shared versus separate
+
+| Piece | Shared or separate | Proposed owner |
+|---|---|---|
+| Signed roster, device kinds, freshness, durable replay store (R6), account-token binding (#391 §7.6), the mixed-fleet cutover (R8) | Shared | **#55** (PR #391) |
+| Amendments to #391 for the other kinds: host `sign` key (Q1), `connector` kind (Q16) | Shared, requested by #519 and #388 | **#55**, decided before R1 is built |
+| Signing-label registry and negative vectors (§8.5) | Shared | **#55**, kept with #391's framing |
+| One host authorization module (principal resolution, grants, per-op allowlist, nested principals), extending #407 | Shared | **#55** for device kinds. **#388** adds connector grants, **#519** the agent policy and link scopes |
+| Relay credential framework: purposes, key domains, encoding, old-validator rejection, revocation across deployments | Shared | **#388** (first consumer, and #394 specifies it), reviewed by #55. #519 adds the guest purpose |
+| Connector enrollment (full-key transfer, approval UX, claim), connector grants, connector key storage, the read profile and conformance suite (#534), the Python transport (HA #9, #10), HA integration | Separate | **#388** / agent-bridge-home-assistant#2 (D) |
+| Agent credentials, `agent.hello`, adoption, envelope, chains and budgets, prefix, `driverFrom`, MCP (#45), links and federation | Separate | **#519** (with #45 for the MCP server) |
+| Attribution taxonomy: `driver` and `driverFrom.kind` (`agent`; later `automation` for connector writes; `external`) | Shared vocabulary | **#519**, with #388 adding `automation` if write grants are ever approved |
+
+---
+
+## 9. Threat model
 
 In addition to design.md §5.1 (:348-361) and #391 §2.
 
-### 8.1 Single account
+### 9.1 Single account
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
@@ -919,18 +1134,30 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **Clock faults** | A host's clock is wrong | Make a used command run again (durable record, high-water mark) | Make commands fail with `clock` until fixed |
 | **Agent loops** | Two well-meaning agents ping-pong | Run unattended past 20 messages or 60 minutes per person-started conversation | Use up to those budgets |
 
-### 8.2 Cross-account
+### 9.2 Cross-account
 
-All of 8.1, plus §7.8. The essential difference is that the counterpart **owner** is a party
+All of 9.1, plus §7.8. The essential difference is that the counterpart **owner** is a party
 the design must not trust: consent is per side, scope is minimal by default, the projection hides
 what wasn't meant to be shared, external provenance is always visible to both person and agent,
 and revocation is unilateral.
 
+### 9.3 Connectors
+
+#394's threat assumptions ("Scope and trust boundary") apply, and are not repeated here. In
+addition:
+
+| Party | Must not be able to | Can (residual) |
+|---|---|---|
+| **A compromised connector** (for example a Home Assistant install, with its key) | Write anything; reach a host other than its selected one; act as a person, host or agent; use an agent's or peer's grants | Read what its grant allows on that host until revoked. Revocation at the host works without the relay |
+| **A stolen scoped credential** without the key | Be admitted (the credential is key-bound), or act as an account token anywhere, including on an older relay build (§8.5) | Nothing |
+| **The relay** labelling a key `connector`, `app` or `pwa` | Gain anything at an enforcing host: authority is the host's full-key lookup (§8.3) | Deny service |
+| **An older, non-enforcing host** on the account | Be reached by a connector under production issuance: the mixed-fleet gate (§8.7) must be met first | Before the gate, it keeps today's baseline gap for *any* admitted key. The gate is why |
+
 ---
 
-## 9. Phasing and dependencies
+## 10. Phasing and dependencies
 
-### 9.1 Dependencies
+### 10.1 Dependencies
 
 | Dependency | Needed for | Why |
 |---|---|---|
@@ -939,10 +1166,10 @@ and revocation is unilateral.
 | **#489 / PR #501** `userMessageFrom` | Attribution of delivered prompts | The field and its parser rules; this design supplies the verified source |
 | **#45** MCP server | Agent-facing tools | The consumer of the pipe ops. Not a blocker for the local slice, which can be exercised from `agent-bridge-host agent …` |
 | **#46 / #134** driver | Done for the machinery (`SessionDrivers`) | Reused unchanged |
-| **#388** headless identity | Not a blocker | Headless clients are *devices* with a `service` role (as #407's floor prefigures). Agent principals are not devices. The shared concern is attribution taxonomy: if #388 adds automation principals, `driverFrom` grows a `kind` (`agent`, `automation`), and `driver` stays `agent` |
+| **#388** headless identity, and connectors | Not a blocker for agents, in either direction | Connectors are a distinct principal kind with their own lifecycle and a read-only first grant. They share verification machinery, not authority (§8). Their dependencies are in §8.7, and ownership is in §8.9 |
 | **Peer-pid on macOS/Linux** | Adoption, and the ancestry half of token binding, there | local-pipe.md:129-130 |
 
-### 9.2 Slices
+### 10.2 Slices
 
 Each slice is one PR, security-reviewed independently before merge.
 
@@ -963,9 +1190,14 @@ and desk machine each run several sessions). It needs nothing from #55, respects
 exercises every rule except the signature, so AP5 adds transport and verification to a policy and
 attribution model already proven live.
 
+**Across all three kinds.** The owner's 15:30 PT direction makes the read-only connector API (#534,
+under #388) the likely first slice overall. It and AP1 share no unbuilt prerequisite (§8.7), so
+they can proceed in parallel. The shared pieces (§8.9) are each built once, by their owner, and
+consumed by the others.
+
 ---
 
-## 10. Open questions for the owner
+## 11. Open questions for the owner
 
 Each has a recommendation. None is decided by this note.
 
@@ -1014,3 +1246,18 @@ Each has a recommendation. None is decided by this note.
 15. **Q15. Corporate machines and federation.** **Recommended:** links refused on a machine the
     owner marks corporate unless allowed at that machine, pending the S8 policy check
     (design.md:1338-1343).
+16. **Q16. The connector's production trust anchor** (§8.7). (a) The #55 roster, with a new
+    `connector` kind approved by a presence-proven person's device, plus a local per-host grant.
+    (b) #407's local pins as the production anchor before #55, which needs every person's device
+    and host pinned by full key at every account-reachable host, and all of them enforcing.
+    **Recommended: (a) for production**, with (b) kept to disposable and staging hosts as #407
+    already allows. Choosing (b) for production is a separate architecture decision for the
+    owner, with its mixed-fleet gate verified first. The grant record is the same under both, so
+    (b) → (a) is a re-anchor, not a re-enrollment.
+17. **Q17. Who owns the relay credential framework** (purposes, key domains, encodings,
+    old-validator rejection, revocation across deployments). **Recommended: #388**, its first
+    consumer, whose #394 proposal already specifies it, reviewed by #55. #391 §7.6's bound
+    account tokens and #519's guest credentials are further purposes in the same framework.
+18. **Q18. A connector write grant later** (replying from Home Assistant, say). **Recommended:**
+    a separate reviewed design with its own `automation` attribution, never derived from the
+    agent policy. Out of scope for the first grant.
