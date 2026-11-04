@@ -131,24 +131,34 @@ if ($Production -and -not $env:RELAY_ALERT_EMAIL) {
 
 # A budget's start date must fall in the current month when it's created, and can never change
 # afterwards. So it's the existing budget's date, or else the first of this month (UTC).
-$existingStart = try {
-    az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0].timePeriod.startDate" -o tsv
-} catch { Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message)); assuming none"; $null }
+$budgetLookupFailed = $false
+$budget = try {
+    $json = az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0]" -o json
+    if ($json -and $json -ne 'null') { $json | ConvertFrom-Json } else { $null }
+} catch { $budgetLookupFailed = $true; Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message))"; $null }
+$existingStart = if ($budget -and $budget.PSObject.Properties['timePeriod']) { $budget.timePeriod.startDate } else { $null }
 $env:RELAY_BUDGET_START = if ($existingStart) { ([datetime]$existingStart).ToUniversalTime().ToString('yyyy-MM-dd') } else { [datetime]::UtcNow.ToString('yyyy-MM-01') }
+# The budget keeps its own copy of the address, one per notification.
+$budgetEmails = @(if ($budget -and $budget.PSObject.Properties['notifications']) {
+        $budget.notifications.PSObject.Properties.Value | Where-Object { $_.PSObject.Properties['contactEmails'] } | ForEach-Object { $_.contactEmails }
+    })
 
 # what-if prints each resource's predicted properties, and a changed property's old value too, and
-# masks only what Azure marks secret: an email receiver's address isn't. So the address may appear
-# in a preview only where it can't be printed:
-# - nothing exists yet: preview with a placeholder, so only the placeholder is shown;
-# - both exist and the address is unchanged: preview with the stored one, so nothing changes
-#   and what-if lists neither;
-# - anything else (a new address, or one resource missing): leave monitoring out of the preview.
+# masks only what Azure marks secret: an email address isn't. So the address may appear in a
+# preview only where it can't be printed:
+# - both lookups succeeded and found nothing: preview with a placeholder, the only address shown;
+# - both exist, and every stored copy is exactly the address being applied: preview with it, so
+#   both resources are NoChange and what-if prints none of their properties;
+# - anything else (a new address, copies that differ, one resource missing, a lookup that
+#   failed): leave monitoring out of the preview.
 if ($WhatIf -and $env:RELAY_ALERT_EMAIL) {
-    if (-not $storedEmail -and -not $existingStart) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
-    elseif ($storedEmail -and $existingStart -and (-not $AlertEmail -or $AlertEmail -eq $storedEmail)) { $env:RELAY_ALERT_EMAIL = $storedEmail }
+    $target = $env:RELAY_ALERT_EMAIL
+    $unchanged = $storedEmail -and $budget -and $budgetEmails.Count -gt 0 -and $storedEmail -ceq $target -and -not ($budgetEmails | Where-Object { $_ -cne $target })
+    if (-not $budgetLookupFailed -and -not $storedEmail -and -not $budget) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
+    elseif (-not $budgetLookupFailed -and $unchanged) { $env:RELAY_ALERT_EMAIL = $target }
     else {
         $env:RELAY_ALERT_EMAIL = ''
-        Write-Host 'monitoring: left out of this preview, which would otherwise print the alert address (a new address, or the action group or budget missing); the real run applies it'
+        Write-Host 'monitoring: left out of this preview, which could otherwise print the alert address (a new or differing address, a missing resource, or a failed lookup); the real run applies it'
     }
 }
 foreach ($kind in 'staging', 'production') {

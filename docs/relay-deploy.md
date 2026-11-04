@@ -275,13 +275,15 @@ address alerts go to; later runs reuse the one in the action group:
 ```
 
 Without an address, `deploy.ps1 -Production` says monitoring was skipped and changes nothing
-else. A `-WhatIf` preview never prints the address. What-if shows each resource's predicted
-properties, and a changed property's old value, and Azure doesn't mask an email address. So:
-- before monitoring exists, the preview uses the placeholder `alerts@example.invalid`;
-- once it exists, with the address unchanged, the preview uses the stored address, and
-  nothing about it changes;
-- otherwise (a new address, or the action group or budget missing), monitoring is left out of
-  the preview, with a message, and the real run applies it.
+else. A `-WhatIf` preview is built so it can't print the address. What-if shows each resource's
+predicted properties, and a changed property's old value, and Azure doesn't mask an email
+address. The action group and the budget each keep a copy. So:
+- if both lookups succeed and find neither resource, the preview uses the placeholder
+  `alerts@example.invalid`;
+- if both exist and every stored copy is exactly the address being applied, the preview uses it.
+  Both show as unchanged, without their properties;
+- otherwise (a new or differing address, one resource missing, or a lookup that failed),
+  monitoring is left out of the preview, with a message, and the real run applies it.
 
 The budget's start date can't change once the budget exists, and must be in the current month
 when it's created, so `deploy.ps1` passes the existing budget's date, or the first of this month.
