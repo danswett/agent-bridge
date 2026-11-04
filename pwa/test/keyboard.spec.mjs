@@ -106,6 +106,8 @@ async function tabTo(page, target, { key = 'Tab', max = 120 } = {}) {
 // demo) is focused directly, as Option+Tab would, and operated as everywhere else, with Enter.
 async function reachLink(page, browserName, link) {
   if (browserName !== 'webkit') { await tabTo(page, link); return; }
+  // Option, as Option+Tab starts with: a key, so the focus that follows is shown (A12).
+  await page.keyboard.press('Alt');
   await link.focus();
   await expect(link).toBeFocused();
   // Focused by script, so :focus-visible is the engine's guess; the outline drawn is what counts.
@@ -153,6 +155,17 @@ test.describe('on a desktop', () => {
       back.push((await focused(page)).id);
     }
     expect(back).toEqual(stops.slice(0, -1).map((s) => s.id).reverse());
+  });
+
+  test('a session a notification opens as the app starts has focus on its title, with no ring around it, its header or its row', async ({ page }) => {
+    await openDemo(page);
+    await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CLAUDE);
+    const v = view(page, CLAUDE);
+    await expect(row(page, CLAUDE)).toHaveClass(/linked/);
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title').toBe(false);
+    expect(await v.locator('.session-header').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the header').toBe('none');
+    expect(await row(page, CLAUDE).locator('.row-main').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the row').toBe('none');
   });
 
   test('a session opens from its row with Enter, and its question is answered with Tab, Space and Enter', async ({ page }) => {
@@ -252,6 +265,53 @@ test.describe('on a phone', () => {
     expect(parts).toEqual(['session header', 'session tabs', 'reply box']);
     expect(readingOrder(stops)).toEqual([]);
   });
+
+  // A12 (#373): focus moved by a press, a touch or the app coming back still lands, for a screen
+  // reader, but only focus a key moved draws a ring.
+  test('a session opened with a touch has focus on its title with no ring drawn, though keys were pressed before, and one opened with Enter draws it', async ({ page }) => {
+    await openDemo(page);
+    // As on iOS, where a tap focuses no button: focus stays where it was, for the browser to guess from.
+    await page.evaluate(() => document.addEventListener('mousedown', (e) => e.preventDefault(), true));
+    const v = view(page, CLAUDE);
+    const open = row(page, CLAUDE).locator('.row-main');
+    await tabTo(page, open);
+    await open.tap();
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title after a touch').toBe(false);
+    await v.getByRole('button', { name: 'Sessions' }).tap();
+    await expect(v).toBeHidden();
+    await tabTo(page, open);
+    await page.keyboard.press('Enter');
+    await expect(v.locator('.session-title')).toBeFocused();
+    expect((await focused(page)).shown, 'a ring around the title after Enter').toBe(true);
+  });
+
+  for (const [how, back] of [
+    // What the worker tells an open app when one of its notifications is tapped (main.js).
+    ['a notification tapped while the app is open', () => navigator.serviceWorker.dispatchEvent(new MessageEvent('message', { data: { type: 'agent-bridge.open', url: location.href } }))],
+    // An app in the background brought back by its notification.
+    ['the app brought back from the background', () => document.dispatchEvent(new Event('visibilitychange'))],
+  ]) {
+    test(`the session ${how} opens has focus on its title with no ring around it or its header, though keys were pressed before, and the next key shows focus`, async ({ page }) => {
+      await openDemo(page);
+      // Keys pressed earlier, which would have the browser ring whatever a script focuses next.
+      await tabTo(page, row(page, CLAUDE).locator('.row-main'));
+      await page.evaluate(back);
+      // The session shown as a notification's link shows it (main.js focusLinked).
+      await page.evaluate((id) => window.agentBridgeDemo.page.showSession(id), CLAUDE);
+      const v = view(page, CLAUDE);
+      await expect(v).toHaveClass(/linked/);
+      await expect(v.locator('.session-title')).toBeFocused();
+      expect((await focused(page)).shown, 'a ring around the title').toBe(false);
+      expect(await v.locator('.session-header').evaluate((e) => getComputedStyle(e).boxShadow), 'a ring around the header').toBe('none');
+      // A key pressed where it is shows it there, as browsers do once a key is pressed.
+      await page.keyboard.press('ArrowDown');
+      await expect(v.locator('.session-title')).toBeFocused();
+      expect((await focused(page)).shown, 'a ring around the title after a key').toBe(true);
+      // Shift+Tab to Back: shown.
+      await tabTo(page, v.getByRole('button', { name: 'Sessions' }), { key: 'Shift+Tab', max: 3 });
+    });
+  }
 
   test('the overflow menu opens with Enter, and Escape closes it with focus back on More', async ({ page }) => {
     await openDemo(page);

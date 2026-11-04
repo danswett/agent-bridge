@@ -44,6 +44,7 @@ import { UpdateControl } from './update.js';
 import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
+import { cameBack, watchFocusRing } from './ui/focus.js';
 import { RelayBlobs } from './blobs.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
@@ -176,6 +177,8 @@ function focusLinked() {
 // A tap on a notification while the app is open: the worker says where to go.
 navigator.serviceWorker?.addEventListener('message', (e) => {
   if (e.data?.type !== 'agent-bridge.open' || typeof e.data.url !== 'string') { return; }
+  // Back from a notification: the focus it moves draws no ring (A12), whatever key came before.
+  cameBack();
   let p;
   try { p = new URL(e.data.url).searchParams; } catch { return; }
   const host = param(p, 'host');
@@ -736,6 +739,7 @@ async function startLive() {
 registerServiceWorker();
 watchDisclosures(document);
 watchPresses(document);
+watchFocusRing(document);
 (params.get('demo') === '1' ? startDemo() : startLive()).catch((e) => {
   console.error(e);
   setPill('Error', 'bad');

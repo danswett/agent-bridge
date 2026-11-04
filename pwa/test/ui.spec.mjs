@@ -566,3 +566,53 @@ test('a long unbroken path never makes a row or a session wider than a phone scr
   expect(widths.page).toBeLessThanOrEqual(widths.view);
   for (const right of widths.cards) expect(right).toBeLessThanOrEqual(widths.view);
 });
+
+// A13 (#373): chrome's words aren't selected by a press, a long press or a double tap, and
+// everything a person may want to copy still is. Whether a part is selectable is the first
+// user-select set on it or around it, as the browser uses it.
+test('chrome\'s words are not selectable, and the conversation, code, a question and every field are', async ({ page }) => {
+  await openDemo(page);
+  await open(page, CODEX);
+  await upsert(page, CODEX, { updatedAt: later(), activity: { response: 'Run this once:\n\n```\nnpm run build\n```' } });
+  const v = card(page, CODEX);
+  await expect(v.locator('.response pre code')).toHaveText('npm run build');
+  const select = (locator) => locator.first().evaluate((el) => {
+    for (let e = el; e; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      const used = s.userSelect || s.webkitUserSelect;
+      if (used && used !== 'auto') { return used; }
+    }
+    return 'auto';
+  });
+  const chrome = {
+    'a row\'s title': row(page, CODEX).locator('.row-title'),
+    'a row\'s facts': row(page, CODEX).locator('.row-facts'),
+    'the session\'s title': v.locator('.session-title'),
+    'the session\'s status line': v.locator('.status-line'),
+    'a tab': v.locator('.view-tab'),
+    'a button\'s words': v.locator('.end-session button'),
+    'the page\'s title': page.locator('#sessions-h'),
+    'the app bar\'s title': page.locator('.brand-name'),
+    'the navigation': page.locator('.nav-item .nav-label'),
+    'a banner\'s words': page.locator('#demo-banner span'),
+  };
+  for (const [name, locator] of Object.entries(chrome)) { expect(await select(locator), name).toBe('none'); }
+  const content = {
+    'the response': v.locator('.response p'),
+    'code': v.locator('.response pre code'),
+    'a question': card(page, COPILOT).locator('.question-message'),
+    'the reply box': v.getByRole('textbox', { name: 'Reply' }),
+    'search': page.locator('#search'),
+  };
+  for (const [name, locator] of Object.entries(content)) { expect(await select(locator), name).not.toBe('none'); }
+  // As a double tap or a double click finds them: the title's words aren't taken, the response's
+  // are. Each on its first word: a block's middle may be past its words.
+  const picked = async (locator) => {
+    await page.evaluate(() => getSelection().removeAllRanges());
+    const box = await locator.first().boundingBox();
+    await locator.first().dblclick({ position: { x: 8, y: box.height / 2 } });
+    return page.evaluate(() => getSelection().toString().trim());
+  };
+  expect(await picked(v.locator('.session-title'))).toBe('');
+  expect(await picked(v.locator('.response p'))).not.toBe('');
+});

@@ -90,6 +90,18 @@ body {
 
 a { color: var(--ab-bridge); }
 :focus-visible { outline: 3px solid var(--ab-bridge); outline-offset: 2px; border-radius: 6px; }
+/* A ring only where a key moved focus (ui.md §9.1 A12, #373): js/ui/focus.js marks the one element
+   focused by a press, a touch or the app coming back from a notification, and it alone draws none,
+   the browser's own included, until a key is pressed. Never a page-wide outline: none. */
+[data-focus-quiet]:focus-visible { outline: none; }
+
+/* Chrome's words aren't selected by a press, a long press or a double tap (A13, #373): a control's
+   own words (a session's row and a Needs you title are buttons), a session's header, the app bar's
+   title and a page's title row, which stands in for it on a phone, and a banner's. Everything else
+   stays selectable and copyable: the conversation, code, prompts, questions and every field. */
+button, .button, [role="tab"], [role="menuitem"], .nav-item, .brand, .page-title, .session-header, .banner {
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
 
 /* ---- the shell: app bar, navigation, pages (ui.md §7, PWA) ---- */
 /* A phone first: one column with the page's own title row, the bottom navigation fixed under it.
@@ -590,7 +602,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   min-height: var(--tap); padding: 0 12px; text-align: left; font: inherit; color: var(--ab-text);
   background: none; border: 0; border-radius: 4px; cursor: pointer;
 }
-.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible { background: var(--ab-subtle); }
+.row-menu-item:hover:not(:disabled), .row-menu-item:focus-visible:not([data-focus-quiet]) { background: var(--ab-subtle); }
 .row-menu-item:disabled { color: var(--ab-text2); cursor: default; }
 
 /* ---- a session's row (ui.md §6.1) ----
@@ -633,8 +645,8 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
   .session.selected > .row-main::before { forced-color-adjust: none; background: Highlight; }
   .session.selected .row-main { outline: 1px solid Highlight; }
 }
-/* The session a notification or a launch opened, for a moment. */
-.session.linked .row-main, .session-view.linked .session-header { box-shadow: inset 0 0 0 2px var(--ab-bridge); }
+/* The session a notification or a launch opened is shown selected, with nothing drawn around its
+   header or row: a Bridge ring there looked like focus nobody moved (A12, #373). */
 /* Facts on a line (meta.js): a separator is in the text face whatever face its neighbours are
    in, and stays with the fact before it. */
 .sep { font-family: var(--font-text); font-weight: 400; letter-spacing: normal; color: var(--ab-text2); }
@@ -984,7 +996,7 @@ summary {
 .md-copy > span { padding: 3px 8px; border: 1px solid var(--ab-stroke2); border-radius: 6px; background: var(--ab-card); }
 .md-copy[data-copy="done"] { color: var(--ab-bridge); }
 .md-copy[data-copy="failed"] { color: var(--ab-danger-text); }
-.md-copy:focus-visible { outline: 2px solid var(--ab-bridge); outline-offset: -2px; border-radius: 8px; }
+.md-copy:focus-visible:not([data-focus-quiet]) { outline: 2px solid var(--ab-bridge); outline-offset: -2px; border-radius: 8px; }
 /* The fallback copy's scratch field: in the DOM for a moment, never seen. */
 .md-copy-buffer { position: fixed; top: 0; left: -9999px; width: 1px; height: 1px; padding: 0; border: 0; font-size: 16px; }
 .md blockquote { border-left: 3px solid var(--ab-stroke2); padding-left: 10px; color: var(--ab-text2); margin-left: 0; }
