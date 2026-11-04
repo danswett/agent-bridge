@@ -485,7 +485,9 @@ export class HostSession {
         this.#set(link, 'unsupported', `${link.machine.name} speaks protocol ${hello.protocol ?? '?'} without session reading.`);
         return;
       }
-      await client.subscribe();
+      // Patches where the machine offers them, and then a list held whole from this run of its host
+      // is resumed: only what changed while the channel was down is sent again (#601).
+      await client.subscribe({ patch: hello.capabilities.includes(Capabilities.sessionsPatch), instance: hello.machine.instance });
       if (stale()) { client.close(); return; }
       if (link.client !== client) { throw new Error('the channel closed'); }
       link.failures = 0;

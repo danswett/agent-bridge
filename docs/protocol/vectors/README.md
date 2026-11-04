@@ -87,8 +87,9 @@ replay until its entry goes.
   reply box prepares one, and a refused start a person could cause (a blank or long name, an
   empty or oversized file) must never be sent as it is. A chunk comes from a file of the size its
   context gives. The signed commands are signed again with the fixed keys and must give the same
-  bytes and MAC. A record the PWA does not replay is listed there with the reason. It does not yet
-  replay `session-patches.json` or the `SessionPatch` vectors (#601, its client slice).
+  bytes and MAC. A record the PWA does not replay is listed there with the reason. Each `SessionPatch`
+  is applied with `session-patch.js` as its check, and `session-patches.json`'s recordings go
+  through it alone and through a subscription for patches, step by step.
 - **Swift** (the `apple/` package): not yet. To adopt the folder, read each file as above. Each
   `host` record goes through the package's decoders: a valid vector keeps every field the app
   uses, and a refused one is dropped. Each `client` record goes through its encoders and any

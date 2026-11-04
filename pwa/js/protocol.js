@@ -26,12 +26,13 @@ export const Ops = Object.freeze({
 
 export const Events = Object.freeze({
   sessionUpsert: 'session.upsert',
+  sessionPatch: 'session.patch',
   sessionRemove: 'session.remove',
   sessionsSynced: 'sessions.synced',
   discoveryChanged: 'discovery.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -235,7 +236,8 @@ export function readHello(raw) {
   return {
     protocol: num(h.protocol),
     // readOnly: why the machine takes nothing from the phone now (agent-ha-bridge runs there).
-    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null },
+    // instance: this run of the host, which a reconnect resumes the list of (sessions.subscribe's since).
+    machine: { id: str(m.id), name: str(m.name), os: str(m.os), hostVersion: str(m.hostVersion), dev: m.dev === true, sessions: Number.isSafeInteger(m.sessions) && m.sessions >= 0 ? m.sessions : null, readOnly: str(m.readOnly) || null, instance: str(m.instance) },
     capabilities: Array.isArray(h.capabilities) ? h.capabilities.filter((c) => typeof c === 'string') : [],
   };
 }

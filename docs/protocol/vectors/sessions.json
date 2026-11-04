@@ -7459,14 +7459,6 @@
       "step": "read",
       "csharp": "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
       "pwa": "reads it as a synced with no revision, which ends the snapshot"
-    },
-    {
-      "vector": "SessionsSynced/a-live-id-that-is-not-text",
-      "issue": 601,
-      "differs": "pwa",
-      "step": "read",
-      "csharp": "refuses it: live is strict and whole, so no running session is dropped from a resumed list",
-      "pwa": "reads it, live unread: it does not resume yet"
     }
   ]
 }

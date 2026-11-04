@@ -36,7 +36,8 @@ Larger files come next.
 | `js/channels.js` | Noise_XX_P256 channels to hosts, as the initiator, with the peer's key checked against its id |
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
-| `js/host-client.js` | The sessions protocol over any transport: requests by `id`/`re`, events by `ev`, `seq` checking, the subscription snapshot |
+| `js/host-client.js` | The sessions protocol over any transport: requests by `id`/`re`, events by `ev`, `seq` checking, the subscription snapshot, and resuming it where the host offers `sessions.patch` |
+| `js/session-patch.js` | `session.patch` read and applied to the session as last received, exactly as `SessionPatches.Apply` in C# |
 | `js/host-session.js` | Which machines are shown, one or all (`ALL`), each with a channel and store of its own kept across reconnects; remembers the choice; honours `?host=`; `route(hostId)`, the only way to a machine's channel for what a card sends |
 | `js/sessions-store.js` | The live sessions, most recently updated first (the Most recent sort); a removed session goes with its change, for the Ended group |
 | `js/session-order.js` | The list's order, kept on this device (#164): Your order (new sessions at the top once, then never moved by the host), pins, Most recent and Machine sorts, the Ended group, and which rows have news since last open. Blocked storage falls back to Most recent |

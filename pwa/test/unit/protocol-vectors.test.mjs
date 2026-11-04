@@ -20,6 +20,7 @@ import { checkLaunch, readLaunchOptions, readLaunchResult, readTrustQuestion, re
 import { readUpdateCommandResult, readUpdateState } from '../../js/update.js';
 import { readUsage } from '../../js/usage.js';
 import { HostClient } from '../../js/host-client.js';
+import { PatchError, applyPatch, readPatch } from '../../js/session-patch.js';
 import { SessionsStore } from '../../js/sessions-store.js';
 import { AnswerService } from '../../js/answer-service.js';
 import { ReplyService } from '../../js/reply-service.js';
@@ -36,7 +37,7 @@ const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 const folder = path.join(pwa, '..', 'docs', 'protocol', 'vectors');
 const load = (name) => JSON.parse(readFileSync(path.join(folder, name), 'utf8'));
 const SIGNED = 'signed-command.json';
-// Recorded sessions patched as a host sends them: not records, and not replayed here yet (#601).
+// Recorded sessions patched as a host sends them: not records, replayed on their own below.
 const PATCHES = 'session-patches.json';
 const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
@@ -61,12 +62,14 @@ async function respond(t, op, result) {
   await flush();
   t.host({ re: t.lastRequest(op).id, ok: true, result });
 }
-async function subscribed() {
+async function subscribed({ patch = false, resumed = false, held = [] } = {}) {
   const store = new SessionsStore();
+  for (const id of held) { store.upsert({ id, agent: 'copilot', status: 'idle', activity: {} }); }
+  if (resumed) { Object.assign(store, { instance: 'run-1', revision: 1, whole: true }); }
   const t = fakeTransport();
   const client = new HostClient(t, { store, timeoutMs: 1000 });
-  const p = client.subscribe();
-  await respond(t, 'sessions.subscribe', { revision: 1, count: 0 });
+  const p = client.subscribe({ patch: patch || resumed, instance: 'run-1' });
+  await respond(t, 'sessions.subscribe', { revision: 1, count: 0, ...(resumed ? { resumed: true } : {}) });
   await p;
   return { t, client, store };
 }
@@ -133,8 +136,8 @@ function holds(read, wire, unread = [], at = '') {
 // cannot drop one it fails to read.
 const SESSION_ID = '4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b';
 const READS = {
-  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine, unread: ['instance'] },
-  HelloResult: { read: readHello, unread: ['machine.instance'] },
+  MachineInfo: { read: (j) => readHello({ protocol: 1, machine: j, capabilities: [] }).machine },
+  HelloResult: { read: readHello },
   ToolCall: { read: readTool },
   Option: { read: (j) => readQuestion({ fields: [{ name: 'f', type: 'choice', options: [j] }] }).fields[0].options[0] ?? null },
   Field: { read: (j) => readQuestion({ fields: [j] }).fields[0] ?? null },
@@ -162,13 +165,16 @@ const READS = {
     unread: ['discoveryHeld'],
   },
   SessionsSynced: {
+    // A resumed snapshot's (with live) as a client holding each session it names; any other as a
+    // fresh snapshot's. One the PWA cannot take ends no snapshot, and reads as dropped.
     read: async (j) => {
-      const { t, store } = await subscribed();
+      const live = Array.isArray(j?.live) && j.live.every((id) => typeof id === 'string') ? j.live : null;
+      const { t, client, store } = await subscribed(live ? { resumed: true, held: live } : {});
       t.host({ ev: 'sessions.synced', seq: 1, data: j });
-      return { revision: store.revision, discoveryHeld: store.held };
+      client.close();
+      if (!client.synced) { return null; }
+      return { revision: store.revision, discoveryHeld: store.held, ...(live ? { live: live.filter((id) => store.has(id)) } : {}) };
     },
-    // Only a resumed snapshot's, which the PWA does not ask for yet (#601).
-    unread: ['live'],
   },
   DiscoveryChanged: {
     read: async (j) => {
@@ -178,17 +184,19 @@ const READS = {
     },
   },
   SessionRemoved: {
+    // After the snapshot, where a removal's revision is the one a reconnect resumes from.
     read: async (j) => {
-      const { t, store } = await subscribed();
-      store.upsert({ id: SESSION_ID, agent: 'copilot', status: 'idle', activity: {} });
+      const { t, store } = await subscribed({ patch: true });
+      t.host({ ev: 'session.upsert', seq: 1, data: { id: SESSION_ID, agent: 'copilot', status: 'idle', activity: {} } });
+      t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 1 } });
       let removed = null;
       store.onChange((c) => { if (c.type === 'remove') { removed = c.id; } });
-      t.host({ ev: 'session.remove', seq: 1, data: j });
-      return removed === null ? null : { id: removed };
+      t.host({ ev: 'session.remove', seq: 3, data: j });
+      return removed === null ? null : { id: removed, revision: store.revision };
     },
-    // Only to a client that asked for patches, which the PWA does not yet (#601).
-    unread: ['revision'],
   },
+  SessionPatch: { read: readPatch },
+  SubagentsPatch: { read: (j) => readPatch({ id: SESSION_ID, subagents: j })?.subagents ?? null },
   AnswerResult: { read: readAnswerResult },
   ReplyResult: { read: readAnswerResult },
   StopResult: { read: readStopResult },
@@ -235,6 +243,17 @@ const CHECKS = {
   },
   ReplyRequest: (j) => checkReply(j),
   LaunchRequest: (j) => checkLaunch(j),
+  // A patch the host sends, applied as host-client.js applies it to the session its context holds
+  // (from the event at seq), which must then be its context's result exactly.
+  SessionPatch: (j, context) => {
+    const patch = readPatch(j);
+    assert.ok(patch, 'a patch the PWA cannot read at all');
+    let applied;
+    try { applied = applyPatch(context.session ?? null, context.seq ?? null, patch); }
+    catch (e) { if (e instanceof PatchError) { return e.message; } throw e; }
+    if (context.result !== undefined) { assert.deepEqual(applied, context.result); }
+    return null;
+  },
 };
 
 // Records the PWA sends, as it builds them: each valid vector built from its own parts must be
@@ -251,6 +270,19 @@ async function sendPrepared(j) {
   return sent;
 }
 const BUILDS = {
+  // From what the store holds of the machine: a since only for a list it holds whole from that run.
+  SubscribeRequest: {
+    build: async (j) => {
+      const store = new SessionsStore();
+      if (j.since) { Object.assign(store, { instance: j.since.instance, revision: j.since.revision, whole: true }); }
+      const t = fakeTransport();
+      const client = new HostClient(t, { store, timeoutMs: 1000 });
+      client.subscribe({ patch: j.patch === true, instance: j.since?.instance ?? 'run-1' }).catch(() => {});
+      await flush();
+      client.close();
+      return t.lastRequest('sessions.subscribe').data;
+    },
+  },
   AnswerRequest: { build: (j) => sentBy(AnswerService, 'answer', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, questionId: j.question, answer: j.text !== undefined ? { text: j.text } : { fields: j.fields } })) },
   ReplyRequest: { build: (j) => sentBy(ReplyService, 'reply', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, text: j.text, attachments: (j.attachments ?? []).map((a) => UUID_FILE(a.id)) })) },
   StopRequest: { build: (j) => sentBy(StopService, 'stop', j.request, (s) => s.submit({ hostId: 'h', sessionId: j.id, confirm: j.confirm ?? null })) },
@@ -329,10 +361,7 @@ const BUILDS = {
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
-  SubscribeRequest: 'the PWA asks for neither patches nor resuming yet (#601)',
-  SubscribeSince: 'the PWA asks for neither patches nor resuming yet (#601)',
-  SessionPatch: 'the PWA asks for neither patches nor resuming yet (#601)',
-  SubagentsPatch: 'the PWA asks for neither patches nor resuming yet (#601)',
+  SubscribeSince: 'built only within SubscribeRequest, from what the store holds',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',
@@ -394,7 +423,7 @@ for (const [record, r] of records) {
         holds(await reads.read(JSON.parse(JSON.stringify(v.json))), v.reads ?? v.json, reads.unread);
       }));
     }
-    for (const v of r.refused) {
+    for (const v of r.refused.filter((x) => x.refusedBy === 'parse')) {
       if (reads.refuses) { continue; }
       test(`a ${record} "${v.name}" is dropped, as the host's reader refuses it`,       () => agrees(`${record}/${v.name}`, 'read', async () => {
         const read = await reads.read(JSON.parse(JSON.stringify(v.json)));
@@ -435,6 +464,40 @@ for (const [record, r] of records) {
       }));
     }
   }
+}
+
+// ---- recorded sessions, patched ----
+
+// session-patches.json: each recorded session as a host sends it to a client that asked for
+// patches. Every patch, applied as the PWA applies it, must give exactly the session an upsert of
+// that moment would: the JSON itself, and what the views are given of it.
+const recordings = load(PATCHES).sequences;
+
+for (const sequence of recordings) {
+  test(`the recorded "${sequence.name}" patched step by step is exactly the session each upsert would be`, () => {
+    let held = null;
+    let heldSeq = null;
+    for (const e of sequence.events) {
+      if (e.upsert) { [held, heldSeq] = [e.upsert, e.seq]; continue; }
+      const patch = readPatch(JSON.parse(JSON.stringify(e.patch)));
+      assert.ok(patch, `seq ${e.seq} cannot be read`);
+      const applied = applyPatch(held, heldSeq, patch);
+      assert.deepEqual(applied, e.session, `seq ${e.seq}`);
+      assert.deepEqual(readSession(applied), readSession(e.session), `seq ${e.seq}`);
+      [held, heldSeq] = [applied, e.seq];
+    }
+  });
+
+  test(`the recorded "${sequence.name}" shown through a subscription for patches is each session as upserted`, async () => {
+    const { t, client, store } = await subscribed({ patch: true });
+    for (const e of sequence.events) {
+      t.host({ ev: e.upsert ? 'session.upsert' : 'session.patch', seq: e.seq, data: e.upsert ?? e.patch });
+      const expected = readSession(e.upsert ?? e.session);
+      assert.deepEqual(store.get(expected.id), expected, `seq ${e.seq}`);
+    }
+    assert.equal(t.sent.filter((m) => m.op === 'sessions.subscribe').length, 1, 'a patch was refused, and subscribed again');
+    client.close();
+  });
 }
 
 // ---- signed commands ----
