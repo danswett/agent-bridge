@@ -225,8 +225,8 @@
     if (returned === v) { render(); return; }
     run = 0;
     held = null;
-    if (!v && reduced.matches) {
-      // Reduced motion: the header fades out where it is, then goes under the bar without travelling.
+    if (!v && reduced.matches && last > room) {
+      // Reduced motion: past the top range the header fades out where it is, then goes under the bar without travelling.
       fading = true;
       phone.classList.add('fading');
       fadeTimer = setTimeout(() => { fading = false; returned = false; render(); phone.classList.remove('fading'); }, 83);
