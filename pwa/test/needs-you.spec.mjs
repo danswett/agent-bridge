@@ -697,15 +697,21 @@ test.describe('a moment before the lane takes a click', () => {
     // Taller, but by less than it was scrolled, so the page is still longer than the window and
     // nothing on it changes size: the browser only pulls the page's scroll back.
     const grow = Math.min(100, end - 20);
+    // The page's clock held from here: the wait can't run out on a slow runner before it is seen.
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 2000);
     await page.setViewportSize({ width: 400, height: 600 + grow });
-    await expect.poll(() => lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving')), { intervals: [10, 10, 20, 20, 50], timeout: 3000 }).toBe(true);
+    await expect.poll(async () => {
+      await page.clock.runFor(20);
+      return lane(page).locator('.needs-you-list').evaluate((l) => l.hasAttribute('data-arriving'));
+    }).toBe(true);
     const after = await approve.evaluate((b, top) => {
       const by = b.getBoundingClientRect().top - top;
       b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
       return { by: by > 1, scrolled: Math.round(window.scrollY) };
     }, top);
     expect(after).toEqual({ by: true, scrolled: end - grow });
-    await page.waitForTimeout(100);
+    await page.clock.runFor(100);
     expect((await log(page)).length).toBe(before);
   });
 

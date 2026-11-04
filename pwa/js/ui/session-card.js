@@ -201,8 +201,15 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       const sized = height !== wasHeight || inner !== wasInner;
       resized ||= sized;
       if (top === wasTop || !carried) { return; }
-      const pulled = sized && top < wasTop && height - inner < wasHeight - wasInner && top >= height - inner - 1;
-      if (pulled) { return; }
+      // Pulled back: the end came up past where it was scrolled to, seen with the change of size,
+      // or already seen with it (see overEnd).
+      const over = wasBy[i][7] === true;
+      const pulled = top < wasTop && top >= height - inner - 1 && (over || (sized && height - inner < wasHeight - wasInner));
+      // Nothing taken off; read in a moment, in case the read for the new size came first.
+      if (pulled) {
+        resized = true;
+        return;
+      }
       // All of it anchoring (nothing scrolled by anyone): left for the read to find in place,
       // less what rounding leaves over. Anything else (a 1 px step of a slow scroll included) is
       // all taken off as a scroll: when a scroll and anchoring come in one frame, where the
@@ -214,6 +221,17 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     });
     return { shift, resized };
   };
+  // Marks a scroller this look finds past its own end with a new size (or still past it since
+  // one): a browser that laid out the size before it moved the scroll, so the pull back to the
+  // end that follows is a clamp. An elastic bounce past the end (iOS) changes no size.
+  const overEnd = (by) => {
+    by.forEach((now, i) => {
+      const [top, height, inner] = now;
+      const was = by.length === wasBy.length ? wasBy[i] : null;
+      now[7] = !!was && top > height - inner + 1 && (height !== was[1] || inner !== was[2] || was[7] === true);
+    });
+    return by;
+  };
   const read = (count, entries = null) => {
     pending = false;
     if (!live) { return; }
@@ -221,12 +239,17 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     // or by the compositor): what it moved is taken off here, so the event finds nothing left.
     const by = scrolledBy(wasBy);
     const since = was && scrolledSince(by);
-    if (since?.shift) { was = was.map((y) => y - since.shift); }
-    const at = controls().filter((b) => b.getClientRects().length > 0).map((b) => b.getBoundingClientRect().top);
-    const changed = was && (at.length !== was.length || at.some((y, i) => Math.abs(y - was[i]) > 1));
+    if (since?.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
+    // Where each is across as well as down: a window narrowed or widened within one layout moves
+    // a centred conversation sideways with nothing changing height.
+    const at = controls().filter((b) => b.getClientRects().length > 0).map((b) => {
+      const r = b.getBoundingClientRect();
+      return [r.top, r.left];
+    });
+    const changed = was && (at.length !== was.length || at.some(([y, x], i) => Math.abs(y - was[i][0]) > 1 || Math.abs(x - was[i][1]) > 1));
     if (count && changed && !theirs(entries)) { moved(); }
     was = at;
-    wasBy = by;
+    wasBy = overEnd(by);
   };
   const sized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => read(true, entries)) : null;
   const watched = new Set();
@@ -262,8 +285,8 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       later();
       return;
     }
-    if (since.shift) { was = was.map((y) => y - since.shift); }
-    wasBy = by;
+    if (since.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
+    wasBy = overEnd(by);
     if (since.resized) { later(); }
   };
   win.addEventListener?.('scroll', scrolled, { capture: true, passive: true });

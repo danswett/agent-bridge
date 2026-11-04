@@ -647,6 +647,9 @@ test('a reader who scrolls back and returns to the same place, with the response
 test('the same question redrawn while its wait runs says so on the new drawing, for what is left of the wait and no longer', async ({ page }) => {
   await openDemo(page);
   const v = await open(page, CODEX);
+  // A pointer resting on the conversation: the question arriving isn't scrolled to, so no scroll
+  // (and no wait for it to come to rest) runs on behind the test's own clock.
+  await v.locator('.stream-scroll').hover();
   await holdClock(page);
   const draw = (message) => page.evaluate((message) => {
     const d = window.agentBridgeDemo;
@@ -679,6 +682,16 @@ test('the same question redrawn while its wait runs says so on the new drawing, 
   await page.clock.runFor(50);
   expect(await page.evaluate(() => window.agentBridgeDemo.host.answerLog.length)).toBeGreaterThan(before);
 });
+
+// Until nothing scrolls the scroller on its own (a smooth scroll to a question the app started
+// as the session opened, say): two looks a tenth of a second apart find it where it was.
+async function atRest(page, scroller) {
+  await expect.poll(async () => {
+    const was = await scroller.evaluate((el) => el.scrollTop);
+    await page.waitForTimeout(100);
+    return (await scroller.evaluate((el) => el.scrollTop)) === was;
+  }).toBe(true);
+}
 
 // A question with two choices, asked of Codex's session; extra: anything else to set with it.
 const choices = (id, message = 'Which?') => ({
@@ -852,8 +865,14 @@ test('content growing above what is in sight, which the browser keeps in place, 
   const scroller = v.locator('.stream-scroll');
   // Read to near the end, the question in sight; your message far above, out of sight.
   await scroller.evaluate((el) => { el.scrollTop = el.scrollHeight - el.clientHeight - 100; });
+  await atRest(page, scroller);
   await expect(v.locator('.question-slot .choice').first()).toBeInViewport();
   await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  // Any wait at all from here on is seen, though a slow runner lets it run out before the look.
+  await v.locator('.question-slot').evaluate((slot) => {
+    window.__armed = false;
+    new MutationObserver(() => { if (slot.querySelector('.question[data-arriving]')) { window.__armed = true; } }).observe(slot, { subtree: true, attributes: true, attributeFilter: ['data-arriving'] });
+  });
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
   // Your message, out of sight above, grows: the browser keeps what's in sight where it is.
   const message = Array.from({ length: 30 }, () => 'A much longer message than before.').join('\n\n');
@@ -862,7 +881,7 @@ test('content growing above what is in sight, which the browser keeps in place, 
   const after = await page.evaluate(async (top) => {
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const view = document.querySelector('.session-view[data-id="019a1b2c-codex-example"]');
-    return { by: Math.abs(view.querySelector('.question-slot .choice').getBoundingClientRect().top - top), armed: view.querySelector('.question-slot .question').hasAttribute('data-arriving') };
+    return { by: Math.abs(view.querySelector('.question-slot .choice').getBoundingClientRect().top - top), armed: window.__armed };
   }, top);
   // WebKit keeps nothing in place (no scroll anchoring): there the question really moves, and waits.
   if (browserName !== 'webkit') { expect(after.by).toBeLessThanOrEqual(1); }
@@ -979,12 +998,32 @@ test('a session not shown reads and watches nothing; shown again, it watches its
   expect(await watching()).toEqual([true, true]);
 });
 
+test('a window narrowed within one layout moves the question across, and it takes no click for a moment', async ({ page }) => {
+  await openDemo(page, { width: 1900, height: 900 });
+  await askCodex(page, choices('q-across'));
+  const v = await open(page, CODEX);
+  await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
+  const where = () => v.locator('.question-slot .choice').first().evaluate((c) => { const r = c.getBoundingClientRect(); return { top: r.top, left: r.left }; });
+  const was = await where();
+  await holdClock(page);
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await expect.poll(async () => {
+    await page.clock.runFor(20);
+    return v.locator('.question-slot .question').evaluate((q) => q.hasAttribute('data-arriving'));
+  }).toBe(true);
+  const now = await where();
+  // Only across: nothing above it changed height.
+  expect(Math.abs(now.top - was.top)).toBeLessThanOrEqual(1);
+  expect(was.left - now.left).toBeGreaterThan(1);
+});
+
 test('a taller window pulling a conversation at its end back moves the question down, and it takes no click for a moment', async ({ page }) => {
   await openDemo(page, { height: 700 });
   const long = Array.from({ length: 60 }, (_, i) => `Line ${i + 1} of a long answer.`).join('\n\n');
   await askCodex(page, choices('q-taller'), { activity: { response: long } });
   const v = await open(page, CODEX);
   await v.locator('.stream-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await atRest(page, v.locator('.stream-scroll'));
   await expect(v.locator('.question-slot .question[data-arriving]')).toHaveCount(0);
   const top = await v.locator('.question-slot .choice').first().evaluate((c) => c.getBoundingClientRect().top);
   // The wait can't run out on a slow runner before it is looked at.
