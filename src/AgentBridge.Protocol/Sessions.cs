@@ -541,6 +541,15 @@ public sealed record SubscribeSince
     public required long Revision { get; init; }
 }
 
+// sessions.focus (Capabilities.SessionsFocus): whether the client is on screen now, and the session
+// it shows, if any. Live changes to the others then come together at most every 12 s, and a
+// visible device is not notified of a finished turn it can see (#610).
+public sealed record FocusRequest
+{
+    public required bool Visible { get; init; }
+    public string? Open { get; init; }
+}
+
 // sessions.subscribe's result; the sessions themselves follow as session.upsert events,
 // then sessions.synced. Resumed: only the sessions changed since the request's Since follow.
 public sealed record SubscribeResult(long Revision, int Count, bool? Resumed = null);
@@ -627,6 +636,7 @@ public static class Ops
     public const string SessionsList = "sessions.list";
     public const string SessionGet = "session.get";
     public const string SessionsSubscribe = "sessions.subscribe";
+    public const string SessionsFocus = "sessions.focus";
     public const string SessionAnswer = "session.answer";
     public const string SessionReply = "session.reply";
     public const string SessionStop = "session.stop";
@@ -689,6 +699,10 @@ public static class Capabilities
     // what hello would say to it changes, and a client needs to ask hello again only rarely
     // (docs/protocol/v1-sessions.md, hello). Apps asked every 10 s, ~36 hellos a minute (#640).
     public const string HelloChanged = "hello.changed";
+    // sessions.focus: a client says whether it is on screen and which session it shows; the host
+    // sends the open session's changes at once and the rest together, at most every 12 s
+    // (docs/protocol/v1-sessions.md, sessions.focus). Each radio wake-up costs a phone (#610).
+    public const string SessionsFocus = "sessions.focus";
     public const string SessionsAnswer = "sessions.answer";
     public const string SessionsReply = "sessions.reply";
     public const string SessionsStop = "sessions.stop";
