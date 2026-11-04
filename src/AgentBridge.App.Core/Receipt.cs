@@ -141,8 +141,10 @@ public sealed class Receipt : IDisposable
         public string? Stage;
         public TimeSpan StageAt;
         public TimeSpan? SendingSince;
+        // The last wait was a resend meeting the first copy in flight (Tick).
+        public bool Delivering;
         public ShownLine? Shown;
-        public string? Said;
+        public readonly HashSet<string> Said = [];
     }
 
     sealed record ShownLine(string Key, TimeSpan At, ReceiptLine Line, bool InFlight);
@@ -171,7 +173,9 @@ public sealed class Receipt : IDisposable
         (this.time, this.ui, this.describe, this.show, this.announce) = (time, ui, describe, show, announce);
     }
 
-    TimeSpan Now() => TimeSpan.FromSeconds((double)time.GetTimestamp() / time.TimestampFrequency);
+    // In whole ticks: through a double, a timestamp of today's ticks (about 6e17) loses tens of
+    // them, and a timer set from it fires that late.
+    TimeSpan Now() => TimeSpan.FromTicks((long)((Int128)time.GetTimestamp() * TimeSpan.TicksPerSecond / time.TimestampFrequency));
 
     // instead: a line that isn't the delivery's (the machine is not current, files being read),
     // shown as it is until the next Show without one.
@@ -233,7 +237,12 @@ public sealed class Receipt : IDisposable
             Shown(h, describe(e, false), t, inFlight: false);
             return;
         }
-        if (e.Stage != h.Stage) { (h.Stage, h.StageAt) = (e.Stage, t); }
+        if (e.Stage != h.Stage) { (h.Stage, h.StageAt, h.Delivering) = (e.Stage, t, false); }
+        // A resend that met the first copy in flight goes again every couple of seconds, and is
+        // busy again until the first copy settles: between, it still is being delivered, not newly
+        // sent, so the line doesn't flicker between the two and say both each time.
+        if (e.State == DeliveryState.Waiting) { h.Delivering = e.Reason == Deliveries.StillBeingDelivered; }
+        if (h.Delivering && e.State == DeliveryState.Sending) { e = e with { State = DeliveryState.Waiting, Reason = Deliveries.StillBeingDelivered }; }
         if (Uploading(e)) { h.SendingSince = null; }
         else if (e.State == DeliveryState.Sending && e.Stage is null) { h.SendingSince ??= t; }
         var due = StallDue(e, h);
@@ -275,11 +284,8 @@ public sealed class Receipt : IDisposable
             drawn = signature;
             show(line);
         }
-        if (h is not null && line.Speech is { } speech && speech != h.Said)
-        {
-            h.Said = speech;
-            Announce(speech);
-        }
+        // Each change is said once for the request, however often its view model is made afresh.
+        if (h is not null && line.Speech is { } speech && h.Said.Add(speech)) { Announce(speech); }
     }
 
     void Announce(string text)

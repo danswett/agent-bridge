@@ -122,7 +122,8 @@ public sealed class ReceiptTests
     {
         using var r = NewReceipt();
         Show(r, e => e with { Stage = DeliveryProgress.Typed });
-        Tick(800);
+        Tick(400);
+        Tick(400);
         Show(r, e => e with { State = DeliveryState.Waiting, Reason = Deliveries.StillBeingDelivered });
         Assert.Equal("Passed to the agent · still being delivered", Shown);
         Tick(400);
@@ -132,6 +133,29 @@ public sealed class ReceiptTests
         Show(r, e => e with { Reason = Deliveries.NotConnected });
         Assert.Equal("Waiting for ULTRA · it goes when ULTRA is back", Shown);
         Assert.Equal(ReceiptMark.Still, ReceiptWords.InFlight(false, entry, "ULTRA", false).Mark);
+    }
+
+    [Fact]
+    public void A_resend_that_meets_the_first_copy_in_flight_keeps_saying_still_being_delivered_and_says_so_once()
+    {
+        using var r = NewReceipt();
+        Show(r, e => e with { Stage = DeliveryProgress.Received });
+        Tick(400);
+        Tick(5000);
+        Show(r, e => e with { State = DeliveryState.Waiting, Reason = Deliveries.StillBeingDelivered });
+        Assert.Equal("Sent · still being delivered", Shown);
+        for (var i = 0; i < 3; i++)
+        {
+            Tick(2000);
+            Show(r, e => e with { State = DeliveryState.Sending, Reason = null, Attempts = 2 + i });
+            Tick(100);
+            Show(r, e => e with { State = DeliveryState.Waiting, Reason = Deliveries.StillBeingDelivered });
+        }
+        Tick(1000);
+        Assert.Equal("Sent · still being delivered", Shown);
+        Assert.Single(drawn, d => d == "Sent · still waiting on ULTRA");
+        Assert.Single(said, s => s == "Reply still being delivered");
+        Assert.Equal("Reply still being delivered", said[^1]);
     }
 
     [Fact]

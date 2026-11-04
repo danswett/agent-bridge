@@ -66,8 +66,11 @@ public sealed partial class QuestionViewModel : Observable
         (StatusText, StatusTone) = (line.Whole, line.Tone);
     }
 
+    // Cleared first, so the same words said again (the next reply delivered) are a change too.
     void Said(string speech)
     {
+        Announcement = "";
+        Raise(nameof(Announcement));
         Announcement = speech;
         Raise(nameof(Announcement));
     }
