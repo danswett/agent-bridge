@@ -110,7 +110,14 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
   // frame is not the person's alone, whichever came first.
   let forced = false;
   let draws = 0;
-  const theirs = (entries) => own && !forced && !!entries && entries.every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  // Theirs only if the question itself resized, nothing but it and what holds it did, and nothing
+  // outside the page's content changed with it (the window, or what a scroller shows, resized): a
+  // window resized as the person types still moves the answers. A scroll pulled back because
+  // their own question got shorter (an error going) stays theirs.
+  const theirs = (entries, outside) => own && !forced && !outside && !!entries
+    && entries.some((e) => holder.contains(e.target))
+    && entries.every((e) => holder.contains(e.target) || e.target.contains?.(holder));
+  let view = null;
   // How far everything holding the answers is scrolled and how big each is inside and out; for
   // each the holder's place doesn't pin (nothing fixed between them), how far the browser's
   // anchoring moved its scrolling to keep what's at its top in place as content above changed.
@@ -196,6 +203,7 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     if (by.length !== wasBy.length) { return null; }
     let shift = 0;
     let resized = false;
+    let clamped = false;
     by.forEach(([top, height, inner, carried, , , anchored], i) => {
       const [wasTop, wasHeight, wasInner] = wasBy[i];
       const sized = height !== wasHeight || inner !== wasInner;
@@ -208,6 +216,7 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       // Nothing taken off; read in a moment, in case the read for the new size came first.
       if (pulled) {
         resized = true;
+        clamped = true;
         return;
       }
       // All of it anchoring (nothing scrolled by anyone): left for the read to find in place,
@@ -219,7 +228,7 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       const all = Math.abs(anchored) > 0.5 && Math.abs(top - wasTop - anchored) <= 1;
       shift += all ? top - wasTop - anchored : top - wasTop;
     });
-    return { shift, resized };
+    return { shift, resized, clamped };
   };
   // Marks a scroller this look finds past its own end with a new size (or still past it since
   // one): a browser that laid out the size before it moved the scroll, so the pull back to the
@@ -247,7 +256,11 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
       return [r.top, r.left];
     });
     const changed = was && (at.length !== was.length || at.some(([y, x], i) => Math.abs(y - was[i][0]) > 1 || Math.abs(x - was[i][1]) > 1));
-    if (count && changed && !theirs(entries)) { moved(); }
+    const size = [win.innerWidth, win.innerHeight];
+    const outside = !view || size[0] !== view[0] || size[1] !== view[1]
+      || by.some(([, , inner, carried], i) => carried && wasBy.length === by.length && inner !== wasBy[i][2]);
+    if (count && changed && !theirs(entries, outside)) { moved(); }
+    view = size;
     was = at;
     wasBy = overEnd(by);
   };
@@ -287,6 +300,12 @@ export function watchMoves({ holder, controls, also = [], skip = () => false, mo
     }
     if (since.shift) { was = was.map(([y, x]) => [y - since.shift, x]); }
     wasBy = overEnd(by);
+    // A clamp is read now, not frames on: the answers it slid are under the pointer already. While
+    // the person's own act in the question holds, it is left to the read with what resized.
+    if (since.clamped && !own) {
+      read(true);
+      return;
+    }
     if (since.resized) { later(); }
   };
   win.addEventListener?.('scroll', scrolled, { capture: true, passive: true });

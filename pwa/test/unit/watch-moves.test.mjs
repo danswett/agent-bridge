@@ -16,6 +16,8 @@ function page() {
     disconnect() {}
   };
   const win = {
+    innerWidth: 1440,
+    innerHeight: 900,
     requestAnimationFrame: (fn) => frames.push(fn),
     addEventListener: (type, fn) => { on[type] = fn; },
     removeEventListener() {},
@@ -31,12 +33,15 @@ function page() {
   scroller.contains = (el) => el === scroller || holder.contains(el);
   holder.parentElement = scroller;
   let moves = 0;
-  watchMoves({ holder, controls: () => [button], moved: () => { moves += 1; } });
+  const watcher = watchMoves({ holder, controls: () => [button], moved: () => { moves += 1; } });
   return {
     at,
+    win,
+    holder,
     scroller,
+    watcher,
     moves: () => moves,
-    read: () => resized([{ target: scroller }]),
+    read: (targets = [scroller]) => resized(targets.map((target) => ({ target }))),
     scroll: () => on.scroll({ target: scroller }),
     frames() { while (frames.length) { frames.shift()(); } },
   };
@@ -50,10 +55,12 @@ test('a scroll pulled back to its end after the read for the new size is a move,
   p.scroller.clientHeight = 430;
   p.read();
   assert.equal(p.moves(), 0);
-  // Then the scroll is pulled back to the end, and the answer slides down under the pointer.
+  // Then the scroll is pulled back to the end, and the answer slides down under the pointer:
+  // found then, before another frame, when a click may already be on its way.
   p.scroller.scrollTop = 1803;
   p.at.top += 120;
   p.scroll();
+  assert.equal(p.moves(), 1);
   p.frames();
   assert.equal(p.moves(), 1);
 });
@@ -89,5 +96,60 @@ test('an answer moved sideways with nothing changing height is a move (#491)', (
   // A window narrowed within one layout: the centred conversation, and its answers, move across.
   p.at.left -= 50;
   p.read();
+  assert.equal(p.moves(), 1);
+});
+
+test('the person\'s own question growing as they type in it is theirs, not a move', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  // An error under their field goes: the question, and the conversation holding it, resize.
+  p.at.top -= 20;
+  p.read([p.holder, p.scroller]);
+  assert.equal(p.moves(), 0);
+});
+
+test('a window resized as the person types, resizing only what holds their question, is a move (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  p.win.innerHeight = 1020;
+  p.scroller.clientHeight = 430;
+  p.at.top += 30;
+  p.read([p.scroller]);
+  assert.equal(p.moves(), 1);
+});
+
+test('a window widened as the person types, re-wrapping their question too, is a move (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  p.win.innerWidth = 1500;
+  p.at.top -= 18;
+  p.at.left += 30;
+  p.read([p.holder, p.scroller]);
+  assert.equal(p.moves(), 1);
+});
+
+test('something holding the question resizing alone as the person types, the window as it was, is a move (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  // The conversation's padding above the question grows: their question didn't resize.
+  p.scroller.scrollHeight += 30;
+  p.at.top += 30;
+  p.read([p.scroller]);
+  assert.equal(p.moves(), 1);
+});
+
+test('what the conversation shows changing height as the person types, the window as it was, is a move (#491)', () => {
+  const p = page();
+  p.read();
+  p.watcher.own();
+  // A bar above the conversation takes some of its height as their question grows: the question
+  // resized, and so did what the conversation shows.
+  p.scroller.clientHeight = 280;
+  p.at.top -= 30;
+  p.read([p.holder, p.scroller]);
   assert.equal(p.moves(), 1);
 });
