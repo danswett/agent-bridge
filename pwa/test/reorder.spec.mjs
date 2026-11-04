@@ -719,6 +719,57 @@ for (const width of [1440]) {
       await expect(card(page, DELEGATING)).toHaveAttribute('data-pinned', 'true');
     });
 
+    test('a card dragged by its body in one quick move lands where that move took it', async ({ page }) => {
+      await openDemo(page);
+      const [x, y, box] = await middle(card(page, CLAUDE).locator('.row-main'));
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      // One move, which both lifts it and carries it a place down.
+      await page.mouse.move(x, y + box.height + 12);
+      await expect(card(page, CLAUDE)).toHaveClass(/\blifted\b/);
+      await page.mouse.up();
+      await expect.poll(() => order(page)).toEqual([COPILOT, CODEX, CLAUDE, DELEGATING]);
+    });
+
+    test('a press during a drop\'s settle where the settled list has a header lifts and opens nothing, though a grip is drawn there', async ({ page }) => {
+      await openDemo(page);
+      await card(page, CODEX).locator('.row-main').click({ button: 'right' });
+      await card(page, CODEX).getByRole('menuitem', { name: 'Pin' }).click();
+      await settled(page);
+      await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));
+      const [x] = await grab(page, DELEGATING);
+      const pinned = await card(page, CODEX).boundingBox();
+      // Let go just under the foot of Pinned, a little low: it settles up into Pinned, drawn for
+      // now over the Sessions header that the drop moved down below it.
+      await page.mouse.move(x, pinned.y + pinned.height + 44, { steps: 8 });
+      await expect(card(page, DELEGATING).locator('.drag-chip')).toHaveText('Pin');
+      await page.mouse.up();
+      await expect.poll(() => order(page)).toEqual([CODEX, DELEGATING, COPILOT, CLAUDE]);
+      // A point the settling card's grip covers, where the settled list has the Sessions header
+      // and no card: a press on a grip lifts at once.
+      const point = await page.evaluate((id) => {
+        const list = document.getElementById('session-list');
+        const top = list.getBoundingClientRect().top;
+        const head = list.querySelector('.list-group[data-group="sessions"]');
+        const cards = [...list.querySelectorAll('.session')];
+        const x = list.getBoundingClientRect().left + 12;
+        for (let y = top + head.offsetTop + 1; y < top + head.offsetTop + head.offsetHeight; y += 1) {
+          const settledCard = cards.some((c) => y >= top + c.offsetTop && y < top + c.offsetTop + c.offsetHeight);
+          const drawn = document.elementFromPoint(x, y)?.closest('.drag-handle')?.parentElement?.dataset.id;
+          if (!settledCard && drawn === id) { return { x, y }; }
+        }
+        return null;
+      }, DELEGATING);
+      expect(point).not.toBeNull();
+      await page.mouse.move(point.x, point.y);
+      await page.mouse.down();
+      await expect(page.locator('.lifted')).toHaveCount(0);
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+      await expect(view(page, DELEGATING)).toBeHidden();
+      expect(await order(page)).toEqual([CODEX, DELEGATING, COPILOT, CLAUDE]);
+    });
+
     test('a key during a drop\'s settle moves the card on from its new place, and a press on the gap opens the card landing there', async ({ page }) => {
       await openDemo(page);
       await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));

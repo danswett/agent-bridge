@@ -141,10 +141,14 @@ export class Reorder {
       this.#reroute = null;
       if (!this.#settle) { return; }
       this.finish();
-      // The grip is the row's sibling, not in it: a press there lifts the card now under it.
-      const hit = this.doc.elementFromPoint?.(e.clientX, e.clientY)?.closest?.('.drag-handle, .row-main');
-      if (hit && list.contains(hit) && !hit.contains(e.target)) {
-        this.#reroute = { id: e.pointerId, target: hit, row: hit.matches('.row-main') ? hit : null };
+      // The grip is the row's sibling, not in it: a press there lifts the card now under it. A
+      // press where the settled list has no card (a header, a gap, a group's empty place) is on
+      // nothing: it neither lifts nor opens whatever card was drawn over that point a moment ago.
+      const at = this.doc.elementFromPoint?.(e.clientX, e.clientY)?.closest?.('.drag-handle, .row-main');
+      const hit = at && list.contains(at) ? at : null;
+      const was = e.target.closest?.('.drag-handle, .row-main');
+      if (hit ? !hit.contains(e.target) : !!was) {
+        this.#reroute = { id: e.pointerId, target: hit ?? list, row: hit?.matches('.row-main') ? hit : null };
       }
     }, true);
     // The click of a press that was rerouted lands where the press went (on the grip, nowhere);
@@ -216,9 +220,9 @@ export class Reorder {
     if (g.phase === 'pending') {
       const d = Math.hypot(g.x - g.sx, g.y - g.sy);
       if (g.type === 'touch') {
-        if (g.onGrip && d > DRAG_SLOP) { this.#lift(); } else if (!g.onGrip && d > TOUCH_SLOP) { this.#abort(); }
+        if (g.onGrip && d > DRAG_SLOP) { this.#lift(true); } else if (!g.onGrip && d > TOUCH_SLOP) { this.#abort(); }
       } else if (d > DRAG_SLOP) {
-        this.#lift();
+        this.#lift(true);
       }
     } else if (g.phase === 'lifted') {
       this.#track();
@@ -314,7 +318,8 @@ export class Reorder {
     return slots;
   }
 
-  #lift() {
+  // moved: the pointer's move lifted it, rather than a hold's time.
+  #lift(moved = false) {
     const g = this.#g;
     if (!g || g.phase !== 'pending') { return; }
     clearTimeout(g.timer);
@@ -336,7 +341,11 @@ export class Reorder {
     const origin = slots.find((s) => same(s, m.origin));
     if (!origin) { g.head?.remove(); this.#abort(); return; }
     const top = this.list.getBoundingClientRect().top + m.me.top;
-    Object.assign(g, { phase: 'lifted', m, slots, origin, slot: origin, offY: g.y - top, lx: g.x, ly: g.y, armed: false, outside: false, acc: 0, t: 0, width: m.width });
+    // Held where it was pressed. A move that lifted it (4 px or more of a mouse, pen or grip) is the
+    // drag's own: the card is already that far along, and it counts toward the drag having moved.
+    // A hold's drift before its time came doesn't: let go there, a long press is still a menu.
+    const from = moved ? [g.sx, g.sy] : [g.x, g.y];
+    Object.assign(g, { phase: 'lifted', m, slots, origin, slot: origin, offY: g.sy - top, lx: from[0], ly: from[1], armed: false, outside: false, acc: 0, t: 0, width: m.width });
     this.host.lifted?.();
     const doc = this.doc;
     g.gap = doc.createElement('div');
