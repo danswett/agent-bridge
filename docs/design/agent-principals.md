@@ -13,7 +13,8 @@ note, and a bare "§n" means a section of this one.
 §8 covers the owner-requested overlap with connectors: Home Assistant as the first client of the
 third-party connector API, and #388's headless identity. That section is the one place where
 the three principal kinds (agents, connectors and cross-account peers) are set against each
-other. It covers what they share, what each needs from #55, and who owns each piece.
+other. It covers what they share, what each needs from #55, and who owns each piece. §9 designs
+the third-party connector API that Home Assistant is the first client of.
 
 ## Contents
 
@@ -25,9 +26,10 @@ other. It covers what they share, what each needs from #55, and who owns each pi
 6. [Display and attribution](#6-display-and-attribution)
 7. [Cross-account federation](#7-cross-account-federation)
 8. [Three principal kinds: shared foundations, dependencies and ownership](#8-three-principal-kinds-shared-foundations-dependencies-and-ownership)
-9. [Threat model](#9-threat-model)
-10. [Phasing and dependencies](#10-phasing-and-dependencies)
-11. [Open questions for the owner](#11-open-questions-for-the-owner)
+9. [The connector API](#9-the-connector-api)
+10. [Threat model](#10-threat-model)
+11. [Phasing and dependencies](#11-phasing-and-dependencies)
+12. [Open questions for the owner](#12-open-questions-for-the-owner)
 
 ---
 
@@ -290,7 +292,7 @@ host T ──result──▶ host M ──▶ agent
 
 For a target on the **same machine**, nothing is signed. The host applies the same policy, rate
 limits, chain rules and attribution to the agent connection directly, and audits it the same way.
-So the local slice (§10) exercises every rule except the signature.
+So the local slice (§11) exercises every rule except the signature.
 
 ### 4.2 What signs it (Q1)
 
@@ -486,7 +488,7 @@ non-disclosing first). Each refusal is audited with its reason:
   §6.3's: within a relay-maintained partition, a removed host can keep being served there.
 * A **revoked credential** is local to the issuer. T can't see it, and needs not to: the issuer
   refuses to sign for it. A compromised issuer host can sign for any of its sessions, or invent
-  one. That is the "compromised machine" row of §9, and the target's policy (which origin
+  one. That is the "compromised machine" row of §10, and the target's policy (which origin
   machines may do what) is the bound.
 
 ---
@@ -1137,6 +1139,7 @@ Added at the owner's request (coordinator, 2026-11-03 17:02 PT), to fold in the 
 Home Assistant client and #388's generic headless identity raised by session D (d5ac689c) in
 [#519 comment 6617769351](https://github.com/danswett/agent-bridge/issues/519#issuecomment-6617769351).
 This is the one design for all three kinds. #388 and D keep the connector-specific work (§8.9).
+The connector API itself, of which Home Assistant is the first client, is §9.
 
 ### 8.1 The owner's direction
 
@@ -1334,16 +1337,282 @@ purpose, decommissioning or re-keying older relay deployments that share the acc
 | One host authorization module (principal resolution, grants, per-op allowlist, nested principals), extending #407 | Shared | **#55** for device kinds. **#388** adds connector grants, **#519** the agent policy and link scopes |
 | Relay credential framework: purposes, key domains, encoding, old-validator rejection, revocation across deployments | Shared | **#388** (first consumer, and #394 specifies it), reviewed by #55. #519 adds the guest purpose |
 | Connector enrollment (full-key transfer, approval UX, claim), connector grants, connector key storage, the read profile and conformance suite (#534), the Python transport (HA #9, #10), HA integration | Separate | **#388** / agent-bridge-home-assistant#2 (D) |
+| **The connector API as product** (§9): `connector-api.md`, profiles and versioning, schemas, vectors, conformance suite, reference SDKs, host contract tests | Separate from agents. Product, not Home Assistant | **#388**, as the API's owner, with D's #534 as its start (Q29). The Home Assistant connector is its first consumer, in agent-bridge-home-assistant#2 |
 | Agent credentials, `agent.hello`, adoption, envelope, chains and budgets, prefix, `driverFrom`, MCP (#45), links and federation | Separate | **#519** (with #45 for the MCP server) |
 | Attribution taxonomy: `driver` and `driverFrom.kind` (`agent`; later `automation` for connector writes; `external`) | Shared vocabulary | **#519**, with #388 adding `automation` if write grants are ever approved |
 
 ---
 
-## 9. Threat model
+## 9. The connector API
+
+Added at the owner's direction (coordinator, 2026-11-03 17:31 PT): **Home Assistant is one client
+of a documented, stable, versioned third-party connector API**, not a special case. Anyone may
+build a connector on it (dashboards, chat bots, automation tools), and the Home Assistant
+integration is the first. This section is the API's design. §8 already covers how connectors
+relate to agents and peers, their lifecycle (§8.2) and their first grant (§8.6), and this section
+doesn't repeat that. It builds on D's draft read contract, PR #534
+(`docs/protocol/connector-read.md`, `connector-read-v1.json`, the conversation fixtures,
+`tools/connector-conformance/mock-host.mjs` and `ConnectorReadVectorTests`), which becomes the
+API's first profile.
+
+### 9.1 One wire protocol, separately versioned profiles
+
+**Recommended: the connector API is a published profile of Bridge Protocol v1, not a second
+protocol.**
+
+| | One protocol, connector **profiles** (recommended) | A separate connector protocol |
+|---|---|---|
+| Implementation | One `SessionService`, one set of records, one set of vectors (v1-sessions.md "Test vectors") | A second server surface to build, review and keep consistent |
+| Drift | Can't drift in payloads: a profile *selects* ops and records, and the host's contract tests pin the selection (§9.4) | A translation layer whose behaviour can diverge from the app's and PWA's |
+| Stability | Each profile has its own version and deprecation policy, so the internal protocol can grow (additive fields, new ops for the app) without moving what connectors see | Same goal, at higher cost |
+| Security | Separation comes from the **principal and grant**, enforced at the host per message (§8.3), not from a different wire format | No stronger: a separate format doesn't authorize anything |
+
+The app and PWA keep using the whole protocol. A connector uses only the ops in the profiles its
+grant names.
+
+**Profiles.**
+
+| Profile | Ops and events | Status |
+|---|---|---|
+| `read` v1 | `hello`, `sessions.list`, `session.get`, `sessions.subscribe`. Events `session.upsert`, `session.remove`, `sessions.synced`, `discovery.changed` (#534's index) | First slice (§9.7) |
+| `usage` v1 (later) | `usage.get`, `usage.subscribe` | Separate grant |
+| `act` v1 (later, Q26) | Candidates, each its **own** grant: `session.reply`, `session.stop`, `launch.options` and `session.launch` (`ask` only) | Needs its own design and review (Q18), with `automation` attribution |
+| **Never in any profile** | `session.answer` on any approval; `launch.trust.answer`; `host.*`; roster, account and credential administration; `pairing.*`; `update.*`; `push.*`; `session.transfer`; `agent.command` | Enforced by the host's classification test (§9.4) |
+
+Whether connectors may ever answer `ask_user` *forms* (not approvals) is part of Q26. Note the
+consequence for parity: agent-ha-bridge let Home Assistant's phone notifications answer
+approvals. Under this API they can't, and the native app and PWA are where approvals are
+answered.
+
+**Versioning and negotiation.**
+* A connector's `hello` names the profiles it speaks:
+  `{"connector": {"profiles": [{"name": "read", "versions": [1]}], "sdk": "agent-bridge-py/0.3"}}`.
+  The host answers with the profiles it **grants this principal**, at the highest common version:
+  `{"connector": {"profiles": [{"name": "read", "version": 1}]}}`. A profile neither granted nor
+  supported is simply absent. A connector with nothing in common gets `hello` with no profiles,
+  and every other op is refused with `not-granted`.
+* `capabilities` stay what they are today: features, **not permissions** (#534, "Boundary and
+  versioning"). A connector reads both.
+* **Within a profile's major version:** additive only. New optional fields and enum values
+  (clients ignore unknown ones, v1-sessions.md "Rules for every message"), and new events a
+  connector must tolerate. A new *op* is a new profile minor version, which the connector must
+  negotiate before it is sent.
+* **A major version** is needed for removing or renaming an op or field, changing a meaning, or
+  making optional data required.
+* **Deprecation:** a host supports the current and the previous major version of each profile
+  for at least **12 months** after the new major ships. During that time `hello` marks the old
+  one `{"deprecated": true, "sunset": "2028-01-31"}`, and the app shows connectors that still
+  use it. After sunset the old version is refused with `unsupported-version`, naming the
+  supported ones.
+* The profile index (`connector-api.json`, §9.4) carries each profile's version, status
+  (`draft`, `stable`, `deprecated`) and sunset date.
+
+**Transport.** Noise over the relay (and LAN direct, design.md §5.2, when it exists), as for any
+device. There is **no plaintext REST or webhook gateway**. It would need either an inbound port
+on the host or a relay that reads content, and the design rejects both (design.md §5.1, §5.3).
+The local pipe is not a connector transport: it carries same-user rights, not a principal
+(local-pipe.md:121-130). Implementing Noise P-256 is the price of entry, so the project
+publishes **reference SDKs**, each held to the shared vectors: .NET (`AgentBridge.Transport`),
+JavaScript (the PWA's `noise-p256.js`) and Python (agent-bridge-home-assistant #9 and #10, with
+the owner's approval of 2026-11-03 for that route, #388).
+
+### 9.2 Connector identity, enrollment and approval
+
+A connector is a **service principal** (§8.2): its own P-256 key, generated by it and kept in its
+own protected storage, unattended, and approved and revocable by the owner. There is **no
+central registry or store** of connector *products*. What the owner approves is one installation
+of one connector, with one key, for one account.
+
+**Enrollment** (after #55, route (a) of §8.7; Q16):
+
+1. **Request.** The connector generates its key and shows an enrollment request in its own UI
+   (Home Assistant's config flow, a bot's setup page): a QR code and a code.
+   `{ v, request, key, name, vendor, version, homepage, profiles: [{name, version}] }`. Every field
+   but `key` and `request` is the connector's **claim**, displayed as such.
+2. **Approval** on a presence-proven person's device (#391 decision 3(a)), using #391 §4.2's
+   **mutual, transcript-bound code exchange**, with the connector as the joining device. It shows
+   code 1, which the person types into the app. The app shows code 2, which the person types into
+   the connector's UI. A QR code does both, as in #391 §4.3. That is the "separately reviewed
+   transcript-bound commit/reveal pairing" that #394 ("Proposed enrollment sequence", step 2)
+   accepts in place of a full-key transfer, so no new pairing protocol is introduced.
+3. **What the person decides**, in one screen:
+   * the **display name**, pre-filled from the claim and editable ("Home Assistant (house)"). What
+     the person confirms is what is signed and shown, never the connector's later runtime claim;
+   * **which hosts** it may reach (none pre-ticked; #394 "selected host");
+   * **which profiles**: `read` only by default. Anything else is shown with what it allows, in
+     words;
+   * **scope** within a host: all sessions (default), or only some workspaces, with
+     `inbound.exclude` sessions never visible (§5.1);
+   * the **grant expiry**: 1 year by default, with a reminder 14 days before, renewed with
+     presence (Q27).
+4. **Recording.** A roster `add` of kind `connector` (an amendment to #391, Q16), signed with
+   presence and announced on every device (#391 §6.4). For each selected host, a **grant
+   record**: `{connector key, grant id, generation, profiles, scope, expiry}`, signed as a person
+   command for that host (#391 §7.2) and stored durably by the host (#407's store discipline).
+5. **Credential.** The selected hosts' relay issues the connector's **key-bound scoped relay
+   credential** (§8.5; #394 steps 3-6). It is never an account token, and it is routed only to
+   the granted hosts.
+
+Before #55, the same steps run against #407's local pins on **disposable hosts only** (§8.7).
+
+**Third-party connectors serving many users** (a hosted chat bot) hold **one key per owner
+account**, enrolled separately by each owner. There are no multi-tenant keys, and no key that
+reaches two accounts (§8.8).
+
+### 9.3 Grants, scope, rate limits, audit and display
+
+**Grants** are per connector and per host. The host evaluates them on **every request and every
+outgoing event**. Events for sessions outside the scope are never sent, and a session leaving the
+scope is sent as `session.remove`. The default is the `read` profile, all sessions, on the
+selected hosts only. A narrower *projection* (titles and status only, no `activity` text) is a
+later scope option for dashboards that don't need content (Q28).
+
+**Rate limits**, per connector per host, enforced by the host. The relay limits frames per
+credential as an honest-relay backstop.
+
+| Limit | Default |
+|---|---|
+| Channels open at once | 2 |
+| Subscriptions at once | 2 |
+| Requests | 120 per minute |
+| `session.get` | 60 per minute |
+| Bytes sent to it | 200 MiB per day (relay egress, design.md §4.7) |
+
+Past a limit, the request is refused as `rate-limited` with `retryAfter`. After 10 refusals in
+10 minutes, the host closes the connector's channels for 5 minutes and says so in the app.
+
+**Audit.** Each host records, per connector:
+* channel open and close, and the negotiated profiles;
+* hourly counts per op;
+* refusals, with the op and reason;
+* grant changes and revocations with their cause.
+
+It records **no session content**. Enrollment, renames and removal are roster events, announced on
+every person's device. The app's **Connectors** page lists each connector with its hosts,
+profiles, scope, expiry, last seen, requests today and refusals, and has **Revoke** beside each.
+
+**Display.**
+* A `read` connector never drives a session, so it changes nothing on a card.
+* The machine's detail lists "Read by **Home Assistant (house)** · 2 min ago", with a connector
+  glyph distinct from the agent diamond.
+* Under a future `act` grant, its acts are attributed as `driverFrom { kind: "connector", name }`
+  and shown as "via **Home Assistant (house)**". That attribution is never `driver: agent` and
+  never purple, so the person can tell a connector from an agent at a glance (Q18).
+
+### 9.4 The contract: spec, vectors, conformance and drift tests
+
+The API is product. These live in this repository under the API's owner (§8.9):
+
+| Artefact | Where | What |
+|---|---|---|
+| **Spec** | `docs/protocol/connector-api.md` (umbrella: principles, profiles, versioning, identity, grants, errors, limits), with one doc per profile (`connector-read.md`, from #534) | The normative text |
+| **Machine-readable index** | `docs/protocol/connector-api.json` → `connector-read-v1.json` (#534) | Profiles, versions, status, sunset, ops, events and limits. **A JSON Schema (2020-12) per request, result and event record**, generated from the C# records in `AgentBridge.Protocol` so they can't disagree. #534 has the request schema; the record schemas are the next step |
+| **Vectors** | `docs/protocol/vectors/connector/`, in the existing `vectors/` style and regenerated with `UPDATE_PROTOCOL_VECTORS=1` | Valid and must-refuse messages per profile, version negotiation, refusals (`not-granted`, `unsupported-version`, `rate-limited`, `revoked`), enrollment requests and codes (from #391's vectors), and #534's conversations |
+| **Conformance suite** | `tools/connector-conformance/` | A **reference host** any connector can run, plus scenarios and a report (below) |
+| **Host contract tests** | `tests/AgentBridge.Host.Tests` | Drift and authorization (below) |
+
+**The conformance suite.** #534's stdio mock replays recorded conversations. The suite grows it
+into a reference host. It runs the real `SessionService` over synthetic sessions, behind a real
+Noise responder on loopback with the connector's grant, so a connector exercises its real
+transport. Scenarios:
+* paging, and paging across a revision change;
+* subscribe, snapshot and `sessions.synced`;
+* a sequence gap and resubscription;
+* a discovery hold;
+* malformed and unknown fields and values;
+* `missing` sessions;
+* an out-of-grant op (`not-granted`);
+* an unsupported version;
+* rate limiting with `retryAfter`;
+* **revocation mid-subscription** (the channel closes with `revoked`, and the connector must stop
+  showing data as live);
+* grant expiry;
+* a host restart (a new snapshot, never an empty fleet);
+* an unavailable relay (never an empty fleet).
+
+A connector runs `node tools/connector-conformance/run.mjs --connector "<command>"` and gets a
+report naming each scenario. Passing it is self-attested conformance, not certification by the
+project. Real-host validation still applies for anything production (#534's caveat).
+
+**Host contract tests**, so the API can't drift:
+* **Payload drift:** `ConnectorReadVectorTests` (#534) regenerates the conversations from the
+  real host and fails on any difference.
+* **Op classification:** every op the host serves must be classified as in exactly one profile,
+  internal-only, or never-for-connectors. A new op that isn't classified fails the build, in the
+  spirit of `quality/catalog.yml`, which lists every suite the repository runs. That is how
+  `session.answer` approvals, `launch.trust.answer` and `host.*` can never quietly become
+  reachable.
+* **Authorization matrix:** for each profile grant, every op is driven through the real dispatch
+  entry points in both channel directions. Only that profile's ops succeed, and events outside
+  scope are never sent.
+* **Freeze:** a profile's schemas and op list are hashed into the index. Any change to a
+  `stable` profile must be additive (checked against the previous schema), or come with a version
+  bump.
+
+**Boundary.** Bridge core owns the API, its spec, vectors, conformance suite and reference SDKs.
+**Home Assistant's entities, cards, MQTT and config flow belong to the Home Assistant connector**
+(danswett/agent-bridge-home-assistant), outside Bridge core, as D established. Today's in-host
+Home Assistant connector (`AgentBridge.HomeAssistant`, the G9 migration compatibility path) is
+**not** a connector-API client. It runs in the host process with the host's own authority. It
+remains until its retirement under #319 and #389 (#525-#527), and nothing here changes it.
+
+### 9.5 Security
+
+* **A connector is untrusted third-party code.** Its claims (name, vendor, version, requested
+  profiles) are display text until the owner confirms them. Its key is the only thing that
+  identifies it.
+* **It never answers approvals or folder trust:** no profile contains them, and the
+  classification test (§9.4) enforces that.
+* **It never gets an account-wide token.** Its relay credential is key-bound, purpose-scoped and
+  in a separate signing domain that older validators reject (§8.5; #394 "Grant and enforcement").
+* **The host enforces every grant**, per message, at every dispatch entry, in both directions.
+  The relay, presence, displayed kind and name authorize nothing (§8.3).
+* **Revocation is immediate:**
+  * **At the host** (the app's Revoke, or `agent-bridge-host connectors revoke`, at the
+    machine): durable first, then the connector's channels close and its subscriptions end
+    within a second. That works with the relay down (#394).
+  * **From any person's device:** a roster removal (after #55), which every online host applies
+    at once and an offline host applies before it serves again (#391 §6.2). Plus relay
+    revocation of the credential.
+  * **Expiry:** enforced on live channels, not only at admission (#394).
+* **No standing access survives revocation:** subscriptions are owned by the grant (#394, and
+  #407's revocation-owned subscriptions).
+* **Data minimization:** scope and projection (§9.3), and no content in audit logs.
+
+### 9.6 Relationship to agents and federation
+
+Agents, connectors and other-account peers are the three principal kinds of §8, sharing one
+verification machinery (§8.3-§8.5) with separate lifecycles and grants (§8.2). The reuse matrix
+(§8.4) and the dependencies (§8.7) cover connectors, and the API adds no new shared foundation.
+Its own pieces (profiles, negotiation, conformance, SDKs) belong to the connector owner (§8.9).
+A connector is never an agent, never drives a session under `read`, and is never reachable
+through a federation link (§8.8).
+
+### 9.7 Phasing: the smallest first slice
+
+**C1, the smallest first slice: the read-only connector API, with Home Assistant as its first
+consumer.**
+
+| # | Slice | Depends on | Production? |
+|---|---|---|---|
+| **C1** | `connector-api.md` and `connector-api.json` around #534's `read` v1. Profile negotiation in `hello`. Record schemas generated from C#. The op classification, authorization-matrix and freeze tests. The reference host on loopback Noise, and conformance scenarios except enrollment. The `read` profile enforced through #407's `service` role on **disposable hosts** | #534 merged, #407 (merged) | **No**: disposable hosts only |
+| C2 | Python SDK on the shared vectors (HA #9, #10). The Home Assistant connector reads through C1's reference host and a disposable real host | C1 | No |
+| C3 | Enrollment (§9.2) with mutual codes, the Connectors page, revocation, rate limits and audit | #391 R1 + R3 (+ the `connector` kind, Q16), or the owner's Q16 (b) decision | Behind the owner's approval |
+| C4 | The relay's scoped connector credential (§8.5) | Q17. Staging first; production with the owner's approval | Production relay |
+| C5 | Production read for Home Assistant on the owner's selected host | C2-C4, the mixed-fleet gate (§8.7), independent security review | **Yes** |
+| C6 | Later profiles: `usage`, then `act` (Q26) | C5, a separate design | — |
+
+C1 needs nothing from #55 and doesn't connect anything in production. That is why it comes
+first. **Production Home Assistant (C5) waits for the trust anchor (Q16), the relay credential
+(Q17) and the mixed-fleet gate.**
+
+---
+
+## 10. Threat model
 
 In addition to design.md §5.1 (:348-361) and #391 §2.
 
-### 9.1 Single account
+### 10.1 Single account
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
@@ -1357,18 +1626,18 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **Clock faults** | A host's clock is wrong | Make a used command run again (durable record, high-water mark) | Make commands fail with `clock` until fixed |
 | **Agent loops** | Two well-meaning agents ping-pong | Run unattended past 20 messages or 60 minutes per person-started conversation | Use up to those budgets |
 
-### 9.2 Cross-account
+### 10.2 Cross-account
 
-All of 9.1, plus §7.8, and the repository-specific events of §7.11.6. The essential difference
+All of 10.1, plus §7.8, and the repository-specific events of §7.11.6. The essential difference
 is that the counterpart **owner** is a party
 the design must not trust: consent is per side, scope is minimal by default, the projection hides
 what wasn't meant to be shared, external provenance is always visible to both person and agent,
 and revocation is unilateral.
 
-### 9.3 Connectors
+### 10.3 Connectors
 
-#394's threat assumptions ("Scope and trust boundary") apply, and are not repeated here. In
-addition:
+#394's threat assumptions ("Scope and trust boundary") and §9.5 apply, and are not repeated here.
+In addition:
 
 | Party | Must not be able to | Can (residual) |
 |---|---|---|
@@ -1379,9 +1648,9 @@ addition:
 
 ---
 
-## 10. Phasing and dependencies
+## 11. Phasing and dependencies
 
-### 10.1 Dependencies
+### 11.1 Dependencies
 
 | Dependency | Needed for | Why |
 |---|---|---|
@@ -1393,7 +1662,7 @@ addition:
 | **#388** headless identity, and connectors | Not a blocker for agents, in either direction | Connectors are a distinct principal kind with their own lifecycle and a read-only first grant. They share verification machinery, not authority (§8). Their dependencies are in §8.7, and ownership is in §8.9 |
 | **Peer-pid on macOS/Linux** | Adoption, and the ancestry half of token binding, there | local-pipe.md:129-130 |
 
-### 10.2 Slices
+### 11.2 Slices
 
 Each slice is one PR, security-reviewed independently before merge.
 
@@ -1407,6 +1676,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
 | F1-F6 | Federation (§7.10), with repo discovery (§7.11) as F6 | AP5, owner approval, separate review | Cross-account |
+| C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
 **Why AP1 first.** It delivers the owner's main ask (native, attributed agent messaging) for
 sessions on one machine, which is where most agent coordination already happens (the owner's VM
@@ -1415,13 +1685,14 @@ exercises every rule except the signature, so AP5 adds transport and verificatio
 attribution model already proven live.
 
 **Across all three kinds.** The owner's 15:30 PT direction makes the read-only connector API (#534,
-under #388) the likely first slice overall. It and AP1 share no unbuilt prerequisite (§8.7), so
-they can proceed in parallel. The shared pieces (§8.9) are each built once, by their owner, and
-consumed by the others.
+under #388) the likely first slice overall. That is C1 in §9.7, which depends only on #534 and
+the merged #407, on disposable hosts. It and AP1 share no unbuilt prerequisite (§8.7), so they can
+proceed in parallel. The shared pieces (§8.9) are each built once, by their owner, and consumed by
+the others.
 
 ---
 
-## 11. Open questions for the owner
+## 12. Open questions for the owner
 
 Each has a recommendation. None is decided by this note.
 
@@ -1514,3 +1785,26 @@ Repo-based contributor discovery (§7.11):
 24. **Q24. Suggestions' reach.** **Recommended:** the app only, as a quiet badge on the
     Collaboration page: never a push, a toast or a phone notification. Opt-in per repository, with
     "Never for this repo", and nothing connects until both owners accept.
+
+The connector API (§9):
+
+25. **Q25. One protocol with connector profiles, or a separate connector protocol?**
+    **Recommended:** one protocol (Bridge Protocol v1) with separately versioned profiles,
+    selected by grant and pinned by host contract tests. Major versions are supported for at
+    least 12 months after their successor ships. There is no plaintext REST gateway, and
+    reference SDKs exist in .NET, JavaScript and Python (§9.1).
+26. **Q26. An `act` profile later: which acts, and may connectors answer `ask_user` forms?**
+    **Recommended:** later, each act its own grant (`session.reply`, `session.stop`, launch with
+    `ask` only), with `automation` attribution, and **no** answering of forms in v1. Approvals
+    and folder trust are never available in any profile. This means Home Assistant no longer
+    answers approvals as agent-ha-bridge did; the app and PWA do.
+27. **Q27. Default grant expiry for a connector.** **Recommended:** 1 year, with a reminder 14
+    days before and renewal with presence. Access credentials stay short (#394), and revocation is
+    immediate whatever the expiry.
+28. **Q28. A content-free projection for dashboards.** **Recommended:** yes, as a later scope
+    option (title, status, attention only). The first grant is the full `read` profile as D
+    proposed.
+29. **Q29. Who owns the connector API?** **Recommended:** #388, with its scope widened from
+    "headless identity" to "connector API (product)", building on D's #534. Alternatively, a new
+    issue that #388 and agent-bridge-home-assistant#2 depend on. Either way, Home Assistant
+    specifics stay in the Home Assistant connector repository.
