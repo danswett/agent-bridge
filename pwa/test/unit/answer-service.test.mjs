@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AnswerService } from '../../js/answer-service.js';
+import { AnswerService, sent } from '../../js/answer-service.js';
 import { HostClient, HostError } from '../../js/host-client.js';
-import { recentTimings } from '../../js/timing.js';
+import { finished, recentTimings, tapped } from '../../js/timing.js';
+import { readAnswerResult } from '../../js/protocol.js';
 
 const flush = () => new Promise((r) => setImmediate(r));
 const ANSWER = { fields: { answer: 'a' } };
@@ -297,4 +298,34 @@ test("a stage replayed behind one reached adds nothing to the answer's timing ma
   const record = recentTimings().at(-1);
   assert.deepEqual(record.client.map(([mark]) => mark), ['sent', 'queued', 'result']);
   assert.deepEqual(record.host, { typed: 40 });
+});
+
+test('frames alternating between typed and up next add one timing mark, not one each', async () => {
+  const { conn, service, submit } = setup({ marks: 'answer' });
+  conn.client = progressClient();
+  submit();
+  const call = conn.client.last();
+  for (const working of [false, true, false, true]) { call.progress({ stage: 'typed', working }); }
+  assert.equal(service.get('h1', 's1', 'q1').stage, 'typed');
+  call.resolve({ outcome: 'delivered', reason: null });
+  await flush();
+  assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['sent', 'typed', 'result']);
+});
+
+test("a host's outcome or timing name with a line break cannot forge a line on the console", (t) => {
+  const lines = [];
+  t.mock.method(console, 'debug', (line) => lines.push(line));
+  const result = readAnswerResult({ outcome: 'delivered\nFORGED', timings: { 'typed\nFORGED': 5, typed: 7, bogus: 9 } });
+  assert.deepEqual(result.timings, { typed: 7 });
+  tapped('reply', 'forge-1');
+  finished('forge-1', 'delivered\nFORGED', result.timings);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^agent-bridge reply forge-1 other: result \d+ ms; host: typed 7 ms$/);
+});
+
+test('a call refused on a channel already closed is not marked sent', () => {
+  tapped('reply', 'closed-1');
+  sent({ closed: true }, { request: 'closed-1' }, Promise.resolve()).catch(() => {});
+  finished('closed-1', 'unconfirmed');
+  assert.deepEqual(recentTimings().at(-1).client.map(([mark]) => mark), ['result']);
 });

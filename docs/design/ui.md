@@ -856,14 +856,6 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
   stands in its place (§6.7).
 - **Controls:** Attach, then Send (Bridge, icon only, with a tooltip naming the shortcut:
   Ctrl+Enter, or ⌘↩ on Apple).
-- **Progress (#600):** while a reply or an answer is on its way, its status line says how far it
-  has got, where the machine says (`sessions.progress`): "Sending…", then "Sent. The machine is
-  typing it…" once the machine has it, "Typed. Waiting for the session to take it…" once the
-  keys have gone, or "Queued. The session is working, and takes it at its next step." when they
-  went into a working session; then its outcome ("Delivered. The session has your reply.").
-  Each stage is in the progress tone and replaces the last in place, with no motion of its own;
-  the outcome is acknowledged as in §5.3. A machine that doesn't say shows "Sending…" until the
-  outcome. An answer's status line, on its card and in Needs you, says the same.
 - **Platform styling:**
   - Windows and the PWA: a card with a 2 px Bridge bottom edge.
   - macOS: a capsule field.
@@ -1229,9 +1221,6 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   answered", "No longer waiting" and "Answer at the machine"; in Tools and the delegate
   inspector, "Waiting on you" and "Asks you". "Answered" only for an answer this device sent
   and the host confirmed.
-- **Delivery words (#600, §6.5):** "Sending…", "Sent", "Typed", "Queued" and "Delivered", in
-  that order, for a reply or an answer on its way. "Sent" on its own means only that the machine
-  has it; it is never an outcome.
 - **A question's words** appear in the conversation only, never on a row, in Needs you, in
   Tools, in the inspector or in a menu.
 - **Numbers before nouns:** "3 delegates", "1 background command".

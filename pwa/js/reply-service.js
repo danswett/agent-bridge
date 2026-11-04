@@ -11,9 +11,8 @@
 // A large one goes through the relay's blob store, uploaded once and fetched by the machine.
 // The entry's progress is { sent, total, phase } in bytes while they go, and until the reply
 // itself is sent the person can cancel, which stops an upload where it is.
-import { AnswerService } from './answer-service.js';
+import { AnswerService, sent } from './answer-service.js';
 import { uploadAttachment } from './attachments.js';
-import { marked } from './timing.js';
 
 // Where an answer's entry keeps its question, a reply's keeps this.
 const REPLY = '';
@@ -48,8 +47,7 @@ export class ReplyService extends AnswerService {
           this.#sending.delete(entry.key);
           if (files.length) { progress({ sent: total, total, phase: 'reply' }); }
           // Its files' time is the tap's to sent, not the machine's.
-          marked(entry.request, 'sent');
-          return await client.reply(data, { onProgress: stage });
+          return await sent(client, entry, client.reply(data, { onProgress: stage }));
         } catch (e) {
           if (abort.signal.aborted) { throw Object.assign(new Error(CANCELLED), { fromHost: true, reason: CANCELLED }); }
           throw e;

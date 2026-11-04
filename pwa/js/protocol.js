@@ -263,11 +263,13 @@ export function readHello(raw) {
 // session.answer's and session.reply's result: { outcome, reason }, and timings where the host
 // sent them (sessions.progress): each stage it reached, in ms since it received the request
 // ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a stage that
-// isn't a whole number of ms is left out. Anything unreadable is unconfirmed, since the host
-// may have typed it.
+// isn't a whole number of ms is left out, as is one the protocol doesn't name: its name would
+// be the host's own text in the console line (timing.js). Anything unreadable is unconfirmed,
+// since the host may have typed it.
+export const TimingStages = Object.freeze(['typed', 'recorded', 'confirmed']);
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
-  const timings = Object.entries(obj(r.timings) ?? {}).filter(([, ms]) => Number.isFinite(ms) && ms >= 0);
+  const timings = Object.entries(obj(r.timings) ?? {}).filter(([what, ms]) => TimingStages.includes(what) && Number.isFinite(ms) && ms >= 0);
   return { outcome: readOutcome(r.outcome), reason: str(r.reason), ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
 }
 
