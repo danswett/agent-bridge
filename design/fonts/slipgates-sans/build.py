@@ -24,10 +24,10 @@ Then: subset to the monospace's ranges, rename to "Slipgates Sans" (Inter reserv
 font name, so the OFL doesn't require this, but a modified font under its upstream name
 would be mistaken for it), credit both copyright holders, and write:
   ttf/SlipgatesSans.ttf, ttf/SlipgatesSans-Italic.ttf
-          the variable pair, weight 100-900 and optical size (Apple, Android)
+          the variable pair, weight 100-900, optical size pinned at Text (opsz 14) so no
+          platform swaps in the narrower display cut for large titles (Apple, Android; #544 §11)
   woff2/SlipgatesSans.woff2, woff2/SlipgatesSans-Italic.woff2
-          the same pair as WOFF2, optical size pinned at Text (opsz 14) and weight still
-          100-900, for the PWA: a third smaller (#544 decision 2)
+          the same pair as WOFF2, for the PWA
   ttc/SlipgatesSans.ttc
           Inter's hinted statics for every weight the ramps use, upright and italic, in
           one collection (Windows: hinted for ClearType, and one file so WinUI's family
@@ -152,12 +152,18 @@ def main():
         (out / d).mkdir(parents=True, exist_ok=True)
     variable = []
     for rel, (stem, style) in VARIABLE.items():
-        font = tune(src / rel, style == "italic")
-        font.save(out / "ttf" / f"{stem}.ttf")
-        web = instancer.instantiateVariableFont(TTFont(out / "ttf" / f"{stem}.ttf", recalcTimestamp=False),
-                                                {"opsz": 14})
-        web.flavor = "woff2"
-        web.save(out / "woff2" / f"{stem}.woff2")
+        tuned = out / "ttf" / f"{stem}.ttf"
+        tune(src / rel, style == "italic").save(tuned)
+        # The text cut everywhere (#544 §11): with the opsz axis left in, CoreText and Android
+        # pick Inter's narrower display cut for large titles on their own. Pinning it here
+        # leaves weight as the only axis, the same drawing the Windows statics and the web use.
+        font = instancer.instantiateVariableFont(TTFont(tuned, recalcTimestamp=False), {"opsz": 14})
+        assert [a.axisTag for a in font["fvar"].axes] == ["wght"], stem
+        font.save(tuned)
+        font = TTFont(tuned, recalcTimestamp=False)
+        font.flavor = "woff2"
+        font.save(out / "woff2" / f"{stem}.woff2")
+        font.flavor = None
         wght = next(a for a in font["fvar"].axes if a.axisTag == "wght")
         variable.append({"style": style, "ttf": f"ttf/{stem}.ttf", "woff2": f"woff2/{stem}.woff2",
                          "weight": [int(wght.minValue), int(wght.maxValue)],

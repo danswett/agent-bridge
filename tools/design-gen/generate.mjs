@@ -7,7 +7,8 @@
 // pwa/index.html and pwa/manifest.webmanifest; src/AgentBridge.App/Design/DesignResources.xaml
 // and DesignKeys.cs; and the layout sizes for the app's view models in
 // src/AgentBridge.App.Core/DesignLayout.cs. The bundled fonts for the Apple and Android apps:
-// design/apple/SlipgatesFonts.swift and .plist, and design/android/font/ (lib/emit-native.mjs).
+// design/apple/SlipgatesFonts.swift and .plist, design/android/font/ and
+// design/android/values/slipgates_type.xml (lib/emit-native.mjs).
 // With them, the app icon (lib/app-icon.mjs):
 // design/app-icon/*.svg, pwa/icon.svg, pwa/icons/*.png, and the app's Assets/AgentBridge.ico
 // and AgentBridge.png, whose rasters are compared by their pixels. design/preview.png is drawn

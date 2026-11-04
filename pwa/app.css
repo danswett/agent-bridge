@@ -107,7 +107,7 @@ body[data-conn="busy"] .appbar, body[data-conn="warn"] .appbar, body[data-conn="
 .appbar .brand, .appbar .online, .appbar .avatar { display: none; }
 body.searching .appbar .appbar-end { display: none; }
 body:not(.searching) .appbar .search { display: none; }
-.brand { display: flex; align-items: center; min-height: 32px; gap: var(--ab-space-2); color: var(--ab-text); text-decoration: none; font-weight: 600; font-size: 14px; line-height: 20px; }
+.brand { display: flex; align-items: center; min-height: 32px; gap: var(--ab-space-2); color: var(--ab-text); text-decoration: none; font-weight: 600; font-size: 14px; line-height: 20px; letter-spacing: var(--ab-tracking-wordmark); }
 .mark { width: 20px; height: 20px; color: var(--ab-bridge); flex: none; }
 .appbar-end { display: flex; align-items: center; gap: var(--ab-space-3); margin-left: auto; min-width: 0; }
 .pill {
@@ -180,7 +180,7 @@ body:not(.searching) .appbar .search { display: none; }
 body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), var(--safe-bottom)); }
 /* A phone's strip takes the top: the page starts closer under it. A desktop's bar never moves the page. */
 @media (max-width: 759px) { body[data-conn="busy"] .content, body[data-conn="warn"] .content, body[data-conn="bad"] .content, body.searching .content { padding-top: var(--ab-space-2); } }
-.page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; }
+.page-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; letter-spacing: var(--ab-tracking-title); }
 .page > .page-title, .page > section > .page-title { margin-bottom: var(--ab-space-4); }
 /* What a page shows when its panel has nothing: shown only while the panel is hidden. */
 #launch:not([hidden]) ~ .launch-none, #usage:not([hidden]) ~ .usage-none { display: none; }
@@ -672,7 +672,7 @@ svg.ab-icon-24:not([width]) { width: 24px; height: 24px; }
   padding: var(--ab-space-4) var(--ab-space-6) var(--ab-space-3); border-bottom: 1px solid var(--ab-stroke2);
 }
 .header-main { grid-column: 2; min-width: 0; }
-.session-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; overflow-wrap: anywhere; }
+.session-title { margin: 0; font-size: var(--type-title); line-height: var(--type-title-line); font-weight: 600; letter-spacing: var(--ab-tracking-title); overflow-wrap: anywhere; }
 .header-actions { grid-column: 3; display: flex; align-items: center; gap: var(--ab-space-1); }
 .session-header .back { grid-column: 1; margin-left: calc(-1 * var(--ab-space-3)); }
 .session-header .icon-button[aria-pressed="true"] { color: var(--ab-bridge); background: var(--ab-selected); }

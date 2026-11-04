@@ -302,14 +302,31 @@ export function layoutSizes(tokens) {
 }
 
 // The Windows type ramp (type.roles.windows, ui.md §4.3): "20/28 semibold" is size 20, line
-// height 28, semibold.
+// height 28, semibold. tracking is the role's letter-spacing in em (type.tracking), 0 for most.
 export function typeRamp(tokens) {
   const win = tokens.type.roles.windows;
+  const track = tracking(tokens);
   return Object.entries(win).filter(([k]) => k !== 'family').map(([role, spec]) => {
     const m = /^(\d+)\/(\d+)(?: (semibold))?$/.exec(spec);
     if (!m) { throw new Error(`type.roles.windows.${role}: "${spec}" is not size/line-height [semibold]`); }
-    return { role, size: Number(m[1]), lineHeight: Number(m[2]), semibold: Boolean(m[3]), xaml: `AbType${pascal(role)}` };
+    return { role, size: Number(m[1]), lineHeight: Number(m[2]), semibold: Boolean(m[3]), tracking: track[role] ?? 0, xaml: `AbType${pascal(role)}` };
   });
+}
+
+// Letter-spacing in em, by role (type.tracking, ui.md §4.3): { title: 0.02, wordmark: 0.02 }.
+// Only headings and the wordmark may be tracked. Body text never is: tracking it would lengthen
+// every line past the reading measure (#544 §11), so the roles that set text are refused.
+const UNTRACKED = ['row', 'reading', 'meta', 'code'];
+export function tracking(tokens) {
+  const out = {};
+  for (const [role, em] of Object.entries(tokens.type.tracking ?? {})) {
+    if (role.startsWith('$')) { continue; }
+    if (UNTRACKED.includes(role)) { throw new Error(`type.tracking.${role}: body text stays untracked (ui.md §4.3)`); }
+    if (role === 'family' || (role !== 'wordmark' && !(role in tokens.type.roles.windows))) { throw new Error(`type.tracking.${role} is neither a ramp role nor the wordmark`); }
+    if (typeof em !== 'number' || em < 0 || em > 0.05) { throw new Error(`type.tracking.${role}: ${em} is not an em between 0 and 0.05`); }
+    out[role] = em;
+  }
+  return out;
 }
 
 // A face's x-height as a fraction of its em, from a TrueType or OpenType file's OS/2 table

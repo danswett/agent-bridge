@@ -69,6 +69,15 @@ public enum SlipgatesFont {
     }
 #endif
 
+    /// Letter-spacing in em, by role (docs/design/ui.md §4.3): the title and the wordmark; every
+    /// other role, body text above all, is untracked. Points at a size: em times the size the
+    /// face is drawn at, after Dynamic Type, for SwiftUI's `.tracking(_:)` or a `.kern` attribute.
+    public enum Tracking {
+        public static let title: CGFloat = 0.02
+        public static let wordmark: CGFloat = 0.02
+        public static func points(_ em: CGFloat, size: CGFloat) -> CGFloat { em * size }
+    }
+
     /// Every font file the app bundles, in its Fonts folder, as SlipgatesFonts.plist lists them.
     public static let files: [String] = [
         "SlipgatesSans.ttf",

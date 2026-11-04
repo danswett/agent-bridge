@@ -145,3 +145,21 @@ test('inline mono leaves the type ramp\'s lines alone: the tool line and Tools k
   const [name, row] = await v.locator('.tools-panel li.tool .tool-name').first().evaluate((el) => [getComputedStyle(el).fontWeight, getComputedStyle(el.closest('.tool')).fontWeight]);
   expect(name).toBe(row);
 });
+
+// Tracking (docs/design/ui.md §4.3, #544 §11): +2% on the title and the wordmark, so Slipgates
+// Sans SemiBold doesn't read condensed there; body text and rows stay untracked, so the reading
+// measure holds.
+test('a session\'s title and the wordmark are tracked +2%, and the conversation and the rows are not', async ({ page }) => {
+  await openDemo(page);
+  const spacing = (selector) => page.locator(selector).first().evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { em: s.letterSpacing === 'normal' ? 0 : parseFloat(s.letterSpacing) / parseFloat(s.fontSize), weight: s.fontWeight };
+  });
+  for (const selector of ['.brand']) { expect((await spacing(selector)).em, selector).toBeCloseTo(0.02, 4); }
+  for (const selector of ['.row-title']) { expect((await spacing(selector)).em, selector).toBe(0); }
+  await open(page, CLAUDE);
+  const title = await spacing(`.session-view[data-id="${CLAUDE}"] .session-title`);
+  expect(title.em).toBeCloseTo(0.02, 4);
+  expect(title.weight).toBe('600');
+  expect((await spacing(`.session-view[data-id="${CLAUDE}"] .stream`)).em).toBe(0);
+});

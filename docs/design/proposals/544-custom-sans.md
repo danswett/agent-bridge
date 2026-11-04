@@ -13,9 +13,10 @@
 > [544-custom-sans/fonts/](544-custom-sans/fonts/) only so the boards still render; nothing ships
 > or loads them.
 >
-> **Held, 2026-11-03.** The owner asked whether B reads "a bit too condensed", and the merge of
-> #557 is held until that's answered. The measurements, the PWA before and after, and the options
-> are in [§11](#11-addendum-is-slipgates-sans-too-condensed).
+> **Width, decided 2026-11-03: tune.** The owner asked whether B reads "a bit too condensed". The
+> answer ([§11](#11-addendum-is-slipgates-sans-too-condensed)) keeps B, with the text cut at every
+> size on every platform, +2% tracking on titles and the wordmark, and the wordmark in Slipgates
+> Sans SemiBold. #557 applies it, and the merge hold is lifted.
 
 *Written as a draft for the owner, from the design track.* Issues:
 [#544](https://github.com/danswett/agent-bridge/issues/544) (this),
@@ -526,3 +527,24 @@ If B's round letters still read narrow after this, the remaining fix is to draw 
    - (b) Accept them as they are.
 
 Board for all three: [proposal-544-width.png](544-custom-sans/proposal-544-width.png).
+
+### 11.6 Decided: tune (2026-11-03)
+
+The owner approved the recommendation: **1 (a)** and **2 (a)**. 3 stays open, to take up only if
+the rounds still read narrow once this ships. #557 applies it:
+
+- **The text cut everywhere.** `build.py` now pins the variable pair's optical size at Text
+  (opsz 14) for Apple and Android too, as it already did for the PWA's WOFF2s; Windows' statics
+  were already the text cut. Weight is the variable files' only axis, every weight and italic is
+  still a real face, and the TTFs fell from 629 and 651 KB to 446 and 455 KB. The WOFF2s and the
+  Windows collection are byte-for-byte unchanged.
+- **+2% tracking on the Title role and the wordmark,** none elsewhere: `type.tracking` in
+  tokens.json, generated as `--ab-tracking-title` and `--ab-tracking-wordmark` for the PWA,
+  `CharacterSpacing="20"` on WinUI's `AbTypeTitle`, `SlipgatesFont.Tracking` for Apple and
+  `@dimen/slipgates_tracking_*` for Android. `tools/design-gen` refuses tracking on row,
+  reading, meta or code, so the 770 px reading measure holds. The rule is in
+  [ui.md](../ui.md) §4.3.
+- **The wordmark:** the PWA's app-bar name was already Slipgates Sans SemiBold, and now takes the
+  +2%. Windows' title bar keeps Fluent's caption style. The brand assets set in Inter Tight
+  belong to #558, so they move to Slipgates Sans SemiBold, text cut, +2% in a follow-up there,
+  not in this diff.

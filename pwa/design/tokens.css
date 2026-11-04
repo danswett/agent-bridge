@@ -119,6 +119,10 @@
   /* No synthesized styles (docs/design/ui.md §4.2): every weight and style used is a real face
      above, and a face the browser lacks is never faked from another. */
   font-synthesis: none;
+  /* Tracking (docs/design/ui.md §4.3): letter-spacing for the title role and the wordmark only;
+     body text stays untracked. */
+  --ab-tracking-title: 0.02em;
+  --ab-tracking-wordmark: 0.02em;
   /* Inline mono (docs/design/ui.md §4.2): the text face's x-height ratio, for font-size-adjust,
      and the scale mono takes where a browser has no font-size-adjust. Windows' text face,
      unless the page names its platform on <html data-platform>. */

@@ -109,6 +109,8 @@ function typeStyle(t, tokens) {
     ['LineHeight', t.lineHeight],
     ['LineStackingStrategy', 'BlockLineHeight'],
     ...(t.semibold ? [['FontWeight', 'SemiBold']] : []),
+    // WinUI's CharacterSpacing is in thousandths of an em.
+    ...(t.tracking ? [['CharacterSpacing', Math.round(t.tracking * 1000)]] : []),
     ['Typography.NumeralAlignment', 'Tabular'],
   ];
   return `    <Style x:Key="${t.xaml}" TargetType="TextBlock">
@@ -164,7 +166,7 @@ ${radii(tokens).map((r) => `    <CornerRadius x:Key="${r.xaml}">${r.value}</Corn
 ${spaces(tokens).map((s) => `    <x:Double x:Key="${s.xaml}">${s.value}</x:Double>`).join('\n')}
 ${layoutSizes(tokens).map((s) => `    <x:Double x:Key="${s.xaml}">${s.value}</x:Double>`).join('\n')}
 
-    <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
+    <!-- The type ramp (docs/design/ui.md §4.3): tabular figures; tracking on the title only. -->
 ${typeRamp(tokens).map((t) => typeStyle(t, tokens)).join('\n')}
 
     <!-- Motion (docs/design/ui.md §5.3), the same in every theme, so outside the theme

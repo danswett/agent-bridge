@@ -152,6 +152,10 @@ every colour from the generated roles (#177).
   which left two unrelated faces on every screen (#544).
   - **Files:** hinted static faces in one collection on Windows, where ClearType wants hinting;
     the variable pair (weight 400–700, upright and a true italic) everywhere else.
+  - **The text cut at every size** (#544 §11). Inter's optical-size axis narrows its large
+    sizes, and CoreText and Android would pick that display cut for titles on their own, which
+    read as condensed. So every file is the text cut (opsz 14): the Windows statics are, and
+    the variable pair's optical size is pinned at build time, leaving weight as its only axis.
   - **Stack:** Slipgates Sans, then each platform's system face (Segoe UI Variable, SF via
     `system-ui`, Roboto), which cover loading and any character outside the font.
   - **Scaling:** it scales exactly as the system face would: Dynamic Type through
@@ -237,9 +241,23 @@ Size/line-height in px. Weights are regular unless noted.
 | Section header | 12/16 semibold | 13/18 semibold | 11/14 bold | 13/18 Footnote | 14/20 medium, Title Small, in `primary` |
 | Code | 12/18 | 13/18 | 11/16 | 13/18 | 13/20 |
 
-Every platform sets these sizes in Slipgates Sans, with each role's real weight. Letter-spacing
-is Slipgates Sans' own, with no added tracking on any platform; Material 3's and SF's tracking
-values were made for Roboto and SF.
+Every platform sets these sizes in Slipgates Sans, with each role's real weight.
+
+**Tracking** (`type.tracking`, #544 §11): **+2% (0.02 em) on the Title role and on the
+wordmark**, and none anywhere else. The Title role takes it on every platform, at whatever weight
+the platform sets it (SemiBold on Windows and the PWA, Bold on Apple, regular Title Large on
+Android), because a large Slipgates Sans title otherwise reads a little condensed; body text, rows, meta, section headers and code keep the face's own spacing,
+so the reading measure holds, and `tools/design-gen` refuses tracking on the roles that set
+text. It is generated for each client: `--ab-tracking-title` and `--ab-tracking-wordmark` (CSS
+`letter-spacing`), `CharacterSpacing="20"` on WinUI's `AbTypeTitle`, `SlipgatesFont.Tracking`
+for Apple (em times the drawn size, after Dynamic Type, for `.tracking(_:)` or `.kern`), and
+`@dimen/slipgates_tracking_*` for Android's `letterSpacing`. Material 3's and SF's own tracking
+values were made for Roboto and SF, and aren't used. Tracking is spacing, not a synthesized
+style (§4.2).
+
+**The wordmark** is Slipgates Sans SemiBold, text cut, tracked +2%: the PWA's app bar name, and
+and the brand assets, which move from the interim Inter Tight in a follow-up to #558. Windows' title bar keeps the system caption style, as Fluent
+does.
 
 ## 5. Space, shape, layout and motion
 

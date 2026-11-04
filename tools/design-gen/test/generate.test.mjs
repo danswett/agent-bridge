@@ -250,7 +250,45 @@ test('the Windows type ramp is a TextBlock style per role: its size, line height
     assert.match(s.FontFamily, key === 'AbTypeCode' ? /SlipgatesMono\.ttc#Slipgates Mono, / : /SlipgatesSans\.ttc#Slipgates Sans, /, key);
     assert.equal(s['Typography.NumeralAlignment'], 'Tabular');
     assert.equal(s.LineStackingStrategy, 'BlockLineHeight');
-    assert.equal(s.CharacterSpacing, undefined, 'no tracking added');
+    assert.equal(s.CharacterSpacing, key === 'AbTypeTitle' ? '20' : undefined, `${key}: only the title is tracked, +2%`);
+  }
+});
+
+test('tracking reaches every client for the title and the wordmark: CSS, WinUI, Apple and Android', () => {
+  const out = generate();
+  const css = out['pwa/design/tokens.css'];
+  assert.match(css, /--ab-tracking-title: 0\.02em;/);
+  assert.match(css, /--ab-tracking-wordmark: 0\.02em;/);
+  assert.match(out['design/apple/SlipgatesFonts.swift'], /public static let title: CGFloat = 0\.02\n\s*public static let wordmark: CGFloat = 0\.02/);
+  const android = out['design/android/values/slipgates_type.xml'];
+  assert.match(android, /<item name="slipgates_tracking_title" format="float" type="dimen">0\.02<\/item>/);
+  assert.match(android, /<item name="slipgates_tracking_wordmark" format="float" type="dimen">0\.02<\/item>/);
+});
+
+test('tracking body text is refused, so the reading measure holds', () => {
+  for (const role of ['reading', 'row', 'meta', 'code']) {
+    const root = copy(`track-${role}`);
+    const tokens = JSON.parse(read(root, 'design/tokens.json'));
+    tokens.type.tracking[role] = 0.01;
+    writeFileSync(path.join(root, 'design/tokens.json'), JSON.stringify(tokens));
+    assert.throws(() => generate(root), /body text stays untracked/, role);
+  }
+});
+
+// The text cut everywhere (#544 §11): with an opsz axis, CoreText and Android choose Inter's
+// narrower display cut for large titles by themselves.
+test('the Apple and Android variable files carry weight as their only axis: optical size is pinned at the text cut', () => {
+  const out = generate();
+  for (const res of ['slipgates_sans_upright', 'slipgates_sans_italic']) {
+    const b = out[`design/android/font/${res}.ttf`];
+    let fvar;
+    for (let i = 0, n = b.readUInt16BE(4); i < n; i++) {
+      if (b.toString('latin1', 12 + i * 16, 16 + i * 16) === 'fvar') { fvar = b.readUInt32BE(20 + i * 16); }
+    }
+    assert.ok(fvar !== undefined, `${res} is variable`);
+    const axes = b.readUInt16BE(fvar + 4) === 16 ? b.readUInt16BE(fvar + 8) : -1;
+    const tags = Array.from({ length: axes }, (_, i) => b.toString('latin1', fvar + 16 + i * 20, fvar + 20 + i * 20));
+    assert.deepEqual(tags, ['wght'], res);
   }
 });
 

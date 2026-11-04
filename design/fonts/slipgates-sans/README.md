@@ -37,8 +37,8 @@ face, and no platform may synthesize a weight, an italic or an oblique** (ui.md 
 
 | File | What | Size | For |
 |---|---|---|---|
-| `ttf/SlipgatesSans.ttf`, `ttf/SlipgatesSans-Italic.ttf` | variable, weight 100–900 and optical size | 629 KB, 651 KB | Apple, Android |
-| `woff2/SlipgatesSans.woff2`, `woff2/SlipgatesSans-Italic.woff2` | the same pair, optical size pinned at Text (14) | 173 KB, 187 KB | the PWA |
+| `ttf/SlipgatesSans.ttf`, `ttf/SlipgatesSans-Italic.ttf` | variable, weight 100–900, optical size pinned at Text (14) | 446 KB, 455 KB | Apple, Android |
+| `woff2/SlipgatesSans.woff2`, `woff2/SlipgatesSans-Italic.woff2` | the same pair as WOFF2 | 173 KB, 187 KB | the PWA |
 | `ttc/SlipgatesSans.ttc` | Inter's hinted statics, 400–700 upright and italic, in one collection | 2.07 MB | Windows |
 | `faces.json` | each real face: weight, style, PostScript name, collection index, probe advance | | the generator and the Windows self-test |
 
@@ -51,6 +51,15 @@ the rest; with the collection it finds a real face for each weight and style (me
 **Coverage:** subset to the monospace's ranges: Latin with Vietnamese, Greek, Cyrillic,
 punctuation, currency, arrows and maths, 1,561 characters. Box drawing, blocks, Braille and
 other symbols Inter doesn't draw fall back, as they would from the system face.
+
+**The text cut at every size** (#544 §11): every file is Inter's text cut (opsz 14). The
+variable pair's optical-size axis is pinned at build time, so CoreText and Android can't swap in
+the narrower display cut for large titles (6.5% narrower at 34 px), which read as condensed.
+Weight is its only axis, and the files are a third smaller.
+
+**Tracking** is not in the font: the title role and the wordmark take +2% (0.02 em) through
+`type.tracking` in the tokens, generated for each client; body text is untracked (ui.md §4.3).
+Tracking is spacing, so it doesn't bend the no-synthesis rule.
 
 ## Using it
 

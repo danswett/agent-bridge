@@ -182,13 +182,14 @@
     <x:Double x:Key="AbLayoutReadingMax">770</x:Double>
     <x:Double x:Key="AbLayoutMachineTab">128</x:Double>
 
-    <!-- The type ramp (docs/design/ui.md §4.3): tabular figures, no added tracking. -->
+    <!-- The type ramp (docs/design/ui.md §4.3): tabular figures; tracking on the title only. -->
     <Style x:Key="AbTypeTitle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="ms-appx:///Assets/Fonts/SlipgatesSans.ttc#Slipgates Sans, Segoe UI Variable Text, Segoe UI, Roboto" />
         <Setter Property="FontSize" Value="20" />
         <Setter Property="LineHeight" Value="28" />
         <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
         <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="CharacterSpacing" Value="20" />
         <Setter Property="Typography.NumeralAlignment" Value="Tabular" />
     </Style>
     <Style x:Key="AbTypeRow" TargetType="TextBlock">
