@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proposal #592: Crossing the Pinned boundary pins or unpins</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<!-- A proposal, not the spec (docs/design/proposals/592-reorder.md). Each frame is a Proposal-592-Frame. -->
+<div style="width: 1692px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
+  <div style="display: flex; align-items: center; gap: 12px">
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">Proposal #592 · awaits owner decision</span>
+    <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
+  </div>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Crossing the Pinned boundary pins or unpins</h1>
+  <p style="margin: 0 0 28px; font-size: 13px; line-height: 18px; color: {{t.text2}}">Headers never lift. When the gap crosses into the other group, that group’s header turns Bridge with what the drop will do, and a chip on the card says it too.</p>
+  <div style="display: flex; gap: 28px; align-items: flex-start">
+    <sc-for list="{{frames}}" as="fr">
+      <dc-import name="Proposal-592-Frame" theme="{{theme}}" f="{{fr}}" hint-size="300px,760px"></dc-import>
+    </sc-for>
+
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1692,"height":880}}'>
+const THEMES = {
+  dark: { bg: '#1B1E21', text: '#FFFFFF', text2: 'rgba(255,255,255,.72)', text3: 'rgba(255,255,255,.54)', bridge: '#2DD4BF', tag: 'rgba(45,212,191,.14)', stroke: 'rgba(255,255,255,.12)', name: 'Dark' },
+  light: { bg: '#E6E9EC', text: '#1A1A1A', text2: 'rgba(0,0,0,.62)', text3: 'rgba(0,0,0,.58)', bridge: '#0B7A6E', tag: 'rgba(11,122,110,.12)', stroke: 'rgba(0,0,0,.12)', name: 'Light' },
+};
+// Slots: { h } a group header, { r } a session row, { gap } the landing gap, { ph } an empty-group placeholder.
+// trace: n draws a dashed outline where a neighbour was n slots further on, before it eased.
+const P = { h: 'Pinned' }, S = { h: 'Sessions' };
+const rows = (ids, extra) => ids.split('').map(r => Object.assign({ r }, (extra || {})[r] || {}));
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme === 'light' ? 'light' : 'dark';
+    const frames = [
+      { label: '1 · Up to the header', slots: [P, ...rows('ab'), S, { gap: true }, ...rows('defghi')], lift: { r: 'c', at: 4, dy: -34, sel: true }, ptr: { at: 4, dx: 180, dy: 16, ring: 1 },
+        notes: ['The header stays put while the gap is still in Sessions. The card may pass over it; headers never lift or swap.'] },
+      { label: '2 · Across: drop to pin', slots: [{ h: 'Pinned', target: true, cue: '· drop to pin' }, ...rows('ab'), { gap: true }, { h: 'Sessions', trace: -1 }, ...rows('defghi')], lift: { r: 'c', at: 3, dy: -4, sel: true, chip: 'Pin' }, ptr: { at: 3, dx: 180, dy: 44, ring: 1 },
+        notes: ['Past the header, the gap opens at the end of Pinned and the Sessions header eases down one row (reorder). Pinned turns Bridge with “drop to pin”, and a Pin chip replaces the age.', 'Announced: “Pinned, position 3 of 3. Drops as pinned.”'] },
+      { label: '3 · Dropped: pinned', slots: [P, ...rows('abc', { c: { st: 'sel' } }), S, ...rows('defghi')], say: 'Pinned. Position 3 of 3 in Pinned.',
+        notes: ['Dropping there pins it, exactly as Pin in the menu would, at the place it was dropped. Sessions closes up.'] },
+      { label: '4 · Down past it: drop to unpin', slots: [P, ...rows('b', { b: { trace: 1 } }), { h: 'Sessions', target: true, cue: '· drop to unpin', trace: 1 }, { gap: true }, ...rows('cdefgh')], lift: { r: 'a', at: 3, dy: 6 , chip: 'Unpin' }, ptr: { at: 3, dx: 180, dy: 54, ring: 1 },
+        notes: ['A pinned card dragged below the Sessions header unpins: Sessions turns Bridge with “drop to unpin”, and an Unpin chip shows. The Sessions header eases up one row.'] },
+      { label: '5 · The last pin leaving', slots: [P, { ph: 'Drop here to keep it pinned' }, { h: 'Sessions', target: true, cue: '· drop to unpin' }, { gap: true }, ...rows('acdefg')], lift: { r: 'b', at: 3, dy: 4, chip: 'Unpin' }, ptr: { at: 3, dx: 180, dy: 52, ring: 1 },
+        notes: ['When the only pinned card leaves, a dashed place holds Pinned open to drop back into. With nothing pinned there is no Pinned header, so a drag can’t pin; Pin is in the menu.'] },
+    ];
+    return { t: THEMES[theme], theme, frames: frames.map(f => Object.assign({ grip: 'all' }, f)) };
+  }
+}
+</script>
+</body>
+</html>
