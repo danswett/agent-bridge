@@ -667,9 +667,10 @@ since one cut usually ends inside its block. These rules cover characters only, 
 whether an approval's prose can be drawn as Markdown (a link or image hiding what runs) is #212
 for Copilot's intention, and #209 for a Codex approval's command, which a host now sends whole in a
 fence longer than any run of backticks inside it. An older host sent it as Markdown prose
-(`Needs approval: <command>`): the PWA draws that exactly as written, and the app and Home
-Assistant cards hold any such prose Markdown would redraw at the machine, as its source
-(`ApprovalShape`).
+(`Needs approval: <command>`), the hook's 300-character preview cut to 297 characters and `...`
+with nothing marking it `truncated`, so every client answers a Codex approval not in the new form
+(`ApprovalShape.IsFencedCommand`) at the machine: the PWA draws it exactly as written, and the app
+and Home Assistant cards show it as its source.
 
 The answer is `{ "decision": "approve" }` or `{ "decision": "deny" }`, nothing else.
 Approve is the prompt's plain "Yes", once: no option that grants more ("don't ask again",

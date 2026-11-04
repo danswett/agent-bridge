@@ -181,7 +181,7 @@ public sealed class DecisionContractTests
     {
         var approval = new Question
         {
-            Id = "q", Kind = QuestionKind.Approval, Message = "Codex wants to run:\n\ngit push", AskedAt = DateTimeOffset.UnixEpoch,
+            Id = "q", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\ngit push\n```", AskedAt = DateTimeOffset.UnixEpoch,
             Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
         };
         var plan = HaDecision.Plan(approval, AgentKind.Codex);
@@ -386,6 +386,38 @@ public sealed class DecisionContractTests
         Assert.Contains("answered in the terminal", legacy.Question);
     }
 
+    // An older host sent a Codex approval as "Needs approval: " and the hook's 300-character preview,
+    // cut to 297 and "..." with nothing marking it truncated (codex-commands.json, olderHostPreview).
+    // Nothing in it is Markdown, so it draws as written, yet the curl past the cut is what Approve
+    // would run as well (#209 security review).
+    [Fact]
+    public void An_older_hosts_Codex_preview_cut_short_of_what_runs_is_answered_in_the_terminal_as_its_source()
+    {
+        var c = JsonNode.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "approvals", "codex-commands.json")))!["olderHostPreview"]!;
+        static Question Approval(string message) => new()
+        {
+            Id = "q", Kind = QuestionKind.Approval, Message = message, AskedAt = DateTimeOffset.UnixEpoch,
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
+        };
+
+        var legacy = HaDecision.Plan(Approval((string)c["legacy"]!), AgentKind.Codex);
+        Assert.True(legacy.TerminalOnly);
+        Assert.False(legacy.AnswerOnTap);
+        Assert.Empty(legacy.Choices);
+        Assert.StartsWith($"```\n{(string)c["legacy"]!}\n```\n\n", legacy.Question);
+
+        var session = new Session
+        {
+            Id = "s1", Agent = AgentKind.Codex, Status = SessionStatus.Waiting, UpdatedAt = DateTimeOffset.UnixEpoch, StatusSince = DateTimeOffset.UnixEpoch, Activity = new Activity(),
+            Subagents = [new Subagent { Id = "a1", Kind = SubagentKind.Background, Name = "Builder", Status = SubagentStatus.Waiting }],
+        };
+        Assert.True(HaDecision.Plan(Approval((string)c["legacy"]!) with { Agent = "a1" }, session).TerminalOnly);
+
+        var sent = HaDecision.Plan(Approval((string)c["message"]!), AgentKind.Codex);
+        Assert.True(sent.AnswerOnTap);
+        Assert.Equal((string)c["message"]!, sent.Question);
+    }
+
     [Fact]
     public void A_delegate_whose_name_needs_neutralising_leaves_an_ordinary_approval_answerable_on_the_card()
     {
@@ -512,7 +544,7 @@ public sealed class DecisionContractTests
         var command = "git push --force " + new string('x', HaDecision.QuestionMaxChars);
         var approval = new Question
         {
-            Id = "q", Kind = QuestionKind.Approval, Message = "Codex wants to run:\n\n" + command, AskedAt = DateTimeOffset.UnixEpoch,
+            Id = "q", Kind = QuestionKind.Approval, Message = "Allow **Bash**?\n\n```\n" + command + "\n```", AskedAt = DateTimeOffset.UnixEpoch,
             Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = QuestionMapper.ApprovalOptions, Required = true }],
         };
         var plan = HaDecision.Plan(approval, AgentKind.Codex);
