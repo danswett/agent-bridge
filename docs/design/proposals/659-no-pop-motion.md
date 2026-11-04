@@ -1,7 +1,9 @@
 # Nothing pops in or out (#659)
 
-**Status: Proposed, pending owner decisions D1–D6.** Nothing here is built. The proposed
-text is in [ui.md §5.3](../ui.md#53-motion), marked as a proposal; the tokens are in
+**Status: Decided by the owner on 2026-11-04, D1–D6** (option A in each, as recommended,
+including the cases folded in: #605's departure, the #489 prompt line and #677's banner space).
+The text is in [ui.md §5.3](../ui.md#53-motion), now the spec; the clients follow in #684
+(Windows) and #685 (PWA). The tokens are in
 [design/tokens.json](../../../design/tokens.json) `motion.catalogue` (`shift` and `value`).
 Everything shown uses sample data (machines WORKSTATION and BUILD-VM).
 
@@ -58,7 +60,7 @@ on a running client. "Pops" means the element, or what is next to it, changes in
 | Details values | §6.2; ages and counts in place | `ItemsControl` synced by key, SessionCardViewModel.Panes.cs:41-65; values are text bindings; type ramp is tabular (DesignResources.xaml:174-206) | Facts rebuilt with `replaceChildren`, session-card.js:836 | Yes (as specified) |
 | Status words (row, header, strip) | §5.3 Status glyph: "The words change at once" | Glyph cross-fades, StatusGlyphView.xaml.cs:119-120; words bind | Glyph cross-fades, glyph.js:42-68; words set | Words pop (as specified) |
 | Title weight (unread) | §5.3 Activity dot: "The title's weight changes at once" | Dot fades, SessionRow.xaml.cs:133-134 | Dot `enter`/`leave`, session-card.js:882-884 | Weight pops (as specified) |
-| Banners (offline, update, replaced, stuck) | §5.3 Toast and banner: slides 12 in and fades, leaves the same way | `Motion.Banner`: enters with Toast, MainWindow.xaml.cs:43-44, SessionsPage.xaml.cs:26; **no exit**; content below jumps | `reveal()` enters, motion.js:110-114. Since #677 (merged at f3cde89b), `conceal()` (motion.js:119, through `hideStatus`, main.js:207) makes a leaving banner fade and rise 12 toward its edge as an inert copy, **but its space closes at once, so the content below jumps up**, as the Toast and banner row's PWA cell now says | Windows: **leaving pops, contrary to the spec**, and content below jumps. PWA: the banner no longer pops, but **the content below still jumps** (a known contradiction of this proposal). Proposed: the space eases closed over `shift` as the copy leaves, and what was below eases up with it (Easing aside) |
+| Banners (offline, update, replaced, stuck) | §5.3 Toast and banner: slides 12 in and fades, leaves the same way | `Motion.Banner`: enters with Toast, MainWindow.xaml.cs:43-44, SessionsPage.xaml.cs:26; **no exit**; content below jumps | `reveal()` enters, motion.js:110-114. Since #677 (merged at f3cde89b), `conceal()` (motion.js:119, through `hideStatus`, main.js:207) makes a leaving banner fade and rise 12 toward its edge as an inert copy, **but its space closes at once, so the content below jumps up**, as the Toast and banner row's PWA cell said before #659 | Windows: **leaving pops, contrary to the spec**, and content below jumps. PWA: the banner no longer pops, but **the content below still jumps** (a known contradiction of this decision). Decided: the space eases closed over `shift` as the copy leaves, and what was below eases up with it (Easing aside) |
 | Host and offline notes | Toast and banner | `FleetNote`, an InfoBar in `ListNotes` (SessionsPage.xaml:153-160), enters through `Motion.Banner` (SessionsPage.xaml.cs:26) and closes at once | `hidden`, sessions-page.js:715-716, 762-763 | **Leaving, yes** (Windows); **both ways** (PWA) |
 | Toasts | Toast and banner | System notifications (the OS's own) | None in-app | n/a |
 | Menus (row, Sort, overflow) | §5.3 Menu and flyout | `MenuFlyout`'s own | `enter`/`leave` with `menu`, row-menu.js:50, 61 | No |
@@ -83,9 +85,9 @@ From the table, against the signed-off text (not this proposal):
    quicker". The PWA's app banners have left that way since #677 (f3cde89b); its host and
    offline notes still don't use `reveal()` at all.
 
-Known contradiction of this proposal, shipped to spec: **the PWA's app banners close their space
+Known contradiction of this decision, shipped to the earlier spec: **the PWA's app banners close their space
 at once** (#677, f3cde89b). The banner fades and rises 12 as it goes, but the content below
-jumps up into its space. Under this proposal that space eases closed over `shift` while the
+jumps up into its space. As decided, that space eases closed over `shift` while the
 banner leaves, and what was below eases up with it; the Toast and banner row's PWA cell changes
 to match (§9, the PWA issue).
 
@@ -146,7 +148,7 @@ leaving row's space at once, so the rows below jump into place, and #605 (head 1
 implements that jump because a review cited §5.3. Under this rule the card fades out where it
 was (or collapses as its slot eases closed) and the cards below ease up over `shift`, the same
 motion as the cards a held card passes in Reorder. Under reduced motion the gap closes with a
-short cross-fade (`value`, 83 ms) and nothing travels. Once this proposal is approved, #605's
+short cross-fade (`value`, 83 ms) and nothing travels. Decided (D1–D6, 2026-11-04): #605's
 departure jump is replaced by this; #605 itself is not edited here.
 
 The item never slides in from the side, which is why WinUI's `AddDeleteThemeTransition` stays
@@ -341,7 +343,7 @@ Tested with Playwright 1.56 in Chromium and WebKit
 
 ## 6. The ui.md text
 
-The proposal edits §5.3 in place, with a banner at the top of the section saying so:
+The decision edits §5.3 in place, with a note at the top of the section saying so:
 
 - principle 4 becomes "Nothing pops, and rows never move on their own";
 - Disclosure: the space eases (`shift`) and the content fades out, quicker, on closing;
@@ -357,6 +359,8 @@ The proposal edits §5.3 in place, with a banner at the top of the section sayin
 Principle 5 and the Reorder row, which #605 changes, are untouched.
 
 ## 7. Decisions for the owner
+
+**Decided by the owner on 2026-11-04 (D1–D6): option A in each, the recommended one.**
 
 **D1. How neighbours move.**
 - **A. Ease at both ends: `shift`, standard duration (167 ms Windows and PWA, 200 Android,
@@ -419,24 +423,25 @@ Principle 5 and the Reorder row, which #605 changes, are untouched.
 |---|---|---|
 | Tools: a call arriving, today and proposed; a burst; scrolled away | [proposal-659-tools-strip.png](659-no-pop-motion/proposal-659-tools-strip.png) | [proposal-659-tools-strip-light.png](659-no-pop-motion/proposal-659-tools-strip-light.png) |
 | Disclosure: Show reasoning opening and closing, and a Details value changing | [proposal-659-disclosure.png](659-no-pop-motion/proposal-659-disclosure.png) | [proposal-659-disclosure-light.png](659-no-pop-motion/proposal-659-disclosure-light.png) |
-| Decisions D1–D6 | [proposal-659-decisions.png](659-no-pop-motion/proposal-659-decisions.png) | [proposal-659-decisions-light.png](659-no-pop-motion/proposal-659-decisions-light.png) |
+| Decisions D1–D6, decided | [proposal-659-decisions.png](659-no-pop-motion/proposal-659-decisions.png) | [proposal-659-decisions-light.png](659-no-pop-motion/proposal-659-decisions-light.png) |
 
 The sources are `design/canvas/Proposal-659-*.dc.html`, on the canvas under "#659 · Nothing
 pops". To render them: from `tools/design-mockups`, `npm install`, then
 `node render.js ../../design/canvas ../../docs/design/proposals/659-no-pop-motion Proposal-659-`.
+All six are on one [contact sheet](659-no-pop-motion/contact-sheet.png), tiled for the owner's review.
 
 ## 9. What follows
 
-Once the owner decides, the proposal banner comes off §5.3 and these issues get filed:
+Decided on 2026-11-04; §5.3 is the spec, and these are filed:
 
-1. **Windows app: nothing pops.** `shift` and `value` in App.Core's catalogue; a `Motion.Shift`
+1. **Windows app: nothing pops** (#684). `shift` and `value` in App.Core's catalogue; a `Motion.Shift`
    helper; leaving rows fade (fixing contradiction 1); the strip's chips fade and shift (2);
    Tools as a keyed list with coalescing, the anchor and "N new"; timeline events, the Now line
    the question card and the #489 prompt line (once #504 lands) arrive and leave, and Show
    prompt's space eases closed; banners leave (4) and push; Details values and
    status words cross-fade; the click guard re-arms on a shift.
-2. **Windows app: Needs you as a toggle** (3), if not already tracked under #253.
-3. **PWA: nothing pops.** `flip()` in motion.js; Tools and timeline events as keyed lists;
+2. **Windows app: Needs you as a toggle** (3): already tracked under #253 (U10b), so not filed again.
+3. **PWA: nothing pops** (#685). `flip()` in motion.js; Tools and timeline events as keyed lists;
    the #489 prompt line fades in; the disclosure's space and exit fade (Show prompt
    included); `conceal()` (#677) eases a banner's space closed, and notes go through
    `reveal`/`conceal` (4); value cross-fades; usage bars ease; `watchMoves` counts a shift; and
@@ -451,7 +456,8 @@ Once the owner decides, the proposal banner comes off §5.3 and these issues get
   both ideas (a reorder's passed row now eases with `shift` rather than "at once").
   #605 (head 14d15102) also makes the remaining rows jump when a session ends or leaves the
   list with nothing held, as today's §5.3 says; §2.1 replaces that jump with a fade and an
-  ease up over `shift` (a cross-fade under reduced motion), to follow once this is approved.
+  ease up over `shift` (a cross-fade under reduced motion), decided on 2026-11-04; #684 and #685
+  build it.
 - **#629** (the compact header, #620) adds `collapse` after `reorder`. No conflict: `shift`
   and `value` sit earlier in the catalogue.
 - `design/canvas/canvas.json` is one line in every PR; the #659 boards sit below #620's

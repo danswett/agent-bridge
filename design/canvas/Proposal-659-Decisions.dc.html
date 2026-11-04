@@ -12,14 +12,14 @@
 body{margin:0}
 </style>
 </helmet>
-<!-- A proposal, not the spec (docs/design/proposals/659-no-pop-motion.md §7). -->
+<!-- Decided by the owner on 2026-11-04, D1–D6 (docs/design/proposals/659-no-pop-motion.md §7); the spec is ui.md §5.3. -->
 <div style="width: 1900px; height: 880px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
   <div style="display: flex; align-items: center; gap: 12px">
-    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Proposed (pending owner decisions)</span>
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Decided (owner, 2026-11-04)</span>
     <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
   </div>
-  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Nothing pops: six decisions</h1>
-  <p style="margin: 0 0 22px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The recommended option is first in each, and marked. Durations are Windows and the PWA; Android and Apple take the same tiers.</p>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">Nothing pops: six decisions, decided</h1>
+  <p style="margin: 0 0 22px; font-size: 13px; line-height: 18px; color: {{t.text2}}">Decided by the owner on 2026-11-04: A in each, the recommended option, first and marked. Durations are Windows and the PWA; Android and Apple take the same tiers.</p>
   <div style="display: flex; flex-wrap: wrap; gap: 20px">
     <sc-for list="{{decisions}}" as="d">
       <div style="width: 592px; height: 350px; box-sizing: border-box; padding: 18px 20px; border-radius: 8px; border: 1px solid {{t.stroke}}; background: {{t.card}}">
@@ -31,7 +31,7 @@ body{margin:0}
               <b style="flex: none; font-size: 13px; color: {{o.color}}">{{o.key}}</b>
               <span style="font-size: 13px; line-height: 18px; font-weight: 600">{{o.head}}</span>
             </div>
-            <sc-if value="{{o.rec}}"><div style="margin: 4px 0 0 20px; display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 15px; font-weight: 600; color: {{t.onBridge}}; background: {{t.bridge}}">Recommended</div></sc-if>
+            <sc-if value="{{o.rec}}"><div style="margin: 4px 0 0 20px; display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 15px; font-weight: 600; color: {{t.onBridge}}; background: {{t.bridge}}">Decided</div></sc-if>
             <div style="margin: 4px 0 0 20px; font-size: 12px; line-height: 16px; color: {{t.text2}}">{{o.why}}</div>
           </div>
         </sc-for>

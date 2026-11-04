@@ -354,11 +354,12 @@ transitions keep their own timing, the in-flight progress ring is the only loop 
 glyphs, and scrolling to a question never moves a conversation the person has scrolled back
 through.*
 
-> **Proposed, pending owner decisions (#659).** This section's text for "nothing pops" (principle
-> 4; the Disclosure, Arriving and leaving, Easing aside, Status glyph, Activity dot, Value change
-> and Toast and banner rows; and "Motion on data updates") is a proposal. The options and the
-> recommendations are in [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md), D1–D6.
-> Until the owner decides, the clients keep to the signed-off text in this section's history.
+> **Decided by the owner on 2026-11-04, D1–D6 (#659).** This section's text for "nothing pops"
+> (principle 4; the Disclosure, Arriving and leaving, Easing aside, Status glyph, Activity dot,
+> Value change and Toast and banner rows; and "Motion on data updates") is the spec, every
+> decision option A. The options and reasoning are in
+> [proposals/659-no-pop-motion.md](proposals/659-no-pop-motion.md); the clients follow in #684
+> (Windows) and #685 (PWA).
 
 Motion shows where something came from and where it went. It answers the person or a
 change, and never runs for its own sake. The values are in `tokens.json` under `motion`,
@@ -728,8 +729,9 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     age in meta style: when its turn began (`statusSince` when it started running, seen here). The
     protocol doesn't date a prompt, so one first seen after its turn has no age.
   - **Collapsed by default:** two lines of it in secondary text, then **Show prompt**, with the
-    Disclosure motion (§5.3): the chevron turns and the text settles in, nothing below slides, and
-    it is instant under reduced motion. Open, it reads "Hide prompt" and shows all of it in reading
+    Disclosure motion (§5.3): the chevron turns, the space eases open or closed over `shift` with
+    what is below easing with it, the text fades, and it is instant under reduced motion. Open, it
+    reads "Hide prompt" and shows all of it in reading
     style inside a thin (2 px) agent-colour rule on the leading edge, not a filled card. A new
     prompt starts collapsed; an update to the same one leaves it as the person left it.
   - **Repeats fold.** When a schedule's prompt has the same words as the last one shown under the

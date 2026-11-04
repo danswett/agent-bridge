@@ -12,14 +12,14 @@
 body{margin:0}
 </style>
 </helmet>
-<!-- A proposal, not the spec (docs/design/proposals/659-no-pop-motion.md). Frames are drawn from the tokens' curves, not captured. -->
+<!-- Decided by the owner on 2026-11-04, D1–D6; the spec is ui.md §5.3 (docs/design/proposals/659-no-pop-motion.md). Frames are drawn from the tokens' curves, not captured. -->
 <div style="width: 1900px; height: 980px; box-sizing: border-box; padding: 32px; background: {{t.bg}}; color: {{t.text}}; font-family: 'Segoe UI Variable Text', system-ui, -apple-system, Roboto, sans-serif; overflow: hidden">
   <div style="display: flex; align-items: center; gap: 12px">
-    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Proposed (pending owner decisions)</span>
+    <span style="display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 12px; line-height: 16px; font-weight: 600; color: {{t.bridge}}; background: {{t.tag}}">#659 · Decided (owner, 2026-11-04)</span>
     <span style="font-size: 12px; color: {{t.text2}}">{{t.name}}</span>
   </div>
-  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">A Tools call arrives: today it pops, proposed it eases in and the rest eases down</h1>
-  <p style="margin: 0 0 20px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The same 167 ms, five frames apart. Proposed: the list is laid out once; every call below is drawn where it was and moves down over shift (standard, standard), uncovering the new call as it fades in over listItem (standard, decelerate). The dashed box is the new slot. Only a translation and an opacity run.</p>
+  <h1 style="margin: 10px 0 2px; font-family: 'Segoe UI Variable Display', system-ui, sans-serif; font-size: 22px; line-height: 28px; font-weight: 600">A Tools call arrives: today it pops, decided it eases in and the rest eases down</h1>
+  <p style="margin: 0 0 20px; font-size: 13px; line-height: 18px; color: {{t.text2}}">The same 167 ms, five frames apart. Decided: the list is laid out once; every call below is drawn where it was and moves down over shift (standard, standard), uncovering the new call as it fades in over listItem (standard, decelerate). The dashed box is the new slot. Only a translation and an opacity run.</p>
   <sc-for list="{{strips}}" as="s">
     <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 22px">
       <div style="width: 150px; flex: none; padding-top: 22px">
@@ -92,7 +92,7 @@ class Component extends DCLogic {
     const strips = [
       { name: 'Today (pop)', color: t.text, note: 'Both clients rebuild the list: the call and the shift land in one frame.',
         frames: times.map((ms) => frame(ms, ms === 0 ? 0 : 1, 'today', { note: ms === 0 ? 'before' : 'already there' })) },
-      { name: 'Proposed', color: t.bridge, note: 'listItem fades the call in; shift eases every call below down by one row.',
+      { name: 'Decided', color: t.bridge, note: 'listItem fades the call in; shift eases every call below down by one row.',
         frames: times.map((ms) => frame(ms, 1, 'proposed', { note: ms === 0 ? 'laid out; rows drawn where they were' : (ms === 167 ? 'at rest' : `rows ${Math.round(standard(ms / D) * 100)}% down, call ${Math.round(decelerate(ms / D) * 100)}% faded in`), trace: ms === 0 })) },
       { name: 'Burst and scrolled away', color: t.bridge, note: 'Three calls in one frame are one insertion. Scrolled away, what you read stays put.',
         frames: [
