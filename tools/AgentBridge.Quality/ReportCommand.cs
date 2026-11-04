@@ -248,7 +248,12 @@ static class ReportCommand
             throw new InvalidOperationException($"More than {MaxPages} pages of {connection}: the report would be cut short.");
         }
 
-        IEnumerable<JsonElement> RestPages(string path, string array, int perPage = 100, int maxPages = MaxPages)
+        /// <summary>
+        /// A REST list, page by page. complete: the list must be read whole (main's runs, which
+        /// are counted), so running out of pages fails rather than counting part of the window;
+        /// otherwise the cap is a deliberate sample.
+        /// </summary>
+        IEnumerable<JsonElement> RestPages(string path, string array, int perPage = 100, int maxPages = MaxPages, bool complete = false)
         {
             for (var page = 1; page <= maxPages; page++)
             {
@@ -259,11 +264,23 @@ static class ReportCommand
                 if (items.Count < perPage)
                     yield break;
             }
+            if (complete)
+                throw new InvalidOperationException($"More than {maxPages} pages of {path}: the report would be cut short.");
         }
 
         /// <summary>
+        /// A run's failed jobs in every attempt before its last: the last may follow a cancelled
+        /// attempt as well as a failed one. Five at most, newest first, a call each.
+        /// </summary>
+        List<(long Job, string? Name)> EarlierFailedJobs(long id, int attempt) =>
+            [.. Enumerable.Range(Math.Max(1, attempt - 5), attempt - Math.Max(1, attempt - 5)).Reverse()
+                .SelectMany(n => RestPages($"repos/{slug}/actions/runs/{id}/attempts/{n}/jobs", "jobs"))
+                .Where(j => j.GetProperty("conclusion").GetString() is "failure" or "timed_out")
+                .Select(j => (j.GetProperty("id").GetInt64(), j.GetProperty("name").GetString()))];
+
+        /// <summary>
         /// Main's push runs of ci.yml in the window, newest first, and for each rerun to green
-        /// whether its first attempt failed: one jobs list per such run, which also names the
+        /// whether an earlier attempt failed: a jobs list per earlier attempt, which also names the
         /// failed jobs whose logs say which tests failed.
         /// </summary>
         (IReadOnlyList<MainRun>, bool?, List<(long Job, DateTimeOffset At)>) MainRuns()
@@ -272,7 +289,7 @@ static class ReportCommand
             var flakyJobs = new List<(long, DateTimeOffset)>();
             var nodeIds = new Dictionary<long, string>();
             bool? redNow = null;
-            foreach (var run in RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?branch={Uri.EscapeDataString(baseBranch)}&event=push&created=%3E%3D{Since}", "workflow_runs"))
+            foreach (var run in RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?branch={Uri.EscapeDataString(baseBranch)}&event=push&created=%3E%3D{Since}", "workflow_runs", complete: true))
             {
                 var id = run.GetProperty("id").GetInt64();
                 var conclusion = run.GetProperty("conclusion").GetString();
@@ -280,16 +297,14 @@ static class ReportCommand
                 var created = Time(run, "created_at");
                 if (redNow is null && conclusion is not (null or "cancelled" or "skipped"))
                     redNow = conclusion != "success";
-                var firstFailed = false;
+                var earlierFailed = false;
                 if (conclusion == "success" && attempt > 1)
                 {
-                    var failed = RestPages($"repos/{slug}/actions/runs/{id}/attempts/1/jobs", "jobs")
-                        .Where(j => j.GetProperty("conclusion").GetString() is "failure" or "timed_out")
-                        .ToList();
-                    firstFailed = failed.Count > 0;
-                    flakyJobs.AddRange(failed.Where(j => IsTestJob(j.GetProperty("name").GetString())).Select(j => (j.GetProperty("id").GetInt64(), created)));
+                    var failed = EarlierFailedJobs(id, attempt);
+                    earlierFailed = failed.Count > 0;
+                    flakyJobs.AddRange(failed.Where(j => IsTestJob(j.Name)).Select(j => (j.Job, created)));
                 }
-                var parsed = new MainRun(id, run.GetProperty("head_sha").GetString() ?? "", created, conclusion, attempt, firstFailed);
+                var parsed = new MainRun(id, run.GetProperty("head_sha").GetString() ?? "", created, conclusion, attempt, earlierFailed);
                 if (parsed.Break)
                     nodeIds[id] = run.GetProperty("node_id").GetString()!;
                 runs.Add(parsed);
@@ -329,18 +344,16 @@ static class ReportCommand
         /// The tests the logs of failed CI test jobs name: main's first, then pull requests' (the
         /// newest 50 failed runs), newest first, up to --max-logs logs split between them.
         /// </summary>
-        (IReadOnlyList<CiTestFailure>, int, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs, List<(long Id, DateTimeOffset At)> prRerunGreen)
+        (IReadOnlyList<CiTestFailure>, int, int, int) TestFailures(List<(long Job, DateTimeOffset At)> mainJobs, List<(long Id, int Attempt, DateTimeOffset At)> prRerunGreen)
         {
             if (maxLogs == 0)
                 return ([], 0, 0, mainJobs.Count);
             var prRuns = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=failure&created=%3E%3D{Since}", "workflow_runs", perPage: 50, maxPages: 1)
                 .Select(r => (r.GetProperty("node_id").GetString()!, Time(r, "created_at"))).ToList();
-            // A run rerun to green no longer lists as failed, though its first attempt did fail:
-            // that attempt's jobs, one call a run, for at most half the log budget's runs.
+            // A run rerun to green no longer lists as failed, though an earlier attempt did fail:
+            // those attempts' jobs, a call each, for at most half the log budget's runs.
             var rerunJobs = prRerunGreen.OrderByDescending(r => r.At).Take(Math.Max(1, maxLogs / 2))
-                .SelectMany(r => RestPages($"repos/{slug}/actions/runs/{r.Id}/attempts/1/jobs", "jobs")
-                    .Where(j => j.GetProperty("conclusion").GetString() is "failure" or "timed_out" && IsTestJob(j.GetProperty("name").GetString()))
-                    .Select(j => (Job: j.GetProperty("id").GetInt64(), r.At)))
+                .SelectMany(r => EarlierFailedJobs(r.Id, r.Attempt).Where(j => IsTestJob(j.Name)).Select(j => (j.Job, r.At)))
                 .ToList();
             var prJobs = FailedTestJobs(prRuns).Concat(rerunJobs).OrderByDescending(j => j.At).ToList();
             // Half the logs for each, and what one side doesn't need to the other: a week of red
@@ -373,14 +386,14 @@ static class ReportCommand
         /// <summary>
         /// The last 50 completed pull request runs of ci.yml that passed or failed, with their jobs'
         /// times; and, of the newest 200 completed, those green only on a rerun in the window, whose
-        /// failed first attempts the failure ranking reads too.
+        /// failed earlier attempts the failure ranking reads too.
         /// </summary>
-        (IReadOnlyList<PrCiRun>, List<(long Id, DateTimeOffset At)>) PrRuns()
+        (IReadOnlyList<PrCiRun>, List<(long Id, int Attempt, DateTimeOffset At)>) PrRuns()
         {
             var completed = RestPages($"repos/{slug}/actions/workflows/ci.yml/runs?event=pull_request&status=completed", "workflow_runs", maxPages: 2).ToList();
             var rerunGreen = completed
                 .Where(r => r.GetProperty("conclusion").GetString() == "success" && r.GetProperty("run_attempt").GetInt32() > 1 && Time(r, "created_at") >= since)
-                .Select(r => (r.GetProperty("id").GetInt64(), Time(r, "created_at"))).ToList();
+                .Select(r => (r.GetProperty("id").GetInt64(), r.GetProperty("run_attempt").GetInt32(), Time(r, "created_at"))).ToList();
             var runs = completed
                 .Where(r => r.GetProperty("conclusion").GetString() is "success" or "failure")
                 .Take(50)

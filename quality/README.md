@@ -542,7 +542,8 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
      and their 3 slowest jobs.
 
   Its cost is bounded and printed at the end: a few paginated GraphQL queries and REST lists, a
-  jobs list per rerun `main` run, and at most 30 job logs. Only the `post` job may write issues,
+  jobs list for each earlier attempt of a run rerun to green (every such `main` run, and up to 15
+  pull requests'), and at most 30 job logs. Only the `post` job may write issues,
   only on `main`. A pull request that changes the reporter or the workflow runs it as a dry run,
   and `gh workflow run weekly-report.yml --ref <branch>` (a dry run by default, and always off
   `main`) does too: either writes the report to the job summary only, and

@@ -31,12 +31,12 @@ sealed record FlakyIssue(int Number, string Title, string? Test, bool Open, Date
 
 /// <summary>
 /// One of main's CI runs: its latest attempt's conclusion, and for a run attempted more than once,
-/// whether its first attempt failed.
+/// whether an earlier attempt failed.
 /// </summary>
-sealed record MainRun(long Id, string Sha, DateTimeOffset CreatedAt, string? Conclusion, int Attempt, bool FirstAttemptFailed)
+sealed record MainRun(long Id, string Sha, DateTimeOffset CreatedAt, string? Conclusion, int Attempt, bool EarlierAttemptFailed)
 {
     /// <summary>Red, then green on a rerun of the same commit: nothing changed but luck.</summary>
-    public bool Flake => Conclusion == "success" && Attempt > 1 && FirstAttemptFailed;
+    public bool Flake => Conclusion == "success" && Attempt > 1 && EarlierAttemptFailed;
     /// <summary>Still red after any reruns: broken, or a flake no one reran.</summary>
     public bool Break => Conclusion is "failure" or "timed_out" or "startup_failure";
 }

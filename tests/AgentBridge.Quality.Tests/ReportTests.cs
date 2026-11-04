@@ -56,7 +56,7 @@ public sealed class ReportTests
     {
         var report = WeeklyReport.Render(Facts(mainRed: true, main:
         [
-            new(1, "a", Ago(1), "success", 2, FirstAttemptFailed: true),
+            new(1, "a", Ago(1), "success", 2, EarlierAttemptFailed: true),
             new(2, "b", Ago(2), "failure", 1, false),
             new(3, "c", Ago(3), "failure", 3, true),
             new(4, "d", Ago(4), "success", 1, false),
@@ -290,7 +290,7 @@ public sealed class ReportTests
     }
 
     [Fact]
-    public void A_pull_request_run_green_only_on_a_rerun_has_its_failed_first_attempts_tests_counted()
+    public void A_pull_request_run_green_only_on_a_rerun_has_its_failed_earlier_attempts_tests_counted_after_a_cancelled_first()
     {
         var github = new FakeGitHub(rerunGreen: true);
         var output = new StringWriter();
@@ -301,12 +301,28 @@ public sealed class ReportTests
         Assert.Contains("| `RerunTests.Flaky` | 0 | 1 | 0 |", output.ToString());
     }
 
+    [Fact]
+    public void A_main_run_red_on_a_second_attempt_after_a_cancelled_first_and_green_on_a_third_is_a_flake_whose_failures_are_read()
+    {
+        var github = new FakeGitHub(mainRerun: true);
+        var output = new StringWriter();
+
+        Assert.Equal(0, ReportCommand.Run(["--slug", "o/r", "--max-logs", "4"], output, github, Now));
+
+        Assert.Contains("| 1 | 1 | 1 | 0 | 0 | green |", output.ToString());
+        Assert.Contains("repos/o/r/actions/jobs/801/logs", github.Logs);
+    }
+
+    [Fact]
+    public void A_window_with_more_main_runs_than_the_pages_read_fails_rather_than_counting_part_of_it() =>
+        Assert.Throws<InvalidOperationException>(() => ReportCommand.Run(["--slug", "o/r"], new StringWriter(), new FakeGitHub(endlessMain: true), Now));
+
     /// <summary>
     /// A week on GitHub: one open pull request; a merged one, then one that changed before the
     /// window with more pages promised (which mustn't be read); one red main run and one red pull
     /// request run, each with a failed product job.
     /// </summary>
-    sealed class FakeGitHub(bool failPrLog = false, bool rerunGreen = false) : IGitHub
+    sealed class FakeGitHub(bool failPrLog = false, bool rerunGreen = false, bool mainRerun = false, bool endlessMain = false) : IGitHub
     {
         public List<string> Queries { get; } = [];
         public List<string> Logs { get; } = [];
@@ -336,13 +352,21 @@ public sealed class ReportTests
         public JsonDocument Rest(string path)
         {
             const string run = """{"id": 1, "node_id": "%N", "conclusion": "failure", "run_attempt": 1, "head_sha": "abc", "created_at": "2026-11-08T10:00:00Z", "updated_at": "2026-11-08T10:10:00Z", "run_started_at": "2026-11-08T10:00:00Z"}""";
+            if (endlessMain && path.Contains("branch=main", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"workflow_runs": [""" + string.Join(",", Enumerable.Repeat(run.Replace("%N", "main-node", StringComparison.Ordinal), 100)) + "]}");
+            if (mainRerun && path.Contains("branch=main", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "main-node", StringComparison.Ordinal).Replace("\"failure\", \"run_attempt\": 1", "\"success\", \"run_attempt\": 3", StringComparison.Ordinal) + "]}");
             if (path.Contains("branch=main", StringComparison.Ordinal))
                 return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "main-node", StringComparison.Ordinal) + "]}");
             if (path.Contains("status=failure", StringComparison.Ordinal))
                 return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "pr-node", StringComparison.Ordinal) + "]}");
             if (rerunGreen && path.Contains("status=completed", StringComparison.Ordinal))
-                return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "rerun-node", StringComparison.Ordinal).Replace("\"failure\", \"run_attempt\": 1", "\"success\", \"run_attempt\": 2", StringComparison.Ordinal) + "]}");
-            if (rerunGreen && path.Contains("attempts/1/jobs", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"workflow_runs": [""" + run.Replace("%N", "rerun-node", StringComparison.Ordinal).Replace("\"failure\", \"run_attempt\": 1", "\"success\", \"run_attempt\": 3", StringComparison.Ordinal) + "]}");
+            if ((rerunGreen || mainRerun) && path.Contains("attempts/1/jobs", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"jobs": [{"id": 700, "name": "product (windows-latest)", "conclusion": "cancelled"}]}""");
+            if (mainRerun && path.Contains("attempts/2/jobs", StringComparison.Ordinal))
+                return JsonDocument.Parse("""{"jobs": [{"id": 801, "name": "product (ubuntu-latest)", "conclusion": "failure"}]}""");
+            if (rerunGreen && path.Contains("attempts/2/jobs", StringComparison.Ordinal))
                 return JsonDocument.Parse("""{"jobs": [{"id": 701, "name": "product (windows-latest)", "conclusion": "failure"}, {"id": 702, "name": "light", "conclusion": "failure"}]}""");
             return JsonDocument.Parse("""{"workflow_runs": []}""");
         }
