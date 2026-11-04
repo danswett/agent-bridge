@@ -534,7 +534,10 @@ test.describe('installed', () => {
     await page.reload();
     await page.waitForSelector('html[data-demo-ready]');
     await expect(page.locator('#stuck-banner')).toBeVisible();
-    await expect(page.locator('#stuck-banner')).toContainText('keeps failing to install');
+    await expect(page.locator('#stuck-banner')).toContainText("A new version of the app keeps failing to install. You're still on the version you had.");
+    await expect(page.locator('#stuck-banner .button.secondary')).toHaveText('Try again');
+    // Said through the live region already on the page, which one unhidden with its words is not.
+    await expect(page.locator('#banner-said')).toHaveText("A new version of the app keeps failing to install. You're still on the version you had.");
     await expect(page.locator('.session').first()).toBeVisible();
   });
 });
