@@ -168,6 +168,30 @@ public sealed class AgentInstallTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.InstallAsync(new("codex", true)));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Cancellation_invalidates_PATH_before_reporting_a_partial_installation(bool runnerThrows)
+    {
+        await using var service = Service();
+        commands.Run = (_, _, ct) =>
+        {
+            Assert.True(service.Cancel());
+            if (runnerThrows) { throw new OperationCanceledException(ct); }
+            return Task.FromResult(new CommandResult(true, false, 0, ""));
+        };
+        service.Changed += () =>
+        {
+            if (service.Snapshot?.InProgress == false) { Assert.Equal(2, refreshes); }
+        };
+
+        var result = await service.InstallAsync(new("claude", true));
+
+        Assert.False(result.Completed);
+        Assert.Contains("cancelled", result.Detail);
+        Assert.Equal(2, refreshes);
+    }
+
     [Fact]
     public async Task Unconfirmed_cleanup_is_reported_and_blocks_another_installer()
     {

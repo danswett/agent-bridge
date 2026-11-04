@@ -113,13 +113,17 @@ public sealed class AgentInstallService(
             return new(false, "Windows Package Manager is unavailable. Install or update Microsoft's App Installer, then try again. No CLI was installed.");
         }
         preflight(request.Agent);
-        var result = await commands.RunAsync(winget,
-            ["install", "--id", package, "--exact", "--source", "winget", "--dependency-source", "winget",
-                "--scope", "user", "--silent", "--disable-interactivity", "--no-upgrade",
-                "--accept-package-agreements", "--accept-source-agreements"],
-            TimeSpan.FromMinutes(10), ct);
+        CommandResult result;
+        try
+        {
+            result = await commands.RunAsync(winget,
+                ["install", "--id", package, "--exact", "--source", "winget", "--dependency-source", "winget",
+                    "--scope", "user", "--silent", "--disable-interactivity", "--no-upgrade",
+                    "--accept-package-agreements", "--accept-source-agreements"],
+                TimeSpan.FromMinutes(10), ct);
+        }
+        finally { refreshPaths(); }
         ct.ThrowIfCancellationRequested();
-        refreshPaths();
         if (!result.Ran || result.TimedOut || result.ExitCode != 0)
         {
             return new(false, !result.Ran ? "Windows Package Manager could not start. No installation was confirmed."
