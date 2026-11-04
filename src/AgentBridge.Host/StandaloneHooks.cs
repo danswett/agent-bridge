@@ -300,7 +300,7 @@ public sealed class StandaloneHooks(
             {
                 Add(hooks, name, new JsonObject { ["matcher"] = matcher, ["hooks"] = new JsonArray(new JsonObject
                 {
-                    ["type"] = "command", ["command"] = $"\"{Hook}\" claude {hook}", ["timeout"] = timeout,
+                    ["type"] = "command", ["command"] = ClaudeCommand(hook), ["timeout"] = timeout,
                 }) });
             }
         }
@@ -308,6 +308,7 @@ public sealed class StandaloneHooks(
 
     void Unregister(JsonObject root, string agent)
     {
+        if (agent == "claude") { ValidateClaudeHooks(root); }
         if (root["hooks"] is null) { return; }
         var hooks = Object(root, "hooks");
         foreach (var (name, value) in hooks.ToList())
@@ -339,11 +340,31 @@ public sealed class StandaloneHooks(
         return parent[key] as JsonObject ?? throw new InvalidDataException($"{key} is not an object; it was left alone");
     }
 
+    string ClaudeCommand(string name) => $"'{Hook.Replace("'", "'\\''")}' claude {name}";
+
     bool OwnedClaudeCommand(string command) => new[] { "ask", "notification", "stop", "register" }
-        .Any(n => string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+        .Any(n => string.Equals(command, ClaudeCommand(n), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            || string.Equals(command, $"\"{Hook}\" claude {n}", OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal));
+
+    static void ValidateClaudeHooks(JsonObject root)
+    {
+        if (!root.TryGetPropertyValue("hooks", out var value)) { return; }
+        if (value is not JsonObject hooks) { throw new InvalidDataException("hooks is not an object; it was left alone"); }
+        foreach (var (name, groups) in hooks)
+        {
+            if (groups is not JsonArray entries) { throw new InvalidDataException($"hooks.{name} is not an array; it was left alone"); }
+            for (var i = 0; i < entries.Count; i++)
+            {
+                if (entries[i] is not JsonObject group) { throw new InvalidDataException($"hooks.{name}[{i}] is not an object; it was left alone"); }
+                if (group["hooks"] is not JsonArray inner) { throw new InvalidDataException($"hooks.{name}[{i}].hooks is not an array; it was left alone"); }
+                if (inner.Any(h => h is not JsonObject)) { throw new InvalidDataException($"hooks.{name}[{i}].hooks contains a non-object hook; it was left alone"); }
+            }
+        }
+    }
 
     bool HasBridgeCommands(JsonObject root, bool owned = false)
     {
+        ValidateClaudeHooks(root);
         if (root["hooks"] is not JsonObject hooks) { return false; }
         return hooks.Select(p => p.Value).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())
             .Select(g => g["hooks"]).OfType<JsonArray>().SelectMany(a => a.OfType<JsonObject>())

@@ -70,7 +70,11 @@ homes; removal cannot safely decide which agent owns the shared marker.
 
 Copilot gets a dedicated `hooks\agent-bridge.json`; Claude gets entries merged into
 `settings.json` with unrelated settings and hooks preserved, plus its first original settings
-saved under `<profile>\hooks\backups`. JSON formatting/comments can change. Codex gets a
+saved under `<profile>\hooks\backups`. Malformed Claude hook groups are refused before any
+registration or ownership changes, including in dry runs. Claude executable paths are
+shell-escaped so dollar signs, command substitutions and apostrophes remain literal;
+repair/removal still recognize registrations from the older double-quoted format.
+JSON formatting/comments can change. Codex gets a
 local plugin installed using its supported CLI, never a rewrite of hook trust settings.
 Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; failures
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents

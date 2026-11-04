@@ -205,6 +205,11 @@ public sealed class StandaloneHooksTests : IDisposable
     [InlineData("[]", true)]
     [InlineData("{\"hooks\":false}", true)]
     [InlineData("{\"hooks\":false}", false)]
+    [InlineData("{\"hooks\":{\"SessionStart\":[{\"hooks\":false}]}}", true)]
+    [InlineData("{\"hooks\":{\"SessionStart\":[{\"hooks\":false}]}}", false)]
+    [InlineData("{\"hooks\":{\"SessionStart\":[{}]}}", true)]
+    [InlineData("{\"hooks\":{\"SessionStart\":[null]}}", false)]
+    [InlineData("{\"hooks\":{\"SessionStart\":[{\"hooks\":[false]}]}}", true)]
     public async Task Invalid_Claude_settings_return_a_failed_command_with_a_diagnostic_including_dry_runs(string settings, bool dryRun)
     {
         Write(Registration("claude"), settings);
@@ -217,6 +222,97 @@ public sealed class StandaloneHooksTests : IDisposable
         Assert.Contains("Hook setup incomplete:", error.ToString());
         Assert.Contains("it was left alone", error.ToString());
         Assert.Equal(before, Listing());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Malformed_nested_Claude_hooks_block_removal_without_losing_ownership(bool dryRun)
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var settings = Read(Registration("claude"));
+        settings["hooks"]!["SessionStart"]!.AsArray().Add(new JsonObject { ["hooks"] = false });
+        Write(Registration("claude"), settings.ToJsonString());
+        var before = Listing();
+        using var error = new StringWriter();
+
+        var result = await HookCommands.RunSetupAsync(Setup, ["claude"], false, dryRun, TextWriter.Null, error);
+
+        Assert.Equal(1, result);
+        Assert.Contains("hooks.SessionStart", error.ToString());
+        Assert.Contains("it was left alone", error.ToString());
+        Assert.Equal(before, Listing());
+    }
+
+    static string GitBash => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe");
+
+    sealed class GitBashFactAttribute : FactAttribute
+    {
+        public GitBashFactAttribute()
+        {
+            if (!OperatingSystem.IsWindows() || !File.Exists(GitBash)) { Skip = "Windows Git Bash is required to parse Claude hook commands"; }
+        }
+    }
+
+    [GitBashFact]
+    [Trait("Category", "Process")]
+    public async Task Claude_commands_keep_shell_metacharacters_literal_in_the_executable_path()
+    {
+        var profile = Path.Combine(root, "profile $work $(printf injected) 'quoted' `printf substituted`");
+        var hook = Path.Combine(profile, "hooks", "agent-bridge-host-hook.exe");
+        var setup = new StandaloneHooks(profile, Homes, Source, Legacy, () => active, locator, codex);
+        await setup.InstallAsync("claude", false, TextWriter.Null);
+        var command = (string)Read(Registration("claude"))["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["command"]!;
+        var start = new ProcessStartInfo(GitBash, ["--noprofile", "--norc", "-c",
+            "capture() { printf '%s\\n' \"$@\"; }; capture " + command])
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        start.Environment["work"] = "expanded";
+        using var process = Process.Start(start)!;
+        try
+        {
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Equal(0, process.ExitCode);
+            Assert.Equal("", await error);
+            Assert.Equal(hook + "\nclaude\nregister\n", (await output).Replace("\r\n", "\n"));
+        }
+        finally
+        {
+            if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); }
+        }
+        await setup.InstallAsync("claude", false, TextWriter.Null);
+        await setup.RemoveAsync("claude", false, TextWriter.Null);
+        Assert.Null(Read(Registration("claude"))["hooks"]);
+        Assert.False(File.Exists(Owner("claude")));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Existing_double_quoted_Claude_commands_can_be_repaired_or_removed_without_touching_user_hooks(bool repair)
+    {
+        await Setup.InstallAsync("claude", false, TextWriter.Null);
+        var settings = Read(Registration("claude"));
+        foreach (var group in settings["hooks"]!.AsObject().SelectMany(p => p.Value!.AsArray()))
+        {
+            var entry = group!["hooks"]![0]!;
+            var command = (string)entry["command"]!;
+            entry["command"] = $"\"{Hook}\" claude {command[(command.LastIndexOf(' ') + 1)..]}";
+        }
+        settings["hooks"]!["SessionStart"]![0]!["hooks"]!.AsArray().Add(new JsonObject { ["command"] = "user-hook" });
+        Write(Registration("claude"), settings.ToJsonString());
+
+        if (repair) { await Setup.InstallAsync("claude", false, TextWriter.Null); }
+        await Setup.RemoveAsync("claude", false, TextWriter.Null);
+
+        var groups = Read(Registration("claude"))["hooks"]!["SessionStart"]!.AsArray();
+        Assert.Single(groups);
+        Assert.Equal("user-hook", (string?)Assert.Single(groups[0]!["hooks"]!.AsArray())!["command"]);
+        Assert.False(File.Exists(Owner("claude")));
     }
 
     [Fact]
