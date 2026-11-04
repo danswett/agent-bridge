@@ -1428,6 +1428,11 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
       merge tools. A repository whose own configuration holds anything outside the allowlist (a
       custom merge driver, a `[include]`) can't have **any agent-requested launch**, gated or
       forced-ask: the person launches it themselves. The source report lists what was dropped.
+      **Accepted by the owner (2026-11-03, 23:19 PT)** as the trade-off for the closed
+      configuration: agent-requested and gated launches run Git without the user's aliases, URL
+      rewrites, extra credential helpers, signing or SSH proxies, and a repository with
+      non-allowlisted configuration is refused; the person launches it themselves, in `ask` mode if
+      they prefer.
     * **The residual window.** The host checks its artifacts and the configuration immediately
       before use, but same-user code can still change them in the instant between the check and
       Git reading them (§1.3).
@@ -1605,8 +1610,8 @@ clean after a host update, and a reset generation would let an old clear match a
 
     So O after a restart takes this order: end the unconfined sessions, clear the machine, then
     start the coordinator and its targets. G keeps working, with "origins unknown" labels on
-    older conversations and windows re-approved. An off-machine anchor that would avoid this
-    cost is Q53.
+    older conversations and windows re-approved. The owner accepted this cost (Q53); an
+    off-machine anchor that would avoid it stays a possible later design.
 
 **`unknown` is an origin, and it sticks.** Provenance that is missing, legacy or `"unknown"`
 (§4.3) becomes the origin `unknown:<machine>` on whatever receives it: a reader, a target, a
@@ -3752,9 +3757,10 @@ Decisions the reviews of `f3559996` asked to make explicit:
     unavailable while no person device of the reader is online. A broker comes later, as its own
     design. Either way status guides scheduling only, and never authorizes a merge, a deploy or
     the use of a credential (§5.8).
-53. **Q53. O after a host restart: accept the cost, or anchor taint off the machine?** The taint
-    store can't detect its own rollback (§5.8 Durability), so in AP8 only the running host instance
-    vouches for cleanliness. After every host restart, an update included, every older
+53. **Q53. O after a host restart: accept the cost, or anchor taint off the machine?** **Decided by
+    the owner (2026-11-03, 23:19 PT): (a), accept the cost, with no off-machine anchor in v1.**
+    The taint store can't detect its own rollback (§5.8 Durability), so in AP8 only the running host
+    instance vouches for cleanliness. After every host restart, an update included, every older
     conversation carries `unknown:<machine>`, and so does every session started before the
     person's machine clear. That clear waits until every unconfined (allow-all) session has ended,
     pre-restart or not, and every open window pauses for re-approval. O then needs the order
@@ -3762,11 +3768,12 @@ Decisions the reviews of `f3559996` asked to make explicit:
     working, with labels and re-approved windows.
     * (a) **Accept it** for AP8 and AP9. O is already a narrow clean-workspace mode by the owner's
       Q34 decision, and G with quiet mode is the everyday path.
-    * (b) **An off-machine anchor**: a monotonic taint sequence, signed with the host's device key
-      and held by the relay or countersigned by a person device under the #391 roster floor,
+    * (b) **An off-machine anchor**, kept as a possible later design: a monotonic taint sequence,
+      signed with the host's device key and held by the relay or countersigned by a person device under the #391 roster floor,
       checked before content is handed over and on host start. An older or unverifiable sequence
       enters recovery. It would let surviving sessions keep their state across a restart, at the
       cost of a relay round trip on the first tainting read and recovery whenever the anchor is
       unreachable at start.
 
-    **Recommended: (a)**, with (b) reconsidered only if O proves unusable after updates.
+    **Decided: (a).** (b) stays a possible later design, to be reconsidered only if O proves
+    unusable after updates.
