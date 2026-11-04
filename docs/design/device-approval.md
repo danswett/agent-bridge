@@ -320,8 +320,8 @@ history state. It is valid only if:
     a device of its own adding the same key, one subordinate to the other) could have only one
     listed, after which the other became active under the thief's keys.
   * A self-removal revokes only its signer: the devices it approved are not part of it.
-  * A removal is **invalid if any signer is its target, or is in the target's subtree and not
-    kept**: otherwise a stolen D could cosign its own removal with J, a device it added (D's
+  * A removal other than a self-removal is **invalid if any signer is its target, or is in the
+    target's subtree and not kept**: otherwise a stolen D could cosign its own removal with J, a device it added (D's
     lineage cut at D is empty, so the pair would pass the lineage test).
 
   Under the conditions of §3.5 a removal also bars the target's key from coming back through
@@ -471,9 +471,10 @@ there before it. So:
   enroll N at `seq` 11 after H was enrolled at 12 on another branch, and N would then outrank a
   device approved before it. A device may `remove` **itself or any device junior to it**.
   Removing any other device, senior or concurrent, needs a `cosig` from a second device, and is
-  valid only if **both signers are confirmed** (below) in the removal's parents' state. Neither
-  signer may be senior to the target (or it could remove it alone), and both need their own
-  presence proofs. Their approvals must also be **independent**. A signer's **lineage** is the
+  valid only if **both signers are confirmed** (below) in the removal's parents' state. A device
+  senior to the target may cosign too, to make the removal rank 2 (§3.5); every cosigned removal,
+  whatever its target, must pass the test below. Both signers need their own presence proofs.
+  Their approvals must also be **independent**. A signer's **lineage** is the
   chain of add entries from its own add up to genesis: its add, the add of the device that signed
   it, the add of the device that signed that one, and so on. Each signer's lineage is **cut** to
   leave out the target's add and every add senior to it, and the two cut lineages must not share
@@ -1506,7 +1507,13 @@ the removed device usable even though an informed peer can reach it. So an unros
 a chain of entries, which the host checks exactly as any offer (§3.5): signatures, validity, budgets.
 Since every entry is self-authenticating, who sent it adds no trust. The path discloses nothing:
 the answer is only `accepted` or `refused`, with no heads, counts or reasons, whatever the host
-holds. It is bounded **per key**: one submission a minute from each key, so a flood from the
+holds. Since a channel frame carries at most 65,519 bytes of plaintext (`SecureChannel`), a
+submission is sent in **parts**, each one frame, carrying a submission id, its index and the
+total. The host stages the parts and checks the submission only when all have arrived, as one
+unit, so evidence still arrives together with its removal; it keeps at most one staged submission
+per key, discards one left incomplete for 60 seconds, and refuses one over **8 MiB** in total or
+holding an entry over **48 KiB** as sent (a `remove` keeping 512 adds, with both signers'
+assertions, is under 40 KiB). It is bounded **per key**: one submission a minute from each key, so a flood from the
 relay's own keys cannot crowd out an honest peer's, and at most 256 entries per submission besides
 one removal's evidence. A submission may carry a complete removal proof: the removal, its missing
 ancestors that are not evidence (at most 256), and the evidence §3.3 admits for it (at most 256
@@ -1990,8 +1997,9 @@ Each slice adds its own. Together they cover:
     an ancestor of the removal, not in the target's subtree, or signed by a device that is neither
     the target nor kept; a target `add` that is not that id's add, or not active in the parents'
     state (a subordinate add, or one of a conflicted id's adds: removing its approver takes it
-    instead); a removal signed by its target, or by a device of the target's subtree that it does
-    not keep; a self-removal with a non-empty `keep`; a cosigned removal whose signers fail the
+    instead); a removal other than a self-removal signed by its target, or by a device of the
+    target's subtree that it does not keep; a self-removal with a non-empty `keep` or a
+    `cosigner`; a cosigned removal whose signers fail the
     cosign test, even for a target junior to `by` (there are no cosigned removals of rank 1); a
     `targets` or `voidGrants` member (not part of v1): refused.
 * Caps and budgets: a roster at its 4,096-entry limit (filled with renames by one device) still
@@ -2061,7 +2069,9 @@ Each slice adds its own. Together they cover:
   adopting J's branch leaves J void.
 * **Two adds of one id.** S adds J; J adds X (`aJ`); S adds X's key itself (`aS`) on a parent
   from before J's add, within the window; J confirms `aJ` while it is still active on J's branch,
-  and the heads are then joined: `aS` wins and `aJ` is subordinate. The same for K and X2. C1 and
+  and the heads are then joined: `aS` wins and `aJ` is subordinate. The same for K and X2. X's and
+  X2's removal below forks from J's and K's branches after those confirmations and before the
+  join, where `aJ` and X2's counterpart are active and confirmed. C1 and
   C2, which G approved, remove S (rank 2), keeping
   nothing, on a parent that holds both adds of each id: the removal takes `aS`, J, `aJ`, K and
   both adds of X2, whatever their state, so X and X2 have no active add in any state that holds
@@ -2303,7 +2313,9 @@ Each slice adds its own. Together they cover:
   (the removal, 256 missing ancestors that are not evidence, and 256 evidence entries from each of
   four signers of the target's subtree) is accepted at a host none of whose 1,024 evidence entries
   is used, and refused as a whole with one entry more, or at a host that has already admitted
-  any evidence. A flood of submissions from
+  any evidence. That submission spans many frames and is accepted only once its last part
+  arrives; one with a part missing for 60 seconds, over 8 MiB, or holding a 49 KiB entry is
+  refused as a whole, and nothing in it is applied. A flood of submissions from
   many other keys does not stop one holding a valid removal from being checked first.
 * An approver whose head moved before its append asks the person again, and never reuses the old
   signature or assertion.
