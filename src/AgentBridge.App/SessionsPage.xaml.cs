@@ -638,6 +638,8 @@ public sealed partial class SessionsPage : UserControl
         if (laneGuard.Shown(Layout.ShowList && Layout.OnScreen, DateTimeOffset.UtcNow)) { GuardLane(); }
     }
 
+    static TimeSpan Longer(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
     void GuardLane()
     {
         laneGuard.Arm(DateTimeOffset.UtcNow);
@@ -648,12 +650,12 @@ public sealed partial class SessionsPage : UserControl
             laneTimer.IsRepeating = false;
             laneTimer.Tick += (t, _) =>
             {
-                var left = laneGuard.Remaining(DateTimeOffset.UtcNow);
+                var left = Longer(laneGuard.Remaining(DateTimeOffset.UtcNow), ReorderHold());
                 if (left > TimeSpan.Zero) { t.Interval = left; t.Start(); return; }
                 LaneItems.IsHitTestVisible = true;
             };
         }
-        laneTimer.Interval = laneGuard.Remaining(DateTimeOffset.UtcNow);
+        laneTimer.Interval = Longer(laneGuard.Remaining(DateTimeOffset.UtcNow), ReorderHold());
         laneTimer.Start();
     }
 }

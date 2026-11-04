@@ -335,9 +335,10 @@ static partial class SelfTest
             var bitmap = CreateCompatibleBitmap(screen, w, h);
             var old = SelectObject(memory, bitmap);
             BitBlt(memory, 0, 0, w, h, screen, (int)topLeft.X, (int)topLeft.Y, 0x00CC0020 | 0x40000000);
+            // GetDIBits reads a bitmap no device context holds.
+            SelectObject(memory, old);
             var info = new BitmapInfoHeader { Size = 40, Width = w, Height = -h, Planes = 1, BitCount = 32 };
             GetDIBits(memory, bitmap, 0, (uint)h, pixels, ref info, 0);
-            SelectObject(memory, old);
             DeleteObject(bitmap);
             DeleteDC(memory);
             _ = ReleaseDC(0, screen);

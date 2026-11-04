@@ -88,6 +88,14 @@ public sealed partial class SessionsPage
         public Dictionary<string, SessionCardViewModel> Cards { get; } = new(StringComparer.Ordinal);
         public long SaidAt { get; set; }
         public string? Unsaid { get; set; }
+        // The lift's growth, from what scale and since when, so the scale it is drawn at can be worked out
+        // (Composition reads back a property's set value, not the one an animation draws).
+        public float LiftFrom { get; set; } = 1;
+        public long LiftStart { get; set; }
+        public MotionStep Lift { get; set; } = MotionStep.None;
+
+        public float Scale => !Lift.Runs ? 1
+            : LiftFrom + ((LiftScale - LiftFrom) * (float)Lift.Ease.At(Stopwatch.GetElapsedTime(LiftStart) / Lift.Duration));
     }
 
     Press? press;
@@ -313,7 +321,10 @@ public sealed partial class SessionsPage
         var lift = Motion.Catalogue.Enter("Lift", Motion.Enabled);
         if (lift.Runs)
         {
-            Animate(visual, "Scale", new Vector3(SunkTo(item), SunkTo(item), 1), new Vector3(LiftScale, LiftScale, 1), lift);
+            d.LiftFrom = SunkTo(item);
+            d.LiftStart = Stopwatch.GetTimestamp();
+            d.Lift = lift;
+            Animate(visual, "Scale", new Vector3(d.LiftFrom, d.LiftFrom, 1), new Vector3(LiftScale, LiftScale, 1), lift);
             var look = Visual(row.LiftLayer);
             look.Opacity = 0;
             AnimateOpacity(look, 0, 1, lift);
@@ -329,6 +340,8 @@ public sealed partial class SessionsPage
         ShowLayer(d);
         XamlRoot.Content.AddHandler(KeyDownEvent, escape, true);
         Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnFrame;
+        // Needs you takes no click while a card is held, wherever the pointer goes (AnswerGuard).
+        GuardLane();
         Arrange(d, d.Target, instant: true);
         Follow(at);
         var (place, of) = d.Model.Place(d.Target);
@@ -632,6 +645,7 @@ public sealed partial class SessionsPage
         var crossed = d.Model.Crosses(target);
         var at = d.Model.Place(target);
         var from = d.ItemTop + d.Translation + d.Header;
+        var scale = d.Scale;
         End(d);
         var moving = target != d.Model.Origin;
         // Focus stays with the session: the dropped card asks for it, as after Alt+Up/Down.
@@ -640,7 +654,7 @@ public sealed partial class SessionsPage
         if (!moving || d.Card.Row?.MoveTo(target.Pinned, target.Index, d.Model.Group(target.Pinned)) != true)
         {
             d.Card.WantsRowFocus = true;
-            Settle(d, d.Item, from, reset: d.Items.Values);
+            Settle(d, d.Item, from, scale, reset: d.Items.Values);
         }
         else
         {
@@ -649,7 +663,7 @@ public sealed partial class SessionsPage
             Motion.AfterLayout(List, d.Card, container =>
             {
                 settled = true;
-                Settle(d, container, from, reset: others.Append(d.Item).Where(i => i != container));
+                Settle(d, container, from, scale, reset: others.Append(d.Item).Where(i => i != container));
             });
             // Not drawn after the move (scrolled away): nothing to settle, everything put right.
             var fallback = DispatcherQueue.CreateTimer();
@@ -700,10 +714,11 @@ public sealed partial class SessionsPage
     {
         if (drag is not { } d) { return; }
         var from = d.ItemTop + d.Translation + d.Header;
+        var scale = d.Scale;
         d.Away = false;
         Arrange(d, d.Model.Origin, instant: false);
         End(d);
-        Settle(d, d.Item, from, reset: []);
+        Settle(d, d.Item, from, scale, reset: []);
         reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         GuardLane();
         if (say) { d.Row.Say(ReorderWords.Cancelled(d.Model.Place(d.Model.Origin))); }
@@ -715,6 +730,7 @@ public sealed partial class SessionsPage
     {
         if (drag is not { } d) { return; }
         drag = null;
+        reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         StopHolding();
         Reset(d.Items.Values);
         HideLayer();
@@ -737,6 +753,7 @@ public sealed partial class SessionsPage
     void End(Drag d, bool later = false)
     {
         drag = null;
+        reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         StopHolding();
         if (d.Pointer is { } p) { List.ReleasePointerCapture(p); }
         if (later) { Release(d.Card); }
@@ -760,12 +777,21 @@ public sealed partial class SessionsPage
 
     DateTime reorderedUntil;
 
-    // A row moved by Alt+Up/Down or its menu: the list scrolling it into view moves Needs you too.
-    internal void Moved() => reorderedUntil = DateTime.UtcNow.AddSeconds(1);
+    // A row moved by Alt+Up/Down or its menu: Needs you is held as after a drop, the list scrolling it
+    // into view moving the lane too.
+    internal void Moved()
+    {
+        reorderedUntil = DateTime.UtcNow.AddSeconds(1);
+        GuardLane();
+    }
+
+    // How long Needs you must stay held for a reorder: while a card is held, and until a second after it
+    // is let go or a row is moved.
+    TimeSpan ReorderHold() => drag is not null ? TimeSpan.FromMilliseconds(100) : reorderedUntil - DateTime.UtcNow;
 
     // The card lowers as it settles into its place over `reorder`: from where it was drawn to where
     // the list now lays it out, back to its size, its look fading. With animation effects off, at once.
-    void Settle(Drag d, FrameworkElement container, double from, IEnumerable<ListViewItem> reset)
+    void Settle(Drag d, FrameworkElement container, double from, float scale, IEnumerable<ListViewItem> reset)
     {
         var resetting = reset.ToList();
         if (List.ItemsPanelRoot is not { } panel || container is not ListViewItem item || item.ContentTemplateRoot is not SessionRow row)
@@ -802,7 +828,7 @@ public sealed partial class SessionsPage
         var batch = visual.Compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         Animate(visual, "Translation", new Vector3(0, (float)dy, 0), Vector3.Zero, step);
         Motion.Track(item);
-        Animate(visual, "Scale", visual.Scale, Vector3.One, step);
+        Animate(visual, "Scale", new Vector3(scale, scale, 1), Vector3.One, step);
         AnimateOpacity(Visual(row.LiftLayer), 1, 0, step);
         batch.End();
         batch.Completed += (_, _) => { if (settling.Remove(item, out var done)) { done(); } };

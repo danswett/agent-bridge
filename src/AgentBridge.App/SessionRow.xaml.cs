@@ -289,7 +289,11 @@ public sealed partial class SessionRow : UserControl
             if (f.List.ItemsPanelRoot is not { } panel) { return; }
             if (container is not ListViewItem { ContentTemplateRoot: SessionRow row }) { return; }
             var delta = f.Top - Motion.TopIn(row.RowGlyph, panel);
-            if (Math.Abs(delta) >= 1) { Motion.Slide(container, "Reorder", new System.Numerics.Vector2(0, (float)delta)); }
+            if (Math.Abs(delta) < 1) { return; }
+            Motion.Slide(container, "Reorder", new System.Numerics.Vector2(0, (float)delta));
+            // A group's heading is drawn by its first card, and stays where it is as another card
+            // becomes first: only the card slides, its heading sliding back as far.
+            if (row.HeaderPart > 0) { Motion.Slide(row.GroupHeading, "Reorder", new System.Numerics.Vector2(0, (float)-delta)); }
         });
     }
 
