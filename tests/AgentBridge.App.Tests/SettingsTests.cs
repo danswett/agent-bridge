@@ -253,6 +253,33 @@ public sealed class SettingsTests : IAsyncLifetime
         Assert.DoesNotContain(host.Received, r => r.Op == HostOps.AgentsVerify || r.Op == LaunchProtocol.Launch || r.Op == Ops.SessionStop);
     }
 
+    [Theory]
+    [InlineData(VerificationState.Verified)]
+    [InlineData(VerificationState.Unknown)]
+    [InlineData(VerificationState.Running)]
+    public async Task A_racing_or_unrecognized_cancel_result_never_claims_observation_was_cancelled(VerificationState state)
+    {
+        await Connected();
+        var request = Guid.NewGuid().ToString("D");
+        host.Status = host.Status with { AgentVerifications = [VerificationReport(request, VerificationState.Running)] };
+        host.On(HostOps.AgentsVerifyCancel, _ =>
+        {
+            var report = VerificationReport(request, state);
+            host.Status = host.Status with { AgentVerifications = [report] };
+            return report;
+        });
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => settings.Verifications.Count == 1, "running verification");
+        await settings.CancelVerificationAsync(request);
+        Assert.DoesNotContain("Observation stopped.", settings.VerificationActionStatus, StringComparison.Ordinal);
+        if (state == VerificationState.Verified)
+        {
+            Assert.Null(settings.Error);
+            Assert.Contains("already ended", settings.VerificationActionStatus, StringComparison.Ordinal);
+        }
+        else { Assert.Contains("did not confirm", settings.Error, StringComparison.Ordinal); }
+    }
+
     // The host's status as the test sets it, seen by the app. The app may have read the status before
     // the test set it (on Linux its socket connects at once), so it is sent as the host would.
     async Task ConnectedWith(HostStatus status)
