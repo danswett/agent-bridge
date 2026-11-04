@@ -296,6 +296,11 @@ export class HostClient {
       // one held: the list is not whole after it, and is never resumed from.
       if (gap && m.seq <= (this.#lastSeq ?? 0)) { this.#lost(); }
       this.#lastSeq = m.seq;
+    } else {
+      // An event without a number (a host that is broken) says nothing of what was lost before it:
+      // the revision stops moving, and the list is never resumed from.
+      this.#tracking = false;
+      this.#lost();
     }
     // Before anything of this event is applied or told: the snapshot under way is no longer the
     // whole of anything, so nothing may complete it, not even this event when it is the

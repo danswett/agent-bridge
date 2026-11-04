@@ -255,3 +255,15 @@ test('a synced naming the live sessions after an answer that does not say it res
   assert.equal(again.requests('sessions.subscribe').length, 2);
   assert.deepEqual(again.lastRequest('sessions.subscribe').data, { patch: true });
 });
+
+test('an event without a number says nothing of what was lost before it, so it moves no revision and the list is never resumed from', async () => {
+  const store = new SessionsStore();
+  const t = fakeTransport();
+  await subscribed(t, store, { revision: 4, count: 1 });
+  t.host({ ev: 'session.upsert', seq: 1, data: session('s1') });
+  t.host({ ev: 'sessions.synced', seq: 2, data: { revision: 4 } });
+
+  t.host({ ev: 'session.remove', data: { id: 'other', revision: 9 } });
+
+  assert.equal(store.resumeFrom('run-1'), null);
+});
