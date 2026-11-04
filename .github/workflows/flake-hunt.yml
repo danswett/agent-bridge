@@ -57,7 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, windows-11-arm]
+        os: [windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     steps:
@@ -94,6 +94,7 @@ jobs:
           }
           Write-Host "Hunting in $target"
           "HUNT_TARGET=$target" | Add-Content $env:GITHUB_ENV
+      - run: dotnet tool restore
       - name: Build
         shell: pwsh
         run: dotnet build $env:HUNT_TARGET -c Release --nologo
@@ -117,7 +118,9 @@ jobs:
             $dir = "flake-results/$env:OS/run-$i"
             New-Item -ItemType Directory -Force -Path $dir | Out-Null
             $started = Get-Date
-            dotnet test $env:HUNT_TARGET -c Release --no-build --nologo --filter $filter --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $dir --logger trx --logger "console;verbosity=minimal"
+            # #660: under dotnet-coverage, as ci.yml's product job runs them.
+            dotnet tool run dotnet-coverage collect --nologo -s build/coverage.settings.xml -f cobertura -o "$dir/coverage.cobertura.xml" "dotnet test $env:HUNT_TARGET -c Release --no-build --nologo --filter `"$filter`" --blame-hang --blame-hang-timeout 5m --blame-hang-dump-type none --results-directory $dir --logger trx"
+            Remove-Item -Force -ErrorAction SilentlyContinue "$dir/coverage.cobertura.xml"
             $code = $LASTEXITCODE
             Set-Content -LiteralPath "$dir/exit" -Value $code
             Write-Host "Run $i of $env:RUNS on $env:OS`: exit $code in $([int]((Get-Date) - $started).TotalSeconds) s"
