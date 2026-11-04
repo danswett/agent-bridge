@@ -152,6 +152,20 @@ test.describe('on a phone', () => {
     expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true }]);
   });
 
+  test('the lane\'s line keeps its room whatever it says: an entry is as tall on its way as with a busy outcome\'s words', async ({ page }) => {
+    await openDemo(page);
+    await script(page, 'busy');
+    const e = await ask(page, LAND, permission());
+    await hold(page);
+    await e.getByRole('button', { name: /^Approve once/ }).tap();
+    const status = e.locator('.needs-status');
+    await expect(status).toHaveText('');
+    const height = () => e.evaluate((el) => el.getBoundingClientRect().height);
+    const onItsWay = await height();
+    await release(page);
+    await expect(status).not.toHaveText('');
+    expect(await height()).toBe(onItsWay);
+  });
   test('Deny in the lane is the card\'s Deny', async ({ page }) => {
     await openDemo(page);
     const e = await ask(page, LAND, permission());

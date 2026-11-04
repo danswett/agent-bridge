@@ -269,3 +269,17 @@ test("a confirmed answer's value: a tap's option by its label, free text's first
 test("a confirmed answer's value draws its hidden and bidi characters as escapes (#546)", () => {
   assert.equal(answeredValue({ fields: [] }, { text: 'ok\u202Egnp.exe' }), 'ok\\u202Egnp.exe');
 });
+
+test('a wait that ends inside the one-second limit is never said: the request is back in a state already said', (t) => {
+  const { show, said, tick } = setup(t);
+  show();
+  tick(ReceiptTiming.quietMs);
+  show({ stage: 'received' });
+  tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual(said, ['Sending reply', 'Reply sent']);
+  show({ state: 'waiting', reason: 'not connected' });
+  tick(100);
+  show({ state: 'sending', reason: null });
+  tick(ReceiptTiming.announceGapMs * 2);
+  assert.deepEqual(said, ['Sending reply', 'Reply sent']);
+});

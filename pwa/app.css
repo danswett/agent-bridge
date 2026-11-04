@@ -1188,6 +1188,9 @@ summary {
 .choices.approval .choice[aria-pressed="true"].tone-deny { background: var(--ab-danger); color: var(--ab-shell); }
 .toggle:disabled, .choice:disabled, .answer input:disabled, .text-input:disabled, .number-input:disabled { cursor: default; opacity: .6; }
 .choice[aria-pressed="true"]:disabled { opacity: 1; }
+/* Tap to answer (ui.md §6.5): the option or the Needs you button that sent stays pressed, at full
+   opacity, while the rest are disabled: an answer not confirmed or stale reads as the one that went. */
+.needs-actions .button[aria-pressed="true"]:disabled { opacity: 1; }
 
 .answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .answer-actions .button { min-width: 8em; }
@@ -1218,8 +1221,13 @@ form.reply, form.answer { container: receipt / inline-size; }
    (still while this device waits for a machine that isn't connected), then the check for about a
    second once it is delivered (holdCheck), cross-fading back to the button's own glyph. The
    button never changes size or fill: on an icon button they take the glyph's place, and on a
-   button of words they sit at its inline end. */
+   button of words they sit at its inline end, in a slot kept for them at rest, so they never cover a
+   label or a badge, and the button never resizes as they come. */
 .reply .button.send, .answer .button.send, .choice, .needs-actions .button { position: relative; }
+.choice { padding-inline-end: 30px; }
+.choices.approval .choice, .answer .button.send, .needs-actions .button { padding-inline: 30px; }
+/* Its words keep their width beside the slots: Send answer is otherwise a fixed width (.button.send). */
+.answer .button.send { width: auto; }
 .reply .button.send > svg { transition: opacity var(--ab-motion-acknowledge-duration) var(--ab-motion-acknowledge-ease); }
 .reply .button.send:is([aria-busy="true"], .checked) > svg:not(.send-check) { opacity: 0; }
 .send-check { position: absolute; inset-block: 0; inset-inline-end: 8px; margin-block: auto; width: 16px; height: 16px; opacity: 0; pointer-events: none;
@@ -1234,21 +1242,25 @@ form.reply, form.answer { container: receipt / inline-size; }
   border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite;
 }
 .reply .button.send[aria-busy="true"]::after { inset: 0; margin: auto; }
-:is(.reply .button.send.still, .answer.still .button, .needs-entry.still .button)::after { animation: none; border-color: var(--ab-text3); border-right-color: transparent; }
-/* The line's room keeps the Needs you entry from growing as words come. Its words stay in the text
-   colour (.needs-status): the role colours are checked against the card, not the Needs you fill. */
-.needs-status.room { visibility: hidden; min-height: 1.5em; }
+/* Held for a machine that isn't connected, the ring stands still, in Send's ink at full opacity
+   (#617): a paler ring fell under 3:1, and in forced colours GrayText on Highlight did too. */
+:is(.reply .button.send.still, .answer.still :is(.button, .choice), .needs-entry.still .button)::after { animation: none; }
+/* The line's room keeps the Needs you entry from growing or shrinking as words come and go, whatever
+   the state: two lines in a phone's lane, where a wait or a busy outcome wraps. Its words stay in the
+   text colour (.needs-status): the role colours are checked against the card, not the Needs you fill. */
+.needs-status { min-height: 1lh; }
+@media (max-width: 759px) { .needs-status { min-height: 2lh; } }
+.needs-status.room { visibility: hidden; }
 @media (forced-colors: active) {
   /* Every word is CanvasText, so every failure says itself in words. Send's ring and check take
-     Send's own colours (currentColor, as its arrow does), but a still ring is GrayText, so a held
-     request never looks active. */
+     Send's own colours (currentColor, as its arrow does), a still ring too: it stands still. */
   :is(.answer-status, .answer-receipt, .needs-status):is(.progress, .done, .warn, .bad), :is(.answer-status, .answer-receipt, .needs-status) .receipt-more { color: CanvasText; }
   .reply .button.send[aria-busy="true"]::after,
   .answer[aria-busy="true"] .button.send:not([hidden])::after,
   .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
   .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: currentColor; border-right-color: transparent; }
-  :is(.reply .button.send.still, .answer.still .button, .needs-entry.still .button)::after { border-color: GrayText; border-right-color: transparent; }
-}.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
+}
+.question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .reply .button.send[aria-busy="true"]::after,

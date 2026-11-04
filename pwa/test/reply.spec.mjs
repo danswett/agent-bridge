@@ -95,6 +95,11 @@ test.describe('on a phone', () => {
     await reply.getByRole('button', { name: 'Send' }).tap();
     await expect(reply.locator('.reply-status')).toHaveText('The machine refused this reply: replying is not supported for codex yet; reply at the machine.');
     await expect(reply).toHaveAttribute('data-reply', 'refused');
+    // A failure stops what the person is doing: said assertively, on the page's alert line, and only
+    // there (ui.md §9.1 A6).
+    await expect(page.locator('.receipt-alert')).toHaveText('Reply: The machine refused this reply: replying is not supported for codex yet; reply at the machine.');
+    await expect(page.locator('.receipt-alert')).toHaveAttribute('role', 'alert');
+    await expect(reply.locator('.receipt-live')).not.toHaveText(/refused/);
     await expect(reply.getByRole('textbox', { name: 'Reply' })).toHaveValue('please rerun');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeEnabled();
     expect(await typed(page)).toEqual([]);
@@ -355,7 +360,23 @@ test.describe('progress', () => {
     expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: null });
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'result']);
   });
-});test.describe('from a keyboard', () => {
+  test('a reply sent during the last one\'s check shows its own ring at once, never the last one\'s check', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const send = reply.getByRole('button', { name: 'Send' });
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('first');
+    await send.click();
+    await expect(send).toHaveClass(/\bchecked\b/);
+    await hold(page);
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('second');
+    await send.click();
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    await expect(send).not.toHaveClass(/\bchecked\b/);
+    await release(page);
+  });
+});
+
+test.describe('from a keyboard', () => {
   test('Ctrl+Enter or Cmd+Enter sends, and Enter alone is a new line', async ({ page }) => {
     await openDemo(page);
     const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });

@@ -53,6 +53,13 @@ const textFile = (name, size = 40, mimeType = 'text/markdown') => ({ name, mimeT
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
 
+  test('a file being read is said once on the live line as its reading starts, as well as shown', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page);
+    await pick(page, textFile('notes.md'));
+    await expect(reply.locator('.receipt-live')).toHaveText('Reading the attachment');
+    await expect(reply.getByRole('button', { name: 'Remove notes.md' })).toBeVisible();
+  });
   test('a picked file and a pasted screenshot show as chips, go first, and reach the session as @ mentions ahead of the words', async ({ page }) => {
     await openDemo(page);
     const reply = box(page);
