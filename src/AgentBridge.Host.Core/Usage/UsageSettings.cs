@@ -29,6 +29,7 @@ public sealed partial record UsageSettings
 
     public static readonly UsageSettings Default = new();
 
+    public bool Keychain { get; init; }
     public bool Publish { get; init; } = true;
     public TimeSpan Interval { get; init; } = TimeSpan.FromSeconds(120);
     public TimeSpan IdleInterval { get; init; } = TimeSpan.FromSeconds(900);
@@ -52,6 +53,11 @@ public sealed partial record UsageSettings
                 problems.Add("usage.publish is not true or false, so no usage is read");
                 settings = settings with { Publish = false };
             }
+        }
+        if (s.TryGetProperty("keychain", out var keychain))
+        {
+            if (keychain.ValueKind is JsonValueKind.True or JsonValueKind.False) { settings = settings with { Keychain = keychain.GetBoolean() }; }
+            else { problems.Add("usage.keychain must be true or false; Keychain access is off"); }
         }
         var interval = Seconds(s, "intervalSeconds", settings.Interval, problems);
         var idle = Seconds(s, "idleIntervalSeconds", settings.IdleInterval, problems);

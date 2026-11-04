@@ -386,12 +386,20 @@ public sealed class HookRunnerTests : IDisposable
 
         using var output = new MemoryStream();
         Assert.Equal(0, HookRunner.Run(["copilot", "permission"], new Unreadable(), output, Env()));
+        Assert.Equal("event input read failed", Log().Last().GetProperty("reason").GetString());
         Assert.Equal("{}\n", Encoding.UTF8.GetString(output.ToArray()));
     }
 
     sealed class Unreadable : MemoryStream
     {
-        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("the pipe broke");
+        bool partial;
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (partial) { throw new IOException("private payload must not be logged"); }
+            partial = true;
+            buffer[offset] = (byte)'{';
+            return 1;
+        }
     }
 
     [Fact]

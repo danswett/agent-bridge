@@ -35,6 +35,8 @@ export class SessionListView {
   #drawn = false;
 
   get drawn() { return this.#drawn; }
+  #active = true;
+  #visibilityChanged = () => this.#clock();
 
   // sessions: { list() -> [{ hostId, session }], onChange } (HostSession.sessions).
   // fetchDetail(hostId, id) -> Promise<Session|null>; fetchDelegate(hostId, id, agent) ->
@@ -57,11 +59,38 @@ export class SessionListView {
       this.schedule();
     });
     // Relative times move on without any event from the host.
-    this.ticker = setInterval(() => { for (const c of this.#cards.values()) { c.refreshTimes(); } }, 15000);
+    document.addEventListener('visibilitychange', this.#visibilityChanged);
+    this.#clock();
     // What a move did, said to a screen reader.
     this.said = h('p', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
     container.after(this.said);
     this.#listen();
+  }
+
+  setActive(active) {
+    this.#active = active;
+    this.#clock();
+  }
+
+  #refreshTimes() {
+    for (const card of this.#cards.values()) {
+      if (card.element.getClientRects().length || card.view.getClientRects().length) { card.refreshTimes(); }
+    }
+  }
+
+  #clock() {
+    clearInterval(this.ticker);
+    this.ticker = null;
+    if (!this.#active || document.hidden) { return; }
+    this.#refreshTimes();
+    this.ticker = setInterval(() => this.#refreshTimes(), 15000);
+  }
+
+  dispose() {
+    this.#active = false;
+    clearInterval(this.ticker);
+    this.ticker = null;
+    document.removeEventListener('visibilitychange', this.#visibilityChanged);
   }
 
   static key(hostId, id) { return `${hostId}\n${id}`; }
@@ -85,15 +114,18 @@ export class SessionListView {
     const q = String(query ?? '').trim().toLowerCase();
     if (q === this.filter) { return; }
     this.filter = q;
+    this.terms = q ? q.split(/\s+/) : [];
     this.render();
   }
 
   filter = '';
+  terms = [];
 
   #matches(hostId, s) {
     if (!this.filter) { return true; }
     const m = this.machine(hostId);
-    return [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].some((v) => typeof v === 'string' && v.toLowerCase().includes(this.filter));
+    const fields = [s.title, s.repository, s.branch, s.cwd, s.agent, m.name].filter((v) => typeof v === 'string').map((v) => v.toLowerCase());
+    return this.terms.every((term) => fields.some((field) => field.includes(term)));
   }
 
   get moving() { return !this.filter && this.order.sort === 'yours'; }
@@ -212,20 +244,51 @@ export class SessionListView {
   // Ended · N, folded unless opened: the sessions the host removed while this page was open.
   #endedGroup(ended) {
     if (!this.#ended) {
-      this.#ended = { summary: h('summary'), list: h('ul', { class: 'ended-list' }) };
+      this.#ended = { summary: h('summary'), list: h('ul', { class: 'ended-list' }), rows: new Map(), entries: [] };
       this.#ended.el = h('details', { class: 'ended-group' }, this.#ended.summary, this.#ended.list);
+      this.#ended.el.addEventListener('toggle', () => {
+        if (this.#ended.el.open) { this.#renderEnded(); }
+      });
     }
-    const { el, summary, list } = this.#ended;
-    summary.textContent = `Ended \u00b7 ${ended.length}`;
-    const now = Date.now();
-    list.replaceChildren(...ended.map((e) => {
-      const m = this.machine(e.hostId);
-      const when = ago(e.endedAt, now);
-      return h('li', { class: 'ended', dataset: { id: e.session.id, hostId: e.hostId } },
-        h('span', { class: 'ended-title' }, e.session.title || 'Untitled session'),
-        h('span', { class: 'ended-meta' }, [m.show ? m.name : null, when ? `ended ${when}` : null].filter(Boolean).join(' \u00b7 ')));
-    }));
+    const { el, summary } = this.#ended;
+    const label = `Ended · ${ended.length}`;
+    if (summary.textContent !== label) { summary.textContent = label; }
+    this.#ended.entries = ended;
+    // Closed history needs only its count; materialize its latest contents when opened.
+    if (el.open) { this.#renderEnded(); }
     return el;
+  }
+
+  #renderEnded() {
+    const { list, rows, entries } = this.#ended;
+    const now = Date.now();
+    const keep = new Set();
+    let prev = null;
+    for (const entry of entries) {
+      const key = SessionListView.key(entry.hostId, entry.session.id);
+      keep.add(key);
+      let row = rows.get(key);
+      if (!row) {
+        row = {
+          title: h('span', { class: 'ended-title' }),
+          meta: h('span', { class: 'ended-meta' }),
+        };
+        row.el = h('li', { class: 'ended', dataset: { id: entry.session.id, hostId: entry.hostId } }, row.title, row.meta);
+        rows.set(key, row);
+      }
+      const machine = this.machine(entry.hostId);
+      const when = ago(entry.endedAt, now);
+      const title = entry.session.title || 'Untitled session';
+      const meta = [machine.show ? machine.name : null, when ? `ended ${when}` : null].filter(Boolean).join(' · ');
+      if (row.title.textContent !== title) { row.title.textContent = title; }
+      if (row.meta.textContent !== meta) { row.meta.textContent = meta; }
+      const at = prev ? prev.nextSibling : list.firstChild;
+      if (at !== row.el) { list.insertBefore(row.el, at); }
+      prev = row.el;
+    }
+    for (const [key, row] of rows) {
+      if (!keep.has(key)) { row.el.remove(); rows.delete(key); }
+    }
   }
 
   #cardOf(el) {

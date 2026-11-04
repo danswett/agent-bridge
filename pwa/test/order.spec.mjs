@@ -375,3 +375,51 @@ for (const width of [900, 1440]) {
     });
   });
 }
+
+
+test('closed ended history is deferred and unrelated live updates retain its rows', async ({ page }) => {
+  await openDemo(page);
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), CLAUDE);
+  const ended = page.locator('.ended-group');
+  await expect(ended.locator('summary')).toHaveText('Ended · 1');
+  await expect(ended.locator('.ended')).toHaveCount(0);
+  await ended.locator('summary').click();
+  await expect(ended.locator('.ended')).toHaveCount(1);
+  await page.evaluate(() => { window.__endedRow = document.querySelector('.ended'); });
+  await upsert(page, CODEX, { updatedAt: later() });
+  await expect.poll(() => page.evaluate(() => document.querySelector('.ended') === window.__endedRow)).toBe(true);
+  await ended.locator('summary').click();
+  await page.evaluate((id) => window.agentBridgeDemo.remove(id), DELEGATING);
+  await expect(ended.locator('summary')).toHaveText('Ended · 2');
+  await expect(ended.locator('.ended')).toHaveCount(1);
+  await ended.locator('summary').click();
+  await expect(ended.locator('.ended')).toHaveCount(2);
+  expect(await page.evaluate(() => document.querySelector('.ended:last-child') === window.__endedRow)).toBe(true);
+});
+
+
+for (const width of [390, 900]) {
+  test(`compact session titles use two lines with status and age aligned at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await openDemo(page);
+    await upsert(page, CODEX, { title: 'Investigate the shared deployment pipeline failures in staging' });
+    await upsert(page, DELEGATING, { title: 'Investigate the shared deployment pipeline failures in production' });
+    for (const id of [CODEX, DELEGATING]) {
+      const row = card(page, id);
+      const metrics = await row.evaluate((el) => {
+        const title = el.querySelector('.row-title');
+        const glyph = el.querySelector('.row-glyph').getBoundingClientRect();
+        const age = el.querySelector('.row-age').getBoundingClientRect();
+        const rect = title.getBoundingClientRect();
+        const line = parseFloat(getComputedStyle(title).lineHeight);
+        return { height: rect.height, line, titleY: rect.y, glyphY: glyph.y, ageY: age.y, width: el.getBoundingClientRect().width };
+      });
+      expect(metrics.width).toBeLessThanOrEqual(480);
+      expect(metrics.height).toBeGreaterThan(metrics.line);
+      expect(metrics.height).toBeLessThanOrEqual(metrics.line * 2 + 1);
+      expect(Math.abs(metrics.titleY - metrics.glyphY)).toBeLessThan(2);
+      expect(Math.abs(metrics.titleY - metrics.ageY)).toBeLessThan(2);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}

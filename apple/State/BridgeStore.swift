@@ -12,12 +12,25 @@ struct SessionEntry: Identifiable {
         host?.name ?? "Sample workspace"
     }
 
+    static func find(id: String, in sessions: [BridgeSession], host: HostStore?, ended: Bool = false) -> SessionEntry? {
+        let machineID = host?.hello?["machine"]?["id"]?.string ?? host?.id ?? "sample"
+        guard let session = sessions.first(where: { machineID + ":" + $0.id == id }) else { return nil }
+        return SessionEntry(session: session, host: host, ended: ended)
+    }
+
     init(session: BridgeSession, host: HostStore?, ended: Bool = false) {
         id = "\(host?.hello?["machine"]?["id"]?.string ?? host?.id ?? "sample"):\(session.id)"
         self.session = session
         self.host = host
         self.ended = ended
     }
+}
+
+enum SignInStage: String {
+    case relayAddress = "Relay address"
+    case browserApproval = "GitHub approval"
+    case credentialStorage = "Saving on this device"
+    case relayConnection = "Connecting to the relay"
 }
 
 @MainActor @Observable
@@ -28,6 +41,8 @@ final class BridgeStore {
     private(set) var account: RelayAccount?
     private(set) var signInCode: RelayDeviceCode?
     private(set) var signInStatus: String?
+    private(set) var signInFailureStage: SignInStage?
+    private(set) var signInRecoveryReconnect = false
     private(set) var isSigningIn = false
     private(set) var isSample = false
     private(set) var isFixture = false
@@ -67,6 +82,10 @@ final class BridgeStore {
     @ObservationIgnored private var canPollGitHub = true
     @ObservationIgnored private var hostRelays: [String: ObjectIdentifier] = [:]
 
+    var canOpenLauncher: Bool {
+        hosts.contains(where: \.canOpenLauncher)
+    }
+
     var isLive: Bool {
         hosts.contains { $0.isLive }
     }
@@ -80,6 +99,27 @@ final class BridgeStore {
             return SampleSessions.sessions.map { SessionEntry(session: $0, host: nil) }
         }
         return canonicalHosts.flatMap { host in host.sessions.map { SessionEntry(session: $0, host: host) } }
+    }
+
+    func sessionEntry(id: String?) -> SessionEntry? {
+        guard let id else { return nil }
+        if isSample, let entry = SessionEntry.find(id: id, in: SampleSessions.sessions, host: nil) {
+            return entry
+        }
+        let hosts = canonicalHosts
+        if !isSample {
+            for host in hosts {
+                if let entry = SessionEntry.find(id: id, in: host.sessions, host: host) {
+                    return entry
+                }
+            }
+        }
+        for host in hosts {
+            if let entry = SessionEntry.find(id: id, in: host.endedSessions, host: host, ended: true) {
+                return entry
+            }
+        }
+        return nil
     }
 
     var canonicalHosts: [HostStore] {
@@ -200,8 +240,10 @@ final class BridgeStore {
             observe(local)
             local.start()
         #endif
+        var connectionStage = SignInStage.relayAddress
         do {
             relayAddress = try RelayAddress.validated(relayAddress).absoluteString
+            connectionStage = .credentialStorage
             UserDefaults.standard.set(relayAddress, forKey: "bridgeRelay")
             UserDefaults.standard.set(deviceName, forKey: "bridgeDeviceName")
             if let data = try BridgeKeychain.load("account:\(relayAddress)") {
@@ -209,6 +251,8 @@ final class BridgeStore {
             } else {
                 account = nil
             }
+            signInFailureStage = nil
+            signInRecoveryReconnect = false
             activeOrigin = relayAddress
             activeAccountID = account?.accountId
             if previousScope != preferenceScope {
@@ -227,9 +271,11 @@ final class BridgeStore {
             if let account {
                 startRelay(account)
             } else {
+                signInStatus = nil
                 remoteStatus = "Sign in to connect your other machines"
             }
         } catch {
+            recordSignInFailure(connectionStage, reconnect: true, message: error.localizedDescription)
             account = nil
             activeAccountID = nil
             cachedUsage = nil
@@ -279,8 +325,11 @@ final class BridgeStore {
         let token = signInGeneration
         isSigningIn = true
         signInStatus = "Requesting a sign-in code…"
+        signInFailureStage = nil
+        signInRecoveryReconnect = false
         let address = relayAddress
         signInTask = Task {
+            var stage = SignInStage.browserApproval
             do {
                 let address = try RelayAddress.validated(address).absoluteString
                 let flow = try RelaySignIn(relay: address)
@@ -299,6 +348,7 @@ final class BridgeStore {
                 }
                 try Task.checkCancellation()
                 guard token == signInGeneration else { return }
+                stage = .credentialStorage
                 try BridgeKeychain.save(JSONEncoder().encode(signedIn), name: "account:\(address)")
                 relayAddress = address
                 account = signedIn
@@ -310,9 +360,15 @@ final class BridgeStore {
                 guard token == signInGeneration else { return }
                 isSigningIn = false
                 signInCode = nil
-                signInStatus = error.localizedDescription
+                recordSignInFailure(stage, reconnect: false, message: error.localizedDescription)
             }
         }
+    }
+
+    func recordSignInFailure(_ stage: SignInStage, reconnect: Bool, message: String) {
+        signInFailureStage = stage
+        signInRecoveryReconnect = reconnect
+        signInStatus = message
     }
 
     func cancelSignIn() {
@@ -322,6 +378,7 @@ final class BridgeStore {
         isSigningIn = false
         signInCode = nil
         signInStatus = nil
+        signInFailureStage = nil
     }
 
     func signOut() {
@@ -367,6 +424,7 @@ final class BridgeStore {
         relayTask = Task {
             var delay = 1
             while !Task.isCancelled, token == generation {
+                var stage = SignInStage.credentialStorage
                 do {
                     let identity: NoiseKeyPair
                     if let bytes = try BridgeKeychain.load("identity:\(address):\(account.accountId)") {
@@ -375,6 +433,7 @@ final class BridgeStore {
                         identity = NoiseKeyPair()
                         try BridgeKeychain.save(identity.rawRepresentation, name: "identity:\(address):\(account.accountId)")
                     }
+                    stage = .relayConnection
                     let kind = "app"
                     let connection = try RelayBridge(relay: address, account: account, identity: identity, name: name, kind: kind)
                     relay = connection
@@ -384,6 +443,7 @@ final class BridgeStore {
                     guard token == generation else { await connection.disconnect(); return }
                     delay = 1
                     remoteStatus = "Signed in as \(account.login)"
+                    signInFailureStage = nil
                     for try await event in events {
                         guard token == generation else { await connection.disconnect(); return }
                         switch event {
@@ -400,6 +460,9 @@ final class BridgeStore {
                     guard token == generation else { return }
                     relay = nil
                     hosts.filter { !$0.isLocal }.forEach { $0.stop() }
+                    signInFailureStage = stage
+                    signInRecoveryReconnect = true
+                    signInStatus = nil
                     remoteStatus = "\(error.localizedDescription) Reconnecting…"
                 }
                 do { try await Task.sleep(for: .seconds(delay)) } catch { return }
@@ -679,9 +742,10 @@ final class BridgeStore {
         onOpenSession?()
     }
 
-    private func registerSessions(_ sessions: [BridgeSession], host: HostStore) {
+    func registerSessions(_ sessions: [BridgeSession], host: HostStore) {
         let machineID = host.hello?["machine"]?["id"]?.string ?? host.id
-        let newSessions = sessions.filter { !manualOrder.contains(machineID + ":" + $0.id) }.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
+        let orderMembership = Set(manualOrder)
+        let newSessions = sessions.filter { !orderMembership.contains(machineID + ":" + $0.id) }.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
         guard !newSessions.isEmpty else { return }
         let newIDs = newSessions.map { machineID + ":" + $0.id }
         manualOrder = Array((newIDs + manualOrder).prefix(300))
@@ -693,7 +757,6 @@ final class BridgeStore {
         }
         let kept = Set(manualOrder)
         readVersions = readVersions.filter { kept.contains($0.key) }
-        pinned.formIntersection(kept)
         UserDefaults.standard.set(manualOrder, forKey: preferenceScope + ".order")
         UserDefaults.standard.set(readVersions, forKey: preferenceScope + ".read")
         UserDefaults.standard.set(Array(pinned), forKey: preferenceScope + ".pins")

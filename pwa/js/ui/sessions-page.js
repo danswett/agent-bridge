@@ -286,6 +286,7 @@ export class SessionsPage {
         this.launchPanel.setOpen(route === 'launch');
         const back = route === 'sessions' && was !== 'sessions';
         was = route;
+        this.view.setActive(route === 'sessions');
         // Back on Sessions, what it shows is seen now.
         if (route === 'sessions') {
           this.#navigate(() => this.#route(rest));
@@ -318,6 +319,7 @@ export class SessionsPage {
         globalThis.addEventListener?.('focus', back, { signal: this.#shown.signal });
       }
       this.launchPanel.setOpen(shell.route === 'launch');
+      this.view.setActive(shell.route === 'sessions');
       if (shell.route === 'sessions') { this.#route(shell.rest); }
       this.view.setFilter(shell.query);
       this.#delegateBack($('session-views'));
@@ -674,6 +676,7 @@ export class SessionsPage {
 
   // Everything tied to the signed-in account goes with it.
   clear() {
+    this.view.dispose();
     this.#unroute?.();
     this.#unroute = null;
     this.#listening?.abort();
@@ -786,7 +789,17 @@ export class SessionsPage {
     if (query && n > 0) {
       // Search finds nothing among sessions that are there.
       empty.hidden = this.view.shownCount !== 0;
-      empty.textContent = 'No sessions match your search.';
+      if (!empty.querySelector('.clear-search')) {
+        const clear = h('button', { type: 'button', class: 'clear-search' }, 'Clear search');
+        clear.addEventListener('click', () => {
+          const input = $('search');
+          if (input) { input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); }
+          this.view.setFilter('');
+          this.shell?.openSearch();
+          input?.focus();
+        });
+        empty.replaceChildren(h('span', {}, 'No sessions match your search.'), ' ', clear);
+      }
       this.onRendered(n);
       return;
     }

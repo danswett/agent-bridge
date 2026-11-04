@@ -81,7 +81,7 @@ public static class HookRunner
                     SpoolContract.Record(root, agent, hook, "reply", "--fallback", env.Now(), env.ElapsedMs());
                 }
                 var drain = ReadInput(stdin, env.FallbackDrain);
-                if (drain.Finished && agent == "codex" && drain.Whole
+                if (drain.Finished && agent == "codex" && drain.Problem is null
                     && RuntimeRoot(env.ExecutableDirectory).Root is { } runtimeRoot && SpoolContract.CodexSessionId(Trim(drain.Bytes)) is { } session)
                 {
                     SpoolContract.WithdrawCodexApproval(runtimeRoot, session);
@@ -93,7 +93,7 @@ public static class HookRunner
             // a hook waiting for an end that never comes. Stopped at the deadline, the read is left
             // behind; the process ends without it.
             var wait = letThrough && env.LetThroughInputWait < env.InputWait ? env.LetThroughInputWait : env.InputWait;
-            var (finished, utf8, whole) = ReadInput(stdin, wait);
+            var (finished, utf8, problem) = ReadInput(stdin, wait);
 
             var (runtime, rootProblem) = RuntimeRoot(env.ExecutableDirectory);
             if (runtime is null)
@@ -111,10 +111,10 @@ public static class HookRunner
             {
                 var (alive, why) = SpoolContract.ConsumerState(runtime, env.Now());
                 var trimmed = Trim(utf8);
-                if (agent == "codex" && finished && whole) { (codexSession, codexEvent) = SpoolContract.CodexEvent(trimmed); }
+                if (agent == "codex" && finished && problem is null) { (codexSession, codexEvent) = SpoolContract.CodexEvent(trimmed); }
                 if (!alive) { reason = why; }
                 else if (!finished) { reason = $"event not finished within {wait.TotalSeconds:0.###}s"; }
-                else if (!whole) { reason = "event too large"; }
+                else if (problem is not null) { reason = problem; }
                 else if (!SpoolContract.IsJson(trimmed)) { reason = "unusable event"; }
                 else
                 {
@@ -196,21 +196,21 @@ public static class HookRunner
     // Any other is read on a thread of its own rather than the pool's, so the deadline measures
     // the writer, not how soon a busy pool gets round to starting the read; left behind at the
     // deadline, that thread is a background one and does not hold the process.
-    static (bool Finished, byte[] Bytes, bool Whole) ReadInput(Stream stdin, TimeSpan wait)
+    static (bool Finished, byte[] Bytes, string? Problem) ReadInput(Stream stdin, TimeSpan wait)
     {
         if (stdin.CanSeek)
         {
-            var (bytes, whole) = ReadAll(stdin, SpoolContract.MaxEventBytes);
-            return (true, bytes, whole);
+            var (bytes, problem) = ReadAll(stdin, SpoolContract.MaxEventBytes);
+            return (true, bytes, problem);
         }
         var read = Task.Factory.StartNew(() => ReadAll(stdin, SpoolContract.MaxEventBytes), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
-        return read.Wait(wait) ? (true, read.Result.Bytes, read.Result.Whole) : (false, [], false);
+        return read.Wait(wait) ? (true, read.Result.Bytes, read.Result.Problem) : (false, [], null);
     }
 
     // Up to max bytes of stdin, and whether that was all of it. The budget is checked before
     // each read and bounds it, so a writer that keeps the pipe open once max bytes have come
     // cannot hold the hook waiting for one more; an event that fills it is not taken.
-    static (byte[] Bytes, bool Whole) ReadAll(Stream stdin, int max)
+    static (byte[] Bytes, string? Problem) ReadAll(Stream stdin, int max)
     {
         try
         {
@@ -219,13 +219,13 @@ public static class HookRunner
             while (true)
             {
                 var room = max - (int)copy.Length;
-                if (room <= 0) { return (copy.ToArray(), false); }
+                if (room <= 0) { return ([], "event too large"); }
                 var read = stdin.Read(buffer, 0, Math.Min(buffer.Length, room));
-                if (read <= 0) { return (copy.ToArray(), true); }
+                if (read <= 0) { return (copy.ToArray(), null); }
                 copy.Write(buffer, 0, read);
             }
         }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or NotSupportedException) { return ([], true); }
+        catch (Exception e) when (e is IOException or ObjectDisposedException or NotSupportedException) { return ([], "event input read failed"); }
     }
 
     static ReadOnlySpan<byte> Trim(byte[] bytes)

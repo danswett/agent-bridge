@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Stacked product PRs need the same Windows and Linux checks as the final merge.
+    branches: [main, 'codex/**']
     # ready_for_review on top of the defaults: a draft runs only the fast ring (the plan job), so
     # marking it ready must run the PR gate on the same head without waiting for another push.
     types: [opened, synchronize, reopened, ready_for_review]

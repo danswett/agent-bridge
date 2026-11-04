@@ -22,6 +22,10 @@ public sealed class FakeGitHub
 
     readonly ConcurrentDictionary<string, Code> codes = new();
     readonly ConcurrentDictionary<string, GitHubUser> tokens = new();
+    public string? DeviceResponseOverride { get; set; }
+    public string? TokenResponseOverride { get; set; }
+    public string? RevocationRedirect { get; set; }
+    public int? UserStatusOverride { get; set; }
     public ConcurrentBag<string> Revoked { get; } = [];
     public ConcurrentBag<string> Issued { get; } = [];
     public string Url { get; private set; } = "";
@@ -34,14 +38,15 @@ public sealed class FakeGitHub
         var app = b.Build();
         app.MapPost("/login/device/code", () =>
         {
+            if (DeviceResponseOverride is { } content) { return Results.Text(content, "application/json"); }
             var device = Convert.ToHexString(RandomNumberGenerator.GetBytes(20)).ToLowerInvariant();
             var user = $"{RandomNumberGenerator.GetHexString(4)}-{RandomNumberGenerator.GetHexString(4)}".ToUpperInvariant();
             codes[device] = new Code { UserCode = user };
-            // Interval 0: the client polls at once, and the tests approve before it does.
-            return Results.Ok(new { device_code = device, user_code = user, verification_uri = $"{Url}/login/device", interval = 0, expires_in = 900 });
+            return Results.Ok(new { device_code = device, user_code = user, verification_uri = "https://github.com/login/device", interval = 1, expires_in = 900 });
         });
         app.MapPost("/login/oauth/access_token", async (HttpRequest req) =>
         {
+            if (TokenResponseOverride is { } content) { return Results.Text(content, "application/json"); }
             var form = await req.ReadFormAsync();
             if (!codes.TryGetValue(form["device_code"].ToString(), out var c)) { return Results.Ok(new { error = "incorrect_device_code" }); }
             if (c.Denied) { return Results.Ok(new { error = "access_denied" }); }
@@ -53,11 +58,13 @@ public sealed class FakeGitHub
             return Results.Ok(new { access_token = token, token_type = "bearer", scope = "" });
         });
         app.MapGet("/user", (HttpRequest req) =>
+            UserStatusOverride is int status ? Results.StatusCode(status) :
             tokens.TryGetValue(req.Headers.Authorization.ToString().Replace("Bearer ", ""), out var u)
                 ? Results.Ok(new { id = u.Id, login = u.Login })
                 : Results.Unauthorized());
         app.MapDelete("/applications/{client}/token", async (HttpRequest req) =>
         {
+            if (RevocationRedirect is { } redirect) { return Results.Redirect(redirect, preserveMethod: true); }
             var body = await JsonDocument.ParseAsync(req.Body);
             var t = body.RootElement.GetProperty("access_token").GetString()!;
             tokens.TryRemove(t, out _);
@@ -89,7 +96,7 @@ public sealed class FakePushService
         b.WebHost.UseUrls("http://127.0.0.1:0");
         b.Logging.ClearProviders();
         var app = b.Build();
-        app.MapPost("/{**path}", async (HttpRequest req) =>
+        app.MapMethods("/{**path}", ["POST", "DELETE"], async (HttpRequest req) =>
         {
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);

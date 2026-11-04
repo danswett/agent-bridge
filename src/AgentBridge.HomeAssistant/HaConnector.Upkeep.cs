@@ -13,6 +13,21 @@ namespace AgentBridge.HomeAssistant;
 public sealed partial class HaConnector
 {
     HaLiveness? liveness;
+    long failedUpkeepReads;
+    DateTimeOffset? lastProbeWarning;
+
+    void NoteUpkeepReadFailure()
+    {
+        var now = time.GetUtcNow();
+        long count;
+        lock (gate)
+        {
+            count = ++failedUpkeepReads;
+            if (lastProbeWarning is { } last && now - last < TimeSpan.FromMinutes(1)) { return; }
+            lastProbeWarning = now;
+        }
+        log($"Home Assistant session upkeep could not read state ({count} failed reads since starting); retrying at the next check.");
+    }
     // The next start publishes the machine again for a host that never stopped (its online sensor
     // went, most likely to the dashboard's X): its sessions keep what they know.
     bool republishing;
@@ -245,7 +260,7 @@ public sealed partial class HaConnector
             var sentinel = ServesAnswers ? SessionEntities.Reply(p.Node) : SessionEntities.Status(p.Node);
             HaState? state;
             try { state = await ha.GetStateAsync(sentinel, ct); }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { continue; }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { NoteUpkeepReadFailure(); continue; }
             var shortId = id[..Math.Min(8, id.Length)];
             if (state is null)
             {
@@ -302,7 +317,7 @@ public sealed partial class HaConnector
         {
             HaState? decision;
             try { decision = await ha.GetStateAsync(SessionEntities.Decision(p.Node), ct); }
-            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { return; }
+            catch (Exception e) when (e is not (OperationCanceledException or AgentHaBridgeRunning)) { NoteUpkeepReadFailure(); return; }
             // The selector gone on its own, the reply box still there: it alone is declared again.
             // The rest of the card, choices included, is still there and is left as it is: published
             // again, its choice slots would get the first publication's options.

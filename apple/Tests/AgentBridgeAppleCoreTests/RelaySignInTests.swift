@@ -368,3 +368,21 @@ func signInRejectsVerificationURLsOutsideUncredentialedGitHubHTTPS(_ url: String
         #expect(throws: RelayError.invalidURL) { try RelayAddress.validated(address) }
     }
 }
+
+@Test func signInAcceptsOnlyTheExactDevicePageFromTheRelay() async throws {
+    struct Row: Decodable { let uri: String; let valid: Bool }
+    let file = try #require(Bundle.module.url(forResource: "device-pages", withExtension: "json"))
+    for row in try JSONDecoder().decode([Row].self, from: Data(contentsOf: file)) {
+        var payload = try #require(JSONSerialization.jsonObject(with: Data(validDeviceCode.utf8)) as? [String: Any])
+        payload["verificationUri"] = row.uri
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let http = SignInHTTP([.init(200, String(decoding: body, as: UTF8.self))])
+        let (client, session) = try http.client(SignInClock())
+        defer { session.invalidateAndCancel(); SignInURLProtocol.fixtures.remove(http) }
+        if row.valid {
+            #expect(try await client.start().verificationUri.absoluteString == row.uri)
+        } else {
+            await #expect(throws: RelayError.invalidMessage) { try await client.start() }
+        }
+    }
+}

@@ -1972,6 +1972,7 @@ test('search hides rows without fading copies of them, and a session that ends f
   // Gone, it is listed under Ended, which has no card of its own to fade.
   await page.evaluate(() => window.agentBridgeDemo.remove('demo-hidden'));
   await expect(row(page, 'demo-hidden')).toHaveCount(0);
+  await page.locator('.ended-group summary').click();
   await expect(page.locator('.ended[data-id="demo-hidden"]')).toHaveCount(1);
   expect(await fades()).toBe(before + 1);
   await upsert(page, CODEX, { updatedAt: later(2000) });

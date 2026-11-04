@@ -93,11 +93,14 @@
         <p id="signin-error" class="note warn" role="alert" hidden></p>
         <div class="row">
           <button type="button" id="signin-button" class="button">Sign in with GitHub</button>
+          <button type="button" id="cancel-signin" class="button secondary" hidden>Cancel sign-in</button>
           <a class="button secondary" href="?demo=1">Try the demo</a>
         </div>
         <div id="code-box" hidden>
           <p>Open <a id="verify" target="_blank" rel="noopener noreferrer">github.com/login/device</a> and enter this code:</p>
           <p class="code" id="code" aria-live="polite"></p>
+          <a id="copy-open" class="button" target="_blank" rel="noopener noreferrer">Copy code and open GitHub</a>
+          <p id="copy-status" class="note" role="status"></p>
           <p class="note" role="status">Waiting for GitHub…</p>
         </div>
       </section>

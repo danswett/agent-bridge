@@ -6,7 +6,7 @@ using Xunit;
 // The window's list of cards, over a host on a real pipe: its order, holding still while
 // someone types, toasts only for news, and a toast's session opened once it arrives.
 [Trait("Category", "Network")]
-public sealed class MainTests : IAsyncLifetime
+public sealed class MainTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
     readonly FakeHost host = new();
     readonly FakeTimeProvider clock = new(Make.T0);
@@ -379,11 +379,75 @@ public sealed class MainTests : IAsyncLifetime
         Assert.Equal(["plan"], Find("migration").Select(h => h.SessionId));
         Assert.Equal(["fix"], Find("plan ha-bridge").Select(h => h.SessionId));
         Assert.Equal(["fix"], Find("fix/").Select(h => h.SessionId));
+        Assert.Equal(Find("plan ha-bridge"), Find("plan\tha-bridge"));
+        Assert.Equal(Find("plan ha-bridge"), Find("  plan\r\nha-bridge  "));
+        Assert.Equal(Find("plan migration"), Find("plan\tmigration"));
+        Assert.Empty(Find("\t\r\n"));
         Assert.Empty(Find("plan nowhere"));
         Assert.Empty(Find("   "));
         var plain = Find("a session");
         Assert.Equal(["asking", "old"], plain.Select(h => h.SessionId));
         Assert.All(plain, h => Assert.Equal(("A session", "danswett/agent-bridge", (string?)null), (h.Title, h.Detail, h.Machine)));
+    }
+
+    [Fact]
+    public async Task Search_ranks_matching_rows_by_prefix_time_title_and_id_before_capping()
+    {
+        await SnapshotAsync();
+        foreach (var session in new[] {
+            Make.Session("z", title: "Needle zebra", updated: Make.T0),
+            Make.Session("b", title: "Needle alpha", updated: Make.T0),
+            Make.Session("a", title: "Needle alpha", updated: Make.T0),
+            Make.Session("new", title: "Needle recent", updated: Make.T0.AddMinutes(1)),
+            Make.Session("contains", title: "A needle", updated: Make.T0.AddMinutes(2)),
+            Make.Session("unmatched", title: "Something else", updated: Make.T0.AddMinutes(3)) })
+        {
+            await host.SendAsync(Events.SessionUpsert, session);
+        }
+        await Wait.UntilAsync(() => main.Sessions.Count == 8, "the ranked cards");
+        Assert.Equal(["new", "a", "b", "z"], TestUi.Read(() => main.Search("needle", most: 4).Select(h => h.SessionId).ToArray()));
+    }
+
+    [Fact]
+    public async Task Search_on_a_large_fleet_preserves_results_while_ranking_only_matches()
+    {
+        await SnapshotAsync();
+        const int count = 2000;
+        for (var i = 0; i < count; i++)
+        {
+            await host.SendAsync(Events.SessionUpsert, Make.Session($"fleet-{i:D5}", title: i % 100 == 0 ? $"Needle {i}" : $"Unrelated {i}", updated: Make.T0.AddSeconds(i)));
+            if (i % 20 == 19) { await Wait.UntilAsync(() => main.Sessions.Count == i + 3, "the fleet batch"); }
+        }
+        await Wait.UntilAsync(() => main.Sessions.Count == count + 2, "the synthetic fleet");
+        TestUi.Read(() =>
+        {
+            IReadOnlyList<SearchHit> Before()
+            {
+                var words = new[] { "needle" };
+                var listed = main.AllCards.OrderByDescending(c => c.Session.UpdatedAt).ThenBy(c => c.Title, StringComparer.CurrentCulture).ThenBy(c => c.Id, StringComparer.Ordinal).ToList();
+                var hits = new List<(SearchHit Hit, bool Prefix)>();
+                foreach (var card in listed)
+                {
+                    var session = card.Session;
+                    var haystack = string.Join(' ', new[] { card.Title, session.Repository, session.Branch, Words.LastSegment(session.Cwd), card.AgentName, main.Local.Name });
+                    if (!words.All(w => haystack.Contains(w, StringComparison.CurrentCultureIgnoreCase))) { continue; }
+                    var detail = string.Join(" · ", new[] { session.Repository ?? Words.LastSegment(session.Cwd) }.Where(x => !string.IsNullOrEmpty(x)));
+                    hits.Add((new SearchHit(null, card.Id, card.Title, detail), card.Title.StartsWith("needle", StringComparison.CurrentCultureIgnoreCase)));
+                }
+                return [.. hits.OrderByDescending(h => h.Prefix).Select(h => h.Hit).Take(8)];
+            }
+            Assert.Equal(Before(), main.Search("needle"));
+            foreach (var (name, search) in new (string, Func<IReadOnlyList<SearchHit>>)[] { ("before", Before), ("after", () => main.Search("needle")) })
+            {
+                for (var i = 0; i < 10; i++) { search(); }
+                var allocated = GC.GetAllocatedBytesForCurrentThread();
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                for (var i = 0; i < 100; i++) { search(); }
+                watch.Stop();
+                output.WriteLine($"{name}: 2002 cards, 20 matches, 100 queries, {watch.Elapsed.TotalMilliseconds:F2} ms, {GC.GetAllocatedBytesForCurrentThread() - allocated} allocated bytes");
+            }
+            return true;
+        });
     }
 
     [Fact]

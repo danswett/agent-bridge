@@ -609,6 +609,15 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .row-text { grid-column: 2; grid-row: 1; min-width: 0; display: grid; }
 .row-line1 { display: flex; align-items: center; min-width: 0; }
 .row-title { min-width: 0; font-size: var(--type-row); line-height: var(--type-row-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Desktop sidebars are compact too, so titles get at most two lines at every width.
+   Do not use inline-size containment here: WebKit can transiently clamp the list's scroll
+   during row removal, hiding an approval button's movement from the click guard. */
+.row-title {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  white-space: normal; overflow-wrap: anywhere;
+}
+.row-line1 { align-items: flex-start; }
+.row-line1 .unread-dot { margin-top: calc((var(--type-row-line) - 6px) / 2); }
 .session.unread .row-title { font-weight: 600; }
 /* Line 2: one line, cut short at its end; a separator never starts it. */
 .row-facts {

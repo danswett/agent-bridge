@@ -116,7 +116,10 @@
                             <Button Content="Copy code and open the page" Style="{StaticResource AccentButtonStyle}" Click="OnOpenSignIn" />
                             <Button Content="Cancel" Click="OnCancelSignIn" />
                         </local:WrapRow>
-                        <TextBlock Style="{StaticResource AbSecondaryText}" Text="{x:Bind ViewModel.SignInUri, Mode=OneWay}" />
+                        <TextBlock Style="{StaticResource AbSecondaryText}" IsTextSelectionEnabled="True" Text="{x:Bind ViewModel.SignInUri, Mode=OneWay}" />
+                        <TextBlock TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"
+                            Text="{x:Bind ViewModel.SignInActionStatus, Mode=OneWay}"
+                            Visibility="{x:Bind local:Ui.Some(ViewModel.SignInActionStatus), Mode=OneWay}" />
                     </StackPanel>
                 </Border>
                 <TextBlock
@@ -213,15 +216,23 @@
                     <TextBlock Style="{StaticResource SubtitleTextBlockStyle}" Text="Host log" />
                     <Button HorizontalAlignment="Right" Content="Refresh" Click="OnRefreshLog" />
                 </Grid>
+                <CheckBox
+                    Content="Wrap lines"
+                    IsChecked="True"
+                    AutomationProperties.AutomationId="WrapHostLog"
+                    Checked="OnWrapLog"
+                    Unchecked="OnWrapLog" />
                 <TextBox
+                    x:Name="HostLog"
                     IsReadOnly="True"
                     AcceptsReturn="True"
-                    TextWrapping="NoWrap"
+                    TextWrapping="Wrap"
                     MaxHeight="360"
                     FontFamily="{StaticResource MonoFontFamily}"
                     FontSize="12"
                     AutomationProperties.AutomationId="HostLog"
-                    ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.HorizontalScrollMode="Disabled"
                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                     Text="{x:Bind ViewModel.Log, Mode=OneWay}" />
             </StackPanel>

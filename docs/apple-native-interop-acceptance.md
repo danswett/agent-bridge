@@ -96,3 +96,49 @@ acceptance check. The Swift probe can also test the fixture's temporary local
 socket directly. Physical iPhone/iPad acceptance requires a separately authorized
 relay reachable from those devices with valid trust; a device's `localhost` is
 the device itself, and this fixture listens only on the Mac's loopback interface.
+
+## Physical reply and receipt recovery
+
+Use the named development iPad, a connected Mac host, and a **new** session in
+the approved Bridge Sessions workspace. Keep the host permission policy on Ask.
+A Windows host, a demo fixture, or an existing user conversation cannot supply
+this evidence.
+
+1. Verify the iPad appears as a physical device in Xcode, then activate the
+   signed `dev.agentbridge.mobile` app. Open **Launch or Resume** and select
+   **This Mac**. If it is missing, capture the host's capability/hold reason
+   before proceeding. A roster entry alone does not grant launch permission.
+2. Select **New session**, Copilot, and **Bridge Sessions**. Use a harmless
+   opening prompt that asks for “READY” and prohibits tools or file changes.
+   Record the launch receipt and open that exact session.
+3. Send a unique marker once from the anchored composer. Record the reply
+   receipt, the agent's response and the session identity. In the corresponding
+   Mac session transcript, count *user turns* containing the marker. Expect one.
+   The assistant echo and UI labels are not additional user turns.
+4. For the loss case use a second marker and a disposable relay/host connection
+   with a one-shot fault that drops the host-to-client receipt *after* dispatch.
+   After reconnecting, retry the pending action with its original request ID.
+   Compare the receipt with the host's remembered result and count that marker
+   in the same transcript. Do not create a new reply or interrupt the shared
+   relay to simulate a lost receipt.
+5. Record which steps actually ran, host/client revisions, receipt text and
+   per-marker counts. An unconfirmed outcome, a read-only host, or a missing
+   receipt fault means that part of the test stays open.
+
+**November 2, 2026 physical result.** The signed iPadOS 27.2 development client
+(debug image UUID `7BE52F8F-72C0-36E8-A402-69C38BC1598B`) launched a fresh
+Copilot session in Bridge Sessions on Mac host `e153a80` with permissions set
+to Ask. The opening turn received READY. The tester asserted the complete draft
+before sending `Reply with BRIDGE-1102-ACK`. The physical screen showed
+**Delivered**, the Mac transcript contained exactly one user turn equal to that
+text, and the assistant answered `BRIDGE-1102-ACK`. A preliminary UI test had
+sent only the shorter `Reply with BRIDGE-1102`; that was a separate turn.
+
+For recovery, a temporary signed test build based on `ce059c3` discarded the
+real delivered result at the client before applying it and reconnected only
+that session's client transport. The fault matched the disposable session and
+second marker once. The iPad showed **Check Delivery Again**. Tapping it retried
+the retained operation and showed **Delivered**. The Mac recorded one user turn
+equal to `Reply only RECOVERY1102` and one agent answer `RECOVERY1102`.
+The ordinary signed client was restored afterward. This exercises loss at the
+client's receipt boundary. The shared relay was not faulted.

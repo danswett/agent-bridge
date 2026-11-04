@@ -437,14 +437,17 @@ static partial class SelfTest
             var line2 = ById<TextBlock>(row, "RowFacts");
             var text = line2 is null ? "" : Text(line2);
             facts.Add(text);
-            var onLine1 = glyph is not null && title is not null && Math.Abs(Top(glyph) + glyph.ActualHeight / 2 - (Top(title) + title.ActualHeight / 2)) <= 1;
-            var oneLine = line2 is not null && line2.ActualHeight <= line2.FontSize * 2 && Top(line2) > Top(title);
+            var onLine1 = glyph is not null && title is not null && Math.Abs(Top(glyph) + glyph.ActualHeight / 2 - (Top(title) + title.LineHeight / 2)) <= 1;
+            var oneLine = line2 is not null && line2.ActualHeight <= line2.FontSize * 2 && Top(line2) >= Top(title) + (title?.ActualHeight ?? 0) - 1;
+            var compactTitle = title is not null && title.MaxLines == (row.ActualWidth <= 480 ? 2 : 1) && title.TextWrapping == (row.ActualWidth <= 480 ? TextWrapping.Wrap : TextWrapping.NoWrap);
+            var trailing = card.Unread ? ById<FrameworkElement>(row, "Unread") : ById<FrameworkElement>(row, "Age");
+            var trailingOnLine1 = trailing is null || trailing.Visibility != Visibility.Visible || Math.Abs(Top(trailing) + trailing.ActualHeight / 2 - (Top(title) + (title?.LineHeight ?? 20) / 2)) <= 1;
             var weight = title?.FontWeight.Weight == (card.Unread ? Microsoft.UI.Text.FontWeights.SemiBold.Weight : Microsoft.UI.Text.FontWeights.Normal.Weight);
             var never = card.Session.Model is { Length: > 0 } model && text.Contains(model, StringComparison.Ordinal)
                 || card.Session.ProcessId is { } pid && text.Contains(pid.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
-            if (!onLine1 || !oneLine || !weight || never || text.Split(" · ").Length > 2 || text.StartsWith('·') || text.Length == 0) { crooked.Add(card.Id); }
+            if (!onLine1 || !oneLine || !compactTitle || !trailingOnLine1 || !weight || never || text.Split(" · ").Length > 2 || text.StartsWith('·') || text.Length == 0) { crooked.Add(card.Id); }
         }
-        check(rows.Count > 0 && crooked.Count == 0, $"draws every row as two lines: the glyph on line 1, then at most two facts on one line, never the model or the pid{(crooked.Count > 0 ? $": not {string.Join(", ", crooked)}" : "")} ({string.Join(" | ", facts)})");
+        check(rows.Count > 0 && crooked.Count == 0, $"draws every row with adaptive titles: glyph and age on title line 1, then at most two facts on one line, never the model or the pid{(crooked.Count > 0 ? $": not {string.Join(", ", crooked)}" : "")} ({string.Join(" | ", facts)})");
     }
 
     // The status words in their tone's text colour on every row and in the session's header, and

@@ -378,6 +378,7 @@ test.describe('a machine back from offline', () => {
     await expect(sv(page, LAPTOP, 'laptop-gone-q').locator('.question')).toHaveCount(0);
     await laptop(page, 'releaseSnapshot');
     await expect(card(page, LAPTOP, IDLE)).toHaveCount(0);
+    await page.locator('.ended-group summary').click();
     await expect(page.locator('.ended[data-id="laptop-copilot-1"]')).toHaveCount(1);
     await expect(page.locator('.session[data-stale]')).toHaveCount(0);
 

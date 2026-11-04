@@ -15,6 +15,6 @@ let package = Package(
         .testTarget(name: "AgentBridgeInteropTests", dependencies: ["AgentBridgeInterop"]),
         .testTarget(name: "AgentBridgeClientStateTests", dependencies: ["AgentBridgeClientState", "AgentBridgeAppleCore"]),
         .testTarget(name: "AgentBridgeAppleCoreTests", dependencies: ["AgentBridgeAppleCore"],
-                    resources: [.copy("Resources/noise-xx-p256-vectors.json")]),
+                    resources: [.copy("Resources/noise-xx-p256-vectors.json"), .copy("Resources/device-pages.json")]),
     ]
 )

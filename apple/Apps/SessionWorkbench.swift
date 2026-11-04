@@ -11,9 +11,10 @@ struct SessionWorkbench: View {
     @State private var needsOnly = false
     @FocusState private var searchFocused: Bool
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selected: SessionEntry? {
-        (store.entries + store.endedEntries).first { $0.id == store.selectedSessionID }
+        store.sessionEntry(id: store.selectedSessionID)
     }
 
     private var needsYou: [SessionEntry] {
@@ -66,7 +67,7 @@ struct SessionWorkbench: View {
                 }
                 if search.isEmpty, !needsOnly, !store.endedEntries.isEmpty {
                     Section("Recently ended") {
-                        ForEach(store.endedEntries.filter { store.includesSelectedMachine($0.host) }) { entry in row(entry).opacity(0.6) }
+                        ForEach(store.endedEntries.filter { store.includesSelectedMachine($0.host) }) { entry in row(entry) }
                     }
                 }
             }
@@ -101,7 +102,7 @@ struct SessionWorkbench: View {
                             Button("Connection Settings", systemImage: "network") { showingConnection = true }
                             Button("Reconnect", systemImage: "arrow.clockwise", action: store.connect).disabled(store.isSample || store.isFixture)
                             Button("Launch or Resume", systemImage: "plus") { showingLaunch = true }
-                                .disabled(!store.hosts.contains { $0.can("sessions.launch") || $0.capabilities.contains("launch.trust") || $0.attempts["launch"] != nil })
+                                .disabled(!store.canOpenLauncher)
                         } label: { Image(systemName: "line.3.horizontal.decrease") }
                             .accessibilityLabel("Session filters and connections")
                     }
@@ -148,7 +149,7 @@ struct SessionWorkbench: View {
     private func row(_ entry: SessionEntry) -> some View {
         NavigationLink(value: entry.id) {
             VStack(alignment: .leading, spacing: 4) {
-                SessionRow(session: entry.session)
+                SessionRow(session: entry.session, ended: entry.ended)
                 HStack(spacing: 6) {
                     if store.pinned.contains(entry.id) {
                         Image(systemName: "pin.fill")
@@ -264,14 +265,30 @@ struct SessionWorkbench: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge", systemImage: "terminal")
+            VStack(spacing: 12) {
+                if store.isConnecting, !reduceMotion {
+                    ProgressView().controlSize(.large)
+                } else {
+                    Image(systemName: store.isConnecting ? "network" : store.isLive ? "tray" : "person.crop.circle.badge.questionmark")
+                        .font(.largeTitle)
+                        .accessibilityHidden(true)
+                }
+                Text(store.isConnecting ? "Connecting" : store.isLive ? "No active sessions" : "Connect to Agent Bridge")
+            }
         } description: {
             if store.account == nil, !store.isSample, let status = store.signInStatus {
                 Text(status)
             } else {
                 Text(store.isLive ? "Sessions appear when an agent starts on a connected machine." : "Sign in with the GitHub account you use on your host.")
             }
+            if store.isLive, let reason = store.canonicalHosts.compactMap(\.readOnlyReason).first {
+                Text("This machine is read-only: \(reason)")
+            }
         } actions: {
+            if store.isLive, store.canOpenLauncher {
+                Button("Launch or Resume", systemImage: "plus") { showingLaunch = true }
+                    .buttonStyle(.borderedProminent)
+            }
             if !store.isSample, !store.isFixture, store.account == nil {
                 Button(store.isSigningIn ? "Continue Sign-In" : "Sign In with GitHub") {
                     showingConnection = true

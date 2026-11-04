@@ -44,6 +44,13 @@ public sealed partial class SessionRow : UserControl
         set => SetValue(CardProperty, value);
     }
 
+    void OnRowSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var compact = e.NewSize.Width <= 480;
+        SessionTitle.MaxLines = compact ? 2 : 1;
+        SessionTitle.TextWrapping = compact ? TextWrapping.Wrap : TextWrapping.NoWrap;
+    }
+
     public static FontWeight Weight(bool unread) => unread ? FontWeights.SemiBold : FontWeights.Normal;
     public static string Separator(string? place) => string.IsNullOrEmpty(place) ? "" : " · ";
     public static string WordsState(StatusTone tone) => $"Words{tone}";

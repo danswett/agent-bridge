@@ -62,6 +62,7 @@ public sealed class CopilotUsageCollector(UsageOptions options, IUsageHttp http,
             }
             catch (Exception e) when (e is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
+                if (e is UsageHttpException { Status: 401 }) { credentials.RejectMacToken(login, host, token); }
                 failure = $"The Copilot quota could not be read: {UsageFetch.Describe(e)}";
             }
         }

@@ -31,13 +31,15 @@ sealed class VelopackUpdater(Func<bool> prereleases, IUiDispatcher ui, string pr
     UpdateManager Manager()
     {
         var feed = File.Exists(FeedFile) ? File.ReadAllText(FeedFile).Trim() : "";
-        var key = $"{feed}|{prereleases()}";
+        var developmentFeeds = Environment.GetEnvironmentVariable(UpdateFeedPolicy.DevelopmentVariable) == "1";
+        var webFeed = UpdateFeedPolicy.WebUri(feed, developmentFeeds);
+        var key = $"{feed}|{prereleases()}|{developmentFeeds}";
         if (manager is not null && source == key) { return manager; }
         IUpdateSource from = feed.Length == 0
             ? new GithubSource(Repository, null, prereleases(), null)
-            : Uri.TryCreate(feed, UriKind.Absolute, out var u) && u.Scheme is "http" or "https"
-                ? new SimpleWebSource(feed)
-                : new SimpleFileSource(new DirectoryInfo(feed));
+            : webFeed is not null
+                ? new SimpleWebSource(webFeed.AbsoluteUri, new OverrideFeedDownloader(developmentFeeds))
+                : new SimpleFileSource(new DirectoryInfo(UpdateFeedPolicy.LocalDirectory(feed)));
         source = key;
         pending = null;
         downloaded = null;

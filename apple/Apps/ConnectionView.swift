@@ -13,6 +13,7 @@ struct ConnectionView: View {
     @State private var deviceName: String
     @State private var profile: String
     @State private var copiedCode = false
+    @FocusState private var profileFocused: Bool
     @AppStorage("bridge.reading.showDetails") private var showDetails = true
 
     init(store: BridgeStore) {
@@ -33,6 +34,13 @@ struct ConnectionView: View {
                     if let cacheStatus = store.cacheStatus {
                         Text(cacheStatus).font(.caption).foregroundStyle(.secondary)
                     }
+                    #if os(macOS)
+                        if store.hosts.contains(where: { $0.isLocal && $0.localConnectionTimedOut }) {
+                            Label("Local host profile ‘\(store.profile)’ did not respond.", systemImage: "exclamationmark.triangle")
+                            Button("Review Local Profile") { profileFocused = true }
+                            Button("Retry Local Connection", action: connect)
+                        }
+                    #endif
                     Button("Reconnect", action: connect).disabled(store.isSigningIn || store.isFixture)
                     if store.isLive || store.isConnecting {
                         Button("Disconnect", action: store.disconnect).disabled(store.isFixture)
@@ -59,13 +67,26 @@ struct ConnectionView: View {
                         }
                         Button("Cancel Sign In", role: .cancel, action: store.cancelSignIn)
                     } else {
-                        Button("Sign In with GitHub") {
-                            applySettings()
-                            copiedCode = false
-                            store.signIn()
+                        if store.signInFailureStage == nil {
+                            Button("Sign In with GitHub") {
+                                applySettings()
+                                copiedCode = false
+                                store.signIn()
+                            }
                         }
                     }
-                    if let status = store.signInStatus {
+                    if let stage = store.signInFailureStage {
+                        Label("\(stage.rawValue) failed", systemImage: "exclamationmark.triangle")
+                        if store.signInRecoveryReconnect {
+                            Text(store.signInStatus ?? store.remoteStatus).font(.callout).foregroundStyle(.secondary)
+                            Button("Retry Connection", action: connect)
+                        } else {
+                            if let status = store.signInStatus {
+                                Text(status).font(.callout).foregroundStyle(.secondary)
+                            }
+                            Button("Try Sign-In Again") { applySettings(); store.signIn() }
+                        }
+                    } else if let status = store.signInStatus {
                         Text(status).font(.callout).foregroundStyle(.secondary)
                     }
                 }.disabled(store.isFixture)
@@ -78,7 +99,7 @@ struct ConnectionView: View {
                     #endif
                     TextField("This device’s name", text: $deviceName)
                     #if os(macOS)
-                        TextField("Local host profile", text: $profile).autocorrectionDisabled()
+                        TextField("Local host profile", text: $profile).autocorrectionDisabled().focused($profileFocused)
                     #endif
                     Button("Apply and Reconnect", action: connect)
                 } header: {
@@ -127,8 +148,9 @@ struct ConnectionView: View {
             .navigationTitle("Connection")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+        .onChange(of: store.signInCode?.userCode) { _, _ in copiedCode = false }
         #if os(macOS)
-        .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
+            .frame(minWidth: 480, idealWidth: 540, minHeight: 560, idealHeight: 700)
         #endif
     }
 

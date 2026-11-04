@@ -1,0 +1,70 @@
+[
+  {
+    "uri": "https://github.com/login/device",
+    "valid": true
+  },
+  {
+    "uri": "http://github.com/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com.evil.example/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://evil.example@github.com/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com:443/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com:8443/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/settings",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/login/device/",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/login/device?",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/login/device#",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/login/./device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/%6cogin/device",
+    "valid": false
+  },
+  {
+    "uri": " https://github.com/login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com/login/device\n",
+    "valid": false
+  },
+  {
+    "uri": "https://github.com\\login/device",
+    "valid": false
+  },
+  {
+    "uri": "https://git\thub.com/login/device",
+    "valid": false
+  },
+  {
+    "uri": "",
+    "valid": false
+  }
+]

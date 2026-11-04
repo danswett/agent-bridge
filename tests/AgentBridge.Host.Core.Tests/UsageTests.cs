@@ -840,6 +840,23 @@ public sealed class UsageTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task Opted_in_Keychain_reads_once_even_after_denial_or_token_rotation(int exitCode)
+    {
+        var options = new UsageOptions { CopilotHome = "", ClaudeHome = "", CodexHome = "", ReadMacKeychain = true };
+        var credentials = new CopilotCredentials(options, commands, environment: _ => null, findGh: () => null, log: log.Add);
+        commands.Next = new(true, false, exitCode, "fake-secret");
+        var token = await credentials.ResolveAsync("octo", CopilotCredentials.GitHub);
+        Assert.Equal(exitCode == 0 ? "fake-secret" : null, token);
+        if (token is not null) { credentials.RejectMacToken("octo", CopilotCredentials.GitHub, token); }
+        Assert.Null(await credentials.ResolveAsync("octo", CopilotCredentials.GitHub));
+        var probe = Assert.Single(commands.Runs);
+        Assert.Equal(new[] { "find-generic-password", "-s", "copilot-cli", "-a", "https://github.com:octo", "-w" }, probe.Arguments);
+        Assert.DoesNotContain(log, message => message.Contains("fake-secret", StringComparison.Ordinal));
+    }
+
     sealed class FakeCommands : ICommandRunner
     {
         public CommandResult Next { get; set; } = new(false, false, -1, "");

@@ -369,6 +369,7 @@ public sealed class UpkeepTests : IDisposable
         ha.GetFailsFor = id => id == $"sensor.{NodeA}_status";
         await Run(c, 120);
         Assert.False(ha.Exists($"sensor.{NodeA}_status"));
+        Assert.InRange(Logged("session upkeep could not read state"), 1, 2);
         ha.GetFailsFor = null;
         // Read gone, but not yet for a minute: a Home Assistant still starting answers so too.
         await Run(c, 50);
