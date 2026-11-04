@@ -373,6 +373,20 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void The_persons_own_question_growing_in_a_conversation_shorter_than_its_pane_is_theirs()
+    {
+        // CI's three panes: the conversation fits its pane, so the extent is the pane's height (602)
+        // before and after; what it scrolls, as measured, grows 72 with the question. Theirs.
+        static AnswerLook Fits(double question, double content, int answers) =>
+            new([.. Enumerable.Range(0, answers).Select(i => (409.5, 228.0 + 38 * i))],
+                [new ScrollerLook(369, 153, 0, 0, 0, 0, 719, 602, 712, 602, false, 712, content)],
+                1424, 891, new LookBox(24, 8, 664, question));
+        Assert.False(From(Fits(196, 400, 3)).Read(Fits(268, 472, 5), own: true));
+        // Something else in it growing with the question is still a move.
+        Assert.True(From(Fits(196, 400, 3)).Read(Fits(268, 520, 5), own: true));
+    }
+
+    [Fact]
     public void The_persons_own_question_growing_as_they_type_is_theirs_only_when_nothing_else_changed()
     {
         // Other's box opens: the question grows 40, what scrolls grows 40, Send is 40 lower and a

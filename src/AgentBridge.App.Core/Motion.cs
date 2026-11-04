@@ -197,12 +197,17 @@ public sealed class AnswerGuard
 
 // A scroller holding a question's answers, as one look saw it: where its viewport is in the window,
 // how far it is scrolled, how far it can be, and whether the person is scrolling it now (a wheel,
-// a finger, a key or its scroll bar). Its extent is what it scrolls as that measured itself, not
-// stopped at the viewport: a conversation shorter than its pane grows as the question does, where
-// the scroller's own extent, the pane's height, stays put.
+// a finger, a key or its scroll bar). Content is what it scrolls as that measured itself, which
+// unlike the extent doesn't stop at the viewport: a conversation shorter than its pane grows as the
+// question does, where the extent, the pane's height, stays put. Not given: taken to be the extent.
 public readonly record struct ScrollerLook(
     double Left, double Top, double OffsetX, double OffsetY, double ScrollableWidth, double ScrollableHeight,
-    double ViewportWidth, double ViewportHeight, double ExtentWidth, double ExtentHeight, bool Person);
+    double ViewportWidth, double ViewportHeight, double ExtentWidth, double ExtentHeight, bool Person,
+    double ContentWidth = double.NaN, double ContentHeight = double.NaN)
+{
+    public double MeasuredWidth => double.IsNaN(ContentWidth) ? ExtentWidth : ContentWidth;
+    public double MeasuredHeight => double.IsNaN(ContentHeight) ? ExtentHeight : ContentHeight;
+}
 
 // A box, in whatever coordinates its look says.
 public readonly record struct LookBox(double X, double Y, double Width, double Height);
@@ -363,7 +368,7 @@ public sealed class AnswerMoves
         }
         // The innermost: what it scrolls is the question's, and grew or shrank only as it did.
         var (inner, wasInner) = (now.Scrollers[0], before.Scrollers[0]);
-        return Math.Abs(inner.ExtentWidth - wasInner.ExtentWidth) <= Slack
-            && Math.Abs(inner.ExtentHeight - wasInner.ExtentHeight - (q.Height - wq.Height)) <= Slack;
+        return Math.Abs(inner.MeasuredWidth - wasInner.MeasuredWidth) <= Slack
+            && Math.Abs(inner.MeasuredHeight - wasInner.MeasuredHeight - (q.Height - wq.Height)) <= Slack;
     }
 }
