@@ -8,7 +8,7 @@ public sealed class RosterPropertyTests
 {
     public static TheoryData<string> Scenarios => new(Builders.Keys);
 
-    static readonly Dictionary<string, Func<World>> Builders = new()
+    internal static readonly Dictionary<string, Func<World>> Builders = new()
     {
         ["line"] = () =>
         {

@@ -226,7 +226,7 @@ public sealed class RosterRecoveryTests
 
     // H's 64 sibling adds, then a 65th over its budget; G removes H on the 65th. The siblings pass
     // the four-head limit, so all but the first four are quarantined, as a hostile approver's are.
-    static World Siblings(bool self = false)
+    internal static World Siblings(bool self = false)
     {
         var w = new World();
         w.Genesis();
@@ -259,16 +259,27 @@ public sealed class RosterRecoveryTests
         Assert.Equal(Invalid.Evidence, offered[^1].Reason);
     }
 
-    [Fact]
-    public void An_add_in_a_state_with_64_active_devices_is_refused_and_a_removal_is_not()
+    // G and 63 adds in a line fill the 64 active devices; a 64th add is refused, and a removal
+    // on the full state is not.
+    internal static World ActiveCap()
     {
         var w = new World();
         w.Genesis();
         var last = "G";
         for (var i = 0; i < RosterVerifier.MaxActive; i++) { w.Add($"+N{i}", "G", $"N{i}", last); last = $"+N{i}"; }
-        w.Remove("R", "G", "+N0", last);
-        var offered = w.Feed(new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now), [.. w.Labels]);
+        w.Remove("R", "G", "+N0", $"+N{RosterVerifier.MaxActive - 2}");
+        return w;
+    }
+
+    [Fact]
+    public void An_add_in_a_state_with_64_active_devices_is_refused_and_a_removal_is_not()
+    {
+        var w = ActiveCap();
+        var v = new RosterVerifier(RosterFixture.Account, RosterFixture.Generation, () => w.Now);
+        var offered = w.Feed(v, [.. w.Labels]);
         Assert.Equal(Invalid.ActiveCap, offered[^2].Reason);
-        Assert.Equal(Verdict.Accepted, offered[^3].Verdict);
+        Assert.Equal(Verdict.Accepted, offered[^1].Verdict);
+        Assert.Equal(RosterVerifier.MaxActive - 1, v.State.ActiveCount);
+        Assert.DoesNotContain("N0", w.Active(v));
     }
 }
