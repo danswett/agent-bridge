@@ -38,8 +38,11 @@ public static class Wire
 
     // The same for a challenge sent before the hello (the relay's EarlyChallenge), which names no
     // account since the relay knows none yet.
-    public static byte[] EarlyProofMac(byte[] sharedSecret, byte[] nonce) =>
-        HMACSHA256.HashData(sharedSecret, [.. Encoding.UTF8.GetBytes(EarlyProofLabel), .. nonce]);
+    public static byte[] EarlyProofMac(byte[] sharedSecret, byte[] nonce)
+    {
+        byte[] data = [.. Encoding.UTF8.GetBytes(EarlyProofLabel), .. nonce];
+        return HMACSHA256.HashData(sharedSecret, data);
+    }
 
     public static string Hex(ReadOnlySpan<byte> b) => Convert.ToHexString(b).ToLowerInvariant();
 
