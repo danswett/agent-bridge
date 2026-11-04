@@ -36,7 +36,9 @@ const pwa = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..
 const folder = path.join(pwa, '..', 'docs', 'protocol', 'vectors');
 const load = (name) => JSON.parse(readFileSync(path.join(folder, name), 'utf8'));
 const SIGNED = 'signed-command.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED).sort().map((f) => [f, load(f)]);
+// Recorded sessions patched as a host sends them: not records, and not replayed here yet (#601).
+const PATCHES = 'session-patches.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
@@ -165,6 +167,8 @@ const READS = {
       t.host({ ev: 'sessions.synced', seq: 1, data: j });
       return { revision: store.revision, discoveryHeld: store.held };
     },
+    // Only a resumed snapshot's, which the PWA does not ask for yet (#601).
+    unread: ['live'],
   },
   DiscoveryChanged: {
     read: async (j) => {
@@ -182,6 +186,8 @@ const READS = {
       t.host({ ev: 'session.remove', seq: 1, data: j });
       return removed === null ? null : { id: removed };
     },
+    // Only to a client that asked for patches, which the PWA does not yet (#601).
+    unread: ['revision'],
   },
   AnswerResult: { read: readAnswerResult },
   ReplyResult: { read: readAnswerResult },
@@ -323,6 +329,10 @@ const BUILDS = {
 // Records the PWA neither reads nor builds through a function these tests can call, and why.
 const NOT_REPLAYED = {
   SubscribeResult: 'the PWA waits for sessions.synced and uses nothing of this result',
+  SubscribeRequest: 'the PWA asks for neither patches nor resuming yet (#601)',
+  SubscribeSince: 'the PWA asks for neither patches nor resuming yet (#601)',
+  SessionPatch: 'the PWA asks for neither patches nor resuming yet (#601)',
+  SubagentsPatch: 'the PWA asks for neither patches nor resuming yet (#601)',
   PushSubscribeRequest: 'PushRegistrar sends the browser\'s own subscription, from a private method',
   PushKeys: 'part of PushSubscribeRequest',
   PushUnsubscribeRequest: 'PushRegistrar sends the browser\'s own endpoint, from a private method',

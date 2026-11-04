@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host.Core;
 using AgentBridge.Host.Delivery;
 using AgentBridge.Host.Delivery.Launch;
@@ -164,7 +165,7 @@ public sealed class SessionService
                     return (object?)source.Get(id) ?? new { missing = true };
                 }
             case Ops.SessionsSubscribe:
-                return await SubscribeAsync(channel);
+                return await SubscribeAsync(channel, data);
             default:
                 return null;
         }
@@ -173,8 +174,14 @@ public sealed class SessionService
     // A channel has one subscription. A second subscribe (a client recovering from a gap)
     // stops the first before answering, so nothing from the old one can follow the new
     // response, and the new snapshot covers whatever the old one never sent.
-    async Task<object> SubscribeAsync(IProtocolChannel channel)
+    async Task<object> SubscribeAsync(IProtocolChannel channel, JsonElement data)
     {
+        // Read strictly, as every request a client sends, but only an object is a request: clients
+        // before patches send {} or nothing at all.
+        var request = data.ValueKind == JsonValueKind.Object ? data.Deserialize<SubscribeRequest>(ProtocolJson.Options) ?? new() : new();
+        // Revisions start again from 0 in each run of the host, so one from another run says nothing
+        // about what the client holds.
+        var since = request.Since is { } s && machine.Instance is { } instance && s.Instance == instance ? s.Revision : (long?)null;
         var state = subscribers.GetOrAdd(channel, _ => new Subscriber());
         // Cleanup is registered once per channel and finds whatever feed is current then.
         // One registration per subscribe would keep every replaced feed (and anything still
@@ -197,7 +204,7 @@ public sealed class SessionService
                 await old.StopAsync();
             }
             if (!channel.IsOpen) { throw new IOException("the channel is closed"); }
-            var feed = new Feed(source.Subscribe());
+            var feed = new Feed(source.Subscribe(since), patch: request.Patch == true);
             state.Feed = feed;
             FeedCreated?.Invoke(feed);
             // The snapshot waits until the response has gone (ChannelReply), so the client
@@ -253,7 +260,7 @@ public sealed class SessionService
 
     List<string> Offered(IProtocolChannel channel)
     {
-        List<string> offered = [Capabilities.SessionsRead];
+        List<string> offered = [Capabilities.SessionsRead, Capabilities.SessionsPatch];
         if (answers?.Available == true) { offered.Add(Capabilities.SessionsAnswer); }
         if (answers?.ApprovesPermissions == true) { offered.Add(Capabilities.SessionsApprove); }
         if (replies?.Available == true) { offered.Add(Capabilities.SessionsReply); }
@@ -362,10 +369,16 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
     static string? String(JsonElement data, string name) =>
         data.ValueKind == JsonValueKind.Object && data.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    sealed class Feed(SessionSubscription subscription)
+    sealed class Feed(SessionSubscription subscription, bool patch)
     {
         readonly CancellationTokenSource stop = new();
         readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // With patch: each session as this channel last sent it, and the seq it went with. Only what
+        // got through: an event that could not be sent leaves the client on the one before, which
+        // the next patch then goes on from.
+        readonly Dictionary<string, (long Seq, JsonObject Json)> sent = new(StringComparer.Ordinal);
+        // Past this subscription's sessions.synced: upserts from here on are live changes.
+        bool live;
         int started;
 
         public SessionSubscription Subscription => subscription;
@@ -379,13 +392,19 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 await foreach (var ev in subscription.Events.ReadAllAsync(stop.Token))
                 {
-                    try { await channel.SendEventAsync(ev.Name, ev.Data, stop.Token); }
+                    var (name, data, id, json) = Shape(ev);
+                    if (name is null) { continue; }
+                    try
+                    {
+                        var seq = await channel.SendEventAsync(name, data, stop.Token);
+                        if (id is not null && json is not null) { sent[id] = (seq, json); }
+                    }
                     catch (MessageTooLargeException e)
                     {
                         // Every session has been through SessionBudget.Fit, so this is a bug.
                         // The size is checked before encrypting, so the channel is intact and
                         // the session's next change can still get through.
-                        log($"skipped a {ev.Name} too large to send ({e.Size} bytes)");
+                        log($"skipped a {name} too large to send ({e.Size} bytes)");
                     }
                 }
             }
@@ -396,6 +415,32 @@ async Task<LaunchResult> LaunchAsync(IProtocolChannel channel, JsonElement data)
             {
                 subscription.Dispose();
                 done.TrySetResult();
+            }
+        }
+
+        // The event as this client asked for it: to one that asked for patches, a live upsert is a
+        // session.patch on what it last sent (null name: nothing it reads changed), and a removal
+        // carries the revision. Json: the session as the client will hold it once sent.
+        (string? Name, object Data, string? Id, JsonObject? Json) Shape(SessionEvent ev)
+        {
+            if (!patch) { return (ev.Name, ev.Data, null, null); }
+            switch (ev.Data)
+            {
+                case Session session:
+                    var json = SessionPatches.Json(session);
+                    if (!live) { return (ev.Name, ev.Data, session.Id, json); }
+                    var next = sent.TryGetValue(session.Id, out var last)
+                        ? SessionPatches.Next(last.Json, last.Seq, json, ev.Revision)
+                        : SessionPatches.Whole(json, ev.Revision);
+                    return next is null ? (null, ev.Data, null, null) : (Events.SessionPatch, next, session.Id, json);
+                case SessionRemoved removed:
+                    sent.Remove(removed.Id);
+                    return (ev.Name, removed with { Revision = ev.Revision }, null, null);
+                case SessionsSynced:
+                    live = true;
+                    return (ev.Name, ev.Data, null, null);
+                default:
+                    return (ev.Name, ev.Data, null, null);
             }
         }
 

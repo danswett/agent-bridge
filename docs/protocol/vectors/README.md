@@ -9,7 +9,7 @@ are generated.
 
 | File | Records |
 |---|---|
-| `sessions.json` | `hello`, sessions and their parts, `sessions.list` and its events, answers, replies, `session.stop` |
+| `sessions.json` | `hello`, sessions and their parts, `sessions.list`, `sessions.subscribe` and its events (`session.patch` included), answers, replies, `session.stop` |
 | `attachments.json` | `attachment.start`, `attachment.chunk`, `attachment.discard` and their results |
 | `push.json` | `push.subscribe`, `push.unsubscribe`, `push.list` and the notice a push carries |
 | `launch.json` | `launch.options`, `session.launch`, folder-trust questions and `launch.trust.answer` |
@@ -17,6 +17,7 @@ are generated.
 | `update.json` | `update.get`, `update.state`, `update.check` and `update.install` |
 | `usage.json` | `usage.get`, `usage.update` and shared readings |
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse |
+| `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
 
 ## Shape
 
@@ -71,7 +72,12 @@ replay until its entry goes.
   fails to read, or its check gives its reason. Every record in `AgentBridge.Protocol` has valid vectors.
   `tests/AgentBridge.Host.Tests/SignedCommandVectorTests.cs` verifies every signed command with
   `SignedCommands.Verify`, and `PushVectorTests.cs` there holds every valid `push.subscribe` to the
-  host's own check (`PushNotifier.Problem`).
+  host's own check (`PushNotifier.Problem`). `tests/AgentBridge.Host.Core.Tests/PatchReplayTests.cs`
+  writes `session-patches.json` from the host's own replay of the recordings, and applies each
+  patch with `SessionPatches.Apply`. Each `SessionPatch` in `sessions.json` names a context with the
+  session the client holds (`session`, absent for none) and the `seq` of the event it came in, and,
+  for a valid patch, the `result` applying it must give exactly; a refused one gives
+  `SessionPatches.Apply`'s reason.
 - **PWA:** `pwa/test/unit/protocol-vectors.test.mjs`. Each host record goes through the PWA's own
   readers (`protocol.js`, `launch.js`, `usage.js`, `update.js`, `host-client.js`, the service
   worker). A valid vector must keep every part the PWA uses, and a refused one must be dropped.
@@ -81,7 +87,8 @@ replay until its entry goes.
   reply box prepares one, and a refused start a person could cause (a blank or long name, an
   empty or oversized file) must never be sent as it is. A chunk comes from a file of the size its
   context gives. The signed commands are signed again with the fixed keys and must give the same
-  bytes and MAC. A record the PWA does not replay is listed there with the reason.
+  bytes and MAC. A record the PWA does not replay is listed there with the reason. It does not yet
+  replay `session-patches.json` or the `SessionPatch` vectors (#601, its client slice).
 - **Swift** (the `apple/` package): not yet. To adopt the folder, read each file as above. Each
   `host` record goes through the package's decoders: a valid vector keeps every field the app
   uses, and a refused one is dropped. Each `client` record goes through its encoders and any
@@ -92,8 +99,8 @@ replay until its entry goes.
 ## Regenerating
 
 The C# records generate the files: `ProtocolVectors.cs` and `KnownDifferences.cs` in
-`tests/AgentBridge.Protocol.Tests`, and `SignedCommandVectorTests.cs` in
-`tests/AgentBridge.Host.Tests`. A test in each project fails when the committed files differ
+`tests/AgentBridge.Protocol.Tests`, `SignedCommandVectorTests.cs` in `tests/AgentBridge.Host.Tests`,
+and `PatchReplayTests.cs` in `tests/AgentBridge.Host.Core.Tests`. A test in each project fails when the committed files differ
 from what they generate. After a deliberate change to a record, a limit, a check's words or the
 vectors themselves, write them again:
 
@@ -101,6 +108,7 @@ vectors themselves, write them again:
 $env:UPDATE_PROTOCOL_VECTORS = '1'
 dotnet test tests/AgentBridge.Protocol.Tests --filter "FullyQualifiedName~The_committed_vectors"
 dotnet test tests/AgentBridge.Host.Tests --filter "FullyQualifiedName~The_committed_signed_command_vectors"
+dotnet test tests/AgentBridge.Host.Core.Tests --filter "FullyQualifiedName~The_committed_patch_sequences"
 Remove-Item Env:UPDATE_PROTOCOL_VECTORS
 ```
 

@@ -56,3 +56,26 @@ public class SessionTrackerBenchmarks
     [Benchmark]
     public Session Unchanged() => _tracker.Update(_discovered);
 }
+
+// What the host does for each change, for each subscriber that asked for patches (SessionService's
+// feed): the session as JSON, then the patch on the one it last sent, or the whole session when that
+// is no smaller. Here a turn ending: the running tool gone and updatedAt moved.
+public class PatchBenchmarks
+{
+    System.Text.Json.Nodes.JsonObject _sent = null!;
+    Session _next = null!;
+
+    [Params(Shape.Typical, Shape.P99, Shape.Oversized)]
+    public Shape Size { get; set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var s = Fixtures.Upsert(Size);
+        _sent = SessionPatches.Json(s);
+        _next = s with { UpdatedAt = s.UpdatedAt.AddSeconds(1), Activity = s.Activity with { CurrentTool = null } };
+    }
+
+    [Benchmark]
+    public SessionPatch? Next() => SessionPatches.Next(_sent, 41, SessionPatches.Json(_next), 7);
+}

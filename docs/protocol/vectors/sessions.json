@@ -3,6 +3,824 @@
   "spec": "v1-sessions.md",
   "generatedBy": "tests/AgentBridge.Protocol.Tests/ProtocolVectors.cs",
   "contexts": {
+    "held-at-41-then-a-turn-ending": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 41,
+      "result": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "idle",
+        "statusSince": "2026-10-28T04:26:13.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:26:13.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass. The docs build too.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "userMessage": "Run the tests",
+          "turnCount": 5,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          },
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "ended",
+            "outcome": "done",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:26:13.182Z",
+            "line": "Running the protocol tests",
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      }
+    },
+    "held-at-41-then-a-question": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 41,
+      "result": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "waiting",
+        "statusSince": "2026-10-28T04:25:48.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:48.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "question": {
+          "id": "req-41#3f9a",
+          "kind": "approval",
+          "message": "Run `git push`?",
+          "fields": [
+            {
+              "name": "decision",
+              "type": "choice",
+              "options": [
+                {
+                  "value": "approve",
+                  "label": "Approve once"
+                },
+                {
+                  "value": "deny",
+                  "label": "Deny"
+                }
+              ]
+            }
+          ],
+          "askedAt": "2026-10-28T04:22:43.182Z"
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      }
+    },
+    "held-at-41-then-a-nested-delegate": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 41,
+      "result": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:52.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          },
+          {
+            "id": "agent-4",
+            "parent": "agent-3",
+            "kind": "task",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:52.182Z",
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      }
+    },
+    "none-held-then-the-whole-session": {
+      "result": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      }
+    },
+    "held-at-40": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 40
+    },
+    "held-at-41": {
+      "session": {
+        "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+        "agent": "copilot",
+        "title": "Protocol vectors",
+        "cwd": "C:\\src\\agent-bridge",
+        "repository": "danswett/agent-bridge",
+        "branch": "quality/protocol-vectors",
+        "model": "claude-opus-5.5",
+        "status": "working",
+        "statusSince": "2026-10-28T04:25:43.182Z",
+        "startedAt": "2026-10-28T04:22:43.182Z",
+        "updatedAt": "2026-10-28T04:25:43.182Z",
+        "processId": 4120,
+        "activity": {
+          "response": "All **47** tests pass.",
+          "responseTruncated": true,
+          "reasoning": "The suite is green; summarize.",
+          "currentTool": {
+            "id": "call_7",
+            "name": "powershell",
+            "summary": "Run the protocol tests",
+            "status": "running",
+            "startedAt": "2026-10-28T04:25:43.182Z"
+          },
+          "userMessage": "Run the tests",
+          "turnCount": 4,
+          "compactions": 1,
+          "background": {
+            "agents": 1,
+            "shells": 2
+          },
+          "source": {
+            "reasoning": "agent-1"
+          },
+          "own": {
+            "reasoning": "Waiting on the delegate.",
+            "at": "2026-10-28T04:22:43.182Z"
+          }
+        },
+        "driver": "agent",
+        "driverPrincipal": "homeassistant:0f1e2d3c",
+        "subagents": [
+          {
+            "id": "agent-1",
+            "kind": "background",
+            "name": "Run the suite",
+            "task": "Run every test and report failures",
+            "model": "claude-haiku-5.5",
+            "status": "working",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "line": "Running the protocol tests",
+            "currentTool": {
+              "id": "call_7",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 1
+          },
+          {
+            "id": "agent-2",
+            "parent": "agent-1",
+            "kind": "task",
+            "status": "ended",
+            "outcome": "failed",
+            "startedAt": "2026-10-28T04:22:43.182Z",
+            "endedAt": "2026-10-28T04:25:43.182Z",
+            "shells": 0
+          },
+          {
+            "id": "agent-3",
+            "kind": "background",
+            "name": "Check the docs",
+            "status": "working",
+            "startedAt": "2026-10-28T04:25:43.182Z",
+            "currentTool": {
+              "id": "call_9",
+              "name": "powershell",
+              "summary": "Run the protocol tests",
+              "status": "running",
+              "startedAt": "2026-10-28T04:25:43.182Z"
+            },
+            "shells": 0
+          }
+        ],
+        "subagentsMore": 2
+      },
+      "seq": 41
+    },
+    "none-held": {},
     "a-form": {
       "question": {
         "id": "call_q1",
@@ -4166,6 +4984,80 @@
         }
       ]
     },
+    "SubscribeRequest": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "patches-and-resuming",
+          "json": {
+            "patch": true,
+            "since": {
+              "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+              "revision": 118
+            }
+          }
+        },
+        {
+          "name": "patches-only",
+          "json": {
+            "patch": true
+          }
+        },
+        {
+          "name": "as-before",
+          "json": {}
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-patch",
+          "json": {
+            "patch": "yes",
+            "since": {
+              "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+              "revision": 118
+            }
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "SubscribeSince": {
+      "direction": "client",
+      "valid": [
+        {
+          "name": "a-list-held-at-118",
+          "json": {
+            "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9",
+            "revision": 118
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "missing-instance",
+          "json": {
+            "revision": 118
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-revision",
+          "json": {
+            "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9"
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-instance",
+          "json": {
+            "instance": 42,
+            "revision": 118
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
     "SubscribeResult": {
       "direction": "host",
       "valid": [
@@ -4174,6 +5066,14 @@
           "json": {
             "revision": 118,
             "count": 3
+          }
+        },
+        {
+          "name": "resumed-with-one-changed",
+          "json": {
+            "revision": 131,
+            "count": 1,
+            "resumed": true
           }
         },
         {
@@ -4212,6 +5112,16 @@
           }
         },
         {
+          "name": "resumed",
+          "json": {
+            "revision": 131,
+            "live": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "b7e1c2d3-0000-4000-8000-000000000001"
+            ]
+          }
+        },
+        {
           "name": "wrong-type-revision",
           "json": {
             "revision": "many",
@@ -4238,6 +5148,17 @@
           "name": "not-a-record",
           "json": [],
           "refusedBy": "parse"
+        },
+        {
+          "name": "a-live-id-that-is-not-text",
+          "json": {
+            "revision": 131,
+            "live": [
+              "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              7
+            ]
+          },
+          "refusedBy": "parse"
         }
       ]
     },
@@ -4249,6 +5170,13 @@
           "json": {
             "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b"
           }
+        },
+        {
+          "name": "gone-to-a-client-of-patches",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "revision": 131
+          }
         }
       ],
       "refused": [
@@ -4256,6 +5184,686 @@
           "name": "wrong-type-id",
           "json": {
             "id": 42
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "SessionPatch": {
+      "direction": "host",
+      "check": "SessionPatches.Apply",
+      "valid": [
+        {
+          "name": "a-turn-ending",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-41-then-a-turn-ending"
+        },
+        {
+          "name": "a-question-asked",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "set": {
+              "status": "waiting",
+              "statusSince": "2026-10-28T04:25:48.182Z",
+              "updatedAt": "2026-10-28T04:25:48.182Z",
+              "question": {
+                "id": "req-41#3f9a",
+                "kind": "approval",
+                "message": "Run `git push`?",
+                "fields": [
+                  {
+                    "name": "decision",
+                    "type": "choice",
+                    "options": [
+                      {
+                        "value": "approve",
+                        "label": "Approve once"
+                      },
+                      {
+                        "value": "deny",
+                        "label": "Deny"
+                      }
+                    ]
+                  }
+                ],
+                "askedAt": "2026-10-28T04:22:43.182Z"
+              }
+            }
+          },
+          "context": "held-at-41-then-a-question"
+        },
+        {
+          "name": "a-delegate-added-at-the-end",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "set": {
+              "updatedAt": "2026-10-28T04:25:52.182Z"
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-4",
+                  "parent": "agent-3",
+                  "kind": "task",
+                  "status": "working",
+                  "startedAt": "2026-10-28T04:25:52.182Z",
+                  "shells": 0
+                }
+              ]
+            }
+          },
+          "context": "held-at-41-then-a-nested-delegate"
+        },
+        {
+          "name": "the-whole-session",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "revision": 131,
+            "set": {
+              "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+              "agent": "copilot",
+              "title": "Protocol vectors",
+              "cwd": "C:\\src\\agent-bridge",
+              "repository": "danswett/agent-bridge",
+              "branch": "quality/protocol-vectors",
+              "model": "claude-opus-5.5",
+              "status": "working",
+              "statusSince": "2026-10-28T04:25:43.182Z",
+              "startedAt": "2026-10-28T04:22:43.182Z",
+              "updatedAt": "2026-10-28T04:25:43.182Z",
+              "processId": 4120,
+              "activity": {
+                "response": "All **47** tests pass.",
+                "responseTruncated": true,
+                "reasoning": "The suite is green; summarize.",
+                "currentTool": {
+                  "id": "call_7",
+                  "name": "powershell",
+                  "summary": "Run the protocol tests",
+                  "status": "running",
+                  "startedAt": "2026-10-28T04:25:43.182Z"
+                },
+                "userMessage": "Run the tests",
+                "turnCount": 4,
+                "compactions": 1,
+                "background": {
+                  "agents": 1,
+                  "shells": 2
+                },
+                "source": {
+                  "reasoning": "agent-1"
+                },
+                "own": {
+                  "reasoning": "Waiting on the delegate.",
+                  "at": "2026-10-28T04:22:43.182Z"
+                }
+              },
+              "driver": "agent",
+              "driverPrincipal": "homeassistant:0f1e2d3c",
+              "subagents": [
+                {
+                  "id": "agent-1",
+                  "kind": "background",
+                  "name": "Run the suite",
+                  "task": "Run every test and report failures",
+                  "model": "claude-haiku-5.5",
+                  "status": "working",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "line": "Running the protocol tests",
+                  "currentTool": {
+                    "id": "call_7",
+                    "name": "powershell",
+                    "summary": "Run the protocol tests",
+                    "status": "running",
+                    "startedAt": "2026-10-28T04:25:43.182Z"
+                  },
+                  "shells": 1
+                },
+                {
+                  "id": "agent-2",
+                  "parent": "agent-1",
+                  "kind": "task",
+                  "status": "ended",
+                  "outcome": "failed",
+                  "startedAt": "2026-10-28T04:22:43.182Z",
+                  "endedAt": "2026-10-28T04:25:43.182Z",
+                  "shells": 0
+                },
+                {
+                  "id": "agent-3",
+                  "kind": "background",
+                  "name": "Check the docs",
+                  "status": "working",
+                  "startedAt": "2026-10-28T04:25:43.182Z",
+                  "currentTool": {
+                    "id": "call_9",
+                    "name": "powershell",
+                    "summary": "Run the protocol tests",
+                    "status": "running",
+                    "startedAt": "2026-10-28T04:25:43.182Z"
+                  },
+                  "shells": 0
+                }
+              ],
+              "subagentsMore": 2
+            }
+          },
+          "context": "none-held-then-the-whole-session"
+        }
+      ],
+      "refused": [
+        {
+          "name": "on-another-event-than-the-one-held",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-40",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
+        },
+        {
+          "name": "on-a-session-not-held",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "none-held",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
+        },
+        {
+          "name": "for-another-session",
+          "json": {
+            "id": "b7e1c2d3-0000-4000-8000-000000000001",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-41",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not on the session as held"
+        },
+        {
+          "name": "a-set-that-is-not-an-object",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": [
+              1
+            ],
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-41",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not a merge of the session"
+        },
+        {
+          "name": "text-appended-to-a-number",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "turnCount": "0"
+              }
+            }
+          },
+          "context": "held-at-41",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch is not a merge of the session"
+        },
+        {
+          "name": "a-delegate-ordered-twice",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-3"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-41",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch's delegates are not entries by id"
+        },
+        {
+          "name": "a-delegate-without-an-id",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "status": "ended"
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "context": "held-at-41",
+          "refusedBy": "SessionPatches.Apply",
+          "reason": "the patch's delegates are not entries by id"
+        },
+        {
+          "name": "a-base-that-is-not-a-number",
+          "json": {
+            "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+            "base": "41",
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "missing-id",
+          "json": {
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "refusedBy": "parse"
+        },
+        {
+          "name": "wrong-type-id",
+          "json": {
+            "id": 42,
+            "base": 41,
+            "revision": 131,
+            "set": {
+              "status": "idle",
+              "statusSince": "2026-10-28T04:26:13.182Z",
+              "updatedAt": "2026-10-28T04:26:13.182Z",
+              "activity": {
+                "turnCount": 5,
+                "currentTool": null
+              }
+            },
+            "subagents": {
+              "set": [
+                {
+                  "id": "agent-1",
+                  "status": "ended",
+                  "outcome": "done",
+                  "endedAt": "2026-10-28T04:26:13.182Z",
+                  "shells": 0,
+                  "currentTool": null
+                }
+              ],
+              "remove": [
+                "agent-2"
+              ],
+              "order": [
+                "agent-3",
+                "agent-1"
+              ]
+            },
+            "append": {
+              "activity": {
+                "response": " The docs build too."
+              }
+            }
+          },
+          "refusedBy": "parse"
+        }
+      ]
+    },
+    "SubagentsPatch": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "by-id",
+          "json": {
+            "set": [
+              {
+                "id": "agent-1",
+                "status": "ended",
+                "outcome": "done",
+                "endedAt": "2026-10-28T04:26:13.182Z",
+                "shells": 0,
+                "currentTool": null
+              }
+            ],
+            "remove": [
+              "agent-2"
+            ],
+            "order": [
+              "agent-3",
+              "agent-1"
+            ]
+          }
+        },
+        {
+          "name": "one-entry",
+          "json": {
+            "set": [
+              {
+                "id": "agent-3",
+                "status": "ended"
+              }
+            ]
+          }
+        }
+      ],
+      "refused": [
+        {
+          "name": "wrong-type-set",
+          "json": {
+            "set": "wrong",
+            "remove": [
+              "agent-2"
+            ],
+            "order": [
+              "agent-3",
+              "agent-1"
+            ]
           },
           "refusedBy": "parse"
         }
@@ -5851,6 +7459,14 @@
       "step": "read",
       "csharp": "refuses it: the snapshot does not end, so no session is removed and no hold lifted",
       "pwa": "reads it as a synced with no revision, which ends the snapshot"
+    },
+    {
+      "vector": "SessionsSynced/a-live-id-that-is-not-text",
+      "issue": 601,
+      "differs": "pwa",
+      "step": "read",
+      "csharp": "refuses it: live is strict and whole, so no running session is dropped from a resumed list",
+      "pwa": "reads it, live unread: it does not resume yet"
     }
   ]
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentBridge.Host;
 using AgentBridge.Host.Core;
 using AgentBridge.Protocol;
@@ -91,7 +92,7 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal(1, hello.GetProperty("protocol").GetInt32());
         Assert.Equal("Test host", hello.GetProperty("machine").GetProperty("name").GetString());
         Assert.Equal("windows", hello.GetProperty("machine").GetProperty("os").GetString());
-        Assert.Equal([Capabilities.SessionsRead], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch], hello.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
     }
 
     [Fact]
@@ -275,5 +276,100 @@ public sealed class ServeTests : IAsyncLifetime
         Assert.Equal("to both", (await NextAsync(a)).Data.GetProperty("activity").GetProperty("response").GetString());
         Assert.Equal("to both", (await NextAsync(b)).Data.GetProperty("activity").GetProperty("response").GetString());
         Assert.Equal(2, service.Subscribers);
+    }
+
+    // A service for a run of the host named by its instance, as the real host's hello says.
+    void Run(string instance)
+    {
+        service = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0", Instance: instance));
+        host.Hub.Handler = service.HandleAsync;
+    }
+
+    static JsonObject Json(JsonElement e) => JsonNode.Parse(e.GetRawText())!.AsObject();
+
+    [Fact]
+    public async Task A_client_that_asks_for_patches_gets_each_live_change_as_a_patch_on_the_upsert_it_holds()
+    {
+        var ch = await OpenAsync();
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        var snapshot = await SnapshotAsync(ch);
+        var held = Json(snapshot[0].Data);
+
+        await ChangeAsync("listed the folder", 4);
+        var live = await NextAsync(ch);
+
+        Assert.Equal(Events.SessionPatch, live.Name);
+        var patch = Received.Read<SessionPatch>(live.Data);
+        Assert.Equal(snapshot[0].Seq, patch.Base);
+        var applied = SessionPatches.Apply(held, snapshot[0].Seq, patch);
+        Assert.Equal("listed the folder", applied["activity"]!["response"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(SessionPatches.Json(source.Snapshot().Single()), applied));
+        Assert.True(live.Data.GetRawText().Length * 2 < snapshot[0].Data.GetRawText().Length, live.Data.GetRawText());
+        Assert.True(patch.Revision <= source.Revision);
+
+        f.Processes.Exit(AgentKind.Copilot, 100);
+        await source.RefreshAsync();
+        var removed = await NextAsync(ch);
+        Assert.Equal((Events.SessionRemove, source.Revision), (removed.Name, removed.Data.GetProperty("revision").GetInt64()));
+    }
+
+    [Fact]
+    public async Task Hello_offers_patches_and_a_client_that_does_not_ask_still_gets_whole_upserts()
+    {
+        var ch = await OpenAsync();
+        Assert.Contains(Capabilities.SessionsPatch, Result(await ch.RequestAsync(Ops.Hello, new { })).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+        Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { }));
+        await SnapshotAsync(ch);
+
+        await ChangeAsync("whole", 4);
+
+        var live = await NextAsync(ch);
+        Assert.Equal(Events.SessionUpsert, live.Name);
+        Assert.Equal("Served session", live.Data.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task Resuming_on_a_new_channel_to_the_same_run_sends_only_the_sessions_changed_since()
+    {
+        Run("run-1");
+        var otherEvents = f.CopilotSession(Other, 101, name: "Quiet session");
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await source.RefreshAsync();
+        var first = await OpenAsync();
+        Result(await first.RequestAsync(Ops.SessionsSubscribe, new { patch = true }));
+        var revision = (await SnapshotAsync(first))[^1].Data.GetProperty("revision").GetInt64();
+
+        await ChangeAsync("while away", 4);
+        var second = await OpenAsync();
+        var result = Result(await second.RequestAsync(Ops.SessionsSubscribe, new { patch = true, since = new { instance = "run-1", revision } }));
+
+        Assert.True(result.GetProperty("resumed").GetBoolean());
+        Assert.Equal(1, result.GetProperty("count").GetInt32());
+        var resumed = await SnapshotAsync(second);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced], resumed.Select(e => e.Name));
+        Assert.Equal("while away", resumed[0].Data.GetProperty("activity").GetProperty("response").GetString());
+        Assert.Equal([Id, Other], resumed[1].Data.GetProperty("live").EnumerateArray().Select(e => e.GetString()));
+
+        // Nothing of the quiet session was sent on this channel, so its first change comes whole.
+        Fixture.Append(otherEvents, Copilot.User("wake", 5));
+        await source.RefreshAsync();
+        var woke = Received.Read<SessionPatch>((await NextAsync(second)).Data);
+        Assert.Equal((Other, (long?)null), (woke.Id, woke.Base));
+    }
+
+    [Theory]
+    [InlineData("run-0", 0L)]
+    [InlineData("run-1", 1_000_000L)]
+    public async Task A_resume_from_another_run_or_a_revision_not_reached_gets_the_whole_snapshot(string instance, long ahead)
+    {
+        Run("run-1");
+        var ch = await OpenAsync();
+
+        var result = Result(await ch.RequestAsync(Ops.SessionsSubscribe, new { patch = true, since = new { instance, revision = source.Revision + ahead } }));
+
+        Assert.False(result.TryGetProperty("resumed", out _));
+        var snapshot = await SnapshotAsync(ch);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced], snapshot.Select(e => e.Name));
+        Assert.False(snapshot[1].Data.TryGetProperty("live", out _));
     }
 }

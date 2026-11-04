@@ -169,6 +169,90 @@ public class SourceTests
     }
 
     [Fact]
+    public async Task Resuming_from_a_revision_sends_only_the_sessions_changed_since_and_names_every_live_one()
+    {
+        using var f = new Fixture();
+        const string changed = "99999999-9999-4999-8999-999999999999", ended = "77777777-7777-4777-8777-777777777777";
+        Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("still", 1));
+        var second = f.CopilotSession(changed, 101);
+        Fixture.Append(second, Copilot.User("second", 2));
+        Fixture.Append(f.CopilotSession(ended, 102), Copilot.User("third", 3));
+        foreach (var pid in new[] { 100, 101, 102 }) { f.Processes.Run(AgentKind.Copilot, pid); }
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        long held;
+        using (var first = source.Subscribe()) { held = ((SessionsSynced)Drain(first).Last().Data).Revision; }
+
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+        Fixture.Append(second, Copilot.Assistant("reply", 4));
+        f.Processes.Exit(AgentKind.Copilot, 102);
+        await source.RefreshAsync();
+        using var resumed = source.Subscribe(held);
+
+        Assert.Equal(new SubscribeResult(source.Revision, 1, Resumed: true), resumed.Result);
+        var events = Drain(resumed);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced], events.Select(e => e.Name));
+        Assert.Equal("reply", ((Session)events[0].Data).Activity.Response);
+        var synced = (SessionsSynced)events[1].Data;
+        Assert.Equal(source.Revision, synced.Revision);
+        Assert.Equal([changed, Id], synced.Live!);
+    }
+
+    [Theory]
+    [InlineData(-1L)]
+    [InlineData(5L)]
+    public async Task A_revision_the_source_has_not_reached_gets_the_whole_snapshot(long ahead)
+    {
+        using var f = new Fixture();
+        Fixture.Append(f.CopilotSession(Id, 100), Copilot.User("go", 1));
+        f.Processes.Run(AgentKind.Copilot, 100);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+
+        using var subscription = source.Subscribe(ahead < 0 ? ahead : source.Revision + ahead);
+
+        Assert.Equal(new SubscribeResult(source.Revision, 1), subscription.Result);
+        var events = Drain(subscription);
+        Assert.Equal([Events.SessionUpsert, Events.SessionsSynced], events.Select(e => e.Name));
+        Assert.Null(((SessionsSynced)events[1].Data).Live);
+    }
+
+    [Fact]
+    public async Task A_live_change_carries_a_revision_short_of_another_sessions_change_still_waiting_out_its_interval()
+    {
+        using var f = new Fixture();
+        const string other = "99999999-9999-4999-8999-999999999999";
+        var events = f.CopilotSession(Id, 100);
+        var second = f.CopilotSession(other, 101);
+        f.Processes.Run(AgentKind.Copilot, 100);
+        f.Processes.Run(AgentKind.Copilot, 101);
+        await using var source = f.Source();
+        await source.RefreshAsync();
+        using var subscription = source.Subscribe();
+        Drain(subscription);
+        f.Time.Advance(TimeSpan.FromSeconds(1));
+
+        Fixture.Append(events, Copilot.User("go", 1));
+        await source.RefreshAsync();
+        Assert.Equal(source.Revision, Assert.Single(Drain(subscription)).Revision);
+        // Within its interval: held back, and the revision it was made at with it.
+        f.Time.Advance(TimeSpan.FromMilliseconds(100));
+        Fixture.Append(events, Copilot.Assistant("waiting", 2));
+        await source.RefreshAsync();
+        var waiting = source.Revision;
+        Fixture.Append(second, Copilot.User("other", 3));
+        await source.RefreshAsync();
+
+        // A client that resumed from the other session's revision would never hear of "waiting".
+        var otherUpsert = Assert.Single(Drain(subscription));
+        Assert.Equal(other, ((Session)otherUpsert.Data).Id);
+        Assert.Equal(waiting - 1, otherUpsert.Revision);
+        f.Time.Advance(TimeSpan.FromMilliseconds(150));
+        var late = Assert.Single(Drain(subscription));
+        Assert.Equal(("waiting", source.Revision), (((Session)late.Data).Activity.Response, late.Revision));
+    }
+
+    [Fact]
     public async Task The_list_is_paged_so_every_page_fits_a_message_and_the_cursor_reaches_every_session()
     {
         using var f = new Fixture();

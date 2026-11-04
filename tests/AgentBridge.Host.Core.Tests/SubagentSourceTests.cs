@@ -734,7 +734,7 @@ public class CodexSubagentTests
 
     // Replays the recorded session's rollout up to a time after Fixture.T0, with the sub-agent's
     // own rollout written beside it as Codex writes it.
-    sealed class Replay : IAsyncDisposable
+    internal sealed class Replay : IAsyncDisposable
     {
         readonly Fixture _f = new();
         readonly string _rollout;

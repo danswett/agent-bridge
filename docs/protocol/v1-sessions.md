@@ -85,6 +85,9 @@ with the wrong type):
 | `Option` | | `value`, `label` |
 | `DiscoveryHeld` | `reason` | `agents` (whole) |
 | `SessionList`, `SessionsSynced`, `DiscoveryChanged` | | `discoveryHeld` |
+| `SessionsSynced` | `live` (whole) | |
+| `SessionPatch` | `id`, `base`, `set`, `append`, `subagents` | |
+| `SubagentsPatch` | `set`, `remove`, `order` (each whole) | |
 | `session.remove` data | `id` | |
 | `UsageWindow` ([v1-usage.md](v1-usage.md)) | `percent` | |
 | `UsageReader` | `id` | |
@@ -114,7 +117,9 @@ The shared vectors ([vectors/](vectors/README.md)) work these rules through for 
 host sends: each `missing-…` and `wrong-type-…` vector is either valid, with what it reads as, or
 refused because a strict field is involved. A `sessions.synced` or `discovery.changed` whose
 `discoveryHeld` can't be read is refused whole: read as absent, a hold the host still has would
-read as lifted.
+read as lifted. Every part of a `session.patch` is strict, and `live` is: a patch read past a part
+it could not read would leave the client's session silently unlike the host's, and a `live` read
+with an id left out would drop a session that is still running.
 
 This is how clients read what hosts send. Hosts read what clients send (`session.answer`,
 `session.reply`, `session.launch`, `launch.trust.answer`, a signed command's body) strictly, as
@@ -177,6 +182,7 @@ Request `data`: `{}`. Result:
 | Capability | Ops |
 |---|---|
 | `sessions.read` | `sessions.list`, `session.get`, `sessions.subscribe` |
+| `sessions.patch` | `sessions.subscribe` takes `patch` and `since`: live changes as `session.patch`, only what changed ([Patches](#patches-sessionpatch)), and a reconnect to the same run of the host sent only the sessions that changed meanwhile ([Resuming](#resuming-without-a-snapshot)). Without it, or without asking, a client gets whole upserts and whole snapshots as before |
 | `sessions.answer` | `session.answer`. A host leaves it out when it cannot answer at all, for example while agent-ha-bridge's daemon runs for the same user, or on a platform without delivery yet. A client then shows questions read-only and says to answer at the machine |
 | `sessions.reply` | `session.reply`. Left out on the same terms as `sessions.answer`. A client then offers no reply box |
 | `sessions.attach` | `attachment.start`, `attachment.chunk`, `attachment.discard`, and `attachments` on `session.reply` ([Attachments](#attachments)). Offered only with `sessions.reply`, by a host that can stage files for the agent. Without it a client offers no way to attach |
@@ -221,18 +227,31 @@ sessions carry `subagents`.
 
 ### `sessions.subscribe`
 
-Request `data`: `{}`. Result: `{ "revision": 118, "count": 3 }`. Then the host sends:
+Request `data`: `{}`. Of a host that offers `sessions.patch`, a client may also ask for
+patches, to resume, or both:
 
-1. **The snapshot:** one `session.upsert` for each of the `count` live sessions, then
-   `sessions.synced` with `{ "revision": …, "discoveryHeld": {…} }`. On `sessions.synced` a
+```json
+{ "patch": true, "since": { "instance": "9a8b7c6d5e4f30211203f4e5d6c7b8a9", "revision": 118 } }
+```
+
+A host without `sessions.patch` ignores both. Result: `{ "revision": 118, "count": 3 }`, with
+`"resumed": true` when the host resumes ([Resuming](#resuming-without-a-snapshot)). Then the
+host sends:
+
+1. **The snapshot:** one `session.upsert` for each of the `count` live sessions (resuming: for
+   each that changed), then `sessions.synced` with `{ "revision": …, "discoveryHeld": {…} }`
+   (resuming: and `live`). On `sessions.synced` a
    client replaces its list with the sessions it received since subscribing, which drops any
    it had from before that no longer exist, and takes `discoveryHeld` (absent: nothing holds
    discovery) as the host's hold.
 2. **Live changes, until the channel closes:**
    * `session.upsert`, with a full `Session` (without `activity.history`), whenever
      anything a client shows changes. Hosts coalesce bursts to at most one upsert per
-     session every 250 ms, and the latest state always arrives.
-   * `session.remove`, with `{ "id": "…" }`, when a session ends and is dropped. A session
+     session every 250 ms, and the latest state always arrives. A client that asked for
+     `patch` gets a `session.patch` instead ([Patches](#patches-sessionpatch)), and never a
+     live `session.upsert`.
+   * `session.remove`, with `{ "id": "…" }` (to a client that asked for `patch`, with the
+     `revision` a patch carries too), when a session ends and is dropped. A session
      a host is ending (`session.stop`) is first upserted with `status: "ending"`, then
      removed once its process has gone.
    * `discovery.changed`, with `{ "discoveryHeld": {…} }` when the host's discovery becomes
@@ -259,6 +278,100 @@ including one that `sessions.synced` itself reveals, means that snapshot can't b
 client subscribes again rather than taking it. Likewise only upserts received after the
 response count towards the new snapshot: an earlier subscription's upsert of a session that
 ended before the new snapshot was taken would otherwise keep it on the list.
+
+#### Patches (`session.patch`)
+
+A whole upsert is 1 to 40 KiB, sent again for any change: a sub-agent's status, a new
+`updatedAt`. Measured on 2026-11-03 (#597), a session idle for 40 s was upserted three times at
+21.7 KB, 16.6 KB of it `subagents` that had not changed. So a client that asked for `patch` gets
+each live change as only what changed:
+
+```json
+{
+  "id": "4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b",
+  "base": 41,
+  "revision": 131,
+  "set": { "status": "idle", "statusSince": "2026-10-28T04:26:13.182Z", "updatedAt": "2026-10-28T04:26:13.182Z", "activity": { "turnCount": 5, "currentTool": null } },
+  "subagents": { "set": [{ "id": "agent-1", "status": "ended", "outcome": "done", "endedAt": "2026-10-28T04:26:13.182Z", "shells": 0, "currentTool": null }], "remove": ["agent-2"], "order": ["agent-3", "agent-1"] },
+  "append": { "activity": { "response": " The docs build too." } }
+}
+```
+
+| Field | Notes |
+|---|---|
+| `id` | The session |
+| `base` | The `seq` of the event on this channel that last gave the client this session: an upsert of the snapshot, or an earlier patch. **Absent: the patch is the whole session**, applied to nothing, and it replaces whatever the client holds of it as an upsert would. A host sends the whole session when it has sent none of it on this subscription, and whenever that is smaller |
+| `revision` | Every change the host had made up to this revision has now been sent on this channel ([Resuming](#resuming-without-a-snapshot)). At most the host's `revision`, and lower while another session's change waits out its 250 ms. Absent from a host that cannot say |
+| `set` | A JSON merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) of the session as an upsert carries it: an object merges into the field's object member by member, `null` removes a field, and anything else (a list included) replaces the field whole. Holds `subagents` only whole, or `null` |
+| `subagents` | Entries of `subagents`, by `id`, so a change to one does not resend the other nineteen: `remove` drops the ids it names; each entry of `set` merges (RFC 7396) into the entry with its `id`, or is added at the end if there is none; then `order`, when present, is every id in the order the list now has. A list left empty is absent |
+| `append` | Text that grew: the shape of `set`, each leaf a string added to the end of the string the field holds. Never inside `subagents` |
+
+A client applies `set`, then `subagents`, then `append`, to the session as it last **received**
+it (the JSON, not what it made of it), and then reads the result exactly as it reads an upsert
+([Malformed records](#malformed-records)). A patch therefore gives exactly the session that an
+upsert of the same moment would. The shared vectors check this for C# and the PWA:
+`SessionPatch` in [vectors/sessions.json](vectors/sessions.json) for each rule, and
+[vectors/session-patches.json](vectors/session-patches.json) for the recorded Copilot, Claude and
+Codex sessions in `tests/fixtures`, patched as a host sends them. C#: `SessionPatches.Diff` and
+`Apply` in `src/AgentBridge.Protocol/SessionPatches.cs`.
+
+**A patch the client cannot apply** is dropped whole, never applied in part, and the client
+subscribes again, as after a gap in `seq`: one whose `base` is not the `seq` it holds that session
+from on this channel (it holds the session from another event, holds none, or holds it from an
+earlier subscription), a `set` or `append` that is not an object, text appended to a field that is
+not text, a `subagents` applied to a list that is not entries with distinct text ids, an entry of
+`subagents.set` without one, or an `order` that does not name each entry once. Its list is not whole
+again until that subscription's `sessions.synced`, as #427 says above. A client also subscribes
+again when it cannot read a patch at all (a strict field below). That `base` names an event, and
+not a version of the session, is what lets a client find out: it learns nothing of a session from
+a patch whose upsert it dropped as unreadable (Malformed records, rule 4), and applying the next
+patch to what it had before would have shown a session the host never had.
+
+A host sends nothing for a change that leaves the session as an upsert carries it unchanged (only
+its tool history moved, say). An `append` is used only where the old text is all still there at the
+start of the new: a `response` cut to its last 16 KiB has moved, and is `set`. Hosts choose
+freely between a patch and a whole session; a client applies either.
+
+#### Resuming without a snapshot
+
+A reconnect took a whole snapshot, and #427 holds everything a client sends that machine until it
+ends. A client that held the list whole on an earlier channel to the same run of the host asks for
+only what changed since, with `since`:
+
+| Field | Notes |
+|---|---|
+| `instance` | The `machine.instance` of the `hello` the list came from |
+| `revision` | The latest revision the client's whole list is at: the `revision` of the `sessions.synced` that made it whole, then of each `session.patch` and `session.remove` received after that `sessions.synced` with no gap in `seq` since. A gap stops it moving: what came before the gap still all arrived, so the revision held then is still true |
+
+The host **resumes** when `instance` is this run's and `revision` is no later than its own. It
+answers `resumed: true` and a `count` of the sessions that follow: one `session.upsert` for each
+live session whose state is not what it was at that revision (one that started since included),
+then `sessions.synced` with `live`, the id of every live session, those not sent included:
+
+```json
+{ "revision": 131, "live": ["4f0c2a1e-9d3b-4e6f-8a7c-5b1d2e3f4a5b", "b7e1c2d3-0000-4000-8000-000000000001"] }
+```
+
+Anything else gets the full snapshot, as without `since`, and no `resumed`: another instance (the
+host restarted, and its revisions started again from 0), a revision it has not reached, or a `live`
+of more than 32 KiB. A run's revisions only go up, and its sessions are all in memory, so a host
+needs no history to resume: a session that changed since has a later revision, and one that ended
+is missing from `live`.
+
+**When the list is whole again.** Which `sessions.synced` ends the snapshot is exactly as above
+(#427): only one received after the response to the latest `sessions.subscribe`, with no gap in
+`seq` since that response. On the one that ends a resumed snapshot, the client's list becomes, for
+each id in `live`, the session as upserted since the response, or else as it held it before; a
+session it held that is not in `live` has ended and is dropped. Until then the PWA sends that
+machine nothing, and the Windows app no answer, reply or stop for its sessions, as for any snapshot.
+If an id in `live` is one the client neither holds nor was sent, or `live` cannot be read, the list
+can't be whole, and the client subscribes again without `since`.
+
+A client gives `since` only for a list that is whole: never after it dropped a `session.upsert` or a
+`session.patch` it could not read, or could not apply a patch, until a full snapshot has made its
+list whole again; and only while it has `instance` and a `revision` from this run of the host. The
+patches that follow a resumed snapshot are on its upserts, or whole (no `base`): a host remembers
+nothing of what it sent on an earlier channel.
 
 ### Discovery held
 

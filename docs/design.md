@@ -211,8 +211,15 @@ HA image store.
   reconnect it sends `resume{fromSeq}`. If the host's ring buffer no longer covers
   that seq, it sends a fresh snapshot. **This replaces retained MQTT:** an offline
   client loses nothing it needs, and a reconnect after a laptop sleep is one message.
+  As built (#601, [v1-sessions.md](protocol/v1-sessions.md#resuming-without-a-snapshot)): the
+  client resumes from the `revision` its whole list is at, in the same run of the host
+  (`machine.instance`), and is sent only the sessions changed since and the ids of the live ones.
+  The host needs no ring buffer, as every live session is in its memory with the revision it last
+  changed at.
 * **Deltas.** `activity` is append-only (reasoning chunks, tool calls) and is sent as
   appended items, not full state. This matters for relay egress cost and phone battery.
+  As built (#601, `session.patch`): only the fields that changed, as a JSON merge patch,
+  `subagents` by id, and text that grew as the text appended.
 * **Commands** (client → host) carry the signed envelope in §5.5:
   `session.reply`, `decision.answer`, `session.launch`, `session.stop`
   (with the existing daemon-side two-press confirmation), `session.transfer.request`,

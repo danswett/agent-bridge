@@ -20,7 +20,8 @@
             "sessions": 1
           },
           "capabilities": [
-            "sessions.read"
+            "sessions.read",
+            "sessions.patch"
           ]
         }
       }

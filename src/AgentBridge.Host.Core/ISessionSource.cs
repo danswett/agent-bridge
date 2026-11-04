@@ -60,6 +60,13 @@ public interface ISessionSource : IAsyncDisposable
     // events with its own continuing seq.
     SessionSubscription Subscribe();
 
+    // The same, resuming from a revision of this source the client's whole list is at: only the
+    // sessions whose state changed since are upserted, and sessions.synced names every live one
+    // (Live), with the result's Resumed set. A revision this source cannot resume from, or a source
+    // that never resumes, gives the whole snapshot. Live upserts and removals carry the revision
+    // every change up to which has been written to the subscription (SessionEvent.Revision).
+    SessionSubscription Subscribe(long? since) => Subscribe();
+
     // One discovery and tailing pass, now. The CLI's `sessions` command and tests use it;
     // StartAsync runs it in a loop.
     Task RefreshAsync(CancellationToken cancellationToken = default);
@@ -93,8 +100,10 @@ public sealed record SessionChange(SessionChangeKind Kind, string Id, Session? S
 public sealed record SessionFiles(AgentKind Agent, string? Transcript, string? Registration);
 
 // One event for a subscriber, named as on the wire (Events.SessionUpsert and so on), with
-// its data record: Session, SessionRemoved, SessionsSynced or DiscoveryChanged.
-public sealed record SessionEvent(string Name, object Data);
+// its data record: Session, SessionRemoved, SessionsSynced or DiscoveryChanged. Revision, on a
+// live upsert or removal: every change up to it has been written to the subscription by now, so a
+// client that has read this far may resume from it. Null where the source cannot say.
+public sealed record SessionEvent(string Name, object Data, long? Revision = null);
 
 public sealed class SessionSubscription : IDisposable
 {
