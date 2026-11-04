@@ -282,10 +282,16 @@
   full.addEventListener('focusout', (e) => { if (!full.contains(e.relatedTarget)) { focusInside = false; full.scrollTop = 0; } });
 // The header floats over the conversation, so a vertical swipe or wheel that starts on it scrolls the
 // conversation, as the app's would. On a landscape phone the header can cover the whole conversation.
+// A header taller than the stage (capped, so it scrolls within itself) takes the movement first, as nested scrolling does.
+const pan = (dy) => {
+  const before = full.scrollTop, max = Math.max(0, full.scrollHeight - full.clientHeight);
+  full.scrollTop = Math.min(Math.max(before + dy, 0), max);
+  scroller.scrollTop += dy - (full.scrollTop - before);
+};
 full.addEventListener('wheel', (e) => {
   if (e.ctrlKey || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
   e.preventDefault();
-  scroller.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1);
+  pan(e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scroller.clientHeight : 1));
 }, { passive: false });
 let touch = null;
 full.addEventListener('touchstart', (e) => {
@@ -300,7 +306,7 @@ full.addEventListener('touchmove', (e) => {
   }
   if (touch.axis !== 'y') return;
   e.preventDefault();
-  scroller.scrollTop += dy;
+  pan(dy);
   touch.x = p.clientX; touch.y = p.clientY;
 }, { passive: false });
 const endTouch = () => { touch = null; };
