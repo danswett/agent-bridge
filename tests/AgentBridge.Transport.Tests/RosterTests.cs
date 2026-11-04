@@ -132,6 +132,47 @@ public class RosterTests
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task A_host_coming_back_online_is_in_presence_or_the_offline_list_of_every_snapshot_never_neither()
+    {
+        await using var relay = await TestRelay.StartAsync();
+        var token = relay.TokenFor(1, "octo");
+        var app = await relay.ConnectAsync(token, "app", "app");
+        var gone = await relay.ConnectAsync(token, "desk", "host");
+        await LeaveAsync(relay, gone, app);
+        await UntilKnownAsync(app, gone.Id);
+
+        // Read as a usage poll reads it, over and over while the host comes back (#206): each
+        // snapshot's two lists are one presence message's, so the host is never in neither.
+        using var stop = new CancellationTokenSource();
+        var neither = 0;
+        var samples = 0;
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reader = Task.Run(() =>
+        {
+            reading.TrySetResult();
+            while (!stop.IsCancellationRequested)
+            {
+                var snap = app.Relay.Snapshot;
+                if (snap.Presence.All(p => p.Id != gone.Id) && snap.Known?.Any(k => k.Id == gone.Id) != true) { neither++; }
+                samples++;
+            }
+        });
+        // Reading before the host starts back, so the moment it comes online is among the samples.
+        await reading.Task;
+        await using var again = await relay.ConnectAsync(token, "desk", "host", gone.Key);
+        await app.Relay.WaitForPeerAsync(p => p.Id == gone.Id, Patience);
+        await stop.CancelAsync();
+        await reader;
+
+        Assert.True(samples > 0);
+        Assert.Equal(0, neither);
+        var now = app.Relay.Snapshot;
+        Assert.Contains(now.Presence, p => p.Id == gone.Id);
+        Assert.DoesNotContain(now.Known!, k => k.Id == gone.Id);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task An_online_machine_an_unknown_one_and_a_malformed_id_are_refused()
     {
         await using var relay = await TestRelay.StartAsync();

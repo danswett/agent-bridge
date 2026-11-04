@@ -518,18 +518,15 @@ public sealed class RelayFleetLink : IFleetLink
 
     public IReadOnlyList<KnownMachine>? Offline => current?.Relay.Known;
 
-    // RelayClient sets Presence and then Known from each presence message. Known is read first, so
-    // where those stores stay in order (x64), a machine coming online between the two reads is in
-    // one list or the other, never neither, which would read as forgotten. Should it be in neither
-    // anyway, it is online: its own report says it is the account's again (UsageCache.Present).
+    // Both from one presence message (RelayClient.Snapshot, #206), so a machine coming online is
+    // in one list or the other, never neither, which would read as forgotten.
     public (IReadOnlyList<FleetHost> Hosts, IReadOnlyList<KnownMachine>? Offline) Snapshot
     {
         get
         {
             if (current is not { } c) { return ([], null); }
-            var known = c.Relay.Known;
-            Interlocked.MemoryBarrier();
-            return (HostsOf(c, c.Relay.Presence), known);
+            var snap = c.Relay.Snapshot;
+            return (HostsOf(c, snap.Presence), snap.Known);
         }
     }
 
