@@ -23,7 +23,17 @@ public static class Motion
     static MotionCatalogue? catalogue;
 
     public static MotionCatalogue Catalogue => catalogue ??= MotionCatalogue.From(key =>
-        Application.Current.Resources.TryGetValue(key, out var v) ? Convert.ToString(v, CultureInfo.InvariantCulture) : null);
+        Retimed.TryGetValue(key, out var t) ? t
+        : Application.Current.Resources.TryGetValue(key, out var v) ? Convert.ToString(v, CultureInfo.InvariantCulture) : null);
+
+    // An entry's timing stretched by the self-test for a check, so which of two steps ends first
+    // doesn't hang on how soon the compositor ends a batch; null puts the token's back.
+    static readonly Dictionary<string, string> Retimed = new(StringComparer.Ordinal);
+    internal static void Retime(string key, TimeSpan? duration)
+    {
+        if (duration is { } d) { Retimed[key] = d.ToString("c", CultureInfo.InvariantCulture); } else { Retimed.Remove(key); }
+        catalogue = null;
+    }
 
     // Windows' animation effects, unless the self-test has set them for a check.
     public static bool Enabled => Forced ?? Settings.AnimationsEnabled;

@@ -52,6 +52,11 @@ public sealed class ReorderTests
 
         var unpinned = new ReorderDrag(List(S("a"), S("b"), S("c")), "b");
         Assert.Equal(["c"], unpinned.Closing().Keys);
+
+        // The only pin going: no groups are left, so the rest close up its card and both headers.
+        var only = new ReorderDrag(List(S("p", pinned: true), S("a"), S("b")), "p");
+        Assert.Equal(-(60 + 30 + 30), only.Closing()["a"]);
+        Assert.Equal(-(60 + 30 + 30), only.Closing()["b"]);
     }
 
     [Fact]

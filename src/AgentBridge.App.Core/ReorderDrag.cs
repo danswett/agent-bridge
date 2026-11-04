@@ -89,12 +89,15 @@ public sealed class ReorderDrag
     public bool Crosses(ReorderTarget t) => t.Pinned != Held.Pinned;
 
     // The held card's session ended: the cards after it close its slot, each moving up one card, and
-    // those before it stay. Keyed by card, as how far each moves from where it was laid out.
+    // those before it stay. The only pinned card going takes both headers with it, Pinned's and
+    // Sessions', so the rest move up by those too. Keyed by card, as how far each moves from where it
+    // was laid out.
     public IReadOnlyDictionary<string, double> Closing()
     {
         var after = Others(Held.Pinned).Skip(Origin.Index);
         if (Held.Pinned) { after = after.Concat(rest); }
-        return after.ToDictionary(c => c.Key, _ => -GapHeight, StringComparer.Ordinal);
+        var by = GapHeight + (Held.Pinned && pinned.Count == 0 ? pinnedHeader + sessionsHeader : 0);
+        return after.ToDictionary(c => c.Key, _ => -by, StringComparer.Ordinal);
     }
 
     IEnumerable<bool> Groups => new[] { true, false }.Where(HasGroup);

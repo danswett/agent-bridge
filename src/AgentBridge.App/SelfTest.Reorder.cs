@@ -163,7 +163,7 @@ static partial class SelfTest
             var savedHere = saved.IndexOf(main.KeyOf(held)) is var h && h > saved.IndexOf(main.KeyOf(passed[1])) && saved.IndexOf(main.KeyOf(passed[1])) > saved.IndexOf(main.KeyOf(passed[0]));
             await Task.Delay(400);
             check(landed && savedHere && focused && laneHeld && said == $"Moved to position 4 of {sessions.Count} in Sessions." && Item(held)?.ContentTemplateRoot is SessionRow { Lifted: false },
-                $"drops a card where its gap was, saves the order there, keeps keyboard focus with it and holds Needs you from a click for a moment (order {Order()}; saved {(savedHere ? "there" : "elsewhere")}; {FocusedName(window)}, the card {(held.WantsRowFocus ? "still asking for focus" : "not asking")}, its item {ItemState(window, held)}; Needs you {(laneHeld ? "held" : "not held")}; said \"{said}\")");
+                $"drops a card where its gap was, saves the order there, keeps keyboard focus with it and holds Needs you from a click for a moment (order {Order()}; saved {(savedHere ? "there" : "elsewhere")}; {FocusedName(window)}, the card {(held.WantsRowFocus ? $"still asking for focus ({page.FocusMissed ?? "the list never missed"})" : "not asking")}, its item {ItemState(window, held)}; Needs you {(laneHeld ? "held" : "not held")}; said \"{said}\")");
         }
 
         // Dropped among the pinned: pinned there, said so.
@@ -223,6 +223,33 @@ static partial class SelfTest
             check(lifts && !liftedAnyway, $"lifts a card held by touch, and nothing once the sort leaves Your order during the hold ({(lifts ? "lifts" : "did not lift")}; {(liftedAnyway ? "lifted after the sort changed" : "nothing after the sort changed")})");
         }
 
+        // The held session ending (as its host removing it does): said, and the list let go only once
+        // the card has faded and the others have closed its slot on `reorder`. `reorder` stretched to a
+        // second for the check: at 167 ms a compositor slow to end the fade's batch let go after the
+        // glides anyway, and the check passed without waiting for them.
+        {
+            await Fit();
+            var at = Grab(held);
+            page.Begin(held, at);
+            page.MoveTo(new Point(at.X, at.Y + (2 * slot) + 6));
+            await Task.Delay(300);
+            Motion.Retime("AbMotionReorderDuration", TimeSpan.FromSeconds(1));
+            var closing = Motion.Catalogue.Enter("Reorder", true).Duration;
+            TimeSpan? after;
+            string? said;
+            try
+            {
+                page.EndHeld();
+                said = SessionRow.LastSaid;
+                await Until(() => page.VanishedAfter is not null, TimeSpan.FromSeconds(3));
+                after = page.VanishedAfter;
+                await Task.Delay(300);
+            }
+            finally { Motion.Retime("AbMotionReorderDuration", null); }
+            check(said == ReorderWords.Ended(held.Title) && after is { } took && took >= closing && !page.Dragging && main.Held is null,
+                $"says a held session ended, and lets the list go only once the card has faded and the others have closed its slot (\"{said}\"; after {after?.TotalMilliseconds:0} of {closing.TotalMilliseconds:0} ms)");
+        }
+
         // With animation effects off: the card still follows, but nothing lifts, slides or settles.
         {
             Motion.Forced = false;
@@ -262,6 +289,25 @@ static partial class SelfTest
             await Task.Delay(400);
             check(down == $"Moved to position 3 of {count} in Sessions." && end == "End of Sessions.",
                 $"says where Alt+Down moved a card, and the end of its group when it can go no further (\"{down}\", \"{end}\")");
+        }
+
+        // A row the list reuses part way through a keyboard move's slide: its heading, held still
+        // against the slide, is put back with it.
+        {
+            var first = main.Sessions.First(c => !c.Pinned);
+            var second = main.Sessions.Where(c => !c.Pinned).ElementAt(1);
+            list.ScrollIntoView(first);
+            await Task.Delay(300);
+            Rows(window).FirstOrDefault(r => r.Card == first)?.MoveBy(1);
+            await Task.Delay(40);
+            var row = Rows(window).FirstOrDefault(r => r.Card == second);
+            var sliding = row?.HeadingSlide ?? 0;
+            row?.Reshown();
+            var after = row?.HeadingSlide ?? 0;
+            await Task.Delay(300);
+            Rows(window).FirstOrDefault(r => r.Card == first)?.MoveBy(-1);
+            await Task.Delay(400);
+            check(Math.Abs(sliding) > 1 && Math.Abs(after) < 0.5, $"puts a group heading back with its row when the list reuses the row part way through a keyboard move ({sliding:0} px sliding, {after:0} px after)");
         }
 
         // A real mouse, through Windows' input: pressed on the grip, dragged two cards down, let go.

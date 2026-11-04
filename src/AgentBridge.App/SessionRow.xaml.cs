@@ -81,7 +81,16 @@ public sealed partial class SessionRow : UserControl
         // A lifted look belongs to the card held, which the list gives back to its own row.
         HideLift();
         ShowGrip();
+        // A heading held still against a keyboard move's slide (SlideFrom) belongs to that move: the
+        // item's own slide is reset as the list reuses it, and the heading must be too.
+        Motion.Settle(GroupHeading);
     }
+
+    // The row given its session again, as the list does when it reuses it (the self-test's).
+    internal void Reshown() => Settle();
+
+    // How far the group heading is drawn from its place by a slide.
+    internal double HeadingSlide => ElementCompositionPreview.GetElementVisual(GroupHeading).Properties.TryGetVector3("Translation", out var t) == CompositionGetValueStatus.Succeeded ? t.Y : 0;
 
     // The dot last shown, so only a change of it on this session fades.
     bool unread;

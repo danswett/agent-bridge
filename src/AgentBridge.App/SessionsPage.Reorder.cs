@@ -302,6 +302,14 @@ public sealed partial class SessionsPage
     }
     internal FrameworkElement ListHeaderView => ListHeader;
 
+    // The self-test's held session ending, through the same steps as its host removing it; how long the
+    // card took to go, from then until the list let it go.
+    internal void EndHeld() => Vanish();
+    internal TimeSpan? VanishedAfter { get; private set; }
+
+    // Why the list's last ask to focus a dropped session missed, for the self-test to say.
+    internal string? FocusMissed { get; private set; }
+
     internal void MoveTo(Point at) { if (drag is not null) { Follow(at); } }
     internal void LetGo() { if (drag is not null) { Release(); } }
     internal void PutBack() { if (drag is not null) { Cancel(say: true); } }
@@ -710,7 +718,8 @@ public sealed partial class SessionsPage
         // Focus stays with the session: the dropped card asks for it, as after Alt+Up/Down.
         if (!moved) { d.Card.WantsRowFocus = true; }
         SettleWhereDrawn(d, from, scale, gliding, afterLayout: moved);
-        FocusSession(d.Card, 10);
+        FocusMissed = null;
+        FocusSession(d.Card, 40);
         reorderedUntil = DateTime.UtcNow.AddSeconds(1);
         GuardLane();
         d.Row.Say(ReorderWords.Dropped(PlaceNow(d, drawn), crossed, target.Pinned));
@@ -796,10 +805,13 @@ public sealed partial class SessionsPage
     // Keyboard focus with the dropped session (as after Alt+Up/Down, #410, #506): its list item once the
     // list has drawn it there. The row's own request (SessionRow.TakeFocus) can lose the race as the list
     // hands its items to sessions again after the move, a row control given the card then given another
-    // before it asks, so the list asks too, a few times, until focus lands.
+    // before it asks, so the list asks too, until focus lands. For up to 2 s: in about one self-test run
+    // in fifteen the list took longer than half a second to draw the session in its place, and focus
+    // was left on another session's item.
     void FocusSession(SessionCardViewModel card, int tries)
     {
-        if (!card.WantsRowFocus || tries <= 0) { return; }
+        if (!card.WantsRowFocus) { return; }
+        if (tries <= 0) { FocusMissed = $"{FocusMissed}; gave up"; return; }
         // A frame or more apart: the list lays out its items again across a pass or two after the move.
         var timer = DispatcherQueue.CreateTimer();
         timer.IsRepeating = false;
@@ -809,12 +821,15 @@ public sealed partial class SessionsPage
             t.Stop();
             if (!card.WantsRowFocus || XamlRoot is null) { return; }
             List.UpdateLayout();
-            if (List.ContainerFromItem(card) is ListViewItem item && ReferenceEquals(item.Content, card) && item.Focus(FocusState.Keyboard))
+            var item = List.ContainerFromItem(card) as ListViewItem;
+            if (item is not null && ReferenceEquals(item.Content, card) && item.Focus(FocusState.Keyboard))
             {
+                FocusMissed = null;
                 card.WantsRowFocus = false;
                 item.StartBringIntoView();
                 return;
             }
+            FocusMissed = item is null ? "no item draws it" : !ReferenceEquals(item.Content, card) ? "its item draws another session" : "its item refused focus";
             FocusSession(card, tries - 1);
         };
         timer.Start();
@@ -847,19 +862,22 @@ public sealed partial class SessionsPage
         // Said in place of anything still waiting to be said, while its row is still there to say it.
         d.Row.Say(ReorderWords.Ended(d.Card.Title));
         HideLayer();
+        var started = Stopwatch.GetTimestamp();
+        VanishedAfter = null;
         // The others close its slot on `reorder` (at once with animation effects off), as the list will
         // lay them out once it lets the session go.
         var closing = d.Model.Closing();
-        foreach (var (key, item) in d.Items) { Glide(item, closing.TryGetValue(key, out var shift) ? shift : 0, instant: false); }
+        void Close() { foreach (var (key, item) in d.Items) { Glide(item, closing.TryGetValue(key, out var shift) ? shift : 0, instant: false); } }
         var items = d.Items.Values.Append(d.Item).ToList();
         var visual = Visual(d.Item);
         var step = Motion.Catalogue.Exit("ListItem", Motion.Enabled);
-        // Faded out: the list lets the session go and lays the others out where they were drawn, in one
-        // pass, so nothing jumps.
+        // Faded out and closed up: the list lets the session go and lays the others out where they were
+        // drawn, in one pass, so nothing jumps.
         void Gone() => DispatcherQueue.TryEnqueue(() =>
         {
             if (viewModel is not null && viewModel.Held == d.Card) { viewModel.Held = null; }
             if (drag is null) { Reset(items); }
+            VanishedAfter = Stopwatch.GetElapsedTime(started);
         });
         // Cut short (another card lifted, the item recycled): everything back as laid out now, the
         // session let go when the list can take it.
@@ -870,16 +888,27 @@ public sealed partial class SessionsPage
         }
         if (!step.Runs)
         {
+            Close();
             visual.StopAnimation("Opacity");
             visual.Opacity = 0;
             Gone();
             return;
         }
         settling[d.Item] = CutShort;
+        // The list lets go only once the fade and the closing glides are both done: their batch, and no
+        // sooner than the longer of the two (a compositor not drawing ends a batch early).
+        var waiting = 2;
+        void Done() { if (--waiting == 0 && settling.Remove(d.Item)) { Gone(); } }
         var batch = visual.Compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+        Close();
         AnimateOpacity(visual, 1, 0, step);
         batch.End();
-        batch.Completed += (_, _) => { if (settling.Remove(d.Item)) { Gone(); } };
+        batch.Completed += (_, _) => DispatcherQueue.TryEnqueue(Done);
+        var longest = DispatcherQueue.CreateTimer();
+        longest.IsRepeating = false;
+        longest.Interval = TimeSpan.FromTicks(Math.Max(step.Duration.Ticks, Motion.Catalogue.Enter("Reorder", Motion.Enabled).Duration.Ticks));
+        longest.Tick += (t, _) => { t.Stop(); Done(); };
+        longest.Start();
     }
 
     // The pointer, the keys and the frames let go; the list's own changes drawn again.
