@@ -19,6 +19,7 @@ sealed class MergeRuleConfig
     public SecurityMarksConfig SecurityMarks { get; set; } = new();
     public CodeQlConfig Codeql { get; set; } = new();
     public List<string> IgnoreWorkflows { get; set; } = [];
+    public MainGreenConfig MainGreen { get; set; } = new();
     public List<string> SensitivePaths { get; set; } = [];
 
     public static MergeRuleConfig Parse(string yaml)
@@ -37,6 +38,8 @@ sealed class MergeRuleConfig
         config.SecurityMarks ??= new();
         config.SecurityMarks.Labels ??= [];
         config.Codeql ??= new();
+        config.MainGreen ??= new();
+        config.MainGreen.ExemptLabels ??= [];
         var missing = new List<string>();
         if (string.IsNullOrWhiteSpace(config.Base)) missing.Add("base");
         if (string.IsNullOrWhiteSpace(config.StatusPoster)) missing.Add("status_poster");
@@ -45,6 +48,7 @@ sealed class MergeRuleConfig
         if (config.IndependentReview.Posters.Count == 0) missing.Add("independent_review.posters");
         if (string.IsNullOrWhiteSpace(config.Codeql.Workflow)) missing.Add("codeql.workflow");
         if (string.IsNullOrWhiteSpace(config.Codeql.Check)) missing.Add("codeql.check");
+        if (string.IsNullOrWhiteSpace(config.MainGreen.Workflow)) missing.Add("main_green.workflow");
         if (config.SensitivePaths.Count == 0) missing.Add("sensitive_paths");
         if (missing.Count > 0)
             throw new FormatException($"quality/merge-rule.yml has no {string.Join(", ", missing)}.");
@@ -71,6 +75,20 @@ sealed class CodeQlConfig
     public string Workflow { get; set; } = "";
     public string Check { get; set; } = "";
 }
+
+sealed class MainGreenConfig
+{
+    /// <summary>The workflow file whose latest finished push run on the base branch says whether it's green.</summary>
+    public string Workflow { get; set; } = "";
+    public List<string> ExemptLabels { get; set; } = [];
+}
+
+/// <summary>
+/// The base branch's CI, read once per run: success, failure (red, being re-run, or no finished
+/// run) or error (couldn't be read), and the reason, which a blocked pull request's description
+/// starts with.
+/// </summary>
+sealed record MainFact(string State, string Reason);
 
 /// <summary>A commit status on the head: GitHub keeps every one posted, newest last by time.</summary>
 sealed record StatusFact(string Context, string State, string? Description, string? Creator, DateTimeOffset CreatedAt);
@@ -150,15 +168,24 @@ static class MergeRule
     /// <summary>
     /// The verdict on one pull request, or null when the rule doesn't apply (closed, or into
     /// another branch). Failure is anything a person must act on; pending is what's on its way
-    /// (Copilot's review, CodeQL). Every missing piece is named, failures first.
+    /// (Copilot's review, CodeQL). Every missing piece is named, failures first, and a red main
+    /// before them all. Error, when main's CI couldn't be read, fails it like failure.
     /// </summary>
-    public static MergeVerdict? Evaluate(MergeRuleConfig config, PullRequestFacts pr)
+    public static MergeVerdict? Evaluate(MergeRuleConfig config, MainFact main, PullRequestFacts pr)
     {
         if (pr.State != "OPEN" || pr.BaseRef != config.Base)
             return null;
         var sha = Short(pr.HeadSha);
         var failures = new List<string>();
         var pending = new List<string>();
+
+        // Auto-merge doesn't pause for a red main, so nothing lands on one but the fix: a pull
+        // request with an exempt label, which only someone with triage rights can add. It skips
+        // this check alone.
+        var exemptBy = pr.Labels.FirstOrDefault(l => config.MainGreen.ExemptLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        var mainBlocks = main.State != "success" && exemptBy is null;
+        if (mainBlocks)
+            failures.Add(main.Reason);
 
         if (pr.IsDraft)
             failures.Add("draft: mark it ready for review");
@@ -230,9 +257,9 @@ static class MergeRule
             pending.Add($"waiting for {running[0].Name}{More(running.Count)}");
 
         var reasons = failures.Concat(pending).ToList();
-        var state = failures.Count > 0 ? "failure" : pending.Count > 0 ? "pending" : "success";
+        var state = failures.Count > 0 ? (mainBlocks && main.State == "error" ? "error" : "failure") : pending.Count > 0 ? "pending" : "success";
         var description = state == "success"
-            ? $"Copilot reviewed {sha}; every check passed{(needsReceipt ? "; independent review on file" : "")}"
+            ? $"Copilot reviewed {sha}; every check passed{(needsReceipt ? "; independent review on file" : "")}{(main.State != "success" ? $"; main isn't green, but it's labelled {exemptBy}" : "")}"
             : Capitalize(string.Join("; ", reasons));
         return new MergeVerdict(state, Truncate(Printable(description)), reasons, sensitive);
     }

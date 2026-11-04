@@ -23,11 +23,16 @@ public class MergeRuleTests
           workflow: CodeQL
           check: CodeQL
         ignore_workflows: [Merge rule]
+        main_green:
+          workflow: ci.yml
+          exempt_labels: [fixes-main]
         sensitive_paths:
           - .github/**
           - src/AgentBridge.Transport/**
           - src/**pair**
         """);
+
+    static readonly MainFact MainGreen = new("success", "main's CI 2222222 passed");
 
     static readonly ReviewFact Copilot = new("copilot-pull-request-reviewer", IsBot: true, "COMMENTED", Head);
     static readonly RunFact Green = new("COMPLETED", "SUCCESS");
@@ -55,7 +60,7 @@ public class MergeRuleTests
     [Fact]
     public void A_reviewed_change_with_green_CodeQL_and_nothing_sensitive_passes()
     {
-        var verdict = MergeRule.Evaluate(Config, Pr())!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr())!;
 
         Assert.Equal("success", verdict.State);
         Assert.Equal("Copilot reviewed abcdef0; every check passed", verdict.Description);
@@ -64,8 +69,8 @@ public class MergeRuleTests
     [Fact]
     public void A_Copilot_review_of_an_earlier_commit_or_by_a_user_with_the_bots_name_leaves_it_waiting()
     {
-        var earlier = MergeRule.Evaluate(Config, Pr(reviews: [Copilot with { CommitOid = Older }]))!;
-        var impostor = MergeRule.Evaluate(Config, Pr(reviews: [Copilot with { IsBot = false }]))!;
+        var earlier = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { CommitOid = Older }]))!;
+        var impostor = MergeRule.Evaluate(Config, MainGreen, Pr(reviews: [Copilot with { IsBot = false }]))!;
 
         Assert.Equal(("pending", "Waiting for a Copilot review of abcdef0"), (earlier.State, earlier.Description));
         Assert.Equal("pending", impostor.State);
@@ -76,10 +81,10 @@ public class MergeRuleTests
     {
         var files = new[] { "src/AgentBridge.Host/Pairing/Codes.cs", "docs/status.md" };
 
-        var none = MergeRule.Evaluate(Config, Pr(files))!;
+        var none = MergeRule.Evaluate(Config, MainGreen, Pr(files))!;
         // A workflow's token posting the receipt, as a pull request's own workflow could, counts for nothing.
-        var byWorkflow = MergeRule.Evaluate(Config, Pr(files, statuses: [Receipt("success", "github-actions[bot]")]))!;
-        var byReviewer = MergeRule.Evaluate(Config, Pr(files, statuses: [Receipt("success")]))!;
+        var byWorkflow = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [Receipt("success", "github-actions[bot]")]))!;
+        var byReviewer = MergeRule.Evaluate(Config, MainGreen, Pr(files, statuses: [Receipt("success")]))!;
 
         Assert.Equal("failure", none.State);
         Assert.Equal("Needs an independent review of abcdef0: it touches src/AgentBridge.Host/Pairing/Codes.cs", none.Description);
@@ -90,12 +95,12 @@ public class MergeRuleTests
 
     [Fact]
     public void Sensitive_paths_match_whatever_the_case() =>
-        Assert.Equal("failure", MergeRule.Evaluate(Config, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);
+        Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, Pr(["SRC/agentbridge.transport/Channel.cs"]))!.State);
 
     [Fact]
     public void The_latest_receipt_counts_and_a_failed_one_blocks_even_a_change_that_needs_none()
     {
-        var verdict = MergeRule.Evaluate(Config, Pr(statuses: [Receipt("success", minute: 1), Receipt("failure", minute: 2)]))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(statuses: [Receipt("success", minute: 1), Receipt("failure", minute: 2)]))!;
 
         Assert.Equal(("failure", "The independent review of abcdef0 failed: sec-42 failure"), (verdict.State, verdict.Description));
     }
@@ -103,7 +108,7 @@ public class MergeRuleTests
     [Fact]
     public void A_file_list_GitHub_cut_short_counts_as_sensitive()
     {
-        var verdict = MergeRule.Evaluate(Config, Pr(filesComplete: false))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(filesComplete: false))!;
 
         Assert.Equal(("failure", "Needs an independent review of abcdef0: its file list is incomplete"), (verdict.State, verdict.Description));
     }
@@ -111,7 +116,7 @@ public class MergeRuleTests
     [Fact]
     public void A_draft_or_a_hold_label_fails_and_every_missing_piece_is_named_failures_first()
     {
-        var verdict = MergeRule.Evaluate(Config, Pr(draft: true, labels: ["HOLD"], reviews: []))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(draft: true, labels: ["HOLD"], reviews: []))!;
 
         Assert.Equal("failure", verdict.State);
         Assert.Equal(["draft: mark it ready for review", "held by the label 'HOLD'", "waiting for a Copilot review of abcdef0"], verdict.Reasons);
@@ -131,7 +136,7 @@ public class MergeRuleTests
             codeqlRun: runStatus is null ? null : new RunFact(runStatus, runConclusion),
             codeqlCheck: checkStatus is null ? null : new RunFact(checkStatus, checkConclusion));
 
-        var verdict = MergeRule.Evaluate(Config, pr)!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, pr)!;
 
         Assert.Equal((state, description), (verdict.State, verdict.Description));
     }
@@ -139,14 +144,14 @@ public class MergeRuleTests
     [Fact]
     public void A_closed_pull_request_or_one_into_another_branch_is_not_judged()
     {
-        Assert.Null(MergeRule.Evaluate(Config, Pr() with { State = "MERGED" }));
-        Assert.Null(MergeRule.Evaluate(Config, Pr() with { BaseRef = "release" }));
+        Assert.Null(MergeRule.Evaluate(Config, MainGreen, Pr() with { State = "MERGED" }));
+        Assert.Null(MergeRule.Evaluate(Config, MainGreen, Pr() with { BaseRef = "release" }));
     }
 
     [Fact]
     public void A_long_verdict_still_fits_GitHubs_140_character_description()
     {
-        var verdict = MergeRule.Evaluate(Config, Pr(["src/AgentBridge.Transport/" + new string('a', 200) + ".cs"], draft: true, labels: ["hold"], reviews: []))!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/" + new string('a', 200) + ".cs"], draft: true, labels: ["hold"], reviews: []))!;
 
         Assert.True(verdict.Description.Length <= 140, verdict.Description);
     }
@@ -296,9 +301,9 @@ public class MergeRuleTests
     [Fact]
     public void A_path_with_a_line_break_or_any_control_character_needs_the_independent_review()
     {
-        var acrossLines = MergeRule.Evaluate(Config, Pr(["src/AgentBridge.Transport/a\nb.cs"]))!;
-        var bell = MergeRule.Evaluate(Config, Pr(["docs/a\u0007.md"]))!;
-        var undecodable = MergeRule.Evaluate(Config, Pr(["docs/a\uFFFD.md"]))!;
+        var acrossLines = MergeRule.Evaluate(Config, MainGreen, Pr(["src/AgentBridge.Transport/a\nb.cs"]))!;
+        var bell = MergeRule.Evaluate(Config, MainGreen, Pr(["docs/a\u0007.md"]))!;
+        var undecodable = MergeRule.Evaluate(Config, MainGreen, Pr(["docs/a\uFFFD.md"]))!;
 
         Assert.True(new Glob("src/AgentBridge.Relay/**").IsMatch("src/AgentBridge.Relay/a\nb.cs"));
         Assert.Equal(("failure", "Needs an independent review of abcdef0: it touches src/AgentBridge.Transport/a\\u000ab.cs"), (acrossLines.State, acrossLines.Description));
@@ -314,12 +319,12 @@ public class MergeRuleTests
     {
         var pr = Pr(labels: label is null ? [] : [label]) with { Title = title };
 
-        var none = MergeRule.Evaluate(Config, pr)!;
-        var receipted = MergeRule.Evaluate(Config, pr with { Statuses = [Receipt("success")] })!;
+        var none = MergeRule.Evaluate(Config, MainGreen, pr)!;
+        var receipted = MergeRule.Evaluate(Config, MainGreen, pr with { Statuses = [Receipt("success")] })!;
 
         Assert.Equal(("failure", "Needs an independent review of abcdef0: it's marked as a security change"), (none.State, none.Description));
         Assert.Equal("success", receipted.State);
-        Assert.Equal("success", MergeRule.Evaluate(Config, Pr() with { Title = "Docs: security notes" })!.State);
+        Assert.Equal("success", MergeRule.Evaluate(Config, MainGreen, Pr() with { Title = "Docs: security notes" })!.State);
     }
 
     [Fact]
@@ -473,15 +478,15 @@ public class MergeRuleTests
     {
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
 
-        Assert.Equal(sensitive, MergeRule.Evaluate(config, Pr([path]))!.SensitiveFiles.Count > 0);
+        Assert.Equal(sensitive, MergeRule.Evaluate(config, MainGreen, Pr([path]))!.SensitiveFiles.Count > 0);
     }
 
     [Fact]
     public void Any_red_check_on_the_head_fails_it_and_any_unfinished_one_keeps_it_waiting()
     {
-        var red = MergeRule.Evaluate(Config, Pr() with { Checks = [new("lint", "success", "success"), new("analyze (csharp)", "failure", "failure"), new("native-clients", "failure", "cancelled")] })!;
-        var running = MergeRule.Evaluate(Config, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("native-clients", "pending", "in_progress")] })!;
-        var green = MergeRule.Evaluate(Config, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("CodeQL", "success", "neutral")] })!;
+        var red = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("lint", "success", "success"), new("analyze (csharp)", "failure", "failure"), new("native-clients", "failure", "cancelled")] })!;
+        var running = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("native-clients", "pending", "in_progress")] })!;
+        var green = MergeRule.Evaluate(Config, MainGreen, Pr() with { Checks = [new("pwa-ui", "success", "skipped"), new("CodeQL", "success", "neutral")] })!;
 
         Assert.Equal(("failure", "Check analyze (csharp) ended failure on abcdef0 (+1 more)"), (red.State, red.Description));
         Assert.Equal(("pending", "Waiting for native-clients"), (running.State, running.Description));
@@ -491,8 +496,8 @@ public class MergeRuleTests
     [Fact]
     public void Read_without_its_checks_a_pull_request_can_fail_but_never_pass()
     {
-        var unread = MergeRule.Evaluate(Config, Pr() with { FullyRead = false, CodeQlRun = null })!;
-        var draft = MergeRule.Evaluate(Config, Pr(draft: true) with { FullyRead = false, CodeQlRun = null })!;
+        var unread = MergeRule.Evaluate(Config, MainGreen, Pr() with { FullyRead = false, CodeQlRun = null })!;
+        var draft = MergeRule.Evaluate(Config, MainGreen, Pr(draft: true) with { FullyRead = false, CodeQlRun = null })!;
 
         Assert.Equal(("pending", "Its checks and files on abcdef0 aren't read yet"), (unread.State, unread.Description));
         Assert.Equal(("failure", "Draft: mark it ready for review"), (draft.State, draft.Description));
@@ -505,7 +510,7 @@ public class MergeRuleTests
 
         var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
 
-        Assert.Equal("failure", MergeRule.Evaluate(Config, facts)!.State);
+        Assert.Equal("failure", MergeRule.Evaluate(Config, MainGreen, facts)!.State);
     }
 
     [Fact]
@@ -553,7 +558,7 @@ public class MergeRuleTests
         ]));
         var facts = MergeRuleCommand.ParseFacts(doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest"), Config);
 
-        var verdict = MergeRule.Evaluate(Config, facts)!;
+        var verdict = MergeRule.Evaluate(Config, MainGreen, facts)!;
 
         Assert.Equal(("failure", "Check native-clients ended failure on abcdef0 (+1 more)"), (verdict.State, verdict.Description));
     }
@@ -593,7 +598,7 @@ public class MergeRuleTests
     {
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
 
-        var verdict = MergeRule.Evaluate(config, Pr([path]))!;
+        var verdict = MergeRule.Evaluate(config, MainGreen, Pr([path]))!;
 
         Assert.Equal(("failure", $"Needs an independent review of abcdef0: it touches {path}"), (verdict.State, verdict.Description));
     }
@@ -623,6 +628,223 @@ public class MergeRuleTests
         Assert.True(steps.IndexOf(mint) < steps.IndexOf(judge));
         Assert.Contains("github.event.context != 'merge-rule'", Scalar(job, "if"));
         Assert.Equal("agent-bridge-merge-rule", MergeRuleConfig.Load(Path.Combine(root, "quality", "merge-rule.yml")).StatusPoster);
+    }
+
+    // Auto-merge doesn't pause while main is red, so the merge rule must: judged by main's CI
+    // push run that finished last, at its latest attempt.
+    [Fact]
+    public void A_red_main_fails_a_pull_request_that_is_otherwise_ready()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((5, "completed", "failure", 1), (4, "completed", "success", 1)));
+        var config = WriteConfig();
+        try
+        {
+            var exit = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal(0, exit);
+            Assert.Equal([$"{Head} failure merge-rule Main is red (CI c500000): waiting for main to be fixed "], github.Posted);
+            Assert.Contains("repos/danswett/agent-bridge/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=20", github.RestPaths);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void A_green_main_lets_a_ready_pull_request_pass_once_its_run_is_the_latest_to_finish()
+    {
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns((5, "completed", "success", 1), (4, "completed", "failure", 1)));
+        var config = WriteConfig();
+        try
+        {
+            var output = new StringWriter();
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], output, github, OnMain);
+
+            Assert.Contains("Main: ci.yml run 5 (attempt 1) on c500000 ended success.", output.ToString(), StringComparison.Ordinal);
+            Assert.Equal([$"{Head} success merge-rule Copilot reviewed abcdef0; every check passed; independent review on file "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // A fix's own run still going doesn't free main: the latest finished run says it's red until
+    // that run passes. A red run being re-run is no better: its last finished attempt was red.
+    [Theory]
+    [InlineData(6, "in_progress", 1, "Main is red (CI c500000): waiting for main to be fixed")]
+    [InlineData(5, "queued", 2, "Main's CI c500000 is being re-run: waiting for main to be green")]
+    public void A_main_run_still_going_after_a_red_one_still_blocks(long id, string status, int attempt, string description)
+    {
+        var runs = new List<(long, string, string?, int)> { (id, status, null, attempt) };
+        if (id != 5)
+            runs.Add((5, "completed", "failure", 1));
+        runs.Add((4, "completed", "success", 1));
+        var github = new FakeGitHub(GraphQLPullRequest(Head), mainRuns: MainRuns([.. runs]));
+        var config = WriteConfig();
+        try
+        {
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github, OnMain);
+
+            Assert.Equal([$"{Head} failure merge-rule {description} "], github.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    [Fact]
+    public void The_fixes_main_label_exempts_only_the_main_check_so_a_sensitive_fix_still_needs_its_receipt()
+    {
+        var red = new MainFact("failure", "main is red (CI c500000): waiting for main to be fixed");
+        string[] files = ["src/AgentBridge.Transport/Channel.cs"];
+
+        var unreviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["fixes-main"]))!;
+        var reviewed = MergeRule.Evaluate(Config, red, Pr(files, labels: ["Fixes-Main"], statuses: [Receipt("success")]))!;
+        var unlabelled = MergeRule.Evaluate(Config, red, Pr(files, statuses: [Receipt("success")]))!;
+
+        Assert.Equal(("failure", "Needs an independent review of abcdef0: it touches src/AgentBridge.Transport/Channel.cs"), (unreviewed.State, unreviewed.Description));
+        Assert.Equal(("success", "Copilot reviewed abcdef0; every check passed; independent review on file; main isn't green, but it's labelled Fixes-Main"), (reviewed.State, reviewed.Description));
+        Assert.Equal(("failure", "Main is red (CI c500000): waiting for main to be fixed"), (unlabelled.State, unlabelled.Description));
+    }
+
+    // Like any other read, main's CI unread or never finished fails every pull request it would
+    // block, rather than let one merge onto a main no one could see.
+    [Fact]
+    public void Main_unreadable_or_with_no_finished_run_fails_closed()
+    {
+        var plain = GraphQLPullRequest(Head);
+        var fix = GraphQLPullRequest(Older, labels: ["fixes-main"], number: 7);
+        var unreadable = new FakeGitHub(plain, listed: [plain, fix], byNumber: new Dictionary<int, string> { [42] = plain, [7] = fix }, failMain: true);
+        var unfinished = new FakeGitHub(plain, mainRuns: MainRuns((5, "in_progress", null, 1)));
+        var config = WriteConfig();
+        try
+        {
+            var exit = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), unreadable, OnMain);
+            MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), unfinished, OnMain);
+
+            Assert.Equal(1, exit);
+            Assert.Equal(
+                [$"{Head} error merge-rule Couldn't read main's CI: gh: HTTP 502 ",
+                 $"{Older} success merge-rule Copilot reviewed 0000000; every check passed; independent review on file; main isn't green, but it's labelled fixes-main "],
+                unreadable.Posted);
+            Assert.Equal([$"{Head} failure merge-rule No finished CI run on main: waiting for one "], unfinished.Posted);
+        }
+        finally
+        {
+            File.Delete(config);
+        }
+    }
+
+    // CI finishing on main must re-judge every pull request, so their verdicts follow main to red
+    // and back; main's other runs still start nothing.
+    [Theory]
+    [InlineData("workflow_run", "completed", "CI", "main", "push", "danswett/agent-bridge", null, true)]
+    [InlineData("workflow_run", "requested", "CI", "main", "push", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "in_progress", "CI", "main", "push", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "completed", "Pages", "main", "push", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "completed", "CI", "main", "workflow_dispatch", "danswett/agent-bridge", null, false)]
+    [InlineData("workflow_run", "requested", "CI", "quality/x", "pull_request", "danswett/agent-bridge", null, true)]
+    [InlineData("workflow_run", "requested", "CI", "main", "pull_request", "someone/fork", null, true)]
+    [InlineData("status", null, null, null, null, null, "merge-rule", false)]
+    [InlineData("status", null, null, null, null, null, "independent-review", true)]
+    public void The_merge_rule_workflow_judges_again_when_CI_finishes_on_main(string eventName, string? action, string? workflow, string? branch, string? runEvent, string? headRepo, string? context, bool runs)
+    {
+        var root = ChangedFiles.RepoRoot(AppContext.BaseDirectory);
+        var stream = new YamlStream();
+        stream.Load(new StringReader(File.ReadAllText(Path.Combine(root, ".github", "workflows", "merge-rule.yml"))));
+        var job = (YamlMappingNode)((YamlMappingNode)((YamlMappingNode)stream.Documents[0].RootNode)
+            .Children[new YamlScalarNode("jobs")]).Children[new YamlScalarNode("evaluate")];
+        var condition = ((YamlScalarNode)job.Children[new YamlScalarNode("if")]).Value!;
+        var github = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github.repository"] = "danswett/agent-bridge",
+            ["github.event_name"] = eventName,
+            ["github.event.action"] = action,
+            ["github.event.context"] = context,
+            ["github.event.workflow_run.name"] = workflow,
+            ["github.event.workflow_run.head_branch"] = branch,
+            ["github.event.workflow_run.event"] = runEvent,
+            ["github.event.workflow_run.head_repository.full_name"] = headRepo,
+        };
+
+        Assert.Equal(runs, IfExpression.Evaluate(condition, github));
+    }
+
+    /// <summary>
+    /// Just enough of GitHub's expression language for a job's <c>if</c>: (), !, ==, !=, &amp;&amp;
+    /// and ||, over string literals and context values, compared without regard to case as
+    /// GitHub does. A value the context doesn't hold is null, which equals no string.
+    /// </summary>
+    static class IfExpression
+    {
+        public static bool Evaluate(string condition, IReadOnlyDictionary<string, string?> context)
+        {
+            var tokens = System.Text.RegularExpressions.Regex.Matches(condition, @"\s*(\(|\)|&&|\|\||==|!=|!|'(?:[^']|'')*'|[A-Za-z_][A-Za-z0-9_.\-]*)\s*")
+                .Select(m => m.Groups[1].Value).ToList();
+            Assert.Equal(System.Text.RegularExpressions.Regex.Replace(condition, @"\s", ""), string.Concat(tokens).Replace(" ", "", StringComparison.Ordinal));
+            var position = 0;
+            var result = Or();
+            Assert.Equal(tokens.Count, position);
+            return Truthy(result);
+
+            object? Or()
+            {
+                var left = And();
+                while (position < tokens.Count && tokens[position] == "||")
+                {
+                    position++;
+                    var right = And();
+                    left = Truthy(left) || Truthy(right);
+                }
+                return left;
+            }
+
+            object? And()
+            {
+                var left = Compare();
+                while (position < tokens.Count && tokens[position] == "&&")
+                {
+                    position++;
+                    var right = Compare();
+                    left = Truthy(left) && Truthy(right);
+                }
+                return left;
+            }
+
+            object? Compare()
+            {
+                var left = Primary();
+                if (position < tokens.Count && tokens[position] is "==" or "!=")
+                {
+                    var equal = tokens[position++] == "==";
+                    var right = Primary();
+                    var same = left is string l && right is string r ? string.Equals(l, r, StringComparison.OrdinalIgnoreCase) : left is null && right is null;
+                    return equal == same;
+                }
+                return left;
+            }
+
+            object? Primary()
+            {
+                var token = tokens[position++];
+                if (token == "(")
+                {
+                    var inner = Or();
+                    Assert.Equal(")", tokens[position++]);
+                    return inner;
+                }
+                if (token == "!")
+                    return !Truthy(Primary());
+                if (token.StartsWith('\''))
+                    return token[1..^1].Replace("''", "'", StringComparison.Ordinal);
+                return context.TryGetValue(token, out var value) ? value : null;
+            }
+
+            static bool Truthy(object? value) => value switch { bool b => b, string s => s.Length > 0, _ => false };
+        }
     }
 
     // The merge-rule GitHub App (docs/merge-rule-app.md).
@@ -671,10 +893,18 @@ public class MergeRuleTests
             hold_labels: [hold]
             independent_review: { context: independent-review, posters: [danswett] }
             codeql: { workflow: CodeQL, check: CodeQL }
+            main_green: { workflow: ci.yml, exempt_labels: [fixes-main] }
             sensitive_paths: [docs/old.md]
             """);
         return path;
     }
+
+    // Main's CI runs as REST lists them, newest first: an id, then its status, conclusion and attempt.
+    static string MainRuns(params (long Id, string Status, string? Conclusion, int Attempt)[] runs) =>
+        JsonSerializer.Serialize(new
+        {
+            workflow_runs = runs.Select(r => new { id = r.Id, head_sha = $"c{r.Id}".PadRight(40, '0'), status = r.Status, conclusion = r.Conclusion, run_attempt = r.Attempt }),
+        });
 
     static object Suite(string slug, object? run, string status, string? conclusion, params object[] checkRuns) =>
         new { app = new { slug }, workflowRun = run, status, conclusion, checkRuns = new { nodes = checkRuns } };
@@ -745,10 +975,11 @@ public class MergeRuleTests
 
     /// <summary>
     /// GitHub as the command sees it: <paramref name="one"/> answers a single pull request's query,
-    /// <paramref name="listed"/> (or <paramref name="one"/>) the open list's, and
-    /// <paramref name="statuses"/> REST's status history.
+    /// <paramref name="listed"/> (or <paramref name="one"/>) the open list's,
+    /// <paramref name="statuses"/> REST's status history, and <paramref name="mainRuns"/> (or one
+    /// green run) main's CI.
     /// </summary>
-    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false) : IGitHub
+    sealed class FakeGitHub(string one, string[]? listed = null, string statuses = "[]", IReadOnlyDictionary<int, string>? byNumber = null, string? files = null, bool failChecks = false, bool listFailsAfterFirstPage = false, bool failStatuses = false, string? mainRuns = null, bool failMain = false) : IGitHub
     {
         public List<string> Posted { get; } = [];
 
@@ -774,6 +1005,8 @@ public class MergeRuleTests
         public JsonDocument Rest(string path)
         {
             RestPaths.Add(path);
+            if (path.Contains("/actions/workflows/", StringComparison.Ordinal))
+                return failMain ? throw new InvalidOperationException("gh: HTTP 502") : JsonDocument.Parse(mainRuns ?? MainRuns((1, "completed", "success", 1)));
             if (failStatuses && path.Contains("/statuses", StringComparison.Ordinal))
                 throw new InvalidOperationException("gh: HTTP 502");
             return JsonDocument.Parse(path.Contains("/statuses", StringComparison.Ordinal)

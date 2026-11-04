@@ -72,7 +72,9 @@ static class MergeRuleCommand
           merge-rule (--pr N | --sha SHA | --all) [--slug OWNER/REPO] [--config FILE]
                      [--post] [--target-url URL] [--summary FILE] [--allow-non-main]
               Judges open pull requests into main against quality/merge-rule.yml: those on the
-              numbered one's head, those whose head is SHA, or all of them. Prints each verdict;
+              numbered one's head, those whose head is SHA, or all of them. Main's CI comes
+              first: while its latest finished push run isn't green, every pull request fails
+              but one with an exempt label (main_green). Prints each verdict;
               with --post, also sets each head's merge-rule status to the worst verdict on it
               (unless the workflow already posted the same), and with --summary, appends a
               Markdown table to FILE. A dry run (no --post) changes nothing.
@@ -141,6 +143,9 @@ static class MergeRuleCommand
         public int? GraphQLRemaining { get; private set; }
         public int RestCalls { get; private set; }
         public Dictionary<string, (List<string> Files, bool Complete)> FilesBySha { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Main's CI, read once at the start of the run (ReadMain), so every verdict in it sees the same main.</summary>
+        public MainFact Main { get; set; } = new("error", "main's CI wasn't read");
 
         public JsonDocument GraphQL(string query, Dictionary<string, object> variables)
         {
@@ -219,6 +224,11 @@ static class MergeRuleCommand
         var session = new Session(github, config, slug);
         var problems = 0;
 
+        session.Main = ReadMain(session, out var mainLog);
+        output.WriteLine(mainLog);
+        if (session.Main.State == "error")
+            problems++;
+
         // The status belongs to a commit, not a pull request, and two open pull requests can share
         // a head: so every mode judges all open pull requests on the head it's about, and posts the
         // worst of their verdicts. A held or unreviewed one then can't ride on another's success.
@@ -229,7 +239,7 @@ static class MergeRuleCommand
             if (!int.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
                 throw new ArgumentException($"--pr {number} is not a pull request number.");
             var one = FetchOne(session, n, checks: false, history: true);
-            if (MergeRule.Evaluate(config, one) is null)
+            if (MergeRule.Evaluate(config, session.Main, one) is null)
             {
                 output.WriteLine($"#{one.Number}: not judged ({one.State.ToLowerInvariant()}, into {one.BaseRef}).");
                 prs = [];
@@ -342,25 +352,26 @@ static class MergeRuleCommand
     static bool IsReadFailure(Exception e) => ReadFailures.Contains(e.GetType());
 
     /// <summary>
-    /// The verdict on a pull request read from the open list: its light facts' failure, if they
-    /// have one and its receipts are all in view (a hold takes effect without anything more to
-    /// read), otherwise the verdict on a full read. A full read that fails gives the light
+    /// The verdict on a pull request read from the open list: its light facts' failure (or error,
+    /// when main's CI couldn't be read), if they have one and its receipts are all in view (a hold
+    /// or a red main takes effect without anything more to read), otherwise the verdict on a full
+    /// read. A full read that fails gives the light
     /// failure if there is one, otherwise error, never the light read's pending, so the head
     /// doesn't keep an earlier success.
     /// </summary>
     static (PullRequestFacts Pr, MergeVerdict? Verdict) Assess(Session session, PullRequestFacts light)
     {
-        var verdict = MergeRule.Evaluate(session.Config, light);
-        if (verdict is null || (verdict.State == "failure" && !ReceiptsHidden(session.Config, light)))
+        var verdict = MergeRule.Evaluate(session.Config, session.Main, light);
+        if (verdict is null || (verdict.State is ("failure" or "error") && !ReceiptsHidden(session.Config, light)))
             return (light, verdict);
         try
         {
             var full = FetchFull(session, light.Number);
-            return (full, MergeRule.Evaluate(session.Config, full));
+            return (full, MergeRule.Evaluate(session.Config, session.Main, full));
         }
         catch (Exception e) when (IsReadFailure(e))
         {
-            return (light, verdict.State == "failure" ? verdict : MergeRule.ReadError(light, e.Message));
+            return (light, verdict.State is "failure" or "error" ? verdict : MergeRule.ReadError(light, e.Message));
         }
     }
 
@@ -376,6 +387,52 @@ static class MergeRuleCommand
             return (known, MergeRule.ReadError(known, e.Message));
         }
         return Assess(session, light);
+    }
+
+    /// <summary>
+    /// The base branch's CI: its workflow's newest finished push run there, at its latest attempt
+    /// (one REST call). A newer run still going doesn't count, so main stays red until the fix's
+    /// run passes; but a finished run being re-run (attempt 2 on) does, as not green, since its
+    /// attempt before was newer than any older run's, and is almost always red: no one re-runs a
+    /// green main. No finished run, or one that can't be read, fails closed.
+    /// </summary>
+    static MainFact ReadMain(Session session, out string log)
+    {
+        var config = session.Config;
+        const int Runs = 20;
+        var path = $"repos/{session.Slug}/actions/workflows/{Uri.EscapeDataString(config.MainGreen.Workflow)}/runs?branch={Uri.EscapeDataString(config.Base)}&event=push&per_page={Runs}";
+        try
+        {
+            using var doc = session.Rest(path);
+            var runs = doc.RootElement.GetProperty("workflow_runs").EnumerateArray()
+                .OrderByDescending(r => r.GetProperty("id").GetInt64());
+            foreach (var run in runs)
+            {
+                var sha = MergeRule.Short(run.GetProperty("head_sha").GetString() ?? "");
+                var id = run.GetProperty("id").GetInt64();
+                var attempt = run.TryGetProperty("run_attempt", out var a) && a.ValueKind == JsonValueKind.Number ? a.GetInt32() : 1;
+                if (run.GetProperty("status").GetString() == "completed")
+                {
+                    var conclusion = run.GetProperty("conclusion").GetString() ?? "without a result";
+                    log = $"Main: {config.MainGreen.Workflow} run {id} (attempt {attempt}) on {sha} ended {conclusion}.";
+                    return conclusion == "success"
+                        ? new MainFact("success", $"{config.Base}'s CI {sha} passed")
+                        : new MainFact("failure", $"{config.Base} is red (CI {sha}): waiting for {config.Base} to be fixed");
+                }
+                if (attempt > 1)
+                {
+                    log = $"Main: {config.MainGreen.Workflow} run {id} on {sha} is re-running (attempt {attempt}).";
+                    return new MainFact("failure", $"{config.Base}'s CI {sha} is being re-run: waiting for {config.Base} to be green");
+                }
+            }
+            log = $"Main: no finished {config.MainGreen.Workflow} push run on {config.Base} among the latest {Runs}.";
+            return new MainFact("failure", $"no finished CI run on {config.Base}: waiting for one");
+        }
+        catch (Exception e) when (IsReadFailure(e))
+        {
+            log = $"Main: couldn't read {config.MainGreen.Workflow}'s runs on {config.Base}: {e.Message}";
+            return new MainFact("error", MergeRule.Printable($"couldn't read {config.Base}'s CI: {e.Message}"));
+        }
     }
 
     // REST names a bot "app[bot]" and GraphQL "app"; read both the GraphQL way.

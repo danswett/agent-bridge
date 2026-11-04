@@ -51,6 +51,17 @@ codeql:
 # left out: the merge rule's own, which are running while it judges.
 ignore_workflows: [Merge rule]
 
+# Main must be green. GitHub's auto-merge doesn't pause while main's CI is red, and would keep
+# landing pull requests on a broken main, each making the breakage harder to untangle. So while
+# this workflow's latest finished push run on main (at its latest attempt) isn't a success, every
+# pull request fails; a newer run still going doesn't count, so main stays red until the fix's run
+# passes. A pull request with one of these labels is the fix, and skips this check alone: every
+# other requirement, the independent review included, still applies. Adding a label takes triage
+# rights, so a pull request's author can't exempt their own from a fork: ask the merge coordinator.
+main_green:
+  workflow: ci.yml
+  exempt_labels: [fixes-main]
+
 # A pull request that changes any of these paths also needs the independent review. Globs as in
 # quality/catalog.yml (src/**trust** is any path below src/ with "trust" in it, folders included),
 # matched case-insensitively against each changed path and each renamed file's old path. The list

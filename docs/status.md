@@ -417,13 +417,14 @@ agent-ha-bridge releases from this work:
 - **Merge rule enforcement (#452, #524): applied 2026-11-03.** Main's ruleset 26510567
   (`quality/ruleset-main.json`) is active since 21:55 PT, the classic branch protection was removed
   at 22:59 PT, and merged branches delete themselves. The merge-rule GitHub App (ID 5607979,
-  `agent-bridge-merge-rule`; docs/merge-rule-app.md) was created on 2026-11-04, and the workflow
-  posts `merge-rule` with its token once this change merges. Auto-merge stays off until the
-  coordinator has seen the App's posts and pinned the ruleset's `merge-rule` to the App; until then
-  the coordinator merges by hand, after its own local `merge-rule --pr <n>`, which counts only
-  `danswett`'s receipts, run from a freshly fetched `origin/main` checkout, never the PR's worktree
-  (the tool refuses anything else). Then change this line, and AGENTS.md's rule 4, to say
-  auto-merge is on, with the date.
+  `agent-bridge-merge-rule`; docs/merge-rule-app.md) was created on 2026-11-04 and posts
+  `merge-rule` (#623); the ruleset accepts `merge-rule` only from that App. **Auto-merge has been
+  on since 2026-11-04 00:50 PT:** sessions arm it on their ready PR, pinned to the head
+  (AGENTS.md rule 4), and the coordinator merges by hand only a PR whose session didn't. Since
+  auto-merge doesn't pause for a red main, `merge-rule` also
+  requires main green: the latest finished push run of `ci.yml` on main passed. While it hasn't,
+  nothing merges but a PR the merge coordinator has labelled `fixes-main`, which skips only that
+  check.
 
 ## 9. Decision log (after design.md §10)
 
