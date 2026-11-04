@@ -522,6 +522,36 @@ public class CopilotTests
         Assert.NotEqual(hidden.Digest, spelled.Digest);
     }
 
+    // An intention is made literal one character at a time, its line never copied at each one: a
+    // line of 100,000 periods copied some 10 GB, before the question's limit applies.
+    [Fact]
+    public void An_intention_of_many_periods_is_made_literal_without_copying_its_line_at_each_one()
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var shown = DescribeCommand("npm test", new string('.', 20_000));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("Allow **shell**?\n\n....", shown.Message, StringComparison.Ordinal);
+        Assert.True(allocated < 50_000_000, $"{allocated:N0} bytes");
+    }
+
+    // A custom tool with no arguments shows only its description of what runs: as written, in a block
+    // the cards take, not escaped as prose ("Deploy\: prod"), which every card shows as its source and
+    // the cards held at the machine as a command in prose.
+    [Fact]
+    public void A_custom_tool_with_no_arguments_shows_its_description_as_written_in_a_block()
+    {
+        var prompt = Copilot.Prompts["custom-tool"].DeepClone().AsObject();
+        prompt.Remove("args");
+        prompt["toolDescription"] = "Deploy: prod";
+        using var doc = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", prompt, 1));
+
+        var message = CopilotPermission.Describe(doc.RootElement.GetProperty("data"))!.Message;
+
+        Assert.Equal("Allow **deploy\\_site**?\n\n```\nDeploy: prod\n```", message);
+        Assert.True(ApprovalShape.DrawsAsWritten(message));
+    }
+
     // Appended as text after the message, "\n\0at-machine" could be written by the message itself: a
     // custom tool described as "run\n\0at-machine" had the id of the one described as "run" run outside
     // the sandbox. An ordinary prompt's id is what it always was.
@@ -708,12 +738,12 @@ public class CopilotTests
     public void A_tools_title_and_description_are_drawn_as_the_words_they_are()
     {
         var mcp = new System.Text.Json.Nodes.JsonObject { ["kind"] = "mcp", ["serverName"] = "github", ["toolName"] = "get", ["toolTitle"] = "[safe](https://other.example) <b>x</b>", ["args"] = new System.Text.Json.Nodes.JsonObject() };
-        var custom = new System.Text.Json.Nodes.JsonObject { ["kind"] = "custom-tool", ["toolName"] = "deploy", ["toolDescription"] = "```\n[safe](https://other.example)" };
+        var custom = new System.Text.Json.Nodes.JsonObject { ["kind"] = "custom-tool", ["toolName"] = "deploy", ["toolDescription"] = "```\n[safe](https://other.example)", ["args"] = new System.Text.Json.Nodes.JsonObject { ["env"] = "prod" } };
         using var a = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r1", "c1", mcp, 1));
         using var b = System.Text.Json.JsonDocument.Parse(Copilot.Permission("r2", "c2", custom, 1));
 
         Assert.StartsWith("Allow **\\[safe\\](https\\://other.example) \\<b\\>x\\</b\\>**?", CopilotPermission.Describe(a.RootElement.GetProperty("data"))!.Message);
-        Assert.Equal("Allow **deploy**?\n\n\\`\\`\\`\n\\[safe\\](https\\://other.example)", CopilotPermission.Describe(b.RootElement.GetProperty("data"))!.Message);
+        Assert.StartsWith("Allow **deploy**?\n\n\\`\\`\\`\n\\[safe\\](https\\://other.example)\n\n```json\n", CopilotPermission.Describe(b.RootElement.GetProperty("data"))!.Message, StringComparison.Ordinal);
     }
 
     [Fact]

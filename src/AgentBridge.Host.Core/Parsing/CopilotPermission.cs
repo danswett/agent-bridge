@@ -148,7 +148,16 @@ public static partial class CopilotPermission
                     return Join($"Allow **{Plain(title)}**?", Fence($"{server}/{tool}"), Args(p));
                 }
             case "custom-tool" when Json.Str(p, "toolName") is { } tool:
-                return Join($"Allow **{Plain(tool)}**?", Literal(Json.Str(p, "toolDescription")), Args(p));
+                {
+                    // With its arguments, the description is the agent's words before them. Without
+                    // any, it is all the prompt shows of what runs, so it is shown as written, in a
+                    // block: escaped as prose, "Deploy: prod" was drawn "Deploy\: prod" by every card
+                    // that shows an approval as its source, and with no block at all the cards held
+                    // it at the machine as a command in prose (ApprovalShape).
+                    var args = Args(p);
+                    var description = Json.Str(p, "toolDescription");
+                    return Join($"Allow **{Plain(tool)}**?", args is null ? (string.IsNullOrWhiteSpace(description) ? null : Fence(description)) : Literal(description), args);
+                }
             default:
                 return null;
         }
@@ -225,18 +234,22 @@ public static partial class CopilotPermission
         {
             if (b.Length > 0) { b.Append('\n'); }
             var line = raw.TrimStart(' ', '\t');
+            // Whether the line so far is all digits, kept as it goes: copying the prefix to check it at
+            // every '.' or ')' made a line of 100,000 periods copy some 10 GB.
+            var digits = true;
             for (var i = 0; i < line.Length; i++)
             {
                 var c = line[i];
                 var escape = c is '\\' or '`' or '*' or '_' or '[' or ']' or '<' or '>' or '&' or '|' or '~' or '^' or '+' or '=' or '!' or '#' or ':'
                     || (i == 0 && c == '-')
                     // An ordered list's marker: digits then . or ) at a line's start.
-                    || ((c is '.' or ')') && i > 0 && line[..i].All(char.IsAsciiDigit))
+                    || ((c is '.' or ')') && i > 0 && digits)
                     // A bare address (https://, mailto:, www.) is not made a link either: a link
                     // drawn from it would end where the renderer guesses, escapes and all.
                     || (c == '.' && i >= 3 && line.AsSpan(i - 3, 3).Equals("www", StringComparison.OrdinalIgnoreCase));
                 if (escape) { b.Append('\\'); }
                 b.Append(c);
+                digits &= char.IsAsciiDigit(c);
             }
         }
         return b.ToString();

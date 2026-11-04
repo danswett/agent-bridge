@@ -425,7 +425,10 @@ public static partial class ToastXml
             }
         }
         Blocks(MarkdownModel.Parse(markdown));
-        return Cut(Spaces().Replace(b.ToString(), " ").Trim(), max);
+        // Revealed again once parsed: parsing decodes a reference an older host left in an approval
+        // (&#x5D0;, &nbsp;) into the character it stands for, which would reorder the preview or be
+        // collapsed with the spaces around it.
+        return Cut(Spaces().Replace(ShownText.Reveal(b.ToString(), rightToLeft: true), " ").Trim(), max);
     }
 
     [GeneratedRegex(@"[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]")]

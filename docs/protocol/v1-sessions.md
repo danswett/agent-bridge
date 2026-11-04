@@ -624,7 +624,8 @@ the agent's own words, sent as literal text (#212): every character that would s
 heading, quote, list or rule at a line's start) is backslash-escaped and a line's leading
 whitespace dropped, so they render as the words they are and can never open a fence that the
 command's own fence would then close. What is approved is always in fenced code after them, the
-fence longer than any run of backticks inside it (shared vectors:
+fence longer than any run of backticks inside it; a custom tool with no arguments has its
+description, all it shows of what runs, in that block as written instead (shared vectors:
 `tests/fixtures/approvals/literal-intentions.json`). Its `id` is `<requestId>#<digest>`: Copilot's request id and a hash of
 the message as built from Copilot's own words, before anything in it is escaped for display.
 An answer is bound to both, so the host refuses (`stale`) if that request is

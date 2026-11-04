@@ -775,7 +775,7 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     can take them for a fence around the command or a link's words in place of where it goes.
     Every card draws an approval as its source, so the PWA's, the Windows app's and Home
     Assistant's show their backslashes. A toast shows the words without their escapes, the command
-    as written.
+    as written, and anything parsing decodes (a reference to a right-to-left letter) escaped again.
   - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never

@@ -112,9 +112,28 @@ public static partial class ApprovalShape
     [GeneratedRegex(@"^ {0,3}(?:>|[-*+](?:[ \t]|$)|[0-9]{1,9}[.)](?:[ \t]|$))")]
     private static partial Regex Container();
 
-    // Every run of backticks in a line closed by another of the same length on it: a code span that
-    // starts and ends there.
-    static bool SpansClosed(string line) => Ticks().Matches(line).GroupBy(m => m.Length).All(g => g.Count() % 2 == 0);
+    // Every run of backticks in a line closed by another of the same length on it, in order, as a
+    // renderer matches them: a code span that starts and ends there. Counting each length was not
+    // enough: runs of 1, 2, 1, 2 leave the last open, and a next line of 2, 1, 2, 1 closed it, joining
+    // the two lines into one span.
+    static bool SpansClosed(string line)
+    {
+        var runs = Ticks().Matches(line).Select(m => m.Length).ToArray();
+        // The next run of each one's length, found from the end, so a line of many runs is read once.
+        var next = new int[runs.Length];
+        var seen = new Dictionary<int, int>();
+        for (var k = runs.Length - 1; k >= 0; k--)
+        {
+            next[k] = seen.GetValueOrDefault(runs[k], -1);
+            seen[runs[k]] = k;
+        }
+        for (var i = 0; i < runs.Length; i++)
+        {
+            if (next[i] < 0) { return false; }
+            i = next[i];
+        }
+        return true;
+    }
 
     // Emphasis, a backslash before punctuation or ending a line, an entity, and a table pipe.
     [GeneratedRegex(@"\*|\\(?:[!-/:-@\[-`{-~]|$)|&[#A-Za-z]|\|")]
