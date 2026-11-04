@@ -246,5 +246,5 @@ reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, i
 | `sent` | Its response left on the channel or pipe of the request that started it (`not sent` if it could not); absent for Home Assistant's, which has none |
 
 A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
-receipt time is the machine's local time, to the millisecond, as the log's own timestamps are,
-so the line reads against the lines around it.
+receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
+around it by its request id, and its times to an agent's transcript as they are, without an offset.
