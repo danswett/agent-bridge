@@ -534,8 +534,9 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
   2. **Throughput:** pull requests open, opened, merged and closed; the median and 90th
      percentile from open to merge and from ready to merge; those open more than 7 days.
   3. **Where open pull requests are stuck:** counted by the first item `merge-rule`'s description
-     names (draft, held, Copilot review, independent review, a red check, CodeQL...), then, for
-     one `merge-rule` passed, conflicts, unresolved threads or a red `main`; and per head-branch
+     names (draft, held, Copilot review, independent review, a red check, CodeQL...), passing over
+     a red `main`, which it names first on every one; then, for one `merge-rule` passed,
+     conflicts, unresolved threads or a red `main`; and per head-branch
      prefix (`codex/`, `perf/`, `quality/`...), the open ones, how deep they stack, and their
      merges this week, to see whether pull requests per session and stack depth slow merging.
   4. **CI health:** the median wall time of the last 50 completed pull request runs of `ci.yml`,
