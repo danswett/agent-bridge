@@ -11,6 +11,8 @@ import { Reorder, longPressMs, TOUCH_SLOP } from './reorder.js';
 
 const GRIP_HINT = 'Press and hold a session to move it. Or use Move up and Move down in its menu.';
 const HINT_MS = 4000;
+// The hint showed by itself once on this device (ui.md §6.1): it never does again.
+const HINT_SHOWN = 'agent-bridge.app.gripHint';
 
 // Keeps one row per session, from every machine shown, in the person's order (session-order.js):
 // Pinned, then the rest, then an Ended group (ui.md §6.1); and each session's view in the session
@@ -36,6 +38,8 @@ export class SessionListView {
   // A card was held while the list changed: what changed is drawn once it is let go.
   #waiting = false;
   #hint = null;
+  #hinted = false;
+  #seen = null;
   // Drawn once: what comes after is news, and may move.
   #drawn = false;
 
@@ -88,6 +92,7 @@ export class SessionListView {
       },
       menu: (card) => { if (!this.#menu.open) { this.openMenu(card); } },
       hint: () => this.#showHint(),
+      header: (id) => this.#head(id, id === 'pinned' ? 'Pinned' : 'Sessions'),
       say: (text) => this.#say(text),
       drawn: () => { if (this.#waiting) { this.schedule(); } },
     }, { top: '.appbar', bottom: '#nav' });
@@ -247,6 +252,7 @@ export class SessionListView {
       if (el?.isConnected) { enter(el, 'listItem'); }
     }
     this.#drawn = true;
+    this.#firstHint();
     // An ended session that matches is a result too: Ended shows it.
     this.shownCount = shown + ended.length;
     this.onRender?.(entries.length);
@@ -353,6 +359,31 @@ export class SessionListView {
     clearTimeout(this.#hint.timer);
     if (el.hidden) { reveal(el, { entry: 'toast', dy: 1 }); }
     this.#hint.timer = setTimeout(() => { leave(el, 'toast'); el.hidden = true; }, HINT_MS);
+  }
+
+  // The hint shows once by itself (ui.md §6.1, D5, #593): the first time a touch user sees the list
+  // in Your order with 2 sessions or more that can move. A list that comes into view later (back
+  // from a session on a phone, or from another page) counts then.
+  #firstHint() {
+    if (this.#hinted || this.order.sort !== 'yours' || this.filter || !globalThis.matchMedia?.('(any-pointer: coarse)').matches) { return; }
+    if (document.visibilityState === 'hidden' || !this.container.getClientRects().length) {
+      this.#seen ??= new IntersectionObserver((seen) => { if (seen.some((e) => e.isIntersecting)) { this.#firstHint(); } });
+      this.#seen.observe(this.container);
+      return;
+    }
+    let movable = 0;
+    for (const card of this.#cards.values()) {
+      if (card.element.parentElement === this.container && this.order.canLift(this.#keyOf(card))) { movable += 1; }
+    }
+    if (movable < 2) { return; }
+    this.#hinted = true;
+    this.#seen?.disconnect();
+    // Storage that can't be read or written shows it once for this page, rather than every time.
+    try {
+      if (this.order.storage?.getItem(HINT_SHOWN)) { return; }
+      this.order.storage?.setItem(HINT_SHOWN, '1');
+    } catch { /* not kept */ }
+    this.#showHint();
   }
 
   openMenu(card) {

@@ -534,10 +534,13 @@ the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `
   landing in the gap (kept after a reload), a quick swipe scrolling and lifting nothing, a
   touchcancel and Escape putting the card back, a pointercancel handing the drag to the finger's
   touches, auto-scroll at the bottom edge, a long press released without moving opening the
-  menu, the grip's hint, and a card let go over Needs you pressing nothing; the platform's long
-  press (400 ms on Android, 500 on iOS) in both engines; with a mouse, the card lifting after
-  4 px, `pointercancel`, Alt+Down sliding both cards, crossing into Pinned and the last pin's
-  placeholder, a key and a press during a drop's settle acting on the new order, reduced motion
+  menu, the grip's hint (shown once by itself, in Your order only, and on a tap), and a card let
+  go over Needs you pressing nothing; the platform's long press (400 ms on Android, 500 on iOS)
+  in both engines; the grips on a laptop with a touchscreen; with a mouse, the card lifting after
+  4 px, `pointercancel`, Alt+Down sliding both cards, crossing into Pinned, the placeholders
+  ("Drop here to keep it pinned", and "Drop here to unpin" with everything pinned or Sessions'
+  last card held), a held session ending (said, and its gap closing), the grip's column in Your
+  order only, a key and a press during a drop's settle acting on the new order, reduced motion
   (no scale, shadow or easing), and axe with a card lifted in light and dark.
   `test/unit/reorder.test.mjs` covers the long press's timing.
 * `test/motion.spec.mjs`, in demo mode (ui.md §5.3, #232): nothing moving as the app starts; every

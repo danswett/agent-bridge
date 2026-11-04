@@ -50,6 +50,7 @@ const same = (a, b) => !!a && !!b && a.group === b.group && a.index === b.index;
 //     side's, nearest first, as they were when it was lifted);
 //   menu(card): its row menu, for a long press released without moving;
 //   hint(): what a tap on the grip says;
+//   header(group) -> the group's header, for Sessions while everything is pinned and a card is held;
 //   say(text): a polite announcement;
 //   drawn(): the list may draw what waited while a card was held.
 // }
@@ -282,24 +283,27 @@ export class Reorder {
       groups[groupOf(b.el)]?.cards.push({ j, el: b.el, fixed: !!(c && this.host.fixed?.(c)) });
     });
     const origin = { group: groupOf(el), index: items.slice(0, at).filter((n) => n.classList.contains('session') && groupOf(n) === groupOf(el)).length };
-    return { L, me, h: me.bottom - me.top, S: me.bottom - me.top + gap, gap, groups, grouped, origin, width: lr.width };
+    return { L, me, at, h: me.bottom - me.top, S: me.bottom - me.top + gap, gap, groups, grouped, origin, width: lr.width };
   }
 
   // Every place the card can land: where it would sit (relative to the list's top), and how far
   // each other child moves to make room for it there.
   #slots(m) {
     const slots = [];
-    const pinnedOthers = m.groups.pinned?.cards.length ?? 0;
+    const others = m.groups[m.origin.group]?.cards.length ?? 1;
     for (const grp of Object.values(m.groups)) {
       const n = grp.cards.length;
       let first = 0;
       while (first < n && grp.cards[first].fixed) { first += 1; }
       for (let i = first; i <= n; i++) {
         const p = i < n ? grp.cards[i].j : n > 0 ? grp.cards[n - 1].j + 1 : grp.head !== null ? grp.head + 1 : 0;
-        // The last pinned card held outside Pinned keeps Pinned open, its place standing empty.
-        const keep = m.origin.group === 'pinned' && grp.id !== 'pinned' && pinnedOthers === 0;
+        // The last card of its group held in the other keeps its group open, its place standing
+        // empty ("Drop here to keep it pinned", or "Drop here to unpin").
+        const keep = grp.id !== m.origin.group && others === 0;
         const removed = (j) => (!keep && m.L[j]?.after ? -m.S : 0);
-        const top = p < m.L.length ? m.L[p].top + removed(p) : m.L.length ? m.L[m.L.length - 1].bottom + m.gap + removed(m.L.length - 1) : m.me.top;
+        // A group with no card (Sessions, everything pinned): its place is under its header.
+        const top = n === 0 && grp.head !== null ? m.L[grp.head].bottom + m.gap + removed(grp.head)
+          : p < m.L.length ? m.L[p].top + removed(p) : m.L.length ? m.L[m.L.length - 1].bottom + m.gap + removed(m.L.length - 1) : m.me.top;
         // The cards either side of the place, nearest first, by which the drop says where it goes.
         const before = grp.cards.slice(i).map((c) => c.el);
         const after = grp.cards.slice(0, i).reverse().map((c) => c.el);
@@ -316,10 +320,20 @@ export class Reorder {
     this.#unhold(g);
     if (!g.el.isConnected || !this.host.movable(g.card)) { this.#abort(); return; }
     this.finish();
+    // Everything pinned: Sessions has no header for as long as it is empty, so one shows under the
+    // list while a pinned card is held, with "Drop here to unpin" in its empty place (ui.md §6.1,
+    // Groups). It is below every card, so nothing above it moves as it comes and goes.
+    if (g.el.dataset.pinned === 'true' && !this.list.querySelector(':scope > .list-group[data-group="sessions"]')) {
+      const head = this.host.header?.('sessions');
+      if (head && !head.isConnected) {
+        g.head = head;
+        this.list.insertBefore(head, this.list.querySelector(':scope > .ended-group'));
+      }
+    }
     const m = this.#measure(g.el);
     const slots = this.#slots(m);
     const origin = slots.find((s) => same(s, m.origin));
-    if (!origin) { this.#abort(); return; }
+    if (!origin) { g.head?.remove(); this.#abort(); return; }
     const top = this.list.getBoundingClientRect().top + m.me.top;
     Object.assign(g, { phase: 'lifted', m, slots, origin, slot: origin, offY: g.y - top, lx: g.x, ly: g.y, armed: false, outside: false, acc: 0, t: 0, width: m.width });
     const doc = this.doc;
@@ -354,7 +368,13 @@ export class Reorder {
   #seen() {
     const lr = this.list.getBoundingClientRect();
     let top = Math.max(lr.top, 0);
-    let bottom = Math.min(lr.bottom, this.win.innerHeight);
+    // The places standing empty below the rows ("Drop here to …") are the list's too, though they
+    // only make room under its box: while one can show, the list reaches that far for the whole
+    // drag, so the card aimed at one doesn't turn to Cancel as the rows close up over it.
+    const g = this.#g;
+    const empty = g?.m ? Object.values(g.m.groups).filter((grp) => !grp.cards.length && grp.head !== null).length : 0;
+    const reach = Math.max(parseFloat(this.list.style.marginBottom) || 0, empty * (g?.m?.S ?? 0));
+    let bottom = Math.min(lr.bottom + reach, this.win.innerHeight);
     const scroller = this.#scroller();
     if (scroller !== this.doc.scrollingElement) {
       const r = scroller.getBoundingClientRect();
@@ -428,12 +448,15 @@ export class Reorder {
     const moved = g.placed && !same(slot, g.slot);
     g.slot = slot;
     g.placed = true;
+    const holders = this.#holders(g, slot);
+    // A group's empty place shown under its header moves what follows it down a place too.
+    const after = holders.filter((p) => p.head !== undefined);
     g.m.L.forEach((b, j) => {
-      const dy = slot.shift(j);
+      const dy = slot.shift(j) + after.filter((p) => j > p.head).length * g.m.S;
       b.el.style.transform = dy ? `translateY(${dy}px)` : '';
     });
     g.gap.style.transform = `translateY(${slot.top}px)`;
-    this.#keep(g, slot.keep);
+    this.#hold(g, holders);
     if (moved && !outside) {
       const crossed = slot.group !== g.origin.group;
       this.#say(crossed
@@ -442,22 +465,47 @@ export class Reorder {
     }
   }
 
-  // "Drop here to keep it pinned", where the last pinned card was, while it is held elsewhere.
-  #keep(g, on) {
-    if (on && !g.keep) {
-      g.keep = this.doc.createElement('div');
-      g.keep.className = 'drag-keep';
-      g.keep.textContent = 'Drop here to keep it pinned';
-      g.keep.style.height = `${g.m.h}px`;
-      g.keep.style.transform = `translateY(${g.m.me.top}px)`;
-      this.list.append(g.keep);
-      // The rows below moved down a place: the list's foot does too, so nothing after it is covered.
-      this.list.style.marginBottom = `${g.m.S}px`;
-    } else if (!on && g.keep) {
-      g.keep.remove();
-      g.keep = null;
-      this.list.style.marginBottom = '';
+  // The places of groups left with no card while the card is held outside them (ui.md §6.1,
+  // Groups): "Drop here to keep it pinned" or "Drop here to unpin". The card's own group's stands
+  // where it was; a group with no card at all (Sessions, everything pinned) has its place under
+  // its header.
+  #holders(g, slot) {
+    const out = [];
+    for (const grp of Object.values(g.m.groups)) {
+      if (grp.cards.length || grp.id === slot.group || grp.head === null) { continue; }
+      const text = grp.id === 'pinned' ? 'Drop here to keep it pinned' : 'Drop here to unpin';
+      if (grp.id === g.m.origin.group) {
+        // Where it was, moved down a place with what follows it when the card is held above it.
+        out.push({ id: grp.id, text, top: g.m.me.top + (slot.p <= g.m.at ? g.m.S : 0) });
+      } else {
+        out.push({ id: grp.id, text, head: grp.head, top: g.m.L[grp.head].bottom + g.m.gap + slot.shift(grp.head) });
+      }
     }
+    return out;
+  }
+
+  #hold(g, holders) {
+    g.holders ??= new Map();
+    for (const [id, el] of g.holders) {
+      if (!holders.some((p) => p.id === id)) { el.remove(); g.holders.delete(id); }
+    }
+    for (const p of holders) {
+      let el = g.holders.get(p.id);
+      if (!el) {
+        el = this.doc.createElement('div');
+        el.className = 'drag-keep';
+        el.dataset.group = p.id;
+        el.textContent = p.text;
+        el.style.height = `${g.m.h}px`;
+        el.style.transform = `translateY(${p.top}px)`;
+        this.list.append(el);
+        g.holders.set(p.id, el);
+      }
+      el.style.transform = `translateY(${p.top}px)`;
+    }
+    // Each place standing empty moved the rows below it down one: the list's foot does too, so
+    // nothing after it is covered.
+    this.list.style.marginBottom = g.holders.size ? `${g.holders.size * g.m.S}px` : '';
   }
 
   #scroll(g, t) {
@@ -508,7 +556,9 @@ export class Reorder {
       b.el.querySelector(':scope > .group-cue')?.remove();
     }
     g.gap.remove();
-    this.#keep(g, false);
+    this.#hold(g, []);
+    // Sessions' header shown for the drag goes; the list draws it again if the drop needs it.
+    g.head?.remove();
     g.chip.remove();
     delete this.doc.documentElement.dataset.reordering;
     g.el.classList.remove('lifted', 'crossing', 'outside');
@@ -517,9 +567,19 @@ export class Reorder {
     if (removed) {
       g.el.dataset.left = 'true';
       // The finger or button is still down over whatever takes the card's place: its release
-      // presses nothing, and the place last said goes unsaid.
-      clearTimeout(this.#speak);
+      // presses nothing. The move is cancelled, said as a cancel is but with no place to be back
+      // at (ui.md §9).
+      this.#say(`${this.host.title(g.card)} ended. Move cancelled.`);
       swallow();
+      // The host draws the list without it once this returns; the others then close the gap from
+      // where they were seen, on `reorder` (at once under reduced motion).
+      queueMicrotask(() => {
+        for (const [el, top] of seen) {
+          if (!el.isConnected || el === g.el) { continue; }
+          const dy = top - el.getBoundingClientRect().top;
+          if (Math.abs(dy) > 0.5) { slide(el, 'reorder', 0, dy); }
+        }
+      });
       return;
     }
     if (!instant) { g.el.classList.add('settling'); }

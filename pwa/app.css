@@ -508,7 +508,9 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 .list-group:first-child { margin-top: 0; }
 .ended-group > summary { cursor: pointer; color: var(--ab-text2); font-weight: 600; font-size: var(--type-section); line-height: var(--type-section-line); min-height: var(--tap); padding: 0 var(--ab-space-3); display: flex; align-items: center; }
 .ended-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
-.ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-6) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
+.ended { display: flex; flex-wrap: wrap; gap: 0 var(--ab-space-2); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) calc(var(--ab-space-3) + 16px + var(--ab-space-3)); color: var(--ab-text2); font-size: var(--type-row); line-height: var(--type-row-line); }
+/* Under the rows' titles, which the grip's column moves along in Your order. */
+.session-list[data-sort="yours"] .ended { padding-left: calc(var(--ab-space-6) + 16px + var(--ab-space-3)); }
 .ended-title { color: var(--ab-text); overflow-wrap: anywhere; min-width: 0; }
 .ended-meta { font-size: var(--type-meta); }
 /* The "new activity" dot: 6 px, Bridge, at the title's trailing edge. */
@@ -671,15 +673,17 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 
 /* ---- a session's row (ui.md §6.1) ----
    Two lines: the glyph on line 1, the title, at most two facts under it, and the age or the new
-   activity dot at the trailing edge. Its leading 24 is the grip's (§9, #592), in every sort, so
-   rows don't shift as the grip comes and goes. A grid item is min-width:auto, so a long unbroken
+   activity dot at the trailing edge. In Your order its leading 24 is the grip's (§6.1, §9, #592),
+   on touch and with a mouse alike, so rows don't shift as the grip comes and goes; in the other
+   sorts rows don't move, so there is no grip and no column. A grid item is min-width:auto, so a long unbroken
    title or path would otherwise make the row wider than the screen. */
 .session { position: relative; min-width: 0; border-radius: var(--ab-radius-control); }
 .row-main {
   display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: var(--ab-space-3); align-items: start;
-  width: 100%; min-height: var(--tap); padding: var(--ab-space-2) var(--ab-space-3) var(--ab-space-2) var(--ab-space-6); margin: 0;
+  width: 100%; min-height: var(--tap); padding: var(--ab-space-2) var(--ab-space-3); margin: 0;
   font: inherit; color: var(--ab-text); text-align: left; background: none; border: 0; border-radius: var(--ab-radius-control); cursor: pointer;
 }
+.session-list[data-sort="yours"] > .session .row-main { padding-left: var(--ab-space-6); }
 .row-main:hover { background: var(--ab-subtle); }
 /* The glyph sits on line 1, centred on its line, never on the row's middle (§5.1). */
 .row-glyph { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: var(--type-row-line); }

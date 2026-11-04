@@ -29,9 +29,10 @@ const running = (page) => page.evaluate(() => document.getAnimations()
   .map((a) => a.id || a.transitionProperty));
 const settled = (page) => page.waitForFunction(() => !document.getAnimations().some((a) => a.id === 'ab-motion-reorder' && a.playState === 'running'));
 
-// The page on a platform (what js/platform.js reads), with navigator.vibrate counted.
-async function openDemo(page, { ua = null, hint = null, query = '' } = {}) {
-  await page.addInitScript(({ ua, hint }) => {
+// The page on a platform (what js/platform.js reads), with navigator.vibrate counted. hinted: the
+// grip hint has shown by itself on this device before; sort: the sort kept from before.
+async function openDemo(page, { ua = null, hint = null, query = '', hinted = false, sort = null } = {}) {
+  await page.addInitScript(({ ua, hint, hinted, sort }) => {
     window.__cspViolations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__cspViolations.push(`${e.violatedDirective} ${e.blockedURI}`));
     window.__ticks = [];
@@ -40,10 +41,16 @@ async function openDemo(page, { ua = null, hint = null, query = '' } = {}) {
       Object.defineProperty(Navigator.prototype, 'userAgent', { get: () => ua, configurable: true });
       Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => (hint ? { platform: hint } : undefined), configurable: true });
     }
-  }, { ua, hint });
+    // The demo keeps its choices under demo: (js/main.js), apart from the live app's.
+    if (hinted) { localStorage.setItem('demo:agent-bridge.app.gripHint', '1'); }
+    if (sort && !sessionStorage.getItem('sorted')) {
+      localStorage.setItem('demo:agent-bridge.app.order', JSON.stringify({ sort }));
+      sessionStorage.setItem('sorted', '1');
+    }
+  }, { ua, hint, hinted, sort });
   await page.goto(`?demo=1&static=1${query}`);
   await page.waitForSelector('html[data-demo-ready]');
-  await expect.poll(() => order(page)).toEqual(FIRST);
+  if (!sort) { await expect.poll(() => order(page)).toEqual(FIRST); }
 }
 
 async function many(page, n = 24) {
@@ -328,7 +335,9 @@ test.describe('on an Android phone, by touch', () => {
   });
 
   test('a tap on the grip says how to move a session, and opens nothing', async ({ page }) => {
-    await openDemo(page, { ua: UA.android, hint: 'Android' });
+    await openDemo(page, { ua: UA.android, hint: 'Android', hinted: true });
+    await page.waitForTimeout(300);
+    await expect(page.locator('.grip-hint')).toHaveCount(0);
     const grip = card(page, CLAUDE).locator('.drag-handle');
     await expect(grip).toBeVisible();
     const b = await grip.boundingBox();
@@ -337,6 +346,31 @@ test.describe('on an Android phone, by touch', () => {
     await expect(page.locator('.grip-hint')).toHaveText('Press and hold a session to move it. Or use Move up and Move down in its menu.');
     await expect(view(page, CLAUDE)).toBeHidden();
     await expect(page.locator('.lifted')).toHaveCount(0);
+  });
+});
+
+test.describe('the grip hint, by itself on touch', () => {
+  test.use({ viewport: { width: 390, height: 664 }, hasTouch: true });
+  const HINT = 'Press and hold a session to move it. Or use Move up and Move down in its menu.';
+
+  test('the first time a touch user sees Your order, the hint shows by itself, and never again on this device', async ({ page }) => {
+    await openDemo(page, { ua: UA.android, hint: 'Android' });
+    await expect(page.locator('.grip-hint')).toBeVisible();
+    await expect(page.locator('.grip-hint')).toHaveText(HINT);
+    await page.reload();
+    await page.waitForSelector('html[data-demo-ready]');
+    await expect.poll(() => order(page)).toEqual(FIRST);
+    await page.waitForTimeout(500);
+    await expect(page.locator('.grip-hint')).toHaveCount(0);
+  });
+
+  test('in another sort it waits, and shows once the list is in Your order', async ({ page }) => {
+    await openDemo(page, { ua: UA.android, hint: 'Android', sort: 'recent' });
+    await expect(page.locator('#session-sort')).toHaveValue('recent');
+    await page.waitForTimeout(500);
+    await expect(page.locator('.grip-hint')).toHaveCount(0);
+    await page.locator('#session-sort').selectOption('yours');
+    await expect(page.locator('.grip-hint')).toHaveText(HINT);
   });
 });
 
@@ -559,6 +593,92 @@ for (const width of [1440]) {
       await expect(card(page, CODEX)).not.toHaveAttribute('data-pinned', 'true');
       await expect(said(page)).toHaveText(/^Unpinned\. Position \d of 4 in Sessions\.$/);
       await expect(page.locator('.list-group')).toHaveCount(0);
+    });
+
+    test('with every session pinned, a held card shows Sessions with "Drop here to unpin", and dropped there is unpinned', async ({ page }) => {
+      await openDemo(page);
+      for (const id of FIRST) {
+        await card(page, id).locator('.row-main').click({ button: 'right' });
+        await card(page, id).getByRole('menuitem', { name: 'Pin' }).click();
+        await settled(page);
+      }
+      await expect(page.locator('.list-group')).toHaveText(['Pinned']);
+      const [x, y] = await grab(page, CLAUDE);
+      await expect(page.locator('.list-group')).toHaveText(['Pinned', 'Sessions']);
+      const empty = page.locator('.drag-keep[data-group="sessions"]');
+      await expect(empty).toHaveText('Drop here to unpin');
+      // Escape takes Sessions away again.
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await expect(page.locator('.list-group')).toHaveText(['Pinned']);
+      await expect(page.locator('.drag-keep')).toHaveCount(0);
+      await settled(page);
+
+      await grab(page, CLAUDE);
+      const spot = await empty.boundingBox();
+      // Over the foot of "Drop here to unpin", well below the list's own box.
+      await page.mouse.move(x, spot.y + spot.height - 6, { steps: 10 });
+      await expect(card(page, CLAUDE).locator('.drag-chip')).toHaveText('Unpin');
+      await expect(page.locator('.list-group[data-group="sessions"]')).toHaveText('Sessions \u00b7 drop to unpin');
+      await expect(empty).toHaveCount(0);
+      await page.mouse.up();
+      await expect(card(page, CLAUDE)).not.toHaveAttribute('data-pinned', 'true');
+      await expect(said(page)).toHaveText('Unpinned. Position 1 of 1 in Sessions.');
+      await expect.poll(() => order(page)).toEqual([COPILOT, CODEX, DELEGATING, CLAUDE]);
+      await expect(page.locator('.list-group')).toHaveText(['Pinned', 'Sessions']);
+    });
+
+    test('the last card in Sessions held in Pinned leaves "Drop here to unpin" in its place', async ({ page }) => {
+      await openDemo(page);
+      for (const id of [COPILOT, CLAUDE, CODEX]) {
+        await card(page, id).locator('.row-main').click({ button: 'right' });
+        await card(page, id).getByRole('menuitem', { name: 'Pin' }).click();
+        await settled(page);
+      }
+      const [x, y] = await grab(page, DELEGATING);
+      const top = (await card(page, DELEGATING).boundingBox()).y;
+      const claude = await card(page, CLAUDE).boundingBox();
+      await page.mouse.move(x, y + (claude.y - top), { steps: 10 });
+      await expect(card(page, DELEGATING).locator('.drag-chip')).toHaveText('Pin');
+      await expect(page.locator('.drag-keep')).toHaveText('Drop here to unpin');
+      // Under the Sessions header, which moved down a place with it.
+      const below = async () => {
+        const head = await page.locator('.list-group[data-group="sessions"]').boundingBox();
+        return (await page.locator('.drag-keep').boundingBox()).y - (head.y + head.height);
+      };
+      await expect.poll(below).toBeGreaterThanOrEqual(-0.5);
+      await page.mouse.up();
+      await expect(card(page, DELEGATING)).toHaveAttribute('data-pinned', 'true');
+      await expect(page.locator('.drag-keep')).toHaveCount(0);
+    });
+
+    test('a held session that ends is said to have ended, and the others close its gap on reorder', async ({ page }) => {
+      await openDemo(page);
+      await page.evaluate(() => document.documentElement.style.setProperty('--ab-motion-reorder-duration', '5000ms'));
+      const title = await page.evaluate((id) => window.agentBridgeDemo.host.get(id).title, COPILOT);
+      await grab(page, COPILOT);
+      await page.evaluate((id) => window.agentBridgeDemo.remove(id), COPILOT);
+      await expect(card(page, COPILOT)).toHaveCount(0);
+      await expect(said(page)).toHaveText(`${title} ended. Move cancelled.`);
+      const sliding = await page.evaluate(() => document.getAnimations()
+        .filter((a) => a.id === 'ab-motion-reorder' && a.playState === 'running').map((a) => a.effect.target.dataset.id).sort());
+      expect(sliding).toEqual([CLAUDE, CODEX, DELEGATING].sort());
+      await page.mouse.up();
+    });
+
+    test('only Your order has the grip and its column: in Most recent and Machine a row starts where it did', async ({ page }) => {
+      await openDemo(page);
+      const inset = () => card(page, CODEX).evaluate((e) => e.querySelector('.row-glyph').getBoundingClientRect().left - e.getBoundingClientRect().left);
+      // In Your order the column is kept whether the grip shows or not.
+      await page.mouse.move(0, 0);
+      expect(await inset()).toBe(24);
+      for (const sort of ['recent', 'machine']) {
+        await page.locator('#session-sort').selectOption(sort);
+        await expect(card(page, CODEX).locator('.drag-handle')).toBeHidden();
+        expect(await inset()).toBe(12);
+      }
+      await page.locator('#session-sort').selectOption('yours');
+      expect(await inset()).toBe(24);
     });
 
     test('a card let go between two pinned cards that ended while it was held is pinned', async ({ page }) => {
