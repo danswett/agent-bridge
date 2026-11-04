@@ -74,8 +74,9 @@ the third-party connector API that Home Assistant is the first client of.
   happen, because an agent only ever holds an agent credential (design.md:503-506).
 * **G3. Least authority.** Read, reply and launch only. Never `session.answer` on an approval,
   never `launch.trust.answer`, never `stop`, `transfer`, `update`, `forget`, settings or pairing.
-  Never a reply into an allow-all session, and never a launch that isn't explicitly `ask` (§5.2,
-  §5.3).
+  Never an **unattended** reply into an allow-all session, and never a launch that isn't
+  explicitly `ask` (§5.2, §5.3). The owner's opt-ins (§5.7) add a per-message approval, a
+  same-account setting the owner enables knowingly, and read-only cross-account access.
 * **G4. Owner control per machine.** Each machine's policy is set at that machine (the app's
   Settings, or `agent-bridge-host config`, refused inside agent sessions, local-pipe.md:85-141).
 * **G5. Bounded automation.** Hop limits, conversation budgets and rate limits stop agent loops
@@ -122,7 +123,7 @@ the third-party connector API that Home Assistant is the first client of.
 | The relay routes **only within one account**. It takes `kind` from the device's own `hello`, and tokens are bearer tokens not bound to a key | `RelayHub.cs:13-16`, `:160-185`, `:249` ("Routing never leaves the sender's account"); `Tokens.cs:9-45` | Single-account messaging needs no relay change. Federation needs a relay change (§7.3) |
 | A reply is never typed while the session is asking anything. Folder trust is answered only by a person's device through the relay, never from the pipe | v1-sessions.md:460, :468; v1-launch.md:139-147, :191-232 | Decision 1's "never approvals or trust" is already enforced by the existing paths. This design adds no path around them, and a policy check on top (§5.2) |
 | design.md §5.6 grants local `agent@session` "read, reply, **answer**, launch with `ask` permissions" | design.md:495 | It conflicts with decision 1, which omits answer. This note follows the decision (Q3) |
-| design.md §13 item 8: "Decide whether remote agent actions need a per-target grant, defaulting to off for launch with allow-all" | design.md:1356-1358 | Answered by §5. Allow-all is never available to an agent, neither as a launch (§5.2) nor as a reply target (§5.3) |
+| design.md §13 item 8: "Decide whether remote agent actions need a per-target grant, defaulting to off for launch with allow-all" | design.md:1356-1358 | Answered by §5. Allow-all is never available to an agent as a launch (§5.2). As a reply target it needs a per-target grant: a per-message, presence-signed approval, or the owner's own-account setting (§5.3, §5.7) |
 | A reply is typed as a burst, then Enter 300 ms later as a separate keystroke. Copilot replies have **no screen guard**. A question or permission prompt that opens between the transcript check and the keys takes them | host-replies.md:21-23, :33-40, :205-209; `KeySend.Expect` (`src/AgentBridge.Host.Delivery/KeyPlan.cs:20`), used today only for Claude's and Codex's first send (host-replies.md:108-110) | Agent replies need idle-only delivery and a screen guard on words *and* Enter (§5.2). The same gap was found in answers in PR #510 (#467) |
 
 ---
@@ -483,7 +484,7 @@ may not reach.
 
   The inner `data` is the exact UTF-8 bytes of the inner op's request `data` (here
   `{"id":"…","text":"…"}` for `session.reply`), base64url without padding. Base64 adds a third
-  to a 16 KiB reply, which still fits v1's 48 KiB message. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `notIdle` (§5.2), `refused`,
+  to a 16 KiB reply, which still fits v1's 48 KiB message. The result is the inner op's result, unchanged (`delivered`, `unconfirmed`, `busy`, `notIdle` (§5.2), `held` (§5.7), `refused`,
   `stale`, …; a launch's `started`, …). A refusal is `{ ok: false, error }` with a reason in
   words, which the issuing host passes back to the agent.
 * **Capability.** `agent.command` in `hello` (host-to-host channels only), and only while the host
@@ -565,11 +566,13 @@ meant as off is never read as on (host-config.md:139-141).
     "allowAgentLaunchedToLaunch": false
   },
   "inbound": {
-    "local":  { "read": "any", "reply": "forced-ask", "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
+    "local":  { "read": "any", "reply": "forced-ask", "gate": false, "allowAllTargets": false, "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] } },
     "remote": {
       "fromMachines": "any",
       "read": "any",
       "reply": "forced-ask",
+      "gate": false,
+      "allowAllTargets": false,
       "launch": { "workspaces": "approved", "permissions": "ask", "agents": ["<default>"], "profiles": ["<default>"] }
     },
     "exclude": { "sessions": [], "workspaces": [] }
@@ -581,7 +584,9 @@ meant as off is never read as on (host-config.md:139-141).
     "perPairPerMinute": 6,
     "perTargetPerMinute": 12,
     "launchesPerOriginPerHour": 3,
-    "launchesPerMachinePerHour": 10
+    "launchesPerMachinePerHour": 10,
+    "gateWindowPerMinute": 2,
+    "allowAllPerTargetPerMinute": 3
   },
   "label": "prefix",
   "links": []
@@ -596,6 +601,8 @@ meant as off is never read as on (host-config.md:139-141).
 | `outbound.allowAgentLaunchedToLaunch` | bool | Whether a session an agent launched may itself launch (fan-out, §5.4) |
 | `inbound.*.read` | `any` \| `agent-launched` \| `none` | Which sessions on this machine an agent may read. `any` is any live session. `agent-launched` is only sessions an agent launched through the bridge. `none` is none. **Default: `any`** |
 | `inbound.*.reply` | `forced-ask` \| `agent-launched` \| `none` | Which sessions an agent may reply to. `forced-ask` is every session the host launched in forced-ask mode with no grant or mode change since (§5.3), which is the widest possible value. `agent-launched` is the subset an agent launched. `none` is none. **Default: `forced-ask`** (Q37). Adopted and manually started sessions are never reply targets, because their mode is unknown (§5.3) |
+| `inbound.*.gate` | bool | Whether a reply into an **allow-all or unknown-mode** session is **held** for the owner's per-message, presence-signed approval instead of refused (§5.7 G). **Default: `false`**. Never offered to connectors |
+| `inbound.*.allowAllTargets` | `false`, or `{ workspaces: "same" \| "any" }` | Whether **this account's own** agents may reply into allow-all and unknown-mode sessions on this machine **without** a gate (§5.7 O). Set in `inbound.local`, it covers agents on this machine; in `inbound.remote`, agents on the account's other machines. Never for another account, a connector, a federated or `homeassistant:` principal, or a chain with a cross-account hop. **Default: `false`** in both. When enabled, the app proposes `inbound.local` with `workspaces: "same"`, and shows the escalation warning |
 | `inbound.*.launch` | `false`, or `{ workspaces: "approved" \| [labels], permissions: "ask", agents: [ids], profiles: [names] }` | Where an agent may launch. **`permissions` can only be `ask`**, and the launch request must say so explicitly (§5.2). `allowAll` is not expressible for an agent: it stays a person's decision, and design.md §5.6 already requires a confirmation for it even from a phone. `agents` and `profiles` are **allowlists**, empty by default except the machine's default agent and profile, each checked not to grant allow-all (§5.2) |
 | `inbound.remote.fromMachines` | `any` \| `[add hash]` | Which of the account's machines may send. `any` means any active, non-probationary rostered host. A list names **add entries**, which the app picks by machine name, never bare device ids. A machine that is re-enrolled or displaced has a new add hash, so it drops out until the owner re-selects it (§8.10, V3, V4) |
 | `inbound.exclude` | session ids and workspace labels | Never reachable by any agent, local or remote. A person can mark a private session or workspace this way |
@@ -608,7 +615,8 @@ per-machine policy". So the defaults let any session be **read** from the owner'
 and let **replies** go to sessions the host launched in forced-ask mode (§5.3). Launch is
 allowed in approved workspaces with an explicit `ask` only. The policy is the only way to narrow
 it, and the app shows it as plain choices ("Agents on your other machines can: read ✓, reply to
-sessions started by Agent Bridge ✓, launch in approved folders ✓"). Until a host is in roster
+sessions started by Agent Bridge ✓, launch in approved folders ✓"). The allow-all opt-ins (§5.7)
+are listed separately, off, each with its warning. Until a host is in roster
 `enforce` mode, `inbound.remote` is ignored and treated as `none` (decision 4).
 
 ### 5.2 Allowed actions
@@ -616,7 +624,7 @@ sessions started by Agent Bridge ✓, launch in approved folders ✓"). Until a 
 | Action | Agent may? | Enforced by |
 |---|---|---|
 | `sessions.list`, `session.get`, `session.read` (wait for change), `launch.options`, `launch.result` | Yes, if `read` permits | Policy. Sessions not readable are left out of lists, and are `not-found` when named |
-| `session.reply` (text only) | Yes, if `reply` permits, and only into a target §5.3 allows | Policy, §5.3, then the existing reply checks (v1-sessions.md:413-470), **then the agent-reply delivery guard below** |
+| `session.reply` (text only) | Yes, if `reply` permits, and only into a target §5.3 allows, or through an owner's opt-in of §5.7 (a held, approved message, or the own-account setting) | Policy, §5.3, then the existing reply checks (v1-sessions.md:413-470), **then the agent-reply delivery guard below** |
 | `session.launch` (new, or resume) | Yes, if `launch` permits, with an **explicit** `permissions: "ask"` | Policy, the launch rules below, then `LaunchProtocol.Check` and the machine's offered values |
 | `session.launch` with `transfer` | **No** | Transfers need a person command (#391 §7.2) |
 | `session.answer`: an approval (Copilot permission, Claude permission, Codex approval) | **Never** | Not in the action set (§4.3), and refused on the pipe for agent connections (`LocalApi.cs:44-47`'s rule kept) |
@@ -706,7 +714,10 @@ connector `act` profile, Q26):
 
 ### 5.3 Sessions an agent can't reach, whatever the policy
 
-These are hard-coded rules, not policy settings, and no grant, link or profile overrides them.
+These are hard-coded rules, not policy settings. No grant, link or profile overrides them, except
+the owner's three opt-ins of §5.7, each of which keeps §5.2's delivery guard. **They restrict the
+target only.** A sender's own mode never matters: an allow-all session's agent can message
+forced-ask targets like any other (§5.7).
 
 **"Allow-all" means any configuration in which typed words can make a side-effecting tool run
 without a fresh, per-action prompt.** Side-effecting means running a command, writing or editing
@@ -727,7 +738,7 @@ agent may already read by default is not counted; that exposure is stated in §7
 
 So the rule is positive, and it is about the **effective** configuration, not the launch mode:
 
-* **A session is a reply target only if both hold:**
+* **A session is an unattended reply target only if both hold** (otherwise only through §5.7):
   1. **At launch, the host forced ask mode, and the effective permission and extension
      configuration auto-allows nothing side-effecting and runs no command of its own.** Before
      every forced-ask launch the host reads **every scope that will still load**, per agent. It
@@ -792,12 +803,16 @@ So the rule is positive, and it is about the **effective** configuration, not th
     host can see that agent's grants and mode changes before delivery.
 * **The consequence in v1** (Q45): **Claude and probably Codex sessions are unreachable as reply
   targets.** Agent-to-agent replies work only **into Copilot** sessions until a Claude or Codex
-  signal is found. Reads and launches work for all three.
+  signal is found. Reads and launches work for all three. With the per-message gate on (§5.7 G),
+  Claude and Codex sessions can still receive a reply the owner approves.
 * **The person's own grants make a session unreachable by agents.** "Don't ask again" at the
   machine, or `/allow-all`, takes the session out of reach until it is relaunched (Q44). That is
   deliberate.
 * Allow-all and unknown sessions are **excluded from every `expose` set** (§7.4) and every
-  connector scope (§9.3). They may still be **read** within the read policy (Q34).
+  connector scope (§9.3), unless a link's `allowAllRead` opt-in exposes them for reading only
+  (§5.7 R). They may be **read** within the same-account read policy. A **reply** into one is
+  refused, unless the target's owner opted in: the per-message gate (§5.7 G), or the own-account
+  setting (§5.7 O). Q34 records the owner's decision.
 * AP1 ships **effective-configuration checks and mode forcing at launch**, and **vectors for every
   row of the table above**. Each must refuse the launch, make the session unknown, or be prevented
   by forcing (§11.2). **Pre-seeded user rules, hooks and rule files** are mandatory refusal
@@ -887,6 +902,98 @@ refusals before signing.
   14:05 PT". The sender's title is quoted and secondary, as in §6.2.
 * **Verifiable.** Under 4.2(a), the person's app can re-verify any inbound entry against the
   roster.
+
+### 5.7 Reaching allow-all sessions: the owner's opt-ins
+
+**Owner decision** (coordinator, 2026-11-03, 19:59 PT). The owner mostly runs sessions in
+allow-all and wants cross-session messaging to work with them. §5.3's restriction is on the
+**target** only. **A sender's own mode never matters:** an allow-all session holding a credential
+(§3.2) can read, launch, and reply into forced-ask targets like any other. What §5.3 forbids is an
+agent's words arriving, **unattended**, in a session that will run them without a prompt. The
+owner chose three opt-in paths through that rule. Each is off by default, and each keeps §5.2's
+delivery guard (idle only, an empty normal-mode composer, `Expect` on the words and the Enter,
+escaping), which there protects the **timing**, not the mode. A fourth option, **sandboxed
+allow-all** (allow-all only inside an OS sandbox the host sets up, so unattended execution is
+confined), was **not chosen** and is recorded as deferred (Q34).
+
+**(G) A per-message gate for allow-all and unknown targets.** Same account and cross-account.
+`inbound.*.gate` (§5.1), and per link `expose.gate` (§7.4). Off by default.
+
+1. **Held.** A reply that passes every check except §5.3's target rule, addressed to an
+   allow-all or unknown-mode session, isn't refused: the target host **holds** it. The sender
+   gets the additive outcome `held`, with a `hold` id. A resend with the same `request` returns the
+   current outcome: `held`, then `delivered`, `unconfirmed`, or `refused` with `code: "gateDenied"`
+   or `"gateExpired"`. The replay record (§4.4) is written when the message is held, so the
+   envelope's 120 s expiry is checked at acceptance, and the held copy can't be replayed. The
+   chain budget and rates (§5.4, §5.5) are charged at hold time, so a denied message still costs
+   the sender.
+2. **The prompt.** The target owner's devices get it in the **Needs-you lane**, as a new item kind
+   `agentMessage` on the target session: the sender's **verified label** (§6.3: agent, machine,
+   and for another account the T2 login and link name), the target session, and the **full
+   message text, never truncated** (up to the 16 KiB reply limit, scrollable), with hidden
+   characters revealed as approvals reveal them (`NeedsYou.Reveal`). The text shown is the
+   **exact characters the host will type**, provenance prefix and escaping included. It says
+   plainly: "**Approving makes this your own instruction to an allow-all session.** It can run
+   commands on *DESK* without asking." Buttons: **Deny**, **Approve once**, and **Allow
+   @sender → this session for 5 / 15 / 30 / 60 min**. Deny is first; nothing is pre-selected.
+3. **The approval is a person command.** It is signed with **presence** on a person's device
+   (#391 §7.2, as other approvals and transfers are), over
+   `F("agent-bridge gate v1", {hold, target: {account, machine, session, instance}, sender:
+   {account, generation, add, session, instance}, textSha256, decision, minutes?, request,
+   expiresAt})`. The host checks a person-kind signer, presence, the hold still pending, the
+   exact `textSha256` of what it holds, the sender principal and target instance, and the
+   request in the durable replay store (single use). So neither a relay nor a host can swap the
+   text, the sender or the target. It can't come from an agent connection, a connector, the
+   `homeassistant:` press path or any path without presence: those have no person `sign` key.
+4. **Expiry.** A hold not approved within **5 minutes** expires (`gateExpired`) and is discarded.
+5. **Delivery.** An approved message is typed **once**, under §5.2's full guard. If the target
+   isn't idle when approved, the host waits for idle until the hold's expiry, then gives up
+   (`gateExpired`). It never retries a delivery that came back `unconfirmed`.
+6. **A window** ("Allow @sender → this session for N minutes"):
+   * N is one of 5, 15, 30 or 60. It is **per sender principal and per target session**, keyed by
+     the sender's `(account, generation, add, session, instance)` and the target's `(machine,
+     session, instance)`. Never a wildcard, never per machine or account.
+   * Only the target owner's presence-signed approval opens one. **A sender can't open, extend or
+     see one**: no op in the agent or connector set touches it.
+   * Revocable at once from the session card ("Stop allowing @sender"). It ends when either
+     session ends or is resumed (a new `instance`), when the target's mode or grants change as
+     §5.3 can see, or when the link is suspended or tombstoned.
+   * Window deliveries skip the prompt but nothing else. They are rate-limited
+     (`limits.gateWindowPerMinute`, default 2, at most 20 per window), each is **audited** with the
+     window id and the message hash, and the person sees a quiet running count on the card.
+7. **Not for connectors in v1.** A connector reply into an allow-all or unknown session is
+   refused outright, and the gate isn't offered (§9.6, Q26).
+8. **What it makes reachable.** Every unknown-mode session can be reached this way: adopted and
+   manually started sessions, and Claude and Codex sessions that §5.3 leaves unknown (Q45).
+
+**(O) Own agents into own allow-all sessions, without a gate.** `inbound.*.allowAllTargets`
+(§5.1). It covers allow-all **and unknown-mode** sessions, since §5.3 already treats unknown as
+allow-all. Off by default, set only at the machine, and **never** for another account's, a
+connector's, a federated or a `homeassistant:` principal, or for any message whose chain has a
+cross-account hop (§5.4 `via`, the §7.5 taint rule).
+* **The risk, shown in the setting:** "Any agent of yours, including one in an ask-mode session or
+  one following instructions injected into it, could get commands run without a prompt through
+  another of your sessions that runs in allow-all." The owner turns it on knowingly.
+* **Scope**, two choices:
+  * **Machines:** set in `inbound.local`, same machine only; set in `inbound.remote` too, any of
+    the account's non-probationary hosts (AP5).
+  * **Workspaces:** `"same"` (the sender's and target's working directories are in the same
+    approved workspace, a worktree the host made for it, or a checkout of the same repository
+    id) or `"any"`.
+
+  **Recommended when enabled: same workspace, same machine** (`inbound.local` only).
+* Chain depth, conversation budgets and rates apply unchanged, with a separate, lower per-target
+  rate for allow-all targets (`limits.allowAllPerTargetPerMinute`, default 3).
+
+**(R) Read-only cross-account access to allow-all sessions.** Per link,
+`expose.allowAllRead` (§7.4, §7.11.5). Off by default.
+* Linked accounts may **read** (`sessions.list`, `session.get`, `sessions.subscribe`) the
+  owner's allow-all and unknown-mode sessions **in the pinned workspaces**, under §7.4's read
+  projection and §7.5's taint rule.
+* **Never reply** through it. A reply into those sessions still needs gate (G), with
+  `expose.gate` on the same link.
+* **The disclosure, shown in the link dialog:** "Their agents could read what your allow-all
+  sessions say, including command output. Transcripts can contain secrets."
 
 ---
 
@@ -1187,8 +1294,8 @@ A message flows only if **both** owners allowed it: A's **reach** (outbound) and
 | | Default | Owner can set |
 |---|---|---|
 | **Expose: machines** | None | Specific machines of theirs |
-| **Expose: sessions** | **None visible** | Only **shared** sessions: those launched in the link's **workspace** (`expose.workspaces: ["Project X"]`), or explicitly shared by the person ("Share with @alex's agents" on a session card). For a repo-scoped link, the link's workspace is the workspaces **pinned** to the repo at acceptance, and worktrees the host made for them (§7.11.5). **Allow-all sessions are never exposed** (§5.3). Everything else is `not-found`, the same as nonexistent |
-| **Expose: actions** | None | `read`, `reply`. `launch` opt-in, only into the link's workspace, `ask` only, counted against `launchesPerMachinePerHour` / 4 |
+| **Expose: sessions** | **None visible** | Only **shared** sessions: those launched in the link's **workspace** (`expose.workspaces: ["Project X"]`), or explicitly shared by the person ("Share with @alex's agents" on a session card). For a repo-scoped link, the link's workspace is the workspaces **pinned** to the repo at acceptance, and worktrees the host made for them (§7.11.5). **Allow-all and unknown-mode sessions are not exposed** (§5.3), unless the link's `allowAllRead` opt-in exposes those in the pinned workspaces for **reading only** (§5.7 R). Everything else is `not-found`, the same as nonexistent |
+| **Expose: actions** | None | `read`, `reply`. `launch` opt-in, only into the link's workspace, `ask` only, counted against `launchesPerMachinePerHour` / 4. `gate` opt-in: replies to allow-all or unknown sessions in the link's workspaces are held for this owner's per-message approval (§5.7 G). The own-account setting (§5.7 O) never applies to a link |
 | **Expose: read projection** | When read is allowed: `id`, `title`, `agent`, `status`, `statusSince`, `activity.response` (≤ 16 KiB), `waiting: bool`, `driverFrom` | Nothing more in v-full. **Never** `cwd`, `userMessage` (it may hold the owner's private instructions), `reasoning`, tool `history`, `subagents`, `question` content, usage, attachments, or `repository`/`branch` unless the link names that repository |
 | **Reach: which of my sessions may send** | **None** | Only sessions launched in the link's workspace, or adopted for the link explicitly. So an agent working in a private repository with access to secrets can't be talked into posting to the collaborator: it has no reach |
 | **Reach: actions** | None | `read`, `reply`, `launch` (if the peer exposes it) |
@@ -1285,8 +1392,9 @@ list.
 ### 7.10 Full-design slices (after owner approval and a separate security review)
 
 F1: link descriptors, link codes and statements (library and vectors). F2: relay `guest`
-admission. F3: host enforcement, projection and taint. F4: app and PWA link pages and the
-external marker. F5: spaces as named sets of links (optional). F6: repo discovery (§7.11):
+admission. F3: host enforcement, projection and taint, including `allowAllRead` and the link's `expose.gate`
+(§5.7, after AP8). F4: app and PWA link pages and the external marker, with the allow-all opt-ins
+and their warnings (§7.11.5). F5: spaces as named sets of links (optional). F6: repo discovery (§7.11):
 SSH-signed descriptors, the members-only directory, membership freshness and the suggestion UI.
 F6 depends on F1-F4, because it produces F1 links.
 
@@ -1493,6 +1601,15 @@ SSH-host-key rule.
 * **Repo scope** (the choices in the dialog):
   * **Nothing is pre-ticked** (Q40), as in §7.4 and #391's "pre-ticks nothing". The person ticks
     read and/or reply. Launch is a separate opt-in.
+  * **Allow-all sessions** (§5.7), two further opt-ins, unticked, each with its warning:
+    * "**Let @alex's agents read my allow-all sessions** in these workspaces" (`allowAllRead`):
+      "Their agents could read what those sessions say, including command output. Transcripts
+      can contain secrets."
+    * "**Ask me before each message** @alex's agents send to an allow-all session"
+      (`expose.gate`): "Each one waits for your approval on your device. Approving makes it your
+      own instruction to a session that runs commands without asking."
+
+    Without the second, @alex's agents can't reply into those sessions at all.
   * **The workspace-to-repo mapping is pinned at acceptance** (Q41). The dialog lists the
     workspaces whose remote resolves to the repo id **now**, and the person confirms which ones
     the link covers. The link statement records them by workspace label and path.
@@ -1503,7 +1620,8 @@ SSH-host-key rule.
       remote starts resolving to the repo is not added until the person adds it. Scope is never
       derived per message from live git settings.
   * **expose** only sessions whose working directory is in a pinned workspace, or a worktree the
-    host made for one. Never allow-all sessions (§5.3).
+    host made for one. Allow-all and unknown-mode sessions only through the two opt-ins above
+    (§5.3, §5.7).
   * **reach** from the same set of sessions only, so an agent in another repo can't post to
     @alex at all.
   * The projection, taint and limits of §7.4-§7.5 apply unchanged.
@@ -2146,7 +2264,7 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 
 | Party | Assumption | Must not be able to | Can (residual) |
 |---|---|---|---|
-| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all, unknown-mode or working session (§5.3). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2) |
+| **A prompt-injected agent with tools only** (MCP and file tools in an `ask` session, no unattended shell) | Holds its own credential and follows hostile instructions | Answer an approval or folder trust anywhere. Launch with allow-all, or without an explicit `ask`. Reply into an allow-all, unknown-mode or working session (§5.3), unless the target's owner approves that exact message or enabled own-account allow-all targets (§5.7). Have its words or Enter land in a prompt that opens mid-delivery (§5.2's guard). Stop, transfer, update, change settings, adopt, or widen its own scope. Reach excluded sessions. Exceed depth, budget or rates. Appear as the person | Read and reply to sessions the policy allows, and launch `ask` sessions in approved workspaces, within budgets. Each act is attributed, audited and shown violet. That is the owner's chosen reach (decision 2). If the owner enabled `allowAllTargets` (§5.7 O): get commands run without a prompt through an allow-all session in that scope, the risk the setting's warning states |
 | **A prompt-injected agent with a shell** (it can run commands, after the person approved them or because its own session is allow-all) | All of the above, plus it runs processes as the user | Make another session's agent act through the bridge without a reply that passes §5.2 and §5.3 at the target | Everything the user can, locally: it is same-user code (§1.3, local-pipe.md:121-130). That includes using another session's token if it can read it, by spoofing its parent or joining that session's Job (§3.4: the ancestry check is a safety rail, not a boundary). Its subprocesses inherit its token (§3.4) |
 | **Another session's agent, or a detached helper**, on the same machine, holding a stolen token (from a readable environment, or a transcript that printed it) | Same OS user | Use it casually: on Windows the token is accepted only from a process inside the bound session's ancestry or Job object, read in full and failing closed, and `AGENT_BRIDGE_SESSION` proves nothing (§3.4). Outlive the session: the token dies with its process | On macOS and Linux nothing, because there are no agent credentials until peer identification exists (§3.4). On Windows, a helper that deliberately spoofs its parent (`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`) or joins the session's Job passes the rail: that is a **safety rail, not a boundary**, and such code is same-user malware (below) |
 | **A stolen person's device** (unlocked, with its presence check passable) | Holds `sign`, maybe a `linkKey` | Beyond #391 §2's bounds: add or re-key hosts on a federation link, or rotate its key, without the peer person's confirmation (§7.3). Renew a link after its removal, holding only that device: the attesters stop co-signing (§7.3) | Until removed: what #391 allows a person's device, including drive sessions (#391 §7.3), and re-sign statements for links it holds the key for. Removal revokes those links, and each host sends a tombstone under its own `hostSign` (§7.3, §7.7). If the device is also a listed host or attester (the single-laptop setup), it renews its links until a tombstone from the required separate revoker arrives, or they expire |
@@ -2157,7 +2275,12 @@ In addition to design.md §5.1 (:348-361) and #391 §2.
 | **A removed host** | Keys still held | Be accepted by any host that has applied the removal, or by a target without a head attestation from another device in the last hour (§8.10, V5) | Inside a relay-maintained partition, unbounded (#391 §6.3). Shown as machines that never confirm the removal |
 | **A hostile approver senior to a host** (#391 §3.3) | Can displace the host's enrollment with its own descriptor | Impersonate that machine's agents. A displacing copy lacks the machine's `dh` private key, so it can't carry envelopes (§8.10, V4) | Deny service to the genuine machine, and be announced |
 | **A newly enrolled host** | Approved, within 72 h | Send cross-machine agent commands during its probation, unless a person allows it at the target (§8.10, V5) | Act locally |
-| **An allow-all session** on any machine | Runs anything typed into it without a prompt | Receive any agent's or connector's reply, local, remote or cross-account (§5.3, Q34) | Be read, within the read policy |
+| **An allow-all session** on any machine | Runs anything typed into it without a prompt | Receive any agent's or connector's reply **unattended**, local, remote or cross-account (§5.3, Q34). Receive a connector's at all in v1 | Be read, within the read policy. Receive a reply its owner approved, message by message or through a window (§5.7 G). Receive own agents' replies if the owner enabled `allowAllTargets` (§5.7 O) |
+| **Prompt fatigue** at the gate | A stream of held messages | Get one through without a person's presence-signed approval. Pile up: holds expire in 5 minutes, and are charged to the sender's rates and budget when held (§5.7 G) | Tire the person into approving. Mitigated by Deny first and nothing pre-selected, the per-pair rates, and the quiet lane (no push per hold) |
+| **Social engineering through the message text** ("Dan asked me to run this", a forged header) | The sender controls every word | Hide anything: the full text is shown, never truncated, hidden characters revealed, the sender's label from verified fields only (§6.3) | Persuade the person. The prompt says that approving makes it their own instruction to an allow-all session |
+| **Message substitution** after approval (a relay, a host, or a resend with new text) | Holds or relays the bytes | Deliver different text, to a different session or instance, or from a different sender: the approval signs `textSha256`, the target instance and the sender principal, and is single-use in the durable replay store (§5.7 G) | Deny service by dropping the approval |
+| **Window abuse** | An open window from one sender to one session | Open or extend it (only the target owner's presence-signed approval can), widen it to other sessions or senders, or outlive either session's instance, a mode change or a revocation | Send up to `gateWindowPerMinute` (2) messages a minute until it ends, each typed under the guard and audited |
+| **Own-account escalation** through `allowAllTargets` | An ask-mode or prompt-injected agent of the owner's | Use it when it is off (the default), from another account, a connector or a chain with a cross-account hop, or outside its workspace and machine scope (§5.7 O) | When on, run commands without a prompt through a sibling allow-all session in scope. The owner accepts this knowingly |
 | **The relay** | Untrusted | Read, forge, replay or splice envelopes (Noise, signature, durable replay, channel-peer = signer) | Deny or delay service, observe host-to-host sizes and timing |
 | **Clock faults** | A host's clock is wrong | Make a used command run again (durable record, high-water mark) | Make commands fail with `clock` until fixed |
 | **Agent loops** | Two well-meaning agents ping-pong | Run unattended past 20 messages or 60 minutes per person-started conversation | Use up to those budgets |
@@ -2169,7 +2292,9 @@ All of 10.1, plus §7.8, and the repository-specific events of §7.11.6. In addi
 | Party | Must not be able to | Can (residual) |
 |---|---|---|
 | **A stolen person's device of the peer**, holding the link's `linkKey` | Add a host, change a listed host's keys, or rotate `linkKey`, without this side's person confirming it (§7.3). Renew freshness after the peer removes the device, holding only that device: renewal needs a co-signature by a peer attester off the custodian's machine, which the attesters refuse once the custodian is removed (§7.3, §7.5). Pre-date statements: `issuedAt` more than 120 s ahead is refused. Outlast a tombstone: one signed by `linkKey`, any confirmed peer host or a pinned revoker is honoured at once and permanently, and can arrive without RB (§7.3) | Before the peer removes the device: re-sign statements for already-confirmed hosts, and remove hosts. After removal: at most the remaining 24 h of the last co-signed statement, unless a tombstone arrives first. If the thief also holds an attester's keys, or the whole machine of a `singleMachine` link, **until a tombstone from another peer host or a revoker arrives, or the link expires** (30 days). This is not bounded at 24 h |
-| **A collaborator's agent targeting an allow-all session** | Reach it: allow-all sessions are excluded from every `expose` set, without exception (§5.3) | — |
+| **A collaborator's agent targeting an allow-all session** | Reach it unattended: allow-all and unknown sessions are never exposed for replies, and the own-account setting never applies to a link (§5.3, §5.7 O) | Read it, if the owner ticked `allowAllRead` (§5.7 R). Get a message typed into it that the owner approved through the gate, if `expose.gate` is on (§5.7 G) |
+| **Exfiltration through `allowAllRead`**: a collaborator's agent reading allow-all sessions | Read outside the pinned workspaces or past §7.4's projection, or reply through it | Read what those sessions say, including command output and any secret in it. The link dialog says so (§7.11.5) |
+| **Cross-account social engineering at the gate**: a collaborator's agent's message, shown for approval | Appear as the owner's own agent: the prompt carries the external marker and the T2 login (§6.2) | Persuade the owner, as for the same account |
 | **A rewritten `rendezvous` pointer** | Collect GitHub tokens: none are ever sent (§7.11.2). Switch directories silently: the origin is pinned (§7.11.2) | Collect T2 directory signatures and descriptors from owners who accept the new origin (§7.11.6) |
 
 The essential difference is that the counterpart **owner** is a party
@@ -2211,13 +2336,15 @@ Each slice is one PR, security-reviewed independently before merge.
 
 | # | Slice | Depends on | Crosses machines? |
 |---|---|---|---|
-| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **effective-configuration checks and mode forcing at launch** for every agent kind (§5.3): the Copilot flag allowlist with no Agency or `extraArgs`, and reads of `permissions-config.json`, `allowedUrls` and hooks; Claude's `--permission-mode default` with restricted settings sources, and reads of managed and user settings, hooks, plugins and MCP servers; Codex's explicit `-a`/`-s`, and reads of every rule file and MCP server; a scrubbed environment; **vectors for every row of §5.3's sources table**;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **pre-seeded user allow rules, hooks and Codex rule files each refuse the launch or leave the session `unknown`**, for all three agents, and an `auto` launch that would pick Agency is refused;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
+| **AP1** | **Smallest first slice: local agent principals, Windows only** (§3.4). It covers:<br>• credentials issued at launch (`AGENT_BRIDGE_TOKEN`, hashed store with process binding, a Job object per launch);<br>• `agent.hello` with **ancestry or Job membership read in full, failing closed**, never the environment variable. It is a **safety rail, not a boundary**: parent-PID spoofing and Job joining are stated residuals (§3.4);<br>• **effective-configuration checks and mode forcing at launch** for every agent kind (§5.3): the Copilot flag allowlist with no Agency or `extraArgs`, and reads of `permissions-config.json`, `allowedUrls` and hooks; Claude's `--permission-mode default` with restricted settings sources, and reads of managed and user settings, hooks, plugins and MCP servers; Codex's explicit `-a`/`-s`, and reads of every rule file and MCP server; a scrubbed environment; **vectors for every row of §5.3's sources table**;<br>• in-session grant and mode-change **detection**: Copilot from `permission.requested`/`permission.completed`, the others `unknown` unless a vector proves a signal before delivery;<br>• a **Copilot input-box reader** (host-replies.md:19-23 has none today), so the composer can be read before typing and before Enter (§5.2);<br>• the `agents` policy (`enabled`, `issue`, `inbound.local`, `exclude`, `limits`);<br>• local `session.reply`, `session.launch` and reads as an agent connection;<br>• chains, budgets and rates for local targets, and the audit log;<br>• `driverPrincipal = agent:<machine>/<session>`, `driverFrom`, the escaped prefix, and `userMessageFrom = agent` from the verified source;<br>• `agent-bridge-host agent list\|read\|reply\|launch` for tests, and the federation stub fields (§7.9).<br>**Exit criteria, each with a test that fails without it:**<br>• **an allow-all or unknown-mode session is never a reply target** (§5.3), including a session switched to allow-all after launch. The §5.7 opt-ins come later (AP8, AP9), so AP1 has none;<br>• **an agent launch or resume without an explicit `permissions: "ask"` is refused**, as are a non-allowlisted `agent` or `profile`, a resume of an allow-all session, and a `transfer`;<br>• **agent replies are delivered only to idle sessions** (`notIdle` otherwise, re-checked before Enter), **with `KeySend.Expect` on both the words and the Enter for every agent kind**, Copilot included. A prompt opened between the check and each key types nothing;<br>• a **non-empty or shell-mode composer is refused**, and Enter is sent only when the **complete** composer equals the authorized message exactly (§5.2);<br>• a session launched in forced-ask mode becomes `unknown` after an in-session "don't ask again" grant or a runtime mode switch (§5.3, Q44);<br>• **pre-seeded user allow rules, hooks and Codex rule files each refuse the launch or leave the session `unknown`**, for all three agents, and an `auto` launch that would pick Agency is refused;<br>• leading option keys and `@path` are escaped;<br>• a token from another session or a plain detached helper is refused, as are `AGENT_BRIDGE_SESSION` alone and a partial ancestry read;<br>• a manual or adopted session isn't a reply target, and a manual one gets no credential;<br>• an agent can't answer an approval or folder trust;<br>• a forged header in a title or body (including confusables) is neutralized;<br>• depth and budget refuse, and the person's reply resets them;<br>• a resumed session's old token is dead | #501 merged | **No** (decision 4 holds) |
 | AP2 | #45's MCP server on AP1 (stdio), with the old tool names and outcomes | AP1 | No |
 | AP3 | Adoption on Windows: app action, CLI, `agent.credential` | AP1 | No |
 | AP4 | Envelope library: encoding, signing (a) or MAC (b), strict parser, shared positive and negative vectors | #391 R1 (+ roster v2 V1-V2 if (a), §8.10) | Library only |
 | AP5 | Cross-machine: `agent.command` host-to-host, verification §4.7, `inbound.remote`, `outbound`, durable replay via R6, `instance` on `Session`, `agent.outcome`, `session.read` wait | AP4, #391 R3 + R6, hosts in `enforce` | **Yes** |
 | AP6 | Clients: "from *X* on *Y*" in the app and PWA (extending #503/#504), Settings for the policy, the Agent activity view | AP1 (local), AP5 (remote) | n/a |
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
+| AP8 | **The per-message gate** for allow-all and unknown targets (§5.7 G): `inbound.*.gate`, holds, the `held` outcome and `gateDenied`/`gateExpired` codes, the Needs-you `agentMessage` item with full text and revealed characters, the presence-signed `gate v1` approval, windows and their rate limit, audit. **Exit tests:** an approval for different text, sender, target or instance is refused; a replayed approval is refused; an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused; a hold expires after 5 minutes; a window ends on revocation, either session's end or resume, and a target mode change; a sender can't open or extend a window; a connector reply into allow-all is refused with no hold; delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
+| AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal and for a chain with a cross-account hop; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 (`inbound.local`). `inbound.remote`: AP5 | Local first; remote with AP5 |
 | F1-F6 | Federation (§7.10), with repo discovery (§7.11) as F6 | AP5, owner approval, separate review | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
@@ -2348,7 +2475,10 @@ The connector API (§9):
 26. **Q26. An `act` profile later: which acts, and may connectors answer `ask_user` forms?**
     **Recommended:** later, each act its own grant (`session.reply`, `session.stop`, launch with
     `ask` only), with `automation` attribution, and **no** answering of forms in v1. A reply act gets
-    §5.2's idle-only, screen-guarded delivery and §5.3's allow-all exclusion, as agents do. Approvals
+    §5.2's idle-only, screen-guarded delivery and §5.3's allow-all exclusion, as agents do, but
+    **not** §5.7's gate or own-account setting: a connector reply into an allow-all or unknown
+    session is refused, with no hold. Whether a later `act` profile may use the gate is its own
+    question for that design. Approvals
     and folder trust are never available in any profile. This means Home Assistant no longer
     answers approvals as agent-ha-bridge did; the app and PWA do.
 27. **Q27. Default grant expiry for a connector.** **Recommended:** 1 year, with a reminder 14
@@ -2382,11 +2512,21 @@ The roster v2 requirements (§8.10), from the sixth independent review of #391:
 
 Decisions the reviews of `f3559996` asked to make explicit:
 
-34. **Q34. Replies into allow-all sessions.** **Recommended: never**, for any agent or connector
-    principal, local, remote or cross-account. It is a hard-coded rule (§5.3), not a setting, and
-    an unknown permission mode counts as allow-all. Reading them stays within the read policy. If
-    the owner ever wants an exception, it would be a per-session switch set at that machine, for
-    same-account local agents only, and it defaults to **no**.
+34. **Q34. Replies into allow-all sessions.** **Decided by the owner (2026-11-03, 19:59 PT),
+    §5.7.** The restriction is on the **target** only; a sender's mode never matters. An
+    unattended reply into an allow-all or unknown-mode session stays refused by default (§5.3).
+    Three opt-ins, each off by default and each keeping §5.2's delivery guard:
+    * **(G) A per-message gate**, same account and cross-account: the reply is held, and the
+      target's owner approves that exact message with presence on their own device, once or for a
+      5-60 minute window per sender and target. Never for connectors in v1.
+    * **(O) Own agents into own allow-all sessions without a gate**, per machine, never for
+      another account, a connector or a federated principal, recommended scope same workspace and
+      same machine, with the escalation risk shown and accepted.
+    * **(R) Read-only cross-account access** to allow-all sessions in a link's pinned workspaces,
+      per link, with the content-exposure warning. Replies still need (G).
+
+    **Sandboxed allow-all** (allow-all confined to an OS sandbox the host sets up) was **not
+    chosen**. It is deferred, and could later make a sandboxed session a target without a gate.
 35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
     means an answer or reply is being typed (v1-sessions.md:454).
@@ -2461,7 +2601,11 @@ Decisions the reviews of `f3559996` asked to make explicit:
     with Claude and Codex added when AP1 vectors find a pre-delivery signal (a Claude hook that
     agent-bridge installs and reads, say). (b) Allow Claude and Codex as reply targets on the
     launch check alone, accepting that a grant made at the machine is invisible. **Recommended:
-    (a).** (b) reopens the unattended-execution path the reviews closed. A later option is an
+    (a).** (b) reopens the unattended-execution path the reviews closed. The owner's §5.7
+    decisions (Q34) narrow the gap without reopening it: with the gate on, a Claude or Codex
+    session receives any message its owner approves; with `allowAllTargets` on, the owner's own
+    agents reach their own Claude and Codex sessions in scope with no prompt, as a risk the owner
+    accepted. A later option is an
     allowlist of hooks by exact content hash, for hooks the host can show never approve a tool and
     never run a command derived from session input.
 46. **Q46. Links held on a single machine.** If A's only machine is both the link custodian and
