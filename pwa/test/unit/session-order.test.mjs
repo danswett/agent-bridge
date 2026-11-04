@@ -214,3 +214,37 @@ test('a machine\'s complete list forgets rows of its sessions that ended while n
   assert.deepEqual(kept.order, [key('b'), key('x', 'h2')]);
   assert.deepEqual(Object.keys(kept.seen).sort(), [key('b'), key('x', 'h2')].sort());
 });
+
+test('a drop moves a row to a place in a group in one change, pinning or unpinning it, and the order persists', () => {
+  const storage = new MemoryStorage();
+  const o = new SessionOrder({ storage });
+  const list = [entry('a', 4), entry('b', 3), entry('c', 2), entry('d', 1)];
+  shown(o, list);
+  o.setPinned(key('d'), true);
+  assert.deepEqual(shown(o, list), { pinned: ['d'], sessions: ['a', 'b', 'c'], ended: [] });
+  // Into Pinned, after d: pinned at once, no second step.
+  assert.equal(o.moveTo(key('b'), 'pinned', 1), true);
+  assert.deepEqual(shown(o, list), { pinned: ['d', 'b'], sessions: ['a', 'c'], ended: [] });
+  // Out of Pinned, to the end of the rest.
+  assert.equal(o.moveTo(key('d'), 'sessions', 2), true);
+  assert.deepEqual(shown(o, list), { pinned: ['b'], sessions: ['a', 'c', 'd'], ended: [] });
+  // Its own place is no move.
+  assert.equal(o.moveTo(key('a'), 'sessions', 0), false);
+  // Past the end goes to the end.
+  assert.equal(o.moveTo(key('a'), 'sessions', 99), true);
+  assert.deepEqual(shown(o, list).sessions, ['c', 'd', 'a']);
+  assert.deepEqual(shown(new SessionOrder({ storage }), list), { pinned: ['b'], sessions: ['c', 'd', 'a'], ended: [] });
+});
+
+test('a drop moves nothing in another sort, and never a row its machine has not finished sending', () => {
+  const o = new SessionOrder({ storage: new MemoryStorage() });
+  const list = [entry('a', 3), entry('b', 2), entry('late', 1, 'h2')];
+  shown(o, list, { settled: (h) => h === 'h1' });
+  assert.equal(o.canLift(key('late', 'h2')), false);
+  assert.equal(o.moveTo(key('late', 'h2'), 'sessions', 2), false);
+  assert.equal(o.canLift(key('a')), true);
+  o.setSort('recent');
+  shown(o, list);
+  assert.equal(o.canLift(key('a')), false);
+  assert.equal(o.moveTo(key('a'), 'sessions', 1), false);
+});
