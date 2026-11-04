@@ -43,9 +43,14 @@ sealed class TakeoverState
     public string? EnterEvidence { get; set; }
     public long? RulesetId { get; set; }
     public string? BackupPath { get; set; }
-    public bool CapNoticePosted { get; set; }
-    /// <summary>Set when handing back couldn't be verified: nothing more happens until the ruleset is clean again.</summary>
+    /// <summary>Whether the owner has been asked to confirm a takeover over 12 hours old.</summary>
+    public bool ConfirmAsked { get; set; }
+    /// <summary>Whether the owner has been told this takeover reached its merge cap.</summary>
+    public bool MergeCapPosted { get; set; }
+    /// <summary>Set when the ruleset couldn't be verified: nothing more happens until it's clean again.</summary>
     public bool NeedsOwner { get; set; }
+    /// <summary>What the owner was last asked about on #170, so each tick doesn't ask again.</summary>
+    public string? OwnerAsked { get; set; }
     public List<MergedPullRequest> Merged { get; set; } = [];
     /// <summary>Receipts for #170 that couldn't be posted yet, oldest first.</summary>
     public List<string> PendingComments { get; set; } = [];
@@ -67,26 +72,38 @@ sealed record TakeoverObservation(string? ActionsStatus, TimeSpan? Stall, bool R
 static class MergeTakeoverCommand
 {
     internal const string Usage = """
-          merge-takeover [--slug OWNER/REPO] [--state FILE] [--config FILE] [--dry-run] [--allow-non-main]
+          merge-takeover [--slug OWNER/REPO] [--state FILE] [--config FILE] [--max-merges N] [--dry-run]
+                         [--allow-non-main (with --dry-run only)]
               One tick of Quality's takeover of merging while GitHub Actions is down (quality/README.md
               §4.9). Reads GitHub's status page and the merge-rule workflow's runs; enters when
               Actions isn't operational AND merge-rule has stalled (a run queued, or shown in
               progress with every job done, for 15 min), by adding a pull-request-only admin
               bypass to main's ruleset and posting a receipt on #170; then merges at most one
               armed, unheld pull request a tick that passes main's evaluator, with quality-gate
-              green on its head, 0 unresolved threads and MERGEABLE (--admin --match-head-commit);
-              exits when Actions is operational and merge-rule succeeds again on two ticks 4+ min
-              apart, removing the bypass and checking the ruleset against quality/ruleset-main.json.
+              green from GitHub Actions on its head, 0 unresolved threads and MERGEABLE, all read
+              again just before the merge (--admin --match-head-commit), and at most --max-merges
+              (default 10) a takeover, since main's CI doesn't run between them; exits when
+              Actions is operational and merge-rule succeeds again on two ticks 4+ min apart,
+              removing the bypass and checking the ruleset against quality/ruleset-main.json.
+              Outside a takeover, every tick checks the ruleset too: the takeover's own bypass
+              with no takeover recorded is removed, and anything else that differs asks the owner.
               State lives in --state (default %LOCALAPPDATA%\agent-bridge\merge-takeover.json, or
-              $XDG_STATE_HOME/agent-bridge/ elsewhere). --dry-run prints and changes nothing.
-              Refuses, like merge-rule, unless HEAD is origin/main's with no local changes.
+              $XDG_STATE_HOME/agent-bridge/ elsewhere), with a lock file beside it so two ticks
+              never overlap. Fetches origin/main first (quietly), then refuses, like merge-rule,
+              unless HEAD is origin/main's with no local changes. --dry-run prints and changes
+              nothing (no fetch, lock, state, PUT, comment or merge).
               Exits 1 when the ruleset has drifted or couldn't be verified.
         """;
 
     const int Issue = 170;
     const string Workflow = "merge-rule.yml";
     const string GateCheck = "quality-gate";
+    // quality-gate is a job of ci.yml: only GitHub Actions' own check run counts (main's ruleset
+    // pins it to integration 15368, which is this app), not a status or another app's check
+    // that took the name.
+    const string ActionsApp = "github-actions";
     const string Owner = "danswett";
+    const int DefaultMaxMerges = 10;
     static readonly TimeSpan StallAfter = TimeSpan.FromMinutes(15);
     static readonly TimeSpan RecentSuccess = TimeSpan.FromMinutes(10);
     static readonly TimeSpan QueuedWhileRecovered = TimeSpan.FromMinutes(5);
@@ -104,228 +121,389 @@ static class MergeTakeoverCommand
     public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, IStatusPage statusPage, DateTimeOffset now, Func<string, MergeRuleCommand.CheckoutFacts>? checkout = null)
     {
         var options = ParseOptions(args);
+        var dryRun = options.ContainsKey("dry-run");
+        // With the bypass on, --admin skips GitHub's own checks, so a merge rests on the evaluator
+        // alone: another checkout's may only say what it would do.
+        if (options.ContainsKey("allow-non-main") && !dryRun)
+        {
+            output.WriteLine("Refusing: merge-takeover takes --allow-non-main only with --dry-run, since it merges past the ruleset on the verdict of the evaluator it runs.");
+            return 2;
+        }
+        var maxMerges = DefaultMaxMerges;
+        if (options.TryGetValue("max-merges", out var cap) && (!int.TryParse(cap, NumberStyles.None, CultureInfo.InvariantCulture, out maxMerges) || maxMerges < 1))
+            throw new ArgumentException($"--max-merges {cap} is not a positive number.");
         var root = ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var configPath = options.GetValueOrDefault("config") ?? Path.Combine(root, "quality", "merge-rule.yml");
         var config = MergeRuleConfig.Load(configPath);
-        if (!MergeRuleCommand.MainsEvaluator(output, "merge-takeover", config, configPath, options.ContainsKey("allow-non-main"), checkout))
+        // The guard below can only compare HEAD with origin/main as last fetched, so fetch it
+        // here: a loop that fell behind is then refused rather than judging with an old evaluator.
+        // It only updates the remote-tracking ref; nothing is written to GitHub.
+        var fetchFailed = false;
+        if (!dryRun && checkout is null)
+        {
+            try
+            {
+                ChangedFiles.Git(root, "fetch", "--quiet", "--no-tags", "origin", config.Base);
+            }
+            catch (InvalidOperationException e)
+            {
+                output.WriteLine($"Couldn't fetch origin/{config.Base} ({e.Message.Trim()}); the ruleset is still looked after, but nothing merges this tick.");
+                fetchFailed = true;
+            }
+        }
+        // A clean checkout that's only behind origin/main (main moved with this takeover's own
+        // last merge, and the loop hasn't switched yet) still hands back and looks after the
+        // ruleset: refusing the whole tick would strand the bypass. It only doesn't enter or merge.
+        var origin = MergeRuleCommand.ReadCheckout(config, configPath, checkout, ["quality/ruleset-main.json"]);
+        var behind = origin is { Behind: true, Dirty: false, OtherRules: false } && !options.ContainsKey("allow-non-main");
+        if (behind)
+            output.WriteLine($"Evaluator and rules from {origin.Head}, behind origin/{config.Base} ({origin.BaseCommit}): it hands back and looks after the ruleset, but doesn't take over or merge until the loop switches to origin/{config.Base} (git switch --detach origin/{config.Base}).");
+        else if (!MergeRuleCommand.MainsEvaluator(output, "merge-takeover", config, configPath, options.ContainsKey("allow-non-main"), origin))
             return 2;
         var expected = JsonNode.Parse(File.ReadAllText(Path.Combine(root, "quality", "ruleset-main.json")))!.AsObject();
         var slug = options.GetValueOrDefault("slug") ?? "danswett/agent-bridge";
         var statePath = options.GetValueOrDefault("state") ?? DefaultStatePath();
-        var dryRun = options.ContainsKey("dry-run");
-        var state = LoadState(statePath);
-        var rulesetProblem = false;
-        var otherProblem = false;
 
-        // A receipt that fails to post (GitHub's API is often shaky in the same incident) is kept
-        // in the state and posted on a later tick, so #170 never misses a start or an end.
-        void Post(string body)
+        // Two ticks at once (the loop's next pass while this one is slow) could both PUT, merge or
+        // post, and the later save would lose the earlier one's state.
+        FileStream? held = null;
+        if (!dryRun)
         {
-            state.PendingComments.Add(body);
-            Flush();
-        }
-        void Flush()
-        {
-            while (state.PendingComments.Count > 0)
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(statePath))!);
+            try
             {
+                held = new FileStream(statePath + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                output.WriteLine($"Another merge-takeover tick holds {statePath}.lock; doing nothing this time.");
+                return 0;
+            }
+        }
+        try
+        {
+            return Tick();
+        }
+        finally
+        {
+            held?.Dispose();
+        }
+
+        int Tick()
+        {
+            var state = LoadState(statePath, now, output, dryRun);
+            var rulesetProblem = false;
+            var otherProblem = false;
+
+            // A receipt that fails to post (GitHub's API is often shaky in the same incident) is kept
+            // in the state and posted on a later tick, so #170 never misses a start or an end.
+            void Post(string body)
+            {
+                state.PendingComments.Add(body);
+                Flush();
+            }
+            void Flush()
+            {
+                while (state.PendingComments.Count > 0)
+                {
+                    try
+                    {
+                        Comment(github, slug, state.PendingComments[0]);
+                    }
+                    catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                    {
+                        output.WriteLine($"Couldn't post a receipt on #{Issue} ({e.Message}); it's kept for the next tick.");
+                        otherProblem = true;
+                        break;
+                    }
+                    state.PendingComments.RemoveAt(0);
+                }
+                SaveState(statePath, state);
+            }
+            void Save()
+            {
+                if (!dryRun)
+                    SaveState(statePath, state);
+            }
+
+            // Anything wrong with the ruleset is the owner's, asked once on #170 for each new set
+            // of problems; nothing enters or merges until it's clean again.
+            int AskOwner(long? id, List<string> trouble)
+            {
+                var words = string.Join("; ", trouble);
+                output.WriteLine($"::error::merge-takeover: ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} needs @{Owner}: {words}. Changing nothing, and nothing merges.");
+                if (dryRun)
+                    return 1;
+                state.NeedsOwner = true;
+                if (state.OwnerAsked == words)
+                    SaveState(statePath, state);
+                else
+                {
+                    state.OwnerAsked = words;
+                    Post($"**Quality: main's ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} needs you ({FlakeReport.Pacific(now)}).** @{Owner}, it doesn't match `quality/ruleset-main.json` with no bypass: {words}. "
+                        + "Quality isn't in a takeover, so it changes nothing, and won't take over merging until the ruleset matches again.");
+                }
+                return 1;
+            }
+
+            // The takeover's own bypass with no takeover recorded: the state was lost or set
+            // aside, or another machine's tick added it. Left alone, it would outlive the incident.
+            int RemoveStrayBypass(long id, JsonObject live)
+            {
+                output.WriteLine($"Ruleset {id} has the takeover's admin bypass, but no takeover is recorded here (the state was lost, or another machine added it).");
+                if (dryRun)
+                {
+                    output.WriteLine($"Would PUT it with no bypass actors, verify it, and post a receipt on #{Issue}.");
+                    return 0;
+                }
                 try
                 {
-                    Comment(github, slug, state.PendingComments[0]);
+                    github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
                 }
                 catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
                 {
-                    output.WriteLine($"Couldn't post a receipt on #{Issue} ({e.Message}); it's kept for the next tick.");
-                    otherProblem = true;
-                    break;
+                    output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
                 }
-                state.PendingComments.RemoveAt(0);
-            }
-            SaveState(statePath, state);
-        }
-        if (!dryRun && state.PendingComments.Count > 0)
-            Flush();
-
-        var observed = Observe(github, statusPage, slug, now);
-        output.WriteLine($"Status page: Actions is {observed.StatusWords}.");
-        output.WriteLine($"merge-rule runs: {observed.Runs}");
-        output.WriteLine($"Stalled: {(observed.Stall is { } s ? $"yes, for {Minutes(s)}" : "no")}. Recovered: {(observed.Recovered ? "yes" : "no")}.");
-        output.WriteLine(state.InTakeover
-            ? $"State: in takeover since {FlakeReport.Pacific(state.EnteredAt!.Value)}, {state.Merged.Count} merged."
-            : $"State: not in takeover{(state.ExitedAt is { } ended ? $", last ended {FlakeReport.Pacific(ended)}" : "")}.");
-
-        // Handing back once failed verification: nothing happens until the owner has put the
-        // ruleset right, since entering again would build on a ruleset no one has checked.
-        if (state.NeedsOwner && !state.InTakeover)
-        {
-            var (_, live, problems) = ReadRuleset(github, slug, expected);
-            if (problems.Count > 0 || Bypass(live).Count > 0)
-            {
-                output.WriteLine($"Ruleset still needs @{Owner}: {string.Join("; ", problems.Concat(Bypass(live).Count > 0 ? ["it has bypass actors"] : []))}. Doing nothing.");
-                return 1;
-            }
-            output.WriteLine("The ruleset matches quality/ruleset-main.json with no bypass again.");
-            state.NeedsOwner = false;
-            if (!dryRun)
-                SaveState(statePath, state);
-        }
-
-        var (decision, why) = Decide(state, observed, now);
-        output.WriteLine($"Decision: {decision}: {why}.");
-        if (dryRun)
-            output.WriteLine("Dry run: nothing is changed, posted, merged or saved.");
-
-        var merging = false;
-        switch (decision)
-        {
-            case "enter":
+                var (_, reread, drift, unreadable) = ReadRuleset(github, slug, expected, id);
+                if (unreadable || reread is null)
                 {
-                    var (id, live, problems) = ReadRuleset(github, slug, expected);
-                    if (Bypass(live).Count > 0)
-                        problems.Add($"it already has {Bypass(live).Count} bypass actor(s)");
-                    if (problems.Count > 0)
+                    output.WriteLine($"Couldn't read ruleset {id} back ({string.Join("; ", drift)}); trying again next tick.");
+                    Save();
+                    return 2;
+                }
+                var trouble = Trouble(reread, drift);
+                if (trouble.Count == 0)
+                {
+                    output.WriteLine($"Removed it: ruleset {id} has no bypass and matches quality/ruleset-main.json (verified).");
+                    state.NeedsOwner = false;
+                    state.OwnerAsked = null;
+                    state.ExitedAt = now;
+                    state.FirstHealthyAt = null;
+                    Post($"**Quality: removed a stray takeover bypass ({FlakeReport.Pacific(now)}).** Ruleset {id} had the takeover's temporary admin pull-request bypass, but no takeover was recorded here (this machine's state was lost, or another machine added it). "
+                        + "It's removed and verified: 0 bypass actors, and the ruleset matches `quality/ruleset-main.json`.");
+                    return otherProblem ? 2 : 0;
+                }
+                if (drift.Count == 0 && OnlyAdminBypass(reread))
+                {
+                    output.WriteLine($"Ruleset {id} still has the takeover's bypass; trying again next tick.");
+                    Save();
+                    return 2;
+                }
+                return AskOwner(id, trouble);
+            }
+
+            if (!dryRun && state.PendingComments.Count > 0)
+                Flush();
+
+            var observed = Observe(github, statusPage, slug, now);
+            output.WriteLine($"Status page: Actions is {observed.StatusWords}.");
+            output.WriteLine($"merge-rule runs: {observed.Runs}");
+            output.WriteLine($"Stalled: {(observed.Stall is { } s ? $"yes, for {Minutes(s)}" : "no")}. Recovered: {(observed.Recovered ? "yes" : "no")}.");
+            output.WriteLine(state.InTakeover
+                ? $"State: in takeover since {FlakeReport.Pacific(state.EnteredAt!.Value)}, {state.Merged.Count} merged."
+                : $"State: not in takeover{(state.ExitedAt is { } ended ? $", last ended {FlakeReport.Pacific(ended)}" : "")}.");
+
+            // Outside a takeover, the ruleset should match the file with no bypass. Checked every
+            // tick, not only on entering, so a bypass left by a lost state, another machine or a
+            // hand-back that didn't verify is found, and a drift is put to the owner.
+            if (!state.InTakeover)
+            {
+                var (id, live, drift, unreadable) = ReadRuleset(github, slug, expected);
+                if (unreadable)
+                {
+                    output.WriteLine($"Couldn't read main's ruleset ({string.Join("; ", drift)}); doing nothing this tick.");
+                    Save();
+                    return 2;
+                }
+                var trouble = live is null ? drift : Trouble(live, drift);
+                if (live is not null && drift.Count == 0 && trouble.Count > 0 && OnlyAdminBypass(live))
+                    return RemoveStrayBypass(id!.Value, live);
+                if (trouble.Count > 0 && behind)
+                {
+                    output.WriteLine($"Ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} differs from this checkout's quality/ruleset-main.json ({string.Join("; ", trouble)}), which may be older than main's; asking @{Owner} waits for the checkout to be origin/{config.Base}'s.");
+                    Save();
+                    return 2;
+                }
+                if (trouble.Count > 0)
+                    return AskOwner(id, trouble);
+                if (state.NeedsOwner || state.OwnerAsked is not null)
+                {
+                    output.WriteLine("The ruleset matches quality/ruleset-main.json with no bypass again.");
+                    state.NeedsOwner = false;
+                    state.OwnerAsked = null;
+                }
+            }
+
+            var (decision, why) = Decide(state, observed, now);
+            output.WriteLine($"Decision: {decision}: {why}.");
+            if (decision == "enter" && behind)
+            {
+                output.WriteLine($"Not taking over: this checkout is behind origin/{config.Base}.");
+                decision = "stay out";
+                otherProblem = true;
+            }
+            if (dryRun)
+                output.WriteLine("Dry run: nothing is changed, posted, merged or saved.");
+
+            var merging = false;
+            switch (decision)
+            {
+                case "enter":
                     {
-                        output.WriteLine($"Refusing to take over: ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} doesn't match quality/ruleset-main.json: {string.Join("; ", problems)}. Changing nothing; it needs @{Owner}.");
-                        return 1;
-                    }
-                    var evidence = $"Actions is {observed.StatusWords} on GitHub's status page, and merge-rule has stalled for {Minutes(observed.Stall!.Value)} ({observed.Runs})";
-                    if (dryRun)
-                    {
-                        output.WriteLine($"Would back up ruleset {id}, PUT it with the one admin pull-request bypass, verify it, and post the takeover receipt on #{Issue}.");
+                        var (id, live, problems, _) = ReadRuleset(github, slug, expected);
+                        if (Bypass(live).Count > 0)
+                            problems.Add($"it already has {Bypass(live).Count} bypass actor(s)");
+                        if (live is null || problems.Count > 0)
+                        {
+                            output.WriteLine($"Refusing to take over: ruleset {id?.ToString(CultureInfo.InvariantCulture) ?? "(not found)"} doesn't match quality/ruleset-main.json: {string.Join("; ", problems)}. Changing nothing; it needs @{Owner}.");
+                            return 1;
+                        }
+                        var evidence = $"Actions is {observed.StatusWords} on GitHub's status page, and merge-rule has stalled for {Minutes(observed.Stall!.Value)} ({observed.Runs})";
+                        if (dryRun)
+                        {
+                            output.WriteLine($"Would back up ruleset {id}, PUT it with the one admin pull-request bypass, verify it, and post the takeover receipt on #{Issue}.");
+                            merging = true;
+                            break;
+                        }
+                        var backup = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(statePath))!, $"merge-takeover-ruleset-{id}-{now.UtcDateTime:yyyyMMdd'T'HHmmss'Z'}.json");
+                        Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+                        File.WriteAllText(backup, live.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+                        output.WriteLine($"Backed up ruleset {id} to {backup}.");
+                        // Saved before the PUT, so a PUT that lands though gh reports a failure is
+                        // still a takeover, and recovery removes its bypass.
+                        var before = JsonSerializer.Serialize(state, Json);
+                        state.InTakeover = true;
+                        state.EnteredAt = now;
+                        state.FirstHealthyAt = null;
+                        state.EnterEvidence = evidence;
+                        state.RulesetId = id;
+                        state.BackupPath = backup;
+                        state.ConfirmAsked = false;
+                        state.MergeCapPosted = false;
+                        state.NeedsOwner = false;
+                        state.OwnerAsked = null;
+                        state.Merged = [];
+                        SaveState(statePath, state);
+                        try
+                        {
+                            github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, [AdminBypass.DeepClone()]).ToJsonString()).Dispose();
+                        }
+                        catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                        {
+                            output.WriteLine($"The PUT to ruleset {id} failed: {e.Message}");
+                            if (ReadRuleset(github, slug, expected, id) is { Live: { } unchanged } && Bypass(unchanged).Count == 0)
+                            {
+                                output.WriteLine("It didn't land, so this isn't a takeover; the next tick tries again.");
+                                SaveState(statePath, before);
+                                return 2;
+                            }
+                        }
+                        var (_, reread, after, _) = ReadRuleset(github, slug, expected, id);
+                        var verified = reread is not null && after.Count == 0 && OnlyAdminBypass(reread);
+                        output.WriteLine(verified ? $"Ruleset {id} now has the one admin pull-request bypass (verified)." : $"::error::merge-takeover: ruleset {id} did NOT verify after the PUT: {string.Join("; ", after.Append(OnlyAdminBypass(reread) ? "" : "its bypass actors aren't exactly the admin pull-request one").Where(p => p.Length > 0))}. Nothing merges until @{Owner} has looked.");
+                        // Unverified, it stays a takeover, so recovery removes the bypass and verifies again.
+                        state.NeedsOwner = !verified;
+                        Post(EnterReceipt(now, id!.Value, evidence, verified, maxMerges));
+                        if (!verified)
+                            return 1;
                         merging = true;
                         break;
                     }
-                    var backup = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(statePath))!, $"merge-takeover-ruleset-{id}-{now.UtcDateTime:yyyyMMdd'T'HHmmss'Z'}.json");
-                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
-                    File.WriteAllText(backup, live!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-                    output.WriteLine($"Backed up ruleset {id} to {backup}.");
-                    // Saved before the PUT, so a PUT that lands though gh reports a failure is
-                    // still a takeover, and recovery removes its bypass.
-                    var before = JsonSerializer.Serialize(state, Json);
-                    state.InTakeover = true;
-                    state.EnteredAt = now;
-                    state.FirstHealthyAt = null;
-                    state.EnterEvidence = evidence;
-                    state.RulesetId = id;
-                    state.BackupPath = backup;
-                    state.CapNoticePosted = false;
-                    state.NeedsOwner = false;
-                    state.Merged = [];
-                    SaveState(statePath, state);
-                    try
+                case "exit":
                     {
-                        github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, [AdminBypass.DeepClone()]).ToJsonString()).Dispose();
-                    }
-                    catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
-                    {
-                        output.WriteLine($"The PUT to ruleset {id} failed: {e.Message}");
-                        if (ReadRuleset(github, slug, expected, id) is { Live: { } unchanged } && Bypass(unchanged).Count == 0)
+                        if (dryRun)
                         {
-                            output.WriteLine("It didn't land, so this isn't a takeover; the next tick tries again.");
-                            File.WriteAllText(statePath, before);
+                            output.WriteLine($"Would PUT ruleset {state.RulesetId} with no bypass actors, verify it against quality/ruleset-main.json, and post the takeover-ended receipt on #{Issue}.");
+                            break;
+                        }
+                        // A read or a PUT that fails before anything changed keeps the takeover, so the
+                        // next tick tries again, rather than leave the bypass for the owner to find.
+                        var (id, live, readProblems, _) = ReadRuleset(github, slug, expected, state.RulesetId);
+                        if (live is null)
+                        {
+                            output.WriteLine($"Couldn't read ruleset {state.RulesetId} to hand back ({string.Join("; ", readProblems)}); still in takeover, trying again next tick.");
+                            SaveState(statePath, state);
                             return 2;
                         }
-                    }
-                    var (_, reread, after) = ReadRuleset(github, slug, expected, id);
-                    var verified = after.Count == 0 && OnlyAdminBypass(reread);
-                    output.WriteLine(verified ? $"Ruleset {id} now has the one admin pull-request bypass (verified)." : $"::error::merge-takeover: ruleset {id} did NOT verify after the PUT: {string.Join("; ", after.Append(OnlyAdminBypass(reread) ? "" : "its bypass actors aren't exactly the admin pull-request one").Where(p => p.Length > 0))}. Nothing merges until @{Owner} has looked.");
-                    // Unverified, it stays a takeover, so recovery removes the bypass and verifies again.
-                    state.NeedsOwner = !verified;
-                    Post(EnterReceipt(now, id!.Value, evidence, verified));
-                    if (!verified)
-                        return 1;
-                    merging = true;
-                    break;
-                }
-            case "exit":
-                {
-                    if (dryRun)
-                    {
-                        output.WriteLine($"Would PUT ruleset {state.RulesetId} with no bypass actors, verify it against quality/ruleset-main.json, and post the takeover-ended receipt on #{Issue}.");
-                        break;
-                    }
-                    // A read or a PUT that fails before anything changed keeps the takeover, so the
-                    // next tick tries again, rather than leave the bypass for the owner to find.
-                    var (id, live, readProblems) = ReadRuleset(github, slug, expected, state.RulesetId);
-                    if (live is null)
-                    {
-                        output.WriteLine($"Couldn't read ruleset {state.RulesetId} to hand back ({string.Join("; ", readProblems)}); still in takeover, trying again next tick.");
-                        SaveState(statePath, state);
-                        return 2;
-                    }
-                    var putFailed = false;
-                    try
-                    {
-                        github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
-                    }
-                    catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
-                    {
-                        output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
-                        putFailed = true;
-                    }
-                    var (_, reread, after) = ReadRuleset(github, slug, expected, id);
-                    if (reread is null)
-                    {
-                        output.WriteLine($"Couldn't read ruleset {id} back after the PUT ({string.Join("; ", after)}); still in takeover, checking again next tick.");
-                        SaveState(statePath, state);
-                        return 2;
-                    }
-                    if (Bypass(reread).Count > 0)
-                    {
-                        if (putFailed && OnlyAdminBypass(reread) && after.Count == 0)
+                        try
+                        {
+                            github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
+                        }
+                        catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                        {
+                            output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
+                        }
+                        var (_, reread, after, _) = ReadRuleset(github, slug, expected, id);
+                        if (reread is null)
+                        {
+                            output.WriteLine($"Couldn't read ruleset {id} back after the PUT ({string.Join("; ", after)}); still in takeover, checking again next tick.");
+                            SaveState(statePath, state);
+                            return 2;
+                        }
+                        // Our bypass and nothing else: whatever gh said about the PUT, it didn't
+                        // take, and the next tick can simply try again. Only something else wrong
+                        // is the owner's.
+                        if (after.Count == 0 && OnlyAdminBypass(reread))
                         {
                             output.WriteLine($"Ruleset {id} still has the takeover's bypass; still in takeover, trying again next tick.");
                             SaveState(statePath, state);
                             return 2;
                         }
-                        after.Add($"it still has {Bypass(reread).Count} bypass actor(s)");
+                        var trouble = Trouble(reread, after);
+                        var merged = state.Merged.ToList();
+                        var lasted = now - (state.EnteredAt ?? now);
+                        state.InTakeover = false;
+                        state.ExitedAt = now;
+                        state.FirstHealthyAt = null;
+                        state.NeedsOwner = trouble.Count > 0;
+                        state.OwnerAsked = trouble.Count > 0 ? string.Join("; ", trouble) : null;
+                        state.Merged = [];
+                        SaveState(statePath, state);
+                        if (trouble.Count == 0)
+                            output.WriteLine($"Ruleset {id} has no bypass and matches quality/ruleset-main.json (verified).");
+                        else
+                        {
+                            output.WriteLine($"::error::merge-takeover: ruleset {id} did NOT verify after removing the bypass: {string.Join("; ", trouble)}. It needs @{Owner}.");
+                            rulesetProblem = true;
+                        }
+                        Post(ExitReceipt(now, id ?? state.RulesetId ?? 0, lasted, merged, observed, trouble));
+                        break;
                     }
-                    var merged = state.Merged.ToList();
-                    var lasted = now - (state.EnteredAt ?? now);
-                    state.InTakeover = false;
-                    state.ExitedAt = now;
-                    state.FirstHealthyAt = null;
-                    state.NeedsOwner = after.Count > 0;
-                    state.Merged = [];
-                    SaveState(statePath, state);
-                    if (after.Count == 0)
-                        output.WriteLine($"Ruleset {id} has no bypass and matches quality/ruleset-main.json (verified).");
-                    else
+                case "stay in":
+                    merging = !state.NeedsOwner;
+                    if (state.NeedsOwner)
                     {
-                        output.WriteLine($"::error::merge-takeover: ruleset {id} did NOT verify after removing the bypass: {string.Join("; ", after)}. It needs @{Owner}.");
+                        output.WriteLine($"::error::merge-takeover: ruleset {state.RulesetId} didn't verify when the takeover began, so nothing merges; it needs @{Owner}.");
                         rulesetProblem = true;
                     }
-                    Post(ExitReceipt(now, id ?? state.RulesetId ?? 0, lasted, merged, observed, after));
-                    break;
-                }
-            case "stay in":
-                merging = !state.NeedsOwner;
-                if (state.NeedsOwner)
-                {
-                    output.WriteLine($"::error::merge-takeover: ruleset {state.RulesetId} didn't verify when the takeover began, so nothing merges; it needs @{Owner}.");
-                    rulesetProblem = true;
-                }
-                if (state.EnteredAt is { } since && now - since > OwnerConfirmsAfter && !state.CapNoticePosted)
-                {
-                    if (dryRun)
-                        output.WriteLine($"Would ask @{Owner} on #{Issue} to confirm the takeover, now over {OwnerConfirmsAfter.TotalHours:0} h.");
-                    else
+                    if (state.EnteredAt is { } since && now - since > OwnerConfirmsAfter && !state.ConfirmAsked)
                     {
-                        state.CapNoticePosted = true;
-                        Post($"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
+                        if (dryRun)
+                            output.WriteLine($"Would ask @{Owner} on #{Issue} to confirm the takeover, now over {OwnerConfirmsAfter.TotalHours:0} h.");
+                        else
+                        {
+                            state.ConfirmAsked = true;
+                            Post($"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
+                        }
                     }
-                }
-                if (!dryRun)
-                    SaveState(statePath, state);
-                break;
-            default:
-                if (!dryRun)
-                    SaveState(statePath, state);
-                break;
-        }
+                    Save();
+                    break;
+                default:
+                    Save();
+                    break;
+            }
 
-        if (merging && !MergeOne(output, github, config, slug, state, statePath, now, dryRun))
-            otherProblem = true;
-        return rulesetProblem ? 1 : otherProblem ? 2 : 0;
+            if (merging && (fetchFailed || behind))
+            {
+                output.WriteLine(fetchFailed
+                    ? $"Not merging this tick: origin/{config.Base} couldn't be fetched, so main's evaluator may be out of date."
+                    : $"Not merging this tick: this checkout is behind origin/{config.Base}, so its evaluator isn't main's.");
+                otherProblem = true;
+            }
+            else if (merging && !MergeOne(output, github, config, slug, state, statePath, now, dryRun, maxMerges, Post))
+                otherProblem = true;
+            return rulesetProblem ? 1 : otherProblem ? 2 : 0;
+        }
     }
 
     /// <summary>
@@ -434,9 +612,10 @@ static class MergeTakeoverCommand
 
     /// <summary>
     /// Main's ruleset, found by quality/ruleset-main.json's name (or the id the takeover recorded),
-    /// with every way it differs from that file. Null when it can't be found or read.
+    /// with every way it differs from that file. Live is null when it isn't there (a problem for
+    /// the owner) or couldn't be read (Unreadable: try again).
     /// </summary>
-    static (long? Id, JsonObject? Live, List<string> Problems) ReadRuleset(IGitHub github, string slug, JsonObject expected, long? id = null)
+    static (long? Id, JsonObject? Live, List<string> Problems, bool Unreadable) ReadRuleset(IGitHub github, string slug, JsonObject expected, long? id = null)
     {
         try
         {
@@ -446,16 +625,26 @@ static class MergeTakeoverCommand
                 var name = expected["name"]!.GetValue<string>();
                 id = list.RootElement.EnumerateArray().Where(r => r.GetProperty("name").GetString() == name).Select(r => (long?)r.GetProperty("id").GetInt64()).FirstOrDefault();
                 if (id is null)
-                    return (null, null, [$"no ruleset named '{name}'"]);
+                    return (null, null, [$"no ruleset named '{name}'"], false);
             }
             using var doc = github.Rest($"repos/{slug}/rulesets/{id}");
             var live = JsonNode.Parse(doc.RootElement.GetRawText())!.AsObject();
-            return (id, live, Drift(expected, live));
+            return (id, live, Drift(expected, live), false);
         }
         catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
         {
-            return (id, null, [$"couldn't read it ({e.Message})"]);
+            return (id, null, [$"couldn't read it ({e.Message})"], true);
         }
+    }
+
+    /// <summary>Everything that keeps the ruleset from being clean: its drift from the file, and any bypass actor, ours or not.</summary>
+    static List<string> Trouble(JsonObject live, List<string> drift)
+    {
+        var trouble = drift.ToList();
+        var count = Bypass(live).Count;
+        if (count > 0)
+            trouble.Add(OnlyAdminBypass(live) ? "it has the takeover's admin bypass" : $"it has {count} bypass actor(s) that aren't exactly the takeover's admin pull-request one");
+        return trouble;
     }
 
     /// <summary>
@@ -565,14 +754,46 @@ static class MergeTakeoverCommand
         }
         """;
 
+    // Read again just before each merge: the candidates query runs before the evaluator, and
+    // --admin with the bypass skips GitHub's own merge-time checks, so a review that lands with
+    // comments, a hold, or auto-merge turned off in between would otherwise be merged past.
+    const string RecheckQuery = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              number state baseRefName isDraft headRefOid mergeable
+              autoMergeRequest { enabledAt }
+              labels(first: 100) { totalCount nodes { name } }
+              reviewThreads(first: 100) { totalCount nodes { isResolved } }
+            }
+          }
+        }
+        """;
+
     /// <summary>
     /// The takeover's merge: the oldest open pull request into main with auto-merge armed (the
     /// session's intent) and no hold label, 0 unresolved threads and MERGEABLE, that passes main's
-    /// evaluator with quality-gate green on the head it judged; merged at that head. One a tick,
-    /// since main moves with each and the rest must be judged again. False when something failed.
+    /// evaluator with quality-gate green on the head it judged, and still qualifies when read again
+    /// just before merging; merged at that head. One a tick, since main moves with each and the
+    /// rest must be judged again, and at most <paramref name="maxMerges"/> a takeover, since main's
+    /// CI doesn't run between them. False when something failed.
     /// </summary>
-    static bool MergeOne(TextWriter output, IGitHub github, MergeRuleConfig config, string slug, TakeoverState state, string statePath, DateTimeOffset now, bool dryRun)
+    static bool MergeOne(TextWriter output, IGitHub github, MergeRuleConfig config, string slug, TakeoverState state, string statePath, DateTimeOffset now, bool dryRun, int maxMerges, Action<string> post)
     {
+        if (state.Merged.Count >= maxMerges)
+        {
+            output.WriteLine($"Not merging: this takeover has merged {state.Merged.Count}, its cap (--max-merges {maxMerges}), and main's CI hasn't run on any of them.");
+            if (dryRun)
+                output.WriteLine($"Would ask @{Owner} on #{Issue} whether to merge more.");
+            else if (!state.MergeCapPosted)
+            {
+                state.MergeCapPosted = true;
+                post($"**Quality: the Actions takeover has merged {state.Merged.Count} PR(s), its cap, and stopped merging** ({FlakeReport.Pacific(now)}). "
+                    + $"Main's CI hasn't run after any of them ({string.Join(", ", state.Merged.Select(m => $"#{m.Number}"))}), so untested commits are piling up. "
+                    + $"@{Owner}, Quality merges no more in this takeover unless its loop is given a higher `--max-merges`; the bypass stays until Actions recovers.");
+            }
+            return true;
+        }
         var (owner, name) = (slug.Split('/')[0], slug.Split('/')[^1]);
         var candidates = new List<(int Number, string Head)>();
         try
@@ -639,8 +860,8 @@ static class MergeTakeoverCommand
             string? blocker =
                 !string.Equals(sha, head, StringComparison.OrdinalIgnoreCase) ? $"its head moved from {MergeRule.Short(head)} to {MergeRule.Short(sha)} while it was read"
                 : j.Verdict.State != "success" ? $"main's evaluator says {j.Verdict.State}: {j.Verdict.Description}"
-                : !j.Pr.Checks.Any(c => c.Name == GateCheck && c.State == "success" && c.Detail == "success") ? $"{GateCheck} isn't green on {MergeRule.Short(sha)}"
-                : null;
+                : !j.Pr.Checks.Any(c => c.Name == GateCheck && c.App == ActionsApp && c.State == "success" && c.Detail == "success") ? $"{GateCheck} from GitHub Actions isn't green on {MergeRule.Short(sha)}"
+                : ChangedSinceJudged(github, owner, name, number, sha, config);
             if (blocker is not null)
             {
                 output.WriteLine($"#{number} {MergeRule.Short(sha)}: not merged: {blocker}.");
@@ -669,6 +890,39 @@ static class MergeTakeoverCommand
         return true;
     }
 
+    /// <summary>
+    /// Why a judged pull request may no longer be merged, read again just before merging: null
+    /// only when it's still open into the base at the judged head, armed, not a draft, unheld,
+    /// with every thread read and resolved, and MERGEABLE.
+    /// </summary>
+    static string? ChangedSinceJudged(IGitHub github, string owner, string name, int number, string sha, MergeRuleConfig config)
+    {
+        try
+        {
+            using var doc = github.GraphQL(RecheckQuery, new Dictionary<string, object> { ["owner"] = owner, ["name"] = name, ["number"] = number });
+            var pr = doc.RootElement.GetProperty("data").GetProperty("repository").GetProperty("pullRequest");
+            if (pr.ValueKind != JsonValueKind.Object)
+                return "it couldn't be found when read again";
+            var head = pr.GetProperty("headRefOid").GetString() ?? "";
+            if (pr.GetProperty("state").GetString() != "OPEN")
+                return $"it's {pr.GetProperty("state").GetString()?.ToLowerInvariant()} now";
+            if (pr.GetProperty("baseRefName").GetString() != config.Base)
+                return $"its base is now {pr.GetProperty("baseRefName").GetString()}";
+            if (!string.Equals(head, sha, StringComparison.OrdinalIgnoreCase))
+                return $"its head moved to {MergeRule.Short(head)} after it was judged";
+            return NotACandidate(pr, config) switch
+            {
+                null => null,
+                "" => pr.GetProperty("isDraft").GetBoolean() ? "it became a draft after it was judged" : "auto-merge was turned off after it was judged",
+                var why => $"{why}, read again just before merging",
+            };
+        }
+        catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+        {
+            return $"it couldn't be read again just before merging ({e.Message})";
+        }
+    }
+
     /// <summary>Why an open pull request isn't one the takeover may merge: null if it is, "" for one not to mention (not armed, a draft).</summary>
     static string? NotACandidate(JsonElement pr, MergeRuleConfig config)
     {
@@ -694,7 +948,7 @@ static class MergeTakeoverCommand
     static void Comment(IGitHub github, string slug, string body) =>
         github.Send("POST", $"repos/{slug}/issues/{Issue}/comments", new JsonObject { ["body"] = body }.ToJsonString()).Dispose();
 
-    static string EnterReceipt(DateTimeOffset now, long id, string evidence, bool verified)
+    static string EnterReceipt(DateTimeOffset now, long id, string evidence, bool verified, int maxMerges)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"**Quality: automatic takeover of merging during GitHub's Actions incident (started {FlakeReport.Pacific(now)}).**");
@@ -705,7 +959,8 @@ static class MergeTakeoverCommand
         sb.AppendLine(verified
             ? $"- Ruleset {id} has a temporary bypass for repository admins, for pull requests only. Nothing else in it changed, and the backup is kept."
             : $"- Ruleset {id} was given a temporary bypass for repository admins, for pull requests only, but it **didn't verify** when read back. @{Owner}, it needs you; nothing merges until it's right.");
-        sb.AppendLine("- Quality merges, one per pass, only PRs with auto-merge armed and no `hold` or `do-not-merge` label that pass **main's own evaluator** (the verdict `merge-rule --pr <n>` gives from a fresh `origin/main` checkout). Each must also have `quality-gate` green on its exact head, no unresolved threads, and GitHub reporting it mergeable. Every merge uses `--match-head-commit`.");
+        sb.AppendLine("- Quality merges, one per pass, only PRs with auto-merge armed and no `hold` or `do-not-merge` label that pass **main's own evaluator** (the verdict `merge-rule --pr <n>` gives from a fresh `origin/main` checkout). Each must also have `quality-gate` from GitHub Actions green on its exact head, no unresolved threads, and GitHub reporting it mergeable, all read again just before the merge. Every merge uses `--match-head-commit`.");
+        sb.AppendLine($"- Main's CI doesn't run after these merges while Actions is down, so Quality stops after {maxMerges} and asks @{Owner} here before merging more.");
         sb.AppendLine("- When Actions recovers (the status page says operational and merge-rule runs succeed again, on two checks at least 4 minutes apart), Quality removes the bypass and checks the ruleset against `quality/ruleset-main.json` again.");
         sb.AppendLine();
         sb.Append("Sessions: nothing changes for you. Keep arming auto-merge as usual.");
@@ -735,20 +990,46 @@ static class MergeTakeoverCommand
         return Path.Combine(dir, "agent-bridge", "merge-takeover.json");
     }
 
-    static TakeoverState LoadState(string path) =>
-        File.Exists(path) ? JsonSerializer.Deserialize<TakeoverState>(File.ReadAllText(path), Json) ?? new() : new();
+    /// <summary>
+    /// The state, or a fresh one when there's none. One that can't be read is set aside, not
+    /// crashed on: the ruleset check every tick then finds any bypass it would have recorded.
+    /// </summary>
+    static TakeoverState LoadState(string path, DateTimeOffset now, TextWriter output, bool dryRun)
+    {
+        if (!File.Exists(path))
+            return new();
+        try
+        {
+            return JsonSerializer.Deserialize<TakeoverState>(File.ReadAllText(path), Json) ?? new();
+        }
+        catch (Exception e) when (e is JsonException or NotSupportedException)
+        {
+            var aside = $"{path}.corrupt-{now.UtcDateTime:yyyyMMdd'T'HHmmss'Z'}";
+            if (dryRun)
+                output.WriteLine($"The state in {path} can't be read ({e.Message}); treating it as no state (a real tick keeps it aside as {aside}).");
+            else
+            {
+                File.Move(path, aside, overwrite: true);
+                output.WriteLine($"The state in {path} can't be read ({e.Message}); kept it aside as {aside}, and treating it as no state.");
+            }
+            return new();
+        }
+    }
 
-    static void SaveState(string path, TakeoverState state)
+    static void SaveState(string path, TakeoverState state) => SaveState(path, JsonSerializer.Serialize(state, Json));
+
+    static void SaveState(string path, string json)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        // Written whole and then moved, so a tick killed halfway can't leave half a state.
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, JsonSerializer.Serialize(state, Json));
+        // Written whole and then moved, so a tick killed halfway can't leave half a state; the
+        // temp file is the write's own, so no other writer can move it out from under this one.
+        var temp = $"{path}.{Guid.NewGuid():N}.tmp";
+        File.WriteAllText(temp, json);
         File.Move(temp, path, overwrite: true);
     }
 
     static readonly HashSet<string> Flags = new(StringComparer.Ordinal) { "dry-run", "allow-non-main" };
-    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "slug", "state", "config" };
+    static readonly HashSet<string> Valued = new(StringComparer.Ordinal) { "slug", "state", "config", "max-merges" };
 
     static Dictionary<string, string> ParseOptions(IReadOnlyList<string> args)
     {

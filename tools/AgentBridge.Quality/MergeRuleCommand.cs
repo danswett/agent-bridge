@@ -213,11 +213,15 @@ static class MergeRuleCommand
     /// <summary>
     /// Where the evaluator and its rules come from: the checkout's HEAD, the base branch's
     /// remote-tracking commit (null when it isn't fetched), whether the rules or the evaluator
-    /// differ from HEAD in the working tree, and whether --config named rules from elsewhere.
+    /// differ from HEAD in the working tree, whether --config named rules from elsewhere, and
+    /// whether HEAD is an older commit of the base branch (a checkout not yet moved forward).
     /// </summary>
-    internal sealed record CheckoutFacts(string Head, string? BaseCommit, bool Dirty, bool OtherRules = false);
+    internal sealed record CheckoutFacts(string Head, string? BaseCommit, bool Dirty, bool OtherRules = false, bool Behind = false);
 
-    static CheckoutFacts ReadCheckout(string baseBranch, string configPath)
+    internal static CheckoutFacts ReadCheckout(MergeRuleConfig config, string configPath, Func<string, CheckoutFacts>? checkout, IReadOnlyList<string>? alsoGuarded = null) =>
+        checkout is not null ? checkout(config.Base) : ReadCheckout(config.Base, configPath, alsoGuarded ?? []);
+
+    static CheckoutFacts ReadCheckout(string baseBranch, string configPath, IReadOnlyList<string> alsoGuarded)
     {
         var root = ChangedFiles.RepoRoot(Directory.GetCurrentDirectory());
         var otherRules = !string.Equals(Path.GetFullPath(configPath), Path.GetFullPath(Path.Combine(root, "quality", "merge-rule.yml")),
@@ -232,8 +236,21 @@ static class MergeRuleCommand
         {
             baseCommit = null;
         }
-        var dirty = ChangedFiles.Git(root, "status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality").Trim().Length > 0;
-        return new(head, baseCommit, dirty, otherRules);
+        var dirty = ChangedFiles.Git(root, ["status", "--porcelain", "--", "quality/merge-rule.yml", "tools/AgentBridge.Quality", .. alsoGuarded]).Trim().Length > 0;
+        var behind = false;
+        if (baseCommit is not null && !SameSha(head, baseCommit))
+        {
+            try
+            {
+                ChangedFiles.Git(root, "merge-base", "--is-ancestor", head, baseCommit);
+                behind = true;
+            }
+            catch (InvalidOperationException)
+            {
+                // Not an ancestor (exit 1): a pull request's commit or a local one, not an older main.
+            }
+        }
+        return new(head, baseCommit, dirty, otherRules, behind);
     }
 
     public static int Run(IReadOnlyList<string> args, TextWriter output, IGitHub github, Func<string, CheckoutFacts>? checkout = null)
@@ -380,9 +397,11 @@ static class MergeRuleCommand
     /// would judge it (#524's delta review). merge-takeover holds to the same, since it merges on
     /// the verdict.
     /// </summary>
-    internal static bool MainsEvaluator(TextWriter output, string command, MergeRuleConfig config, string configPath, bool allowNonMain, Func<string, CheckoutFacts>? checkout)
+    internal static bool MainsEvaluator(TextWriter output, string command, MergeRuleConfig config, string configPath, bool allowNonMain, Func<string, CheckoutFacts>? checkout) =>
+        MainsEvaluator(output, command, config, configPath, allowNonMain, ReadCheckout(config, configPath, checkout));
+
+    internal static bool MainsEvaluator(TextWriter output, string command, MergeRuleConfig config, string configPath, bool allowNonMain, CheckoutFacts origin)
     {
-        var origin = checkout is not null ? checkout(config.Base) : ReadCheckout(config.Base, configPath);
         var where = $"{origin.Head}{(origin.Dirty ? " with local changes" : "")}{(origin.OtherRules ? $", rules from {configPath}" : "")}";
         output.WriteLine($"Evaluator and rules from {where}; origin/{config.Base} is {origin.BaseCommit ?? "not fetched"}.");
         if (origin.Dirty || origin.OtherRules || origin.BaseCommit is null || !SameSha(origin.Head, origin.BaseCommit))
@@ -797,7 +816,7 @@ static class MergeRuleCommand
                 }
                 var key = slug + "/" + name;
                 if (!otherApps.TryGetValue(key, out var current) || id > current.Id)
-                    otherApps[key] = (id, Classify(name, cr));
+                    otherApps[key] = (id, Classify(name, cr) with { App = slug });
             }
         }
         var checks = new List<CheckFact>();
@@ -806,6 +825,7 @@ static class MergeRuleCommand
         foreach (var (_, suite) in latestRun.Values)
         {
             var workflow = suite.GetProperty("workflowRun").GetProperty("workflow").GetProperty("name").GetString() ?? "";
+            var app = suite.GetProperty("app") is { ValueKind: JsonValueKind.Object } owner ? owner.GetProperty("slug").GetString() : null;
             var status = suite.GetProperty("status").GetString();
             var conclusion = suite.GetProperty("conclusion").GetString();
             var runs = suite.GetProperty("checkRuns").GetProperty("nodes").EnumerateArray().ToList();
@@ -818,7 +838,7 @@ static class MergeRuleCommand
             if (runs.Count > 0)
                 checks.AddRange(runs
                     .GroupBy(cr => cr.GetProperty("name").GetString() ?? "")
-                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64()))));
+                    .Select(g => Classify(g.Key, g.MaxBy(cr => cr.GetProperty("databaseId").GetInt64())) with { App = app }));
             // The run's own result counts too, jobs or none: one cancelled between jobs, or failed
             // expanding a later matrix, ends red with every job it made green; one that ended
             // before any job (a workflow file that doesn't parse) is startup_failure. GitHub
