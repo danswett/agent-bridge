@@ -38,6 +38,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+      # The PWA's build bundles its scripts with esbuild (pwa/tools/build-site.mjs), as locked.
+      - name: The PWA's packages
+        run: npm ci --prefix pwa --no-audit --no-fund
       - name: Assemble site
         run: |
           mkdir -p _site/s2 _site/s4
@@ -57,6 +60,7 @@ jobs:
           grep -q 'Content-Security-Policy' _site/app/index.html
           grep -q "$BLOB_ORIGIN" _site/app/index.html
           grep -q "$S4_RELAY" _site/app/config.js
+          grep -qF "$S4_RELAY" _site/app/bundle/main-*.js
           cat > _site/index.html <<'EOF'
           <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
           <title>agent-bridge</title>

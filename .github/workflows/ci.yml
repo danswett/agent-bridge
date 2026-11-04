@@ -825,10 +825,15 @@ jobs:
       - name: Contrast, the SVG subset and the generated files
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'design-gen') || contains(fromJSON(env.SUITES), 'a11y-contrast')) }}
         run: node --test "tools/design-gen/test/*.test.mjs"
-      # Plain Node: the unit tests and build-site.mjs import nothing from node_modules.
       - name: Connector read-contract mock
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'connector-conformance')) }}
         run: node --test tools/connector-conformance/mock-host.test.mjs
+      # build-site.mjs bundles the app with esbuild (#609), and the unit tests build the site: the
+      # PWA's packages, as locked, without Playwright's browsers (only the pwa-ui jobs fetch those).
+      - name: The PWA's packages
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit') || contains(fromJSON(env.SUITES), 'pwa-site-csp')) }}
+        working-directory: pwa
+        run: npm ci --no-audit --no-fund
       - name: PWA unit tests
         id: pwa-unit
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'pwa-unit')) }}
@@ -879,6 +884,8 @@ jobs:
         run: |
           node tools/build-site.mjs --out "$RUNNER_TEMP/site" --relay https://relay.example
           grep -q "connect-src 'self' https://relay.example wss://relay.example;" "$RUNNER_TEMP/site/index.html"
+          # The page runs the bundle, so the relay must be in it, not only in config.js.
+          grep -rqF 'https://relay.example' "$RUNNER_TEMP"/site/bundle/main-*.js
           # Each refusal is an explicit if: bash -e ignores a command negated with `!`, so this step
           # used to pass even when the build accepted the bad relay (#360). And it must refuse for
           # that reason: a build that crashed on something else would have passed just the same.

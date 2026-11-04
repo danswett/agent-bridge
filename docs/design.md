@@ -1205,7 +1205,7 @@ the desktop app, so a person can drive real sessions from a phone early.
 - **Copilot permission prompts from the phone (#24, #29):**
   - Approve once typed only the "Yes" digit through Windows Terminal; Copilot ran the command, and the next `node` command prompted again, so no standing grant was left.
   - Deny is Escape, which Copilot records as `cancelled` followed by an abort of the turn. #29 counts that as a confirmed deny, and a phone Deny stops the turn by design.
-- **PWA caching (#28):** GitHub Pages' 10-minute `max-age` meant an iPhone kept a stale build after a deploy. The service worker now revalidates every app file.
+- **PWA caching (#28):** GitHub Pages' 10-minute `max-age` meant an iPhone kept a stale build after a deploy. The service worker then revalidated every app file; #609 replaced that with one cache per release, served without asking the network, and a new release found through `sw.js`.
 - **Launch and resume (#31):**
   - a 300-character prompt launched Copilot in an approved workspace, registered in 2.8 s;
   - an isolated workspace got a fresh worktree at `origin/<default>`;

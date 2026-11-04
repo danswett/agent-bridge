@@ -2,10 +2,15 @@
 // talks to, and puts the Content-Security-Policy in the page (GitHub Pages cannot send
 // headers). The tests serve exactly this output, so they run under the same policy.
 //
+// The app's scripts are bundled and minified (esbuild) into bundle/, under names that carry their
+// content's hash, and the page loads that; js/ is copied as it is beside it, the source layout the
+// tests import modules from.
+//
 //   node tools/build-site.mjs --out <dir> [--relay https://relay.example] [--blob-origin https://<account>.blob.core.windows.net]
 import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const appRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -71,10 +76,75 @@ export function buildSite({ out, relay = '', blobOrigins = [], root = appRoot })
   if (!html.includes(marker)) { throw new Error('index.html has no <meta charset="utf-8"> to put the policy after'); }
   const csp = contentSecurityPolicy(origin, blobOrigins).replace(/"/g, '&quot;');
   writeFileSync(index, html.replace(marker, `${marker}\n  <meta http-equiv="Content-Security-Policy" content="${csp}">`));
+  bundle(out);
   stampWorker(out);
   return out;
 }
 
+// 53 modules, each a request, in an import chain 8 deep, took 4.5 s to a first session on a
+// throttled phone, and the demo's pretend hosts came along for everyone (#609). So js/main.js is
+// bundled into one entry and the chunks it imports: the demo's own chunk only when the demo asks
+// for it (main.js imports demo.js dynamically). The page loads the entry and preloads the chunks
+// it imports, so nothing waits on a chain; the worker precaches them (sw.js BUNDLE). Names carry
+// a hash of their content, so a release's files are never taken for another's. The output is
+// deterministic: the same app builds the same bundle, and the same worker.
+const BUNDLE_DIR = 'bundle';
+
+function bundle(out) {
+  // Loaded here, not at the top: the CSP and relay checks above need no packages.
+  const { buildSync } = createRequire(import.meta.url)('esbuild');
+  rmSync(path.join(out, BUNDLE_DIR), { recursive: true, force: true });
+  const { metafile } = buildSync({
+    absWorkingDir: out,
+    entryPoints: ['js/main.js'],
+    outdir: BUNDLE_DIR,
+    bundle: true,
+    splitting: true,
+    format: 'esm',
+    // The app's own syntax, as it is: the browsers it runs on already take it.
+    target: 'esnext',
+    minify: true,
+    // Error messages and anything else that reads a function's or class's name keep it.
+    keepNames: true,
+    entryNames: '[name]-[hash]',
+    chunkNames: '[name]-[hash]',
+    metafile: true,
+    logLevel: 'error',
+  });
+  const slash = (f) => f.split(path.sep).join('/');
+  const outputs = new Map(Object.entries(metafile.outputs).map(([file, o]) => [slash(file), o]));
+  const entry = [...outputs].find(([, o]) => o.entryPoint === 'js/main.js')?.[0];
+  if (!entry) { throw new Error('esbuild wrote no bundle for js/main.js'); }
+  // The demo's chunk: esbuild makes each module imported dynamically an entry point of its own.
+  const demo = [...outputs].filter(([f, o]) => f !== entry && (o.entryPoint === 'js/demo.js' || Object.keys(o.inputs).some((i) => slash(i) === 'js/demo.js'))).map(([f]) => f);
+  if (demo.length !== 1) { throw new Error('esbuild wrote no chunk of its own for js/demo.js: main.js must import it only dynamically'); }
+  // Everything the entry reaches, by the imports in the kinds asked for, the demo's chunk aside.
+  const reach = (kinds) => {
+    const seen = new Set([entry]);
+    for (const file of seen) {
+      for (const i of outputs.get(file).imports) {
+        if (!i.external && kinds.includes(i.kind) && !demo.includes(slash(i.path))) { seen.add(slash(i.path)); }
+      }
+    }
+    return [...seen].sort();
+  };
+  // What the page needs to start: loaded together rather than one import after another.
+  const preload = reach(['import-statement']).filter((f) => f !== entry);
+  // What the app can ask for at all: kept for offline. The demo's chunk (and anything only it
+  // imports) is fetched when the demo starts, and is never precached.
+  const shell = reach(['import-statement', 'dynamic-import']);
+  const index = path.join(out, 'index.html');
+  const html = readFileSync(index, 'utf8');
+  const script = '<script type="module" src="js/main.js"></script>';
+  if (!html.includes(script)) { throw new Error(`index.html has no ${script} to load the bundle in its place`); }
+  const tags = [...preload.map((f) => `<link rel="modulepreload" href="${f}">`), `<script type="module" src="${entry}"></script>`];
+  writeFileSync(index, html.replace(script, tags.join('\n  ')));
+  const sw = path.join(out, 'sw.js');
+  const source = readFileSync(sw, 'utf8');
+  const placeholder = 'const BUNDLE = [];';
+  if (!source.includes(placeholder)) { throw new Error(`sw.js has no ${placeholder} to list the bundle in`); }
+  writeFileSync(sw, source.replace(placeholder, `const BUNDLE = [${shell.map((f) => `'./${f}'`).join(', ')}];`));
+}
 // An installed PWA that stays open runs its old code until a new service worker takes
 // over, and a browser installs one only when sw.js itself changes. So sw.js carries a
 // hash of every other file served, and any change to the app or its relay is an update.

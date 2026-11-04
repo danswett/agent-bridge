@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSite, contentSecurityPolicy } from '../../tools/build-site.mjs';
@@ -39,14 +39,27 @@ test('the service worker changes whenever anything the site serves changes', () 
   rmSync(scratch, { recursive: true, force: true });
 });
 
-test('the offline shell holds every script the app is made of, so it starts with no network', () => {
-  const shell = new Set([...readFileSync(path.join(pwa, 'sw.js'), 'utf8').matchAll(/'\.\/(js\/[^']+)'/g)].map((m) => m[1]));
-  const scripts = readdirSync(path.join(pwa, 'js'), { recursive: true })
-    .map((f) => `js/${f.split(path.sep).join('/')}`)
-    .filter((f) => f.endsWith('.js'));
-  assert.deepEqual(scripts.filter((f) => !shell.has(f)), []);
+test('the page loads the app as one minified bundle without the demo, preloads what it imports, and keeps all of it offline', () => {
+  const site = buildSite({ out: out('bundle') });
+  const html = readFileSync(path.join(site, 'index.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script type="module" src="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(scripts.length, 1);
+  assert.match(scripts[0], /^bundle\/main-\w+\.js$/, 'the entry, under a name that carries its content\'s hash');
+  const files = readdirSync(path.join(site, 'bundle')).map((f) => `bundle/${f}`);
+  const shell = new Set([...sw(site).matchAll(/'\.\/([^']+)'/g)].map((m) => m[1]));
+  const demo = files.filter((f) => /^bundle\/demo-\w+\.js$/.test(f));
+  assert.equal(demo.length, 1, 'the demo is a chunk of its own, fetched only when the demo starts');
+  assert.ok(!shell.has(demo[0]), 'and never precached');
+  assert.deepEqual(files.filter((f) => !demo.includes(f) && !shell.has(f)), [], 'everything else the app may ask for works offline');
+  assert.deepEqual([...shell].filter((f) => f.startsWith('js/')), [], 'the source layout is served, but nothing loads it');
+  const preloaded = [...html.matchAll(/<link rel="modulepreload" href="([^"]+)">/g)].map((m) => m[1]);
+  assert.deepEqual(preloaded.filter((f) => !shell.has(f) || demo.includes(f)), []);
+  const size = (dir, list) => list.reduce((n, f) => n + statSync(path.join(dir, f)).size, 0);
+  const sources = readdirSync(path.join(site, 'js'), { recursive: true }).filter((f) => f.endsWith('.js'));
+  const bundled = size(site, files.filter((f) => !demo.includes(f)));
+  assert.ok(bundled < size(path.join(site, 'js'), sources) / 2, `the bundle (${bundled} bytes) is minified`);
+  rmSync(scratch, { recursive: true, force: true });
 });
-
 test('the page may reach the relay and the one storage account its blob store uses, and nothing else', () => {
   const csp = contentSecurityPolicy('https://relay.example', ['https://abblobprodwus2.blob.core.windows.net']);
   assert.match(csp, /connect-src 'self' https:\/\/relay\.example wss:\/\/relay\.example https:\/\/abblobprodwus2\.blob\.core\.windows\.net;/);
