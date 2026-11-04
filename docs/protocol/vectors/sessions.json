@@ -7085,6 +7085,73 @@
       ],
       "refused": []
     },
+    "DeliveryProgress": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "received",
+          "json": {
+            "stage": "received"
+          }
+        },
+        {
+          "name": "typed-into-a-working-session",
+          "json": {
+            "stage": "typed",
+            "working": true
+          }
+        },
+        {
+          "name": "typed-into-an-idle-session",
+          "json": {
+            "stage": "typed",
+            "working": false
+          }
+        },
+        {
+          "name": "wrong-type-stage",
+          "json": {
+            "stage": 42
+          },
+          "reads": {
+            "stage": ""
+          }
+        }
+      ],
+      "refused": []
+    },
+    "DeliveryTimings": {
+      "direction": "host",
+      "valid": [
+        {
+          "name": "delivered",
+          "json": {
+            "typed": 352,
+            "recorded": 1190,
+            "confirmed": 1361
+          }
+        },
+        {
+          "name": "typed-and-not-recorded",
+          "json": {
+            "typed": 352
+          }
+        },
+        {
+          "name": "wrong-type-typed",
+          "json": {
+            "typed": "many",
+            "recorded": 1190,
+            "confirmed": 1361
+          },
+          "reads": {
+            "recorded": 1190,
+            "confirmed": 1361
+          }
+        }
+      ],
+      "refused": []
+    },
     "StopRequest": {
       "direction": "client",
       "check": "Stops.Check",

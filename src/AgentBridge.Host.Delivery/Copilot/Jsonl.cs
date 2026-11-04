@@ -62,4 +62,13 @@ internal static class Jsonl
         try { return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.SequentialScan); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
+
+    // A record's own "timestamp" (ISO 8601, UTC: Copilot, Claude Code and Codex all write one at
+    // the top of each line), or null. For timings only.
+    public static DateTimeOffset? Timestamp(System.Text.Json.JsonElement record) =>
+        record.ValueKind == System.Text.Json.JsonValueKind.Object
+        && record.TryGetProperty("timestamp", out var t) && t.ValueKind == System.Text.Json.JsonValueKind.String
+        && DateTimeOffset.TryParse(t.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var at)
+            ? at : null;
 }

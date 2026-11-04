@@ -207,3 +207,44 @@ transcript; the reply is added to them, and the prompt recorded differs, so the 
 `unconfirmed`. agent-ha-bridge has the same exposure. A question the agent opens in the
 moments between the transcript check and the keys landing would take the words; the window
 is the worker's start-up, about the same as for an answer.
+
+## Progress and timings
+
+A client that saw `sessions.progress` and sends `"progress": true` hears the reply's stages
+before its result ([v1-sessions.md, Progress](protocol/v1-sessions.md#progress)): `received`
+as `SessionService` takes the request, before step 1, and `typed` once every key of step 6 has
+gone, with `working` when the session was working then (it takes the prompt at its next step,
+as Copilot's `steering`). The result then carries `timings`: `typed`, `recorded` (the agent's
+own timestamp on the prompt that confirmed it) and `confirmed`, in ms after receipt. A resend
+of a reply still being delivered hears the stages it has reached. Frames are queued without
+waiting, so a slow or closed channel never holds up the typing.
+
+### Timings
+
+The host log's timestamps are to the second, too coarse to say where a reply's second went
+(#597). So every reply, and every answer ([host-answers.md](host-answers.md)), logs one line
+of its stages in ms after the request reached the delivery, progress asked for or not,
+correlated with the outcome line by the request id's first 8 hex digits. When it reached the
+delivery is given in UTC, ISO 8601 with a `Z`, to the millisecond, as diagnostic timestamps
+are (the owner's rule on #611): it reads the same on every machine and against agents'
+transcripts, which are in UTC too. The log's own prefix stays local time to the second.
+
+```
+reply 0b7e3c1d to 99999999: delivered
+reply 0b7e3c1d timings (ms after 2026-11-04T06:56:28.441Z): checked 2, turn 3, inject 4-25, typed 25, recorded 1190, confirmed 1361, settled 1361, sent 1362
+```
+
+| Stage | When |
+|---|---|
+| `checked` | The checks before the typing turn passed (steps 1 to 4) |
+| `turn` | The single typing turn was taken (step 5) |
+| `inject a-b` | The first worker started and the last finished, an Enter pressed again (Claude and Codex replies, Claude's review screen) included |
+| `typed` | Every key went; `working` follows it when the session was working |
+| `recorded` | The agent's timestamp on the prompt that is the reply |
+| `confirmed` | The host matched it (`delivered` only) |
+| `settled` | The outcome was known |
+| `sent` | Its response left on the channel or pipe of the request that started it (`not sent` if it could not); absent for Home Assistant's, which has none |
+
+A stage not reached is left out: a reply refused at step 1 logs only `settled` and `sent`. The
+receipt time is UTC, unlike the log's own local-time prefix, so a line is matched to the lines
+around it by its request id, and its times to an agent's transcript as they are, without an offset.

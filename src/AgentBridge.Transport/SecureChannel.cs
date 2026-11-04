@@ -32,6 +32,8 @@ public sealed class SecureChannel : IProtocolChannel
     // one lock, so frames leave in nonce order and events in seq order.
     readonly SemaphoreSlim sendLock = new(1, 1);
     readonly ConcurrentDictionary<long, TaskCompletionSource<(JsonElement, long)>> pending = new();
+    // Progress listeners of pending requests that have one, by request id.
+    readonly ConcurrentDictionary<long, Action<JsonElement>> listeners = new();
     readonly Channel<ChannelEvent> events;
     readonly TaskCompletionSource closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     Exception? closeReason;
@@ -80,17 +82,21 @@ public sealed class SecureChannel : IProtocolChannel
 
     // Sends {id, op, data} and waits for the response with the same id: the whole response,
     // {re, ok, result} or {re, ok: false, error}. Any number may be outstanding at once.
-    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) =>
-        (await RequestOrderedAsync(op, data, timeout, ct)).Response;
+    // progress hears each {re, progress} frame the host sends for this request before its response
+    // (only when the request asked for them, as session.reply's progress: true does); it is raised
+    // on the channel's receive path, so it must be quick, and what it throws is ignored.
+    public async Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) =>
+        (await RequestOrderedAsync(op, data, timeout, ct, progress)).Response;
 
     // The same, with the seq of the last event received before the response (-1 for none): an
     // event with a higher seq came after it (IClientChannel.RequestOrderedAsync).
-    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+    public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         ThrowIfClosed();
         var id = Interlocked.Increment(ref nextRequest);
         var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = tcs;
+        if (progress is not null) { listeners[id] = progress; }
         try
         {
             // Closed between the check above and registering: Fail has already swept pending.
@@ -98,7 +104,11 @@ public sealed class SecureChannel : IProtocolChannel
             await SendJsonAsync(new { id, op, data }, ct);
             return await tcs.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15), ct);
         }
-        finally { pending.TryRemove(id, out _); }
+        finally
+        {
+            pending.TryRemove(id, out _);
+            listeners.TryRemove(id, out _);
+        }
     }
 
     // Sends {ev, seq, data} and returns its seq. Safe to call from any number of threads:
@@ -173,7 +183,25 @@ public sealed class SecureChannel : IProtocolChannel
 
     internal void Complete(JsonElement response)
     {
-        if (pending.TryRemove(response.GetProperty("re").GetInt64(), out var tcs)) { tcs.TrySetResult((response, lastReceivedSeq)); }
+        var re = response.GetProperty("re").GetInt64();
+        // Progress is never the response, whatever else the frame holds: the call goes on waiting.
+        if (response.TryGetProperty("progress", out var progress))
+        {
+            Report(listeners, re, progress);
+            return;
+        }
+        // The listener goes before the call is answered: a progress frame after the response is for a
+        // request that has finished, and reaches no one (#611, found in review of #616).
+        listeners.TryRemove(re, out _);
+        if (pending.TryRemove(re, out var tcs)) { tcs.TrySetResult((response, lastReceivedSeq)); }
+    }
+
+    // A listener's fault is the caller's, never the channel's: thrown here it would end the channel.
+    internal static void Report(ConcurrentDictionary<long, Action<JsonElement>> listeners, long re, JsonElement progress)
+    {
+        if (!listeners.TryGetValue(re, out var listener)) { return; }
+        try { listener(progress.Clone()); }
+        catch (Exception) { }
     }
 
     internal void Deliver(JsonElement message)

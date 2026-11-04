@@ -158,12 +158,12 @@ public sealed class TrustTests : IAsyncLifetime
         public ChannelReader<ChannelEvent> Events => inner.Events;
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => inner.SendEventAsync(name, data, ct);
         public ValueTask DisposeAsync() => inner.DisposeAsync();
-        public Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) => inner.RequestOrderedAsync(op, data, timeout, ct);
+        public Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) => inner.RequestOrderedAsync(op, data, timeout, ct, progress);
 
-        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default)
+        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null)
         {
-            if (op != atOnce) { return inner.RequestAsync(op, data, timeout, ct); }
-            try { return Task.FromResult(Task.Run(() => inner.RequestAsync(op, data, timeout, ct)).GetAwaiter().GetResult()); }
+            if (op != atOnce) { return inner.RequestAsync(op, data, timeout, ct, progress); }
+            try { return Task.FromResult(Task.Run(() => inner.RequestAsync(op, data, timeout, ct, progress)).GetAwaiter().GetResult()); }
             catch (Exception e) { return Task.FromException<JsonElement>(e); }
         }
     }

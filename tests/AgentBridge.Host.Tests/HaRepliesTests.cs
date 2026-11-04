@@ -27,7 +27,7 @@ public sealed class HaRepliesTests : IDisposable
         public bool Available => true;
         public bool TakesAttachments => attachments;
 
-        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default)
+        public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
         {
             var files = new List<byte[]>();
             if (request.Attachments is { Count: > 0 } refs)

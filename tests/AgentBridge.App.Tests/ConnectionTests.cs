@@ -430,8 +430,8 @@ public sealed class ConnectionTests : IAsyncLifetime
         public string PeerKind => inner.PeerKind;
         public bool IsOpen => inner.IsOpen;
         public Task Closed => inner.Closed;
-        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) => inner.RequestAsync(op, data, timeout, ct);
-        public Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default) => inner.RequestOrderedAsync(op, data, timeout, ct);
+        public Task<JsonElement> RequestAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) => inner.RequestAsync(op, data, timeout, ct, progress);
+        public Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null) => inner.RequestOrderedAsync(op, data, timeout, ct, progress);
         public Task<long> SendEventAsync(string name, object? data = null, CancellationToken ct = default) => inner.SendEventAsync(name, data, ct);
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }

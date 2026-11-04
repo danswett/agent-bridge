@@ -96,6 +96,58 @@ public sealed class LocalPipeTests : IAsyncDisposable
 
     [Fact]
     [Trait("Category", "Network")]
+    public async Task Progress_on_the_pipe_reaches_the_callers_listener_ahead_of_the_result_and_never_completes_the_call()
+    {
+        var go = new TaskCompletionSource();
+        Serve(async (_, _, _) =>
+        {
+            var served = ServedRequest.Current!;
+            served.Progress(new DeliveryProgress(DeliveryProgress.Received));
+            await go.Task;
+            served.Progress(new DeliveryProgress(DeliveryProgress.Typed, true));
+            return new { done = true };
+        });
+        var ch = await ConnectAsync();
+        var heard = new List<string>();
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var call = ch.CallAsync("work", progress: p => { lock (heard) { heard.Add(p.GetRawText()); } first.TrySetResult(); });
+        await first.Task.WaitAsync(Patience);
+        await Task.Delay(200);
+        Assert.False(call.IsCompleted);
+        go.SetResult();
+
+        Assert.True((await call).GetProperty("done").GetBoolean());
+        Assert.Equal(["""{"stage":"received"}""", """{"stage":"typed","working":true}"""], heard);
+    }
+
+    [Fact]
+    [Trait("Category", "Network")]
+    public async Task A_progress_frame_that_comes_after_its_result_on_the_pipe_reaches_no_listener()
+    {
+        Serve((_, _, _) =>
+        {
+            ServedRequest.Current!.Progress(new DeliveryProgress(DeliveryProgress.Received));
+            // A host breaking the rule this one keeps: progress after the result, then an event to
+            // say it has been sent. The first request on a new connection is 1.
+            return Task.FromResult<object?>(new ChannelReply(new { done = true }, async c =>
+            {
+                await ((LocalChannel)c).SendAsync(JsonSerializer.SerializeToUtf8Bytes(new { re = 1, progress = new { stage = "late" } }), default);
+                await c.SendEventAsync("after");
+            }));
+        });
+        var ch = await ConnectAsync();
+        var heard = new List<string>();
+
+        var result = await ch.CallAsync("work", progress: p => { lock (heard) { heard.Add(p.GetProperty("stage").GetString()!); } });
+        var after = await ch.Events.ReadAsync().AsTask().WaitAsync(Patience);
+
+        Assert.True(result.GetProperty("done").GetBoolean());
+        Assert.Equal("after", after.Name);
+        lock (heard) { Assert.Equal(["received"], heard); }
+    }
+    [Fact]
+    [Trait("Category", "Network")]
     public async Task Unknown_ops_and_failures_come_back_as_errors_and_the_connection_carries_on()
     {
         Serve(Echo);

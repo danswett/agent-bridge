@@ -352,6 +352,9 @@ const NOT_REPLAYED = {
   TransferRequest: 'host to host: no client sends it',
   TransferResult: 'host to host: no client reads it',
   UpdateCommand: 'built inside UpdateControl from a fresh request, with nothing else in it',
+  // The PWA asks for progress from #600; until then a host sends neither to it.
+  DeliveryProgress: 'progress frames come only to a client that sends progress: true, which the PWA does not yet',
+  DeliveryTimings: 'timings come only to a client that sends progress: true, which the PWA does not yet',
 };
 
 // ---- the replay ----

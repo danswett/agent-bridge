@@ -18,7 +18,8 @@ public interface ISessionReplier
     // Whether hello offers sessions.attach now: replies that carry files.
     bool TakesAttachments => false;
 
-    Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default);
+    // watch: hears the delivery's stages as it goes (DeliveryWatch), for a caller that reports them.
+    Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null);
 }
 
 public sealed class ReplyOptions
@@ -110,17 +111,17 @@ public sealed class ReplyService : ISessionReplier
     public bool TakesAttachments => attachments is not null && Available;
 
     // peer: the device the request came from. A reply can only use attachments that device sent.
-    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default)
+    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null)
     {
         if (!Guid.TryParseExact(request.Request, "D", out var key))
         {
             return Task.FromResult(Refused("request must be a UUID"));
         }
-        return requests.Once(key, () => DeliverAsync(request, key, peer ?? ""), result =>
+        return requests.Once(key, watch, () => new DeliveryTimeline(options.Time, "reply", key, log), t => DeliverAsync(request, key, peer ?? "", t), result =>
             log($"reply {key.ToString()[..8]} to {Short(request.Id)}: {result.Outcome.ToString().ToLowerInvariant()}{(result.Reason is null ? "" : $" ({result.Reason})")}"));
     }
 
-    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer)
+    async Task<ReplyResult> DeliverAsync(ReplyRequest request, Guid key, string peer, DeliveryTimeline timeline)
     {
         Typed typed;
         try
@@ -148,8 +149,8 @@ public sealed class ReplyService : ISessionReplier
                     if (problem is not null) { return Refused(problem); }
                 }
                 var outcome = session.Agent == AgentKind.Copilot
-                    ? await CopilotAsync(session, request.Text ?? "", claim)
-                    : await AgentAsync(session, request.Text ?? "", claim);
+                    ? await CopilotAsync(session, request.Text ?? "", claim, timeline)
+                    : await AgentAsync(session, request.Text ?? "", claim, timeline);
                 keysWent = outcome.KeysWent;
                 if (outcome.Result is { } result) { return result; }
                 typed = outcome.Typed!;
@@ -186,7 +187,7 @@ public sealed class ReplyService : ISessionReplier
     // KeysWent: some or all of the reply may have reached the session, whatever the result.
     sealed record Attempt(ReplyResult? Result, Typed? Typed, bool KeysWent = false);
 
-    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim)
+    async Task<Attempt> CopilotAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
     {
         // The session id names a folder; only the agent's own id shape is accepted.
         if (!Guid.TryParseExact(session.Id, "D", out _)) { return Done(Refused("the session's id is not a Copilot session id")); }
@@ -214,15 +215,19 @@ public sealed class ReplyService : ISessionReplier
 
         // One delivery typed at a time across sessions, and the last checks are made once its
         // turn has come, not when it arrived.
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         long from;
         InjectionResult result;
+        bool working;
         try
         {
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            working = now.Status == SessionStatus.Working;
             // The transcript, read now, may be ahead of the session source: a question asked a
             // moment ago is there first, and a subagent's is only there. One that cannot be
             // read cannot say nothing is asking.
@@ -241,20 +246,24 @@ public sealed class ReplyService : ISessionReplier
             if (before.Asking) { return Done(Asking()); }
             from = before.ScannedTo;
 
+            timeline.InjectStart();
             try { result = await injector.InjectAsync(pid, keys); }
             catch (Exception e)
             {
                 return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
             }
+            finally { timeline.InjectEnd(); }
         }
         finally { gate.DoneTyping(); }
 
+        // Before the log line, which writes a file: the client hears it as soon as it can.
+        if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
         log($"typed a reply into {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {keys.Describe()} -> {result.Status} {result.Detail}");
         return result.Status switch
         {
             InjectionStatus.NothingTyped => Done(Refused(result.Detail)),
             InjectionStatus.Interrupted => new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true),
-            _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged)), KeysWent: true),
+            _ => new Attempt(null, new Typed(() => ConfirmAsync(transcript, from, words, staged, timeline)), KeysWent: true),
         };
 
         static Attempt Done(ReplyResult r) => new(r, null);
@@ -268,7 +277,7 @@ public sealed class ReplyService : ISessionReplier
     // (Composer). Then, as Confirm-DaemonClaudeSubmit did, an Enter the agent took as part of a
     // paste (Claude absorbs it; Codex makes it a new line, seen live) is pressed again, at most
     // twice, and only while the box on screen still holds exactly this reply.
-    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim)
+    async Task<Attempt> AgentAsync(Session session, string text, Claim? claim, DeliveryTimeline timeline)
     {
         var agent = session.Agent;
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
@@ -290,18 +299,22 @@ public sealed class ReplyService : ISessionReplier
         var plan = agent == AgentKind.Claude ? AgentReply.Claude(text, staged) : AgentReply.Codex(text, staged);
         if (plan is null) { return Done(Refused($"an attachment's path has a space in it, which {name} cannot take as an attachment; attach at the machine")); }
 
+        timeline.Checked();
         await gate.WaitToTypeAsync();
+        timeline.Turn();
         long from;
         var described = new List<string>();
         InjectionResult result;
         // Whether a send before this one went: a refusal then is no longer "nothing typed".
         var sent = false;
+        bool working;
         try
         {
             if (probe.Active() is { } active) { return Done(Refused(active)); }
             var now = source.Get(session.Id);
             if (now is null) { return Done(Stale("the session has ended")); }
             if (now.Question is { } asking) { return Done(Asking(asking)); }
+            working = now.Status == SessionStatus.Working;
             ConsoleScreen screen;
             try { screen = await injector.ReadScreenAsync(pid); }
             catch (Exception e) { return Done(Refused($"the host could not read the session's screen ({e.Message}); reply at the machine")); }
@@ -348,17 +361,20 @@ public sealed class ReplyService : ISessionReplier
                 }
                 var keys = new KeyPlan([AgentReply.Key(send, box.Rows)]);
                 described.Add(keys.Describe());
+                timeline.InjectStart();
                 try { result = await injector.InjectAsync(pid, keys); }
                 catch (Exception e)
                 {
                     return new Attempt(Unconfirmed($"the injector failed while typing ({e.Message}); check at the machine"), null, KeysWent: true);
                 }
+                finally { timeline.InjectEnd(); }
                 if (result.Status != InjectionStatus.Typed) { break; }
                 sent = true;
             }
         }
         finally { gate.DoneTyping(); }
 
+        if (result.Status == InjectionStatus.Typed) { timeline.Typed(working); }
         log($"typed a reply into {name} {Short(session.Id)} (pid {pid}){(staged.Count > 0 ? $" with {staged.Count} attachment(s)" : "")}: {string.Join(" | ", described)} -> {result.Status} {result.Detail}");
         switch (result.Status)
         {
@@ -370,8 +386,8 @@ public sealed class ReplyService : ISessionReplier
                 return new Attempt(Unconfirmed($"{result.Detail}; part of the reply may have reached the session, so check at the machine"), null, KeysWent: true);
         }
 
-        await SubmitAsync(session.Id, agent, pid, transcript, from, plan);
-        return new Attempt(null, new Typed(() => ConfirmAgentAsync(agent, transcript, from, plan)), KeysWent: true);
+        await SubmitAsync(session.Id, agent, pid, transcript, from, plan, timeline);
+        return new Attempt(null, new Typed(() => ConfirmAgentAsync(agent, transcript, from, plan, timeline)), KeysWent: true);
 
         static Attempt Done(ReplyResult r) => new(r, null);
     }
@@ -396,7 +412,7 @@ public sealed class ReplyService : ISessionReplier
     // still empty, or showing only the start of the reply, may not have taken all of it in yet
     // (Codex takes keys in slowly while it streams, seen live), so it is looked at again rather
     // than given up on.
-    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan)
+    async Task SubmitAsync(string sessionId, AgentKind agent, int pid, string transcript, long from, AgentReply plan, DeliveryTimeline timeline)
     {
         var pressed = 0;
         var began = options.Time.GetTimestamp();
@@ -437,7 +453,9 @@ public sealed class ReplyService : ISessionReplier
                     return;
                 }
                 var box = Find(agent, screen.Rows!)!;
-                var enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)]));
+                InjectionResult enter;
+                try { enter = await injector.InjectAsync(pid, new KeyPlan([new KeySend("", true, 0, 0, box.Rows)])); }
+                finally { timeline.InjectEnd(); }
                 pressed++;
                 log($"pressed Enter again in {Short(sessionId)} (pid {pid}): the reply was still in its input box -> {enter.Status} {enter.Detail}");
                 if (enter.Status != InjectionStatus.Typed) { return; }
@@ -456,7 +474,7 @@ public sealed class ReplyService : ISessionReplier
 
     // Watches the agent's record for the prompt that is this reply, and the files it took in.
     // Claude records a reply it queues at once, but reads its files only when it takes it.
-    async Task<ReplyResult> ConfirmAgentAsync(AgentKind agent, string transcript, long from, AgentReply plan)
+    async Task<ReplyResult> ConfirmAgentAsync(AgentKind agent, string transcript, long from, AgentReply plan, DeliveryTimeline timeline)
     {
         var name = agent == AgentKind.Claude ? "Claude" : "Codex";
         var started = options.Time.GetTimestamp();
@@ -472,9 +490,14 @@ public sealed class ReplyService : ISessionReplier
                     if (!plan.Says(prompt)) { other = true; continue; }
                     if (!TakePrompt(transcript, prompt.Offset)) { continue; }
                     mine = prompt.Offset;
+                    timeline.Recorded(prompt.At);
                 }
                 if (prompt.Offset != mine) { continue; }
-                if (plan.Attached(prompt)) { return new ReplyResult(AnswerOutcome.Delivered); }
+                if (plan.Attached(prompt))
+                {
+                    timeline.Confirmed();
+                    return new ReplyResult(AnswerOutcome.Delivered);
+                }
                 // Codex records its images with the prompt: missing then is missing for good.
                 if (agent == AgentKind.Codex) { return Unconfirmed("Codex recorded the reply but did not attach every image to it; check at the machine"); }
             }
@@ -515,7 +538,7 @@ public sealed class ReplyService : ISessionReplier
 
     // Watches the transcript, from where it stood before the keys went, for the person's
     // prompt that is this reply.
-    async Task<ReplyResult> ConfirmAsync(string transcript, long from, string words, IReadOnlyList<string> attached)
+    async Task<ReplyResult> ConfirmAsync(string transcript, long from, string words, IReadOnlyList<string> attached, DeliveryTimeline timeline)
     {
         var started = options.Time.GetTimestamp();
         var other = false;
@@ -526,9 +549,13 @@ public sealed class ReplyService : ISessionReplier
             {
                 if (!CopilotReply.Matches(words, prompt.Content)) { other = true; continue; }
                 if (!TakePrompt(transcript, prompt.Offset)) { continue; }
-                return CopilotReply.Attached(attached, prompt.Attachments)
-                    ? new ReplyResult(AnswerOutcome.Delivered)
-                    : Unconfirmed("the session recorded the reply but did not attach every file to it; check at the machine");
+                timeline.Recorded(prompt.At);
+                if (!CopilotReply.Attached(attached, prompt.Attachments))
+                {
+                    return Unconfirmed("the session recorded the reply but did not attach every file to it; check at the machine");
+                }
+                timeline.Confirmed();
+                return new ReplyResult(AnswerOutcome.Delivered);
             }
             if (since.SessionEnded) { return Unconfirmed("the session ended before it recorded the reply; check at the machine"); }
             if (options.Time.GetElapsedTime(started) >= options.ConfirmTimeout)
@@ -572,6 +599,6 @@ public sealed class UnsupportedPlatformReplier : ISessionReplier
 {
     public bool Available => false;
 
-    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default) =>
+    public Task<ReplyResult> ReplyAsync(ReplyRequest request, string? peer = null, CancellationToken cancellationToken = default, DeliveryWatch? watch = null) =>
         Task.FromResult(new ReplyResult(AnswerOutcome.Refused, "replying is not supported on this platform yet; reply at the machine"));
 }

@@ -30,35 +30,44 @@ internal sealed class OutcomeMemory<T>(TimeProvider time, TimeSpan rememberFor)
     readonly Lock gate = new();
     readonly Dictionary<Guid, Entry> requests = [];
 
-    sealed class Entry(Task<T> outcome)
+    sealed class Entry(DeliveryTimeline? timeline)
     {
-        public Task<T> Outcome { get; } = outcome;
+        public TaskCompletionSource<T> Outcome { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public DeliveryTimeline? Timeline { get; } = timeline;
         public DateTimeOffset? Settled;
     }
 
+    // For a request with no stages to report (a stop, a launch).
+    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled) => Run(key, null, null, _ => deliver(), settled);
+
     // The known outcome for a repeat; otherwise runs deliver once, off the caller's channel:
     // a channel that closes mid-delivery must not cut it short, and a resend on the next
-    // channel gets the outcome.
-    public Task<T> Once(Guid key, Func<Task<T>> deliver, Action<T> settled)
+    // channel gets the outcome. Either way the watch follows the one delivery's stages.
+    public Task<T> Once(Guid key, DeliveryWatch? watch, Func<DeliveryTimeline> timeline, Func<DeliveryTimeline, Task<T>> deliver, Action<T> settled) =>
+        Run(key, watch, timeline, t => deliver(t!), settled);
+
+    Task<T> Run(Guid key, DeliveryWatch? watch, Func<DeliveryTimeline>? timeline, Func<DeliveryTimeline?, Task<T>> deliver, Action<T> settled)
     {
-        TaskCompletionSource<T> outcome;
         Entry entry;
+        bool repeat;
         lock (gate)
         {
             Forget();
-            if (requests.TryGetValue(key, out var known)) { return known.Outcome; }
-            outcome = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-            entry = new Entry(outcome.Task);
-            requests[key] = entry;
+            repeat = requests.TryGetValue(key, out var known);
+            entry = known ?? (requests[key] = new Entry(timeline?.Invoke()));
         }
+        // Outside the lock: a repeat's watch may hear a stage already reached, at once.
+        entry.Timeline?.Watch(watch, first: !repeat);
+        if (repeat) { return entry.Outcome.Task; }
         _ = Task.Run(async () =>
         {
-            var result = await deliver();
+            var result = await deliver(entry.Timeline);
             lock (gate) { entry.Settled = time.GetUtcNow(); }
             settled(result);
-            outcome.SetResult(result);
+            entry.Timeline?.Settled();
+            entry.Outcome.SetResult(result);
         }, CancellationToken.None);
-        return outcome.Task;
+        return entry.Outcome.Task;
     }
 
     void Forget()

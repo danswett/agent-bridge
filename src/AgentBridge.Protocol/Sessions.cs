@@ -567,9 +567,39 @@ public sealed record AnswerRequest
     public required string Request { get; init; }
     public IReadOnlyDictionary<string, JsonElement>? Fields { get; init; }
     public string? Text { get; init; }
+    // True from a client that saw sessions.progress: it hears DeliveryProgress frames before the
+    // result, and the result carries Timings. Absent, nothing about the exchange changes.
+    public bool? Progress { get; init; }
 }
 
-public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null);
+public sealed record AnswerResult(AnswerOutcome Outcome, string? Reason = null)
+{
+    // Only for a request that asked for progress.
+    public DeliveryTimings? Timings { get; init; }
+}
+
+// How far a delivery had got, in milliseconds after the host received the request. Recorded is
+// the agent's own timestamp for the prompt or answer, where its transcript has one. A stage
+// absent was not reached, or is not known.
+public sealed record DeliveryTimings
+{
+    public long? Typed { get; init; }
+    public long? Recorded { get; init; }
+    public long? Confirmed { get; init; }
+}
+
+// The progress of a session.reply or session.answer that asked for it, sent as
+// {"re": id, "progress": {...}} before the response (Channel framing in v1-sessions.md). Stage
+// is a string, not an enum: a client ignores one it doesn't know rather than reading it as
+// another.
+public sealed record DeliveryProgress(string Stage, bool? Working = null)
+{
+    // The host has the request, before any check.
+    public const string Received = "received";
+    // Every key has gone: the outcome will be delivered or unconfirmed. Working: the session was
+    // working, so the agent takes it at its next step (queued).
+    public const string Typed = "typed";
+}
 
 // session.reply: a prompt for the session, typed into its own input as if at the machine.
 // Request is the client's UUID for this reply, as for an answer. Attachments name files the
@@ -580,10 +610,16 @@ public sealed record ReplyRequest
     public required string Request { get; init; }
     public string? Text { get; init; }
     public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
+    // As on AnswerRequest.
+    public bool? Progress { get; init; }
 }
 
 // The same outcomes as an answer, read the same way.
-public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null);
+public sealed record ReplyResult(AnswerOutcome Outcome, string? Reason = null)
+{
+    // Only for a request that asked for progress.
+    public DeliveryTimings? Timings { get; init; }
+}
 
 public static class Ops
 {
@@ -668,4 +704,7 @@ public static class Capabilities
     public const string SessionsAttachDirect = "sessions.attach.direct";
     // Copilot permission prompts are approved or denied through session.answer on this host.
     public const string SessionsApprove = "sessions.approve";
+    // session.reply and session.answer take progress: true, and report DeliveryProgress before
+    // their result. Offered with either.
+    public const string SessionsProgress = "sessions.progress";
 }
