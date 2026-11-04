@@ -846,21 +846,40 @@ public sealed partial class SessionsPage
         StopHolding();
         // Said in place of anything still waiting to be said, while its row is still there to say it.
         d.Row.Say(ReorderWords.Ended(d.Card.Title));
-        Reset(d.Items.Values);
         HideLayer();
+        // The others close its slot on `reorder` (at once with animation effects off), as the list will
+        // lay them out once it lets the session go.
+        var closing = d.Model.Closing();
+        foreach (var (key, item) in d.Items) { Glide(item, closing.TryGetValue(key, out var shift) ? shift : 0, instant: false); }
+        var items = d.Items.Values.Append(d.Item).ToList();
         var visual = Visual(d.Item);
         var step = Motion.Catalogue.Exit("ListItem", Motion.Enabled);
-        void Gone()
+        // Faded out: the list lets the session go and lays the others out where they were drawn, in one
+        // pass, so nothing jumps.
+        void Gone() => DispatcherQueue.TryEnqueue(() =>
         {
-            Reset([d.Item]);
+            if (viewModel is not null && viewModel.Held == d.Card) { viewModel.Held = null; }
+            if (drag is null) { Reset(items); }
+        });
+        // Cut short (another card lifted, the item recycled): everything back as laid out now, the
+        // session let go when the list can take it.
+        void CutShort()
+        {
+            Reset(items);
             Release(d.Card);
         }
-        if (!step.Runs) { Gone(); return; }
-        settling[d.Item] = Gone;
+        if (!step.Runs)
+        {
+            visual.StopAnimation("Opacity");
+            visual.Opacity = 0;
+            Gone();
+            return;
+        }
+        settling[d.Item] = CutShort;
         var batch = visual.Compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
         AnimateOpacity(visual, 1, 0, step);
         batch.End();
-        batch.Completed += (_, _) => { if (settling.Remove(d.Item, out var done)) { done(); } };
+        batch.Completed += (_, _) => { if (settling.Remove(d.Item)) { Gone(); } };
     }
 
     // The pointer, the keys and the frames let go; the list's own changes drawn again.

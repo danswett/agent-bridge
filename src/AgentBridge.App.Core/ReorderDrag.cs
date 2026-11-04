@@ -88,6 +88,15 @@ public sealed class ReorderDrag
     // A drop there pins or unpins the held card.
     public bool Crosses(ReorderTarget t) => t.Pinned != Held.Pinned;
 
+    // The held card's session ended: the cards after it close its slot, each moving up one card, and
+    // those before it stay. Keyed by card, as how far each moves from where it was laid out.
+    public IReadOnlyDictionary<string, double> Closing()
+    {
+        var after = Others(Held.Pinned).Skip(Origin.Index);
+        if (Held.Pinned) { after = after.Concat(rest); }
+        return after.ToDictionary(c => c.Key, _ => -GapHeight, StringComparer.Ordinal);
+    }
+
     IEnumerable<bool> Groups => new[] { true, false }.Where(HasGroup);
 
     public ReorderLayout Layout(ReorderTarget target)

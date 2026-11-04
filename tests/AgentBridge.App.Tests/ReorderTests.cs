@@ -42,6 +42,19 @@ public sealed class ReorderTests
     }
 
     [Fact]
+    public void When_the_held_session_ends_the_cards_after_it_close_its_slot_and_those_before_stay()
+    {
+        var drag = new ReorderDrag(List(S("p", pinned: true), S("q", pinned: true), S("a"), S("b")), "q");
+        var closing = drag.Closing();
+        Assert.False(closing.ContainsKey("p"));
+        Assert.Equal(-drag.GapHeight, closing["a"]);
+        Assert.Equal(-drag.GapHeight, closing["b"]);
+
+        var unpinned = new ReorderDrag(List(S("a"), S("b"), S("c")), "b");
+        Assert.Equal(["c"], unpinned.Closing().Keys);
+    }
+
+    [Fact]
     public void The_gap_moves_only_once_another_place_is_nearer_by_more_than_a_pixel()
     {
         var drag = new ReorderDrag(List(S("a"), S("b"), S("c")), "a");
