@@ -250,6 +250,7 @@
     const max = scroller.scrollHeight - scroller.clientHeight;
     const s = Math.min(Math.max(scroller.scrollTop, 0), Math.max(max, 0)); // ignore rubber-band overscroll
     const d = s - last;
+    const from = last;
     last = s;
     if (programmatic || d === 0) { render(); return; }
     const nd = d > 0 ? 1 : -1;
@@ -257,10 +258,15 @@
     run += Math.abs(d);
     if (held !== null && d > 0) { held = Math.min(room, held + d); if (held >= room) held = null; }   // the reader carries on from where the app left it
     if (held !== null && d < 0 && s <= held) held = null;   // going up, it rides with the conversation again from where they meet: no snap at the top
+    // Coming down into the top range the header follows the finger, so a slide still running from a threshold above stops.
+    if (from > room && s <= room && (!returned || fading)) {   // a header sliding back in finishes its slide
+      clearTimeout(animTimer); phone.classList.remove('animating');
+      if (fading) { clearTimeout(fadeTimer); fading = false; returned = false; phone.classList.remove('fading'); }   // a header fading out is gone at once
+    }
     if (s <= 0) { returned = false; run = 0; held = null; }
     else if (focusInside && !returned) returned = true;   // focus taken at the top: the header stays as it is
     else if (returned && dir > 0 && run >= DOWN && !focusInside) setReturned(false);
-    else if (!returned && dir < 0 && run >= UP && s > room) setReturned(true);
+    else if ((!returned || fading) && dir < 0 && run >= UP && s > room) setReturned(true);   // 64 up also cancels a fade under way
     render();
   }
 
