@@ -189,6 +189,48 @@ test('the timing belongs to the request, not the drawing: a question card drawn 
   assert.deepEqual(said, ['Answer sent, still waiting on ULTRA']);
 });
 
+test('an outcome still waiting out the one-second limit when its view is drawn afresh is said by the new view, after the same second', (t) => {
+  const first = setup(t, 'answer');
+  first.show({ stage: 'received' });
+  first.tick(ReceiptTiming.quietMs);
+  first.show({ state: 'done', outcome: 'delivered' });
+  assert.deepEqual(first.said, ['Answer sent']);
+  first.clock.destroy();
+  const said = [];
+  const again = new ReceiptClock({ describe: () => outcome('answer'), draw: () => {}, say: (text) => said.push(text) });
+  again.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  assert.deepEqual(said, []);
+  first.tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual(said, ['Answer delivered']);
+  again.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  first.tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual([...first.said, ...said], ['Answer sent', 'Answer delivered']);
+});
+
+test('a view that is not drawn leaves the announcement to one that is, rather than saying it where nobody hears', (t) => {
+  const first = setup(t);
+  first.show({ stage: 'received' });
+  const said = [];
+  const request = `r${n}`;
+  const hidden = new ReceiptClock({
+    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
+    draw: () => {},
+    say: (text) => said.push(`hidden: ${text}`),
+    heard: () => false,
+  });
+  first.clock.destroy();
+  hidden.show({ request, state: 'sending', stage: 'received', attempts: 1, reason: null, progress: null });
+  first.tick(ReceiptTiming.quietMs);
+  assert.deepEqual(said, []);
+  const shown = new ReceiptClock({
+    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
+    draw: () => {},
+    say: (text) => said.push(`shown: ${text}`),
+  });
+  shown.show({ request, state: 'sending', stage: 'received', attempts: 1, reason: null, progress: null });
+  assert.deepEqual(said, ['shown: Reply sent']);
+});
+
 test('an answer never says Up next', () => {
   assert.equal(describeInFlight('answer', { state: 'sending', stage: 'queued' }).text, 'Passed to the agent');
 });

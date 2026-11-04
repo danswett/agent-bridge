@@ -21,7 +21,7 @@ import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
-import { ReceiptClock, describeInFlight, drawReceipt, receiptLive } from './receipt.js';
+import { ReceiptClock, describeInFlight, drawReceipt, drawn, receiptLive } from './receipt.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -116,6 +116,7 @@ export class ReplyBox {
       describe: (entry, { stalled }) => describeReply(entry, { machineName: this.machineName, working: this.#session?.status === 'working', stalled }),
       draw: (d) => drawReceipt(this.els.status, 'answer-status reply-status', d),
       say: (text) => { this.els.live.textContent = text; },
+      heard: () => drawn(this.els.live),
     });
     const { service, hostId, sessionId } = replying;
     this.#unwatch = service.watch(hostId, sessionId, (e) => this.#show(e));

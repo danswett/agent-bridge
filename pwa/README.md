@@ -238,7 +238,8 @@ answered · *value*" with the check badge once confirmed: a tap's option, free t
 line cut to about 40 characters, or nothing for a form of several fields. A stage only moves
 forward, across resends. A machine from before it goes from "Sending…" to the outcome.
 
-The receipt shows nothing for its first 400 ms (Send's ring covers them), then the furthest
+The receipt shows nothing for its first 400 ms (Send's ring covers them: on Send, the option
+tapped, or Approve once or Deny in Needs you, for as long as the request is in flight), then the furthest
 stage reached, each in-between stage for at least 400 ms; an outcome shows at once. When the
 stages stop: "Still sending…" after 3 s with nothing heard (and for a resend), "Sent · still
 waiting on *machine*" after 5 s, "Passed to the agent · not picked up yet" after 10 s; Up next
@@ -246,7 +247,11 @@ never stalls. A resend that meets the first copy in flight keeps its stage and a
 being delivered"; one held for a machine that isn't connected says "Waiting for *machine* · it
 goes when *machine* is back", with its ring still. The thresholds are `ReceiptTiming`. A screen
 reader hears each change once, prefixed "Reply" or "Answer", at most one a second (the later of
-two), never "Sending…", always the outcome. If the response is
+two), never "Sending…", always the outcome; that is kept by request, so the form, Needs you and
+the card's receipt after the question has gone share one timing and say each change once
+between them, said in a view that is on screen (a session's card while another is open leaves
+it to Needs you, or to itself once opened). From Send the line keeps the room the longest outcome needs (two lines in a box
+under 640 px wide, one above), so no stage moves the box. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported

@@ -119,13 +119,15 @@ export const receiptText = (d) => (d ? (d.more ? `${d.text} · ${d.more}` : d.te
 
 // What a request's receipt has been through, by request, kept apart from any one view: a question
 // card is drawn afresh on each update of its session, and the quiet window, the dwell, the stalls
-// and what was announced belong to the request, not to the drawing.
+// and what was announced belong to the request, not to the drawing: an announcement still waiting
+// out the rate limit when its view goes is said by the next view of the request, and the limit
+// carries over. said: what has been spoken; pending: what is to be, once the limit allows.
 const KEEP = 50;
 const histories = new Map();
 function historyFor(request, now) {
   let h = histories.get(request);
   if (!h) {
-    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, shown: null, said: new Set() };
+    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, shown: null, said: new Set(), pending: null, saidAt: -Infinity };
     histories.set(request, h);
     if (histories.size > KEEP) { histories.delete(histories.keys().next().value); }
   }
@@ -146,17 +148,17 @@ const QUIET = Object.freeze({ key: 'quiet', text: '', more: null, tone: 'quiet',
 
 // describe(entry, { stalled }): the words for the entry as it is now (describeReply,
 // describeAnswer). draw(d): puts them on the line when they change, or clears it (d null).
-// say(text): the announcement, rate-limited here.
+// say(text): the announcement, rate-limited here. heard(): whether say is heard now: a view not
+// drawn (a session's card while another is open) leaves the request's announcement to one that is,
+// such as Needs you, rather than saying it where nobody hears and so never at all.
 export class ReceiptClock {
   #entry = null;
   #timer = null;
   #drawn = undefined;
-  #pending = null;
   #sayTimer = null;
-  #saidAt = -Infinity;
 
-  constructor({ describe, draw, say = () => {}, now = () => Date.now(), timing = ReceiptTiming }) {
-    Object.assign(this, { describe, draw, say, now, timing });
+  constructor({ describe, draw, say = () => {}, heard = () => true, now = () => Date.now(), timing = ReceiptTiming }) {
+    Object.assign(this, { describe, draw, say, heard, now, timing });
   }
 
   show(entry) {
@@ -174,7 +176,7 @@ export class ReceiptClock {
     clearTimeout(this.#timer);
     this.#timer = null;
     const entry = this.#entry;
-    if (!entry) { this.#put(null, null); return; }
+    if (!entry) { this.#put(null); return; }
     const T = this.timing;
     const t = this.now();
     const h = historyFor(entry.request, t);
@@ -195,11 +197,13 @@ export class ReceiptClock {
     const d = this.describe(now, { stalled: due !== null && t >= due });
     let wake = due !== null && t < due ? due : null;
     if (t < h.start + T.quietMs) {
-      this.#put(QUIET, null);
+      this.#put(QUIET);
+      this.#announce(h);
       wake = h.start + T.quietMs;
     } else if (h.shown && h.shown.key !== d.key && h.shown.inFlight && t < h.shown.at + T.dwellMs) {
       // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
-      this.#put(h.shown.d, null);
+      this.#put(h.shown.d);
+      this.#announce(h);
       wake = Math.min(wake ?? Infinity, h.shown.at + T.dwellMs);
     } else {
       this.#show(h, d, t);
@@ -209,34 +213,34 @@ export class ReceiptClock {
 
   #show(h, d, t) {
     if (!h.shown || h.shown.key !== d.key) { h.shown = { key: d.key, at: t, d, inFlight: this.#entry.state === 'sending' || this.#entry.state === 'waiting' }; } else { h.shown.d = d; }
-    this.#put(d, h);
+    this.#put(d);
+    // Each change is said once for the request, however often a card is drawn again; of two
+    // inside the rate limit, the later replaces the earlier, unsaid.
+    if (d.speech && !h.said.has(d.speech)) { h.pending = d.speech; }
+    this.#announce(h);
   }
 
-  #put(d, h) {
+  #put(d) {
     const signature = d ? `${d.tone}|${d.mark}|${receiptText(d)}` : null;
     if (signature !== this.#drawn) {
       this.#drawn = signature;
       this.draw(d);
     }
-    // Each change is said once for the request, however often a card is drawn again.
-    if (h && d?.speech && !h.said.has(d.speech)) {
-      h.said.add(d.speech);
-      this.#announce(d.speech);
-    }
   }
 
-  #announce(text) {
-    this.#pending = text;
-    const wait = this.#saidAt + this.timing.announceGapMs - this.now();
-    if (wait <= 0) { this.#flush(); } else if (!this.#sayTimer) { this.#sayTimer = setTimeout(() => this.#flush(), wait); }
+  #announce(h) {
+    if (h.pending === null) { return; }
+    const wait = h.saidAt + this.timing.announceGapMs - this.now();
+    if (wait <= 0) { this.#flush(h); } else if (!this.#sayTimer) { this.#sayTimer = setTimeout(() => this.#flush(h), wait); }
   }
 
-  #flush() {
+  #flush(h) {
     this.#sayTimer = null;
-    if (this.#pending === null) { return; }
-    const text = this.#pending;
-    this.#pending = null;
-    this.#saidAt = this.now();
+    if (h.pending === null || !this.heard()) { return; }
+    const text = h.pending;
+    h.pending = null;
+    h.said.add(text);
+    h.saidAt = this.now();
     this.say(text);
   }
 }
@@ -258,3 +262,6 @@ export function drawReceipt(line, base, d, { enters = true } = {}) {
 // The line a screen reader hears the receipt on (ui.md §9): polite, and apart from the words on
 // screen, so each change is said once, prefixed by what it is about.
 export const receiptLive = () => h('span', { class: 'sr-only receipt-live', role: 'status', 'aria-live': 'polite' });
+
+// Whether a live line is drawn, so what it says is heard: one inside a hidden view has no boxes.
+export const drawn = (live) => live.getClientRects().length > 0;

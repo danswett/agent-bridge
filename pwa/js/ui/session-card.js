@@ -30,7 +30,7 @@ import { ago, duration, localTime } from './time.js';
 import { renderMarkdown } from '../markdown.js';
 import { sessionStatus, statusLabel } from '../status.js';
 import { QuestionPanel, describeAnswer, renderQuestion } from './question-view.js';
-import { drawReceipt } from './receipt.js';
+import { ReceiptClock, drawReceipt, drawn, receiptLive } from './receipt.js';
 import { answerability } from '../answers.js';
 import { ReplyBox } from './reply-view.js';
 import { EndSession } from './stop-view.js';
@@ -1398,16 +1398,28 @@ export class SessionCard {
   #watchReceipt({ service, hostId, sessionId }, question) {
     this.#dropReceipt();
     const questionId = question.id;
-    const element = h('p', { class: 'answer-receipt', role: 'status', 'aria-live': 'polite' });
-    const receipt = { element, final: false, unwatch: null, fresh: true };
+    // The line, and apart from it the one a screen reader hears it on (receipt.js).
+    const line = h('p', { class: 'answer-receipt' });
+    const live = receiptLive();
+    const element = h('div', { class: 'answer-receipt-slot' }, line, live);
+    // The same request's clock as the form's was: an answer the form left at Passed to the agent
+    // still stalls here, and a handoff inside the quiet window or a dwell still waits it out.
+    const clock = new ReceiptClock({
+      describe: (entry, { stalled }) => describeAnswer(entry, this.machineName, { question, stalled }),
+      draw: (d) => {
+        // Its words change as the answer goes, above a question that may stay: whatever they move counts.
+        this.#moves?.notOwn();
+        // "You answered · value" says whose answer it is; anything else says it is about the answer.
+        drawReceipt(line, 'answer-receipt', !d?.text || d.key === 'delivered' ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+      },
+      say: (text) => { live.textContent = text; },
+      heard: () => drawn(live),
+    });
+    const receipt = { element, final: false, unwatch: null, fresh: true, clock };
     const show = (entry) => {
       if (!entry) { return; }
-      // Its words change as the answer goes, above a question that may stay: whatever they move counts.
-      this.#moves?.notOwn();
-      const d = describeAnswer(entry, this.machineName, { question });
-      element.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
-      // "You answered · value" says whose answer it is; anything else says it is about the answer.
-      drawReceipt(element, 'answer-receipt', d.key === 'delivered' ? d : { ...d, text: `Your answer: ${d.text}` }, { enters: false });
+      line.dataset.answer = entry.state === 'done' ? entry.outcome : entry.state;
+      clock.show(entry);
       receipt.final = entry.state === 'done';
     };
     receipt.unwatch = service.watch(hostId, sessionId, questionId, show);
@@ -1417,6 +1429,7 @@ export class SessionCard {
 
   #dropReceipt() {
     this.#receipt?.unwatch?.();
+    this.#receipt?.clock.destroy();
     this.#receipt?.element.remove();
     this.#receipt = null;
   }

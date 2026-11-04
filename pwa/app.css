@@ -550,6 +550,7 @@ body[data-signed-in="false"] .content { padding-bottom: max(var(--ab-space-6), v
 /* In the text colour, not the outcome's: the role colours are checked against the card, not the
    Needs you fill, and the words say the outcome. */
 .needs-status { margin: 4px 0 0; font-size: .85rem; color: var(--ab-text); overflow-wrap: anywhere; }
+.needs-status.quiet { visibility: hidden; min-height: 1.5em; }
 @media (forced-colors: active) {
   .needs-you { border-color: Highlight; }
 }
@@ -1141,13 +1142,33 @@ summary {
 .answer-actions .button { min-width: 8em; }
 .answer-actions:not(:has(.button:not([hidden]))) { display: none; }
 .answer-error { color: var(--ab-danger-text); font-weight: 600; font-size: .92rem; margin: 8px 0 0; }
-.answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.answer-status, .answer-receipt { margin: 8px 0 0; font-size: .92rem; font-weight: 600; line-height: 1.4; display: flex; align-items: flex-start; gap: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .answer-status:empty { display: none; }
 .answer-status.progress::before, .answer-receipt.progress::before {
-  content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%;
+  content: ""; width: 12px; height: 12px; flex: none; border-radius: 50%; margin-block: calc((1.4em - 12px) / 2);
   border: 2px solid var(--ab-bridge); border-right-color: transparent; animation: spin 1s linear infinite;
 }
+/* From Send to the outcome the receipt keeps one height (ui.md §6.5): the room the longest
+   outcome needs, "Sent, but not confirmed. Check at machine before sending it again.", two lines
+   in a narrow box (a phone, or a pane narrowed by the inspector) and one in a wide one, so neither
+   a stage nor the outcome moves the box or the card's controls. A longer refusal may still grow. */
+form.reply, form.answer { container: receipt / inline-size; }
+.answer-status { min-height: 1.4em; }
+@container receipt (max-width: 639px) { .answer-status { min-height: 2.8em; } }
+/* Send's own ring (ui.md §5.3, Send and Answer): on the control that sent (Send, or the option
+   tapped, here and in Needs you), for as long as the request is in flight. The receipt's first
+   400 ms are its alone. */
+.reply .button.send[aria-busy="true"] { position: relative; }
+.reply .button.send[aria-busy="true"] > svg { visibility: hidden; }
+.reply .button.send[aria-busy="true"]::after,
+.answer[aria-busy="true"] .button.send:not([hidden])::after,
+.answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+.needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after {
+  content: ""; display: inline-block; flex: none; width: 12px; height: 12px; margin-inline-start: 8px; vertical-align: -2px;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin 1s linear infinite;
+}
+.reply .button.send[aria-busy="true"]::after { position: absolute; inset: 0; margin: auto; }
 /* The receipt (ui.md §6.5, #600, #617): in-flight words in text2 beside the Bridge ring, so
    Delivered, in Bridge with its check badge, stands out as the one good outcome. A request held
    on this device for a machine that isn't connected has its ring still, in text3: nothing moves. */
@@ -1157,10 +1178,9 @@ summary {
 .answer-status.warn, .answer-receipt.warn { color: var(--ab-needs-text); }
 .answer-status.bad, .answer-receipt.bad { color: var(--ab-danger-text); }
 .answer-receipt { padding: 8px 0; }
-/* Its first 400 ms say nothing (Send's ring covers them), and keep the line's height, so the
-   words that follow don't move what is below. */
-.answer-status.quiet:empty { display: flex; visibility: hidden; min-height: 1.4em; }
-.receipt-badge { width: 14px; height: 14px; flex: none; color: var(--ab-bridge); }
+/* Its first 400 ms say nothing (Send's ring covers them), and keep the line's height. */
+.answer-status.quiet:empty { display: flex; visibility: hidden; }
+.receipt-badge { width: 14px; height: 14px; flex: none; margin-block: calc((1.4em - 14px) / 2); color: var(--ab-bridge); }
 /* You answered · value: the value in text2. */
 .answer-status.ok .receipt-more, .answer-receipt.ok .receipt-more { color: var(--ab-text2); }
 @media (forced-colors: active) {
@@ -1170,11 +1190,19 @@ summary {
   .answer-status.progress::before, .answer-receipt.progress::before { forced-color-adjust: none; border-color: Highlight; border-right-color: transparent; }
   .answer-status.held::before, .answer-receipt.held::before { border-color: GrayText; border-right-color: transparent; }
   .receipt-badge { forced-color-adjust: none; color: Highlight; --ab-glyph-knockout: Canvas; }
+  .reply .button.send[aria-busy="true"]::after,
+  .answer[aria-busy="true"] .button.send:not([hidden])::after,
+  .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+  .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { forced-color-adjust: none; border-color: ButtonText; border-right-color: transparent; }
 }
 .question-changed { margin: 8px 0; padding: 4px 12px 10px; border: 1px dashed var(--ab-needs); border-radius: 10px; }
 .question-changed .button { margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .answer-status.progress::before, .answer-receipt.progress::before { animation: none; }
+  .reply .button.send[aria-busy="true"]::after,
+  .answer[aria-busy="true"] .button.send:not([hidden])::after,
+  .answer[aria-busy="true"] .choice[aria-pressed="true"]::after,
+  .needs-entry:is([data-answer="sending"], [data-answer="waiting"]) .button[aria-pressed="true"]::after { animation: none; }
 }
 
 /* ---- ending a session ---- */
