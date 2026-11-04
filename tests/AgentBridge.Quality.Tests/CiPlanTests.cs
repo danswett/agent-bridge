@@ -126,11 +126,29 @@ public class CiPlanTests
     // Skipped on main, or on a whole-ring pull request.
     [InlineData("github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration", "needs.plan.outputs.ha-integration")]
     [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration == 'true' && needs.plan.outputs.product == 'true'")]
+    // A bare read, or the index syntax, without the comparison the gate shape has.
+    [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration")]
+    [InlineData("|| needs.plan.outputs.ha-integration == 'true'", "|| needs['plan'].outputs['ha-integration'] == 'true'")]
     public void A_gated_job_whose_if_isnt_exactly_the_gate_shape_is_reported(string from, string to)
     {
         var problems = Check(Wired.Replace(from, to));
 
         Assert.Equal(["ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'"], problems);
+    }
+
+    [Fact]
+    public void A_job_reading_the_plan_bare_is_still_held_to_the_plans_jobs_and_outputs()
+    {
+        var problems = Check(Wired
+            .Replace("|| needs.plan.outputs.ha-integration == 'true'", "|| needs.plan.outputs.ha-integration")
+            .Replace("JOBS: product ha-integration", "JOBS: product")
+            .Replace("ha-integration: ${{ steps.select.outputs.ha-integration }}", ""));
+
+        Assert.Equal([
+            "ci.yml job ha-integration is gated on the plan, but its if: isn't exactly: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.ha-integration == 'true'",
+            "ci.yml job ha-integration is gated on the plan, but the plan's JOBS doesn't list it, so it would never run on a pull request",
+            "ci.yml plan has no output ha-integration",
+        ], problems);
     }
 
     [Fact]

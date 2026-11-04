@@ -21,8 +21,10 @@ static partial class CiPlan
     // Jobs that deliver rather than check, so quality-gate doesn't wait on them.
     static readonly HashSet<string> Delivery = new(StringComparer.Ordinal) { PublishGate, "publish", "attest", "relay-image-sarif" };
 
-    [GeneratedRegex(@"needs\.plan\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'true'")]
-    private static partial Regex GatedOn();
+    // Any read of the plan in a job's if:, in either property syntax and with or without a
+    // comparison: a bare needs.plan.outputs.x once escaped a match that wanted "== 'true'" (#523).
+    [GeneratedRegex(@"needs\s*(?:\.\s*plan\b|\[\s*['""]plan['""]\s*\])")]
+    private static partial Regex ReadsPlan();
     [GeneratedRegex(@"contains\(\s*fromJSON\(\s*env\.SUITES\s*\)\s*,\s*'([^']*)'\s*\)")]
     private static partial Regex SuiteTest();
     [GeneratedRegex(@"^needs\.quality-gate\.result == 'success'$")]
@@ -72,7 +74,7 @@ static partial class CiPlan
         foreach (var (id, job) in jobs)
         {
             var condition = Expression(Scalar(job, "if") ?? "");
-            if (!GatedOn().Matches(condition).Any(m => m.Groups[1].Value != WholeRing))
+            if (!ReadsPlan().IsMatch(condition))
                 continue;
             gated.Add(id);
             if (condition != GatedJobIf(id))
