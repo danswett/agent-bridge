@@ -772,6 +772,7 @@ tested yet (no Set up beside "Hooks registered…"), and a removal leaves it to 
   colour (the upper bound for that layer over dark Mica). Encoded white and transparent
   regression samples exercise that guard too; missing, blank or failed window captures fail
   the self-test. No capture-only page fill or bitmap recolouring is applied.
+  Its progress gallery (#600, ui.md §6.5) puts a reply and an answer through each receipt state against the demo host, which holds a request or picks its outcome for the gallery's sessions (`DemoHost.Script`): Send's ring in the quiet window, Still sending…, Send's check, a failed reply with Send again, a tapped option's ring, unconfirmed (the tapped option pressed, the rest disabled), busy and refused (every option again), and You answered for a tap, free text and a form. It checks each and saves `result.progress.<state>.<pass>.png` in light, dark, at the narrowest window and in high contrast.
   Last, it measures a live resize (#765): it resizes the window a step a frame, 8 px at a time, from 1560 px to
   400 and back, and keeps every interval between the UI thread's frames (`CompositionTarget.Rendering`) by the window's width
   class, once with the demo's own sessions and once with a window as heavy as a real one (16 more sessions, a conversation of

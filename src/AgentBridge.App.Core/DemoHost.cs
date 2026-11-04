@@ -63,6 +63,27 @@ public sealed partial class DemoHost : IAsyncDisposable
 
     public int Count { get { lock (gate) { return sessions.Count; } } }
 
+    // The self-test's progress gallery (ui.md §6.5): an answer or a reply to a scripted session
+    // gets what the script returns, not the demo's own handling, so each receipt state (held on its
+    // way, unconfirmed, busy, refused, failed) is drawn from a real request on a real channel. A
+    // script that throws fails the request, as a host's error does.
+    readonly Dictionary<string, Func<Task<object?>>> scripted = new(StringComparer.Ordinal);
+
+    public void Script(string sessionId, Func<Task<object?>>? outcome)
+    {
+        lock (gate)
+        {
+            if (outcome is null) { scripted.Remove(sessionId); }
+            else { scripted[sessionId] = outcome; }
+        }
+    }
+
+    Func<Task<object?>>? ScriptFor(string sessionId) { lock (gate) { return scripted.GetValueOrDefault(sessionId); } }
+
+    // A session added or changed, and one removed, as the host would send them (the gallery's).
+    public Task PutAsync(Session s) => Change(s);
+    public Task RemoveSessionAsync(string id) => RemoveAsync(id);
+
     // The protocol's example sessions, and three more: a question answered with one click, a
     // Copilot permission prompt, and a main agent with delegates, so every kind of card is on screen.
     public static IReadOnlyList<Session> Examples()
@@ -229,6 +250,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.SessionAnswer:
                 {
                     var r = data.Deserialize<AnswerRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
                     // As a host that offers sessions.progress says how far it has got (#598, #600).
                     var progress = r.Progress == true ? ServedRequest.Current : null;
                     progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
@@ -243,6 +265,7 @@ public sealed partial class DemoHost : IAsyncDisposable
             case Ops.SessionReply:
                 {
                     var r = data.Deserialize<ReplyRequest>(ProtocolJson.Options)!;
+                    if (ScriptFor(r.Id) is { } script) { return script(); }
                     var progress = r.Progress == true ? ServedRequest.Current : null;
                     progress?.Progress(new DeliveryProgress(DeliveryProgress.Received));
                     if (Replies.Check(r) is { } problem) { return Done(new ReplyResult(AnswerOutcome.Refused, problem)); }
@@ -667,6 +690,8 @@ public sealed partial class DemoHost : IAsyncDisposable
         if (finishes && next.Status == SessionStatus.Working)
         {
             await Task.Delay(3000);
+            // Removed meanwhile (the self-test's gallery cleans up after itself): it stays gone.
+            lock (gate) { if (!sessions.ContainsKey(next.Id)) { return; } }
             var done = DateTimeOffset.UtcNow;
             // The main agent wrote last: the top-level text is its own again. A few short blocks, so a
             // conversation's pictures show the space between them (#765).

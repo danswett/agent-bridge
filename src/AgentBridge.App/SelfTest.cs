@@ -372,6 +372,12 @@ static partial class SelfTest
             AppLog.Write("self-test: sign-in");
             await CheckSignIn(window, main, remote, Check, outFile);
             await CaptureSignIn(window, main, remote, Check, outFile);
+            // The receipt's states (ui.md §6.5) in each theme and at the narrowest width; high
+            // contrast's pass draws them too.
+            await ProgressPasses(window, main, demo, Check, outFile, result);
+            // The gallery's sessions are gone, and the one open with them: high contrast's pass
+            // draws the Sessions page as the theme passes did, a delegate in its strip and inspector.
+            await ShowADelegate(window, main, Check);
             // What was seen so far, written down first: a failure in high contrast that ends the
             // process (a XAML failure shows only as 0xC000027B) leaves the rest on record.
             await Write(outFile, result, checks, failures, "high contrast");
@@ -994,6 +1000,7 @@ static partial class SelfTest
             await PictureYoursInHighContrast(window, check, outFile);
             await PictureAgentRows(window, main, outFile, "highcontrast");
             await PictureRowsTheAppCantActOn(window, main, demo, outFile, [ElementTheme.Default]);
+            await ProgressGallery(window, main, demo, check, outFile, result, "highcontrast");
             var system = new[] { "SystemColorHighlightColor", "SystemColorHighlightTextColor", "SystemColorWindowTextColor", "SystemColorWindowColor", "SystemColorGrayTextColor", "SystemColorButtonFaceColor", "SystemColorButtonTextColor", "SystemColorHotlightColor" }
                 .Select(k => Application.Current.Resources.TryGetValue(k, out var c) && c is Windows.UI.Color colour ? colour.ToString() : null).OfType<string>().ToHashSet();
             var own = Design.DesignKeys.Brushes.Where(k => !(Application.Current.Resources.TryGetValue(k, out var b) && b is SolidColorBrush s && system.Contains(s.Color.ToString()))).ToList();
