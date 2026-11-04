@@ -61,7 +61,7 @@ public sealed class InteropTests : IDisposable
             await using var local = await LocalClient.ConnectAsync(LocalEndpoint.For(root), Patience);
             var hello = await local.HelloAsync();
             Assert.Equal(stack.HostDeviceId, hello.Machine.Id);
-            Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged], hello.Capabilities);
+            Assert.Equal([Capabilities.SessionsRead, Capabilities.SessionsPatch, Capabilities.HelloChanged, Capabilities.SessionsFocus], hello.Capabilities);
             Assert.Contains("Synthetic", hello.Machine.ReadOnly);
             await Assert.ThrowsAsync<HostErrorException>(() => local.CallAsync(HostOps.Stop));
             using var http = new HttpClient { Timeout = Patience };
