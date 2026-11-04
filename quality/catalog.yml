@@ -619,6 +619,19 @@ suites:
     where: relay.yml production, rollback
     status: exists
 
+  - id: ops-probe
+    kind: live
+    ring: 4
+    select: always
+    # Daily, read-only, outside in: production's health, CORS, push key, TLS certificate life and
+    # the DNS records its renewal needs (ops/alerts.md A-CERT, A-DNS). Problems go on one area:ops
+    # issue that closes itself when clean.
+    platforms: [linux-x64]
+    runner: hosted
+    command: pwsh ops/tools/relay-probe.ps1 (daily in ops-probe.yml; by hand, gh workflow run ops-probe.yml)
+    where: ops-probe.yml probe
+    status: exists
+
   # ---------------------------------------------------------------- spikes (kept honest, not product)
   - id: spikes
     kind: static

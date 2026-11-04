@@ -8,12 +8,12 @@ for each alert.
 
 | Runbook | Alerts |
 |---|---|
-| [relay-unavailable](relay-unavailable.md) | A-AVAIL, A-AVAIL-ORIGIN, A-READY, A-REPLICAS, A-5XX, A-CANARY |
+| [relay-unavailable](relay-unavailable.md) | A-AVAIL, A-REPLICAS, A-5XX, A-CANARY |
 | [relay-bad-deploy](relay-bad-deploy.md) | A-BAKE; any fault right after a relay deploy |
-| [relay-resources](relay-resources.md) | A-RESTART, A-MEM, A-CPU, A-SOCKETS, A-FORWARD, A-CANARY-SLOW |
+| [relay-resources](relay-resources.md) | A-RESTART, A-CRASHLOOP, A-MEM, A-CPU, A-SOCKETS, A-FORWARD, A-CANARY-SLOW |
 | [reconnect-storm](reconnect-storm.md) | A-STORM, A-RATELIMIT, A-REFUSALS |
 | [relay-dependencies](relay-dependencies.md) | A-ROSTER, A-BLOB, A-PUSH, A-SIGNIN |
-| [certificate-dns](certificate-dns.md) | A-CERT; A-AVAIL red while A-AVAIL-ORIGIN is green |
+| [certificate-dns](certificate-dns.md) | A-CERT, A-DNS; A-AVAIL red while the app's own name is healthy |
 | [security-events](security-events.md) | A-CHANGE; a key or token exposed |
 | [log-cap](log-cap.md) | A-LOGCAP |
 | [cost](cost.md) | A-BUDGET |

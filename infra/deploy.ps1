@@ -19,6 +19,7 @@ the app, then an Azure-managed certificate bound with SNI.
 ./infra/deploy.ps1 -WhatIf
 ./infra/deploy.ps1
 ./infra/deploy.ps1 -Production -ProductionImage abrelaywus2.azurecr.io/agent-bridge-relay@sha256:... -ProductionVersion <sha>
+./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <sha> -AlertEmail <address>   # first time with monitoring
 ./infra/deploy.ps1 -BaseOnly -SeedProductionFrom kv-abrelay-wus2   # a new stamp taking over another's keys
 #>
 [CmdletBinding()]
@@ -41,6 +42,10 @@ param(
     # Shared resources, identities, vaults and keys only; no apps. For a new stamp whose
     # registry has to receive an image before the apps can start.
     [switch]$BaseOnly,
+    # Where production alerts are emailed (modules/monitoring.bicep). Needed once: later runs
+    # reuse the address already in the action group. Never committed or written out; -WhatIf
+    # previews only in ways that can't print it (see below).
+    [string]$AlertEmail,
     [switch]$WhatIf
 )
 
@@ -115,6 +120,69 @@ $env:RELAY_PRODUCTION_IMAGE = $ProductionImage
 $env:RELAY_PRODUCTION_VERSION = $ProductionVersion
 $env:RELAY_DEPLOY_PRODUCTION = if ($Production) { 'true' } else { 'false' }
 $env:RELAY_OPERATOR = az ad signed-in-user show --query id -o tsv
+
+# Production's monitoring needs an address to send alerts to. A listing, not `show`, so a missing
+# action group is an empty answer rather than an error. The address stays in this process.
+$groupJson = az monitor action-group list --subscription $Subscription -g $ResourceGroup --query "[?name=='ag-agent-bridge-ops'] | [0].emailReceivers[].emailAddress" -o json
+$groupEmails = @(if ($groupJson -and $groupJson -ne 'null') { $groupJson | ConvertFrom-Json })
+$storedEmail = if ($groupEmails.Count -gt 0) { [string]$groupEmails[0] } else { $null }
+$env:RELAY_ALERT_EMAIL = if ($AlertEmail) { $AlertEmail } else { $storedEmail }
+if ($Production -and -not $env:RELAY_ALERT_EMAIL) {
+    Write-Host 'monitoring: no alert address yet, so production alerts, the availability test and the budget are skipped; pass -AlertEmail once'
+}
+
+# A budget's start date must fall in the current month when it's created, and can never change
+# afterwards. So it's the existing budget's date, or else the first of this month (UTC).
+$budgetLookupFailed = $false
+$budget = try {
+    $json = az consumption budget list --subscription $Subscription -g $ResourceGroup --query "[?name=='budget-agent-bridge-relay'] | [0]" -o json
+    if ($json -and $json -ne 'null') { $json | ConvertFrom-Json } else { $null }
+} catch { $budgetLookupFailed = $true; Write-Host "budget: couldn't list existing budgets ($($_.Exception.Message))"; $null }
+# Guessing this month's date for a budget that began earlier would ask Azure to change an
+# immutable start date and fail the deployment part-way, so a real production run stops here.
+if ($budgetLookupFailed -and $Production -and -not $WhatIf -and $env:RELAY_ALERT_EMAIL) {
+    throw "budget: couldn't confirm the existing budget's start date; re-run once 'az consumption budget list' works"
+}
+$existingStart = if ($budget -and $budget.PSObject.Properties['timePeriod']) { $budget.timePeriod.startDate } else { $null }
+$env:RELAY_BUDGET_START = if ($existingStart) { ([datetime]$existingStart).ToUniversalTime().ToString('yyyy-MM-dd') } else { [datetime]::UtcNow.ToString('yyyy-MM-01') }
+# True only if the stored resources already hold exactly what the template would write for the
+# address: the action group's single email receiver, and the budget's four notifications (the
+# names in modules/monitoring.bicep) each with that one contact. Any other shape is false.
+function Test-AddressUnchanged([string]$target) {
+    if ($groupEmails.Count -ne 1 -or [string]$groupEmails[0] -cne $target) { return $false }
+    if (-not $budget -or -not $budget.PSObject.Properties['notifications'] -or -not $budget.notifications) { return $false }
+    $notes = @($budget.notifications.PSObject.Properties)
+    $expected = 'actual50', 'actual80', 'actual100', 'forecast100'
+    if ($notes.Count -ne $expected.Count) { return $false }
+    foreach ($n in $notes) {
+        if ($n.Name -notin $expected) { return $false }
+        $v = $n.Value
+        if (-not $v -or -not $v.PSObject.Properties['contactEmails']) { return $false }
+        $emails = @($v.contactEmails)
+        if ($emails.Count -ne 1 -or [string]$emails[0] -cne $target) { return $false }
+    }
+    return $true
+}
+
+# what-if prints each resource's predicted properties, and a changed property's old value too, and
+# masks only what Azure marks secret: an email address isn't. So the address may appear in a
+# preview only where it can't be printed:
+# - both lookups succeeded and found nothing: preview with a placeholder, the only address shown;
+# - both exist, and every stored copy is exactly the address being applied, in the shape the
+#   template writes (Test-AddressUnchanged): preview with it, so no address property changes and
+#   what-if prints no address;
+# - anything else (a new address, copies that differ, one resource missing, a budget lookup that
+#   failed): leave monitoring out of the preview. A failed action group lookup stops the script.
+if ($WhatIf -and $Production -and $env:RELAY_ALERT_EMAIL) {
+    $target = $env:RELAY_ALERT_EMAIL
+    $unchanged = Test-AddressUnchanged $target
+    if (-not $budgetLookupFailed -and $groupEmails.Count -eq 0 -and -not $budget) { $env:RELAY_ALERT_EMAIL = 'alerts@example.invalid' }
+    elseif (-not $budgetLookupFailed -and $unchanged) { $env:RELAY_ALERT_EMAIL = $target }
+    else {
+        $env:RELAY_ALERT_EMAIL = ''
+        Write-Host 'monitoring: left out of this preview, which could otherwise print the alert address (a new or differing address, a missing resource, or a failed lookup); the real run applies it'
+    }
+}
 foreach ($kind in 'staging', 'production') {
     $var = "RELAY_$($kind.ToUpperInvariant())_DEPLOYER"
     if (-not (Get-Item "env:$var" -ErrorAction SilentlyContinue)) {

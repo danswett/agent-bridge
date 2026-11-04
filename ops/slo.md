@@ -9,7 +9,7 @@ how fast we change things: while there's budget, ship; once it's spent, ship onl
 
 | # | SLI (what is measured) | Source | SLO (28 days) | Budget | Status |
 |---|---|---|---|---|---|
-| S1 | **Relay availability:** successful `/healthz` checks ÷ all checks, from 5 locations every 5 min, on `relay.bad-duck.com` | Availability tests (ALR-2, #573) | **99.5%** | about 3 h 22 min | Planned |
+| S1 | **Relay availability:** successful `/healthz` checks ÷ all checks, from 3 locations every 10 min, on `relay.bad-duck.com` | Availability test `wt-relay-healthz` (#573) | **99.5%** | about 3 h 22 min | Built (the test); reporting planned |
 | S2 | **End to end:** canary echoes completed ÷ attempted, every 5 min (presence, channel echo, 1 MiB blob) | Synthetic canary (SYN-1, #576) | **99%** | about 6 h 43 min | Planned |
 | S3 | **Round-trip latency:** canary echo round trip | Canary | **p95 < 500 ms**, p99 < 1 s, in 99% of 1-hour windows | 7 bad hours | Planned |
 | S4 | **Forward latency:** in-node receive-to-send time | `relay.forward.duration` (OBS-1, #569) | **p99 ≤ 5 ms** (design §5.8) | n/a: an objective, alerted on breach | Planned |

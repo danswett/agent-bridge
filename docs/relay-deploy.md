@@ -247,6 +247,52 @@ hostname on the app (pass 2), then issues the managed certificate and binds it w
 Moving the record, proxying it, or deleting the TXT makes renewal fail silently until the
 certificate expires (the current one: 2027-04-29). Check with
 `az containerapp env certificate list --subscription 0e38f344-908e-4ff3-88ac-4d499a1f51f8 -g rg-agent-bridge-relay -n cae-agent-bridge-relay-wus2 --managed-certificates-only -o table`.
+`ops-probe.yml` checks both records and the certificate's remaining life once a day, and opens
+an issue if they drift ([Monitoring](#monitoring)).
+
+## Monitoring
+
+Production's alerts, its availability test and the resource group's budget are in
+`infra/modules/monitoring.bicep`. Each alert's meaning and runbook are in
+[ops/alerts.md](../ops/alerts.md). Everything goes by email to one action group,
+`ag-agent-bridge-ops`, and nothing pages at night (owner, #568).
+
+| Resource | What it watches |
+|---|---|
+| `ag-agent-bridge-ops` | The action group: one email receiver. Its address is never in the repository |
+| `appi-agent-bridge-relay-wus2` | Application Insights, workspace-based (in the stamp's Log Analytics) |
+| `wt-relay-healthz` | `https://relay.bad-duck.com/healthz` every 10 min, from West US, East US and West Europe. It must answer `"ok":true` with a valid certificate. Alert A-AVAIL fires when 2 of 3 locations fail within 15 min |
+| Metric alerts on `agent-bridge-relay` | Replicas (A-REPLICAS), restarts (A-RESTART, A-CRASHLOOP), memory (A-MEM), CPU (A-CPU), 5xx count (A-5XX) |
+| `budget-agent-bridge-relay` | $40 a month on the whole resource group. Emails at 50%, 80% and 100% actual, and 100% forecast |
+| `ops-probe.yml` (GitHub, daily) | The certificate's remaining life (A-CERT), the CNAME and `asuid` TXT (A-DNS), health, CORS and the push key. Problems go on one `area:ops` issue, which closes itself when clean (not on a run whose DNS lookups couldn't complete) |
+
+It's applied with production, like any infra change (a person, not CI). The first time, pass the
+address alerts go to; later runs reuse the one in the action group:
+
+```powershell
+./infra/deploy.ps1 -WhatIf -Production -ProductionImage <running digest> -ProductionVersion <sha> -AlertEmail <address>
+./infra/deploy.ps1 -Production -ProductionImage <running digest> -ProductionVersion <sha> -AlertEmail <address>
+```
+
+Without an address, `deploy.ps1 -Production` says monitoring was skipped and changes nothing
+else. A `-WhatIf` preview is built so it can't print the address. What-if shows each resource's
+predicted properties, and a changed property's old value, and Azure doesn't mask an email
+address. The action group and the budget each keep a copy. So:
+- if both lookups succeed and find neither resource, the preview uses the placeholder
+  `alerts@example.invalid`;
+- if both exist and already hold exactly what the template writes (the action group's single
+  receiver, and each of the budget's four notifications with that one contact, case and all),
+  the preview uses it, and no address property shows as changed;
+- otherwise (a new or differing address, an extra or missing copy, one resource missing, or a
+  failed budget lookup), monitoring is left out of the preview, with a message, and the real
+  run applies it. A failed action group lookup stops the script.
+
+The budget's start date can't change once the budget exists, and must be in the current month
+when it's created, so `deploy.ps1` passes the existing budget's date, or the first of this month. If it can't list budgets, a real production run stops rather than guess.
+
+Cost: about $6.50 a month for the availability test ($0.0005 a run, 3 locations every 10 min);
+alert rules and the action group's emails cost cents. Availability results go into the
+workspace, a few MB a day against its 0.1 GB daily cap.
 
 ## History
 
@@ -502,7 +548,8 @@ West US 2 consumption prices; the subscription's monthly free grant is 180,000 v
 | Requests (sign-in, health; probes are free) | $0 | $0 |
 | Egress (first 100 GB/month free) | $0 | ≈ $0 (about 25 GB/month at §5.9's 3-client rate) |
 | Blob store, 2 accounts: hot LRS, blobs kept 1–2 days, no fixed cost; large attachments and session transfers, each deleted once fetched | < $0.05 | ≈ $0.10–2 (storage ≈ $0.06 for ≈ 3 GB held; writes ≈ $0.05; the rest is downloads to hosts, free inside the 100 GB with the relay's egress, ≈ $0.087/GB past it) |
-| **Total** | **≈ $19/month** | **≈ $19–22/month** |
+| Monitoring ([above](#monitoring)): one availability test, alert rules, emails | ≈ $6.50 | ≈ $6.50 |
+| **Total** | **≈ $25/month** | **≈ $26–29/month** |
 
 Levers when it matters: GHCR instead of ACR saves the $5 registry; a second region is
 another ≈ $14; the next step up is 0.5 vCPU / 1 GiB (≈ $34) for tens of thousands of sockets.

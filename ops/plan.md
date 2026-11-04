@@ -73,7 +73,7 @@ The full definitions are in [slo.md](slo.md). In short, over 28 days:
 
 | SLO | Target | Measured by |
 |---|---|---|
-| Relay availability | 99.5% (about 3.4 h of downtime) | Availability tests on `/healthz` from 5 locations (ALR-2) |
+| Relay availability | 99.5% (about 3.4 h of downtime) | The availability test on `/healthz`, 3 locations every 10 min (#573) |
 | End-to-end round trip | 99% of canary echoes complete, p95 < 500 ms | Synthetic canary (SYN-1) |
 | Forward latency | p99 in-node forward ≤ 5 ms | `relay.forward.duration` (OBS-1), design §5.8's target |
 | Deploy recovery | Devices back within 3 min of a relay deploy, every deploy | The bake (DEP-1) |
@@ -167,13 +167,20 @@ Thresholds are in [alerts.md](alerts.md).
 
 ### 5.3 Outside-in availability ([#573](https://github.com/danswett/agent-bridge/issues/573))
 
-Application Insights standard tests run every 5 min from 5 locations against `/healthz` and
-`/readyz`, on both the custom domain and the `azurecontainerapps.io` name. Comparing the two
-tells a DNS or certificate fault from an app fault. The SSL check covers the risk
-docs/relay-deploy.md flags: if the Cloudflare record is moved, proxied, or loses its `asuid`
-TXT, the managed certificate's renewal fails silently.
-[tools/relay-probe.ps1](tools/relay-probe.ps1) runs the same checks by hand, plus the DNS
-records themselves.
+Built in two parts, shaped by cost: a standard availability test costs $0.0005 a run, so five
+locations every five minutes would cost about $22 a month against a $40 budget.
+- **Availability (A-AVAIL):** one Application Insights standard test against
+  `https://relay.bad-duck.com/healthz`, every 10 min from three locations (West US, East US, West
+  Europe). It goes through DNS, the certificate and ingress, as a device does. That's about $6.50
+  a month. The alert fires when 2 of 3 locations fail within 15 min.
+- **Certificate and DNS drift (A-CERT, A-DNS):** once a day, `ops-probe.yml` runs
+  [tools/relay-probe.ps1](tools/relay-probe.ps1) against production. It checks the certificate's
+  remaining life, the CNAME, and the `asuid` TXT value its renewal depends on
+  (docs/relay-deploy.md warns renewal fails silently if the Cloudflare record is moved, proxied, or
+  loses its TXT). Problems go on one `area:ops` issue that closes itself when clean.
+
+Separate tests on the `azurecontainerapps.io` name and `/readyz` are deferred, for cost. The
+probe checks both by hand in an incident.
 
 ### 5.4 Dependency and abuse alerts ([#574](https://github.com/danswett/agent-bridge/issues/574))
 

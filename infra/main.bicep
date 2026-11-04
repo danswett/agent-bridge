@@ -69,6 +69,19 @@ param stagingDomainState string = 'none'
 @description('Object id of the person running deploy.ps1, who seeds the vaults\' secrets.')
 param operatorPrincipalId string = ''
 
+@description('Where production alerts are emailed (modules/monitoring.bicep). Empty: no monitoring is deployed. Never committed: infra/deploy.ps1 passes it.')
+@secure()
+param alertEmail string = ''
+
+@description('Application Insights resource for production\'s availability test, and later its metrics (#569).')
+param appInsightsName string = ''
+
+@description('Monthly budget for the resource group, in USD (owner, #568).')
+param budgetAmount int = 40
+
+@description('First day of the budget\'s first month (yyyy-MM-dd). It must be in the current month when the budget is created and can\'t change later, so infra/deploy.ps1 passes the existing budget\'s date or the first of this month. Empty: no budget.')
+param budgetStartDate string = ''
+
 var tags = {
   'agent-bridge-stamp': 'relay'
   'agent-bridge-size': size
@@ -191,6 +204,23 @@ module productionApp 'modules/relay-app.bicep' = {
     tags: union(tags, { 'agent-bridge-env': 'production' })
   }
   dependsOn: [environment]
+}
+
+// Production's alerts, availability test and budget (ops/alerts.md). With production, like the
+// app itself, and only once there's an address to send alerts to.
+module monitoring 'modules/monitoring.bicep' = if (deployApps && deployProduction && !empty(alertEmail) && !empty(appInsightsName)) {
+  name: 'relay-monitoring'
+  params: {
+    location: location
+    alertEmail: alertEmail
+    productionAppName: production.name
+    productionHostname: production.?customDomain ?? productionApp.outputs.fqdn
+    workspaceId: logs.id
+    appInsightsName: appInsightsName
+    budgetAmount: budgetAmount
+    budgetStartDate: budgetStartDate
+    tags: union(tags, { 'agent-bridge-env': 'production' })
+  }
 }
 
 output stagingFqdn string = stagingApp.outputs.fqdn
