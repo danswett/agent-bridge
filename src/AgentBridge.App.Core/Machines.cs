@@ -471,6 +471,9 @@ public sealed class RelayFleetLink : IFleetLink
     readonly Func<bool> claim;
     readonly CancellationTokenSource stop = new();
     readonly SemaphoreSlim poke = new(0);
+    // Hosts' keys from earlier channels, kept across relay connections, so a reconnect after sleep
+    // opens each with IK and has its hello answered in the handshake (#603).
+    readonly KnownResponders responders = new();
     Task loop = Task.CompletedTask;
     volatile Current? current;
     volatile StateNow state = new(FleetState.SignedOut, null);
@@ -593,7 +596,7 @@ public sealed class RelayFleetLink : IFleetLink
             {
                 Set(FleetState.Connecting, null);
                 await using var relay = await RelayClient.ConnectAsync(relayUri, a.Token, key, name, "app", ct);
-                var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options };
+                var hub = new ChannelHub(relay, key, name, "app") { JsonOptions = ProtocolJson.Options, KnownPeers = responders };
                 relay.PresenceChanged += _ => Changed?.Invoke();
                 current = new Current(relay, hub, a.AccountId);
                 Set(FleetState.Connected, $"as {relay.Login}");
@@ -689,7 +692,10 @@ public sealed class RelayFleetLink : IFleetLink
             // A host too old to name its run in hello is known by nothing better than this channel:
             // the relay's presence can arrive out of order, so when it joined could name the run
             // before a restart, and a lost launch would go to the new one too.
-            return new RelayClientChannel(c.Hub, await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15)).WaitAsync(ct));
+            // HostConnection's hello goes first, as LocalClient.HelloAsync sends it (data {}): a host
+            // that takes it early answers it in the handshake (#603). Asked any other way, it is
+            // sent once open as before.
+            return new RelayClientChannel(c.Hub, await c.Hub.OpenAsync(hostId, TimeSpan.FromSeconds(15), new EarlyRequest(Ops.Hello, new { })).WaitAsync(ct));
         }
         // Whatever ends a handshake (ChannelHub.EndsChannel: a malformed introduction too) is the
         // machine not answering for now; the connection loop tries again rather than stopping.

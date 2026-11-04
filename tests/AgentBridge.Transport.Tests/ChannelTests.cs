@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -44,6 +45,105 @@ public class ChannelTests
         Assert.Equal(("app-b", "app"), (other.PeerName, other.PeerKind));
         Assert.Equal(ch.HandshakeHash, other.HandshakeHash);
         Assert.True(ch.IsOpen && other.IsOpen);
+    }
+
+    // Round trips between the opener and the host until the first request is answered, from the
+    // frames the relay forwarded: each run of frames one way is a flight, and two flights a round
+    // trip. The relay's own admission (relay hello, proof) comes before and is not counted here.
+    static int RoundTrips(IEnumerable<string> senders)
+    {
+        var flights = 0;
+        string? last = null;
+        foreach (var from in senders)
+        {
+            if (from != last) { flights++; }
+            last = from;
+        }
+        return (flights + 1) / 2;
+    }
+
+    // #603: a client reconnecting (the PWA reopened, the app after sleep) opened every channel
+    // with XX, then asked hello: two round trips before anything. To a host it has opened a
+    // channel with before, IK carries the hello and its answer in one.
+    [Fact]
+    public async Task A_host_known_from_an_earlier_channel_is_opened_with_IK_and_answers_the_first_request_in_one_round_trip()
+    {
+        var senders = new ConcurrentQueue<string>();
+        var (relay, host, app) = await PairAsync(o =>
+        {
+            var tap = o.Tap;
+            o.Tap = (from, to, payload) => { tap?.Invoke(from, to, payload); senders.Enqueue(from); };
+        });
+        await using var _ = relay;
+        host.Hub.EarlyOps = ["ping"];
+        app.Hub.KnownPeers = new KnownResponders();
+
+        async Task<(int RoundTrips, SecureChannel Channel)> FirstAnswerAsync()
+        {
+            senders.Clear();
+            var ch = await app.Hub.OpenAsync(host.Id, early: new EarlyRequest("ping"));
+            var reply = await ch.RequestAsync("ping");
+            Assert.True(reply.GetProperty("ok").GetBoolean(), reply.GetRawText());
+            Assert.True(reply.GetProperty("result").GetProperty("at").GetInt64() > 0);
+            var trips = RoundTrips([.. senders]);
+            await app.Hub.CloseAsync(ch);
+            return (trips, ch);
+        }
+
+        var cold = await FirstAnswerAsync();
+        var warm = await FirstAnswerAsync();
+
+        Assert.IsType<XXHandshake>(cold.Channel.Handshake);
+        Assert.Equal(2, cold.RoundTrips);
+        Assert.IsType<IKHandshake>(warm.Channel.Handshake);
+        Assert.Equal(1, warm.RoundTrips);
+        Assert.Equal(host.Id, Wire.DeviceId(warm.Channel.PeerStatic!));
+        Assert.Equal(("host-a", "host"), (warm.Channel.PeerName, warm.Channel.PeerKind));
+    }
+
+    [Fact]
+    public async Task An_opener_whose_IK_goes_unanswered_opens_with_XX_instead_and_forgets_the_key()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        app.Hub.KnownPeers = new KnownResponders();
+        app.Hub.IkPatience = TimeSpan.FromMilliseconds(500);
+        await app.Hub.CloseAsync(await app.Hub.OpenAsync(host.Id));
+        Assert.NotNull(app.Hub.KnownPeers.Find(host.Id));
+        // As an older host, put back: it ignores IK's first message.
+        host.Hub.AcceptsIk = false;
+
+        var ch = await app.Hub.OpenAsync(host.Id, TimeSpan.FromSeconds(10));
+
+        Assert.IsType<XXHandshake>(ch.Handshake);
+        Assert.True((await ch.RequestAsync("ping")).GetProperty("ok").GetBoolean());
+        Assert.Null(app.Hub.KnownPeers.Find(host.Id));
+    }
+
+    // IK's first message is encrypted only to the host's static key, and a relay can replay it:
+    // what it asks is run from it only where the host said so (EarlyOps), whatever an opener claims.
+    [Fact]
+    public async Task A_first_request_the_host_does_not_take_early_is_run_only_once_the_channel_is_open()
+    {
+        var (relay, host, app) = await PairAsync();
+        await using var _ = relay;
+        host.Hub.EarlyOps = ["ping"];
+        var echoed = new ConcurrentQueue<bool>();
+        host.Hub.Handler = (ch, op, data) =>
+        {
+            if (op == "echo") { echoed.Enqueue(ch.IsOpen); }
+            return TestRelay.Demo(op, data);
+        };
+        app.Hub.KnownPeers = new KnownResponders();
+        await app.Hub.CloseAsync(await app.Hub.OpenAsync(host.Id));
+        app.Hub.KnownPeers.Learn(host.Id, host.Key.Public, ["echo"]);
+
+        var ch = await app.Hub.OpenAsync(host.Id, early: new EarlyRequest("echo", new { text = "once" }));
+        var reply = await ch.RequestAsync("echo", new { text = "once" });
+
+        Assert.IsType<IKHandshake>(ch.Handshake);
+        Assert.Equal("once", reply.GetProperty("result").GetProperty("text").GetString());
+        Assert.Equal(new[] { true }, echoed);
     }
 
     [Fact]

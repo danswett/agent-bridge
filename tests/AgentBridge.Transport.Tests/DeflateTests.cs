@@ -98,8 +98,7 @@ public class DeflateTests
         if (!inflates)
         {
             // As an app from before: its introduction does not say it inflates.
-            typeof(ChannelHub).GetField("intro", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-                .SetValue(app.Hub, JsonSerializer.SerializeToUtf8Bytes(new { name = "app-b", kind = "app" }));
+            app.Hub.SaysInflates = false;
         }
         var ch = await app.Hub.OpenAsync(host.Id);
         var text = Sessions(60);

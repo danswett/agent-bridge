@@ -26,7 +26,7 @@
 // snapshot it asks for again is whole. Nothing is sent to a stale machine (route() is null, the one
 // gate every send goes through) until a channel opened since has delivered a whole snapshot.
 import { HostClient } from './host-client.js';
-import { Capabilities, PROTOCOL_VERSION } from './protocol.js';
+import { Capabilities, Ops, PROTOCOL_VERSION } from './protocol.js';
 import { SessionsStore } from './sessions-store.js';
 import { UNSUPPORTED_SESSIONS } from './brand.js';
 
@@ -440,7 +440,8 @@ export class HostSession {
     const stale = () => this.#links.get(link.id) !== link || link.attempt !== attempt;
     let client;
     try {
-      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal });
+      // hello goes first: a host that takes it early answers it in the handshake (#603).
+      const channel = await this.connection.openChannel(link.id, { signal: attempt.abort?.signal, early: { op: Ops.hello, data: {} } });
       if (stale()) { channel.close(); return; }
       client = this.makeClient(channel, link.store);
       link.channel = channel;

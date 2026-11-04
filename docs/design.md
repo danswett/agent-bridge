@@ -414,7 +414,9 @@ any cloud component.
 
 **Noise `XX` handshake with P-256 ECDH, AES-256-GCM and SHA-256**, with each side's
 static key pinned from pairing (`IK` once the peer is known), run inside
-WebSocket/pipe frames.
+WebSocket/pipe frames. IK is in from #603: an opener that learned a host's key from an earlier XX
+opens its next channel with IK, and the host answers `hello` in IK's reply, so a reconnecting
+client is answered one round trip sooner ([v1-sessions.md](protocol/v1-sessions.md#opening-a-channel-xx-or-ik)).
 
 Why this specific suite:
 

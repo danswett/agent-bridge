@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace AgentBridge.Transport;
 
@@ -12,7 +14,8 @@ public sealed class ChannelHub
 {
     readonly RelayClient relay;
     readonly P256KeyPair key;
-    readonly byte[] intro;
+    readonly string name;
+    readonly string kind;
     readonly ConcurrentDictionary<(string Peer, ulong Id), SecureChannel> channels = new();
 
     // Serves a peer's request: (channel, op, data) -> result. Null means no service, and
@@ -43,12 +46,28 @@ public sealed class ChannelHub
     public int ChannelCount => channels.Count;
     public RelayClient Relay => relay;
 
+    // IK (#603). As a responder: whether a channel may open with IK, said in this hub's
+    // introductions so an opener knows to try it. As an opener: the responders' keys learned from
+    // them, kept by the owner across relay connections (a reconnect makes a new hub); null opens
+    // every channel with XX.
+    public bool AcceptsIk { get; set; } = true;
+    public KnownResponders? KnownPeers { get; set; }
+    // The ops this hub answers from an IK first message, before the opener has proved it is live:
+    // only what is safe to run again, since a relay can replay that message. Answered after the
+    // same PeerAllowed check as any request.
+    public IReadOnlyCollection<string> EarlyOps { get; set; } = [];
+    // How long an IK opening waits for its answer before trying XX instead: a responder that no
+    // longer takes IK (an older version put back) ignores it.
+    public TimeSpan IkPatience { get; set; } = TimeSpan.FromSeconds(5);
+    // Off only for a test playing a peer from before deflate.
+    internal bool SaysInflates { get; set; } = true;
+
     public ChannelHub(RelayClient relay, P256KeyPair key, string name, string kind, Func<SecureChannel, bool>? peerAllowed = null)
     {
         this.relay = relay;
         this.key = key;
-        // deflate: this hub inflates messages (MessageDeflate), so its peers may send them deflated.
-        intro = JsonSerializer.SerializeToUtf8Bytes(new { name, kind, deflate = true });
+        this.name = name;
+        this.kind = kind;
         PeerAllowed = peerAllowed;
         relay.OnData = OnDataAsync;
         relay.PresenceChanged += DropAbsent;
@@ -147,19 +166,95 @@ public sealed class ChannelHub
             new XXHandshake(initiator, key, initiator ? Prologue(id, relay.DeviceId, peerId) : Prologue(id, peerId, relay.DeviceId)),
             Math.Max(1, EventBufferCapacity));
 
-    public async Task<SecureChannel> OpenAsync(string peerId, TimeSpan? timeout = null)
+    static ulong NewId() => BinaryPrimitives.ReadUInt64BigEndian(RandomNumberGenerator.GetBytes(8));
+
+    // What this device says of itself in a handshake. A responder adds which ops it answers from
+    // an IK first message when it takes IK at all (ik), and, in an IK reply, its answer (early).
+    byte[] Intro(bool responder, JsonNode? early = null)
     {
-        var id = BinaryPrimitives.ReadUInt64BigEndian(RandomNumberGenerator.GetBytes(8));
+        var o = new JsonObject();
+        // Left out when unset, which only a test playing a peer that introduces itself wrongly does.
+        if (name is not null) { o["name"] = name; }
+        if (kind is not null) { o["kind"] = kind; }
+        // This hub inflates messages (MessageDeflate), so its peers may send them deflated.
+        if (SaysInflates) { o["deflate"] = true; }
+        if (responder && AcceptsIk) { o["ik"] = new JsonArray([.. EarlyOps.Select(op => (JsonNode?)JsonValue.Create(op))]); }
+        if (early is not null) { o["early"] = early; }
+        return Encoding.UTF8.GetBytes(o.ToJsonString());
+    }
+
+    // early: the request the caller will make first (hello). To a responder that takes it early
+    // the IK first message carries it, and the reply its answer: the channel's first request, if it
+    // is exactly that, needs no round trip of its own. Otherwise it is only sent once open.
+    public async Task<SecureChannel> OpenAsync(string peerId, TimeSpan? timeout = null, EarlyRequest? early = null)
+    {
+        var limit = timeout ?? TimeSpan.FromSeconds(15);
+        if (KnownPeers is { } cache && cache.Find(peerId) is { } known)
+        {
+            var started = Stopwatch.GetTimestamp();
+            try { return await OpenIkAsync(peerId, known, early, limit < IkPatience ? limit : IkPatience); }
+            // Whatever the reason (unanswered, the responder closing it, a reply that does not
+            // decrypt), XX finds out afresh and learns the key again if it still holds.
+            catch (Exception e) when (e is TimeoutException || EndsChannel(e) || e is IOException)
+            {
+                cache.Forget(peerId, known);
+            }
+            limit -= Stopwatch.GetElapsedTime(started);
+            if (limit <= TimeSpan.Zero) { throw new TimeoutException("the peer did not answer"); }
+        }
+        return await OpenXxAsync(peerId, limit);
+    }
+
+    async Task<SecureChannel> OpenXxAsync(string peerId, TimeSpan timeout)
+    {
+        var id = NewId();
         var ch = NewChannel(peerId, id, true);
         channels[(peerId, id)] = ch;
         try
         {
             await SendAsync(ch, ChannelKind.Msg1, ch.Handshake.WriteMessage([]));
-            await ch.Ready.Task.WaitAsync(timeout ?? TimeSpan.FromSeconds(15));
+            await ch.Ready.Task.WaitAsync(timeout);
             return ch;
         }
         catch (Exception e)
         {
+            Forget(ch, e);
+            throw;
+        }
+    }
+
+    async Task<SecureChannel> OpenIkAsync(string peerId, KnownResponders.Responder known, EarlyRequest? early, TimeSpan timeout)
+    {
+        var id = NewId();
+        var ch = new SecureChannel(this, peerId, id, true, new IKHandshake(true, key, Prologue(id, relay.DeviceId, peerId), known.Static), Math.Max(1, EventBufferCapacity));
+        JsonNode? asked = null;
+        if (early is not null && known.Early.Contains(early.Op))
+        {
+            ch.ExpectEarly(early.Op, early.Data);
+            asked = new JsonObject { ["op"] = early.Op };
+            // Omitted rather than null, as a request without data is sent.
+            if (JsonNode.Parse(ch.EarlyData!) is { } data) { asked["data"] = data; }
+        }
+        channels[(peerId, id)] = ch;
+        try
+        {
+            var first = Intro(false, asked);
+            // Too large to go first: sent as an ordinary request once open.
+            if (asked is not null && first.Length + NoiseConst.PubLen * 2 + NoiseConst.TagLen * 2 > NoiseConst.MaxMessage)
+            {
+                ch.DropEarly();
+                first = Intro(false);
+            }
+            await SendAsync(ch, ChannelKind.IkMsg1, ch.Handshake.WriteMessage(first));
+            await ch.Ready.Task.WaitAsync(timeout);
+            return ch;
+        }
+        catch (Exception e)
+        {
+            // The responder may answer after all: told to let go of it rather than keep it until
+            // this device leaves presence.
+            try { await SendAsync(ch, ChannelKind.Close, []); }
+            catch (Exception) { }
             Forget(ch, e);
             throw;
         }
@@ -202,17 +297,34 @@ public sealed class ChannelHub
                     ch = NewChannel(from, id, false);
                     channels[(from, id)] = ch;
                     ch.Handshake.ReadMessage(body);
-                    await SendAsync(ch, ChannelKind.Msg2, ch.Handshake.WriteMessage(intro));
+                    await SendAsync(ch, ChannelKind.Msg2, ch.Handshake.WriteMessage(Intro(true)));
                     break;
-                case ChannelKind.Msg2 when ch is { Initiator: true }:
-                    ReadIntro(ch, ch.Handshake.ReadMessage(body));
-                    await SendAsync(ch, ChannelKind.Msg3, ch.Handshake.WriteMessage(intro));
+                case ChannelKind.Msg2 when ch is { Initiator: true, Handshake: XXHandshake }:
+                    Learn(ch, ReadIntro(ch, ch.Handshake.ReadMessage(body)));
+                    await SendAsync(ch, ChannelKind.Msg3, ch.Handshake.WriteMessage(Intro(false)));
                     ch.Ready.TrySetResult();
                     break;
-                case ChannelKind.Msg3 when ch is { Initiator: false }:
+                case ChannelKind.Msg3 when ch is { Initiator: false, Handshake: XXHandshake }:
                     ReadIntro(ch, ch.Handshake.ReadMessage(body));
                     ch.Ready.TrySetResult();
                     Accepted?.Invoke(ch);
+                    break;
+                case ChannelKind.IkMsg1 when ch is null && AcceptsIk:
+                    PruneHandshakes();
+                    if (channels.Count >= MaxChannels) { return; }
+                    ch = new SecureChannel(this, from, id, false, new IKHandshake(false, key, Prologue(id, from, relay.DeviceId)), Math.Max(1, EventBufferCapacity));
+                    channels[(from, id)] = ch;
+                    var opening = ReadIntro(ch, ch.Handshake.ReadMessage(body));
+                    // Off the receive path: an early answer runs the handler. Nothing else can
+                    // arrive on this channel until the reply has gone, since only it lets the
+                    // opener encrypt.
+                    _ = AnswerIkAsync(ch, opening.TryGetProperty("early", out var asked) ? asked.Clone() : null);
+                    break;
+                case ChannelKind.IkMsg2 when ch is { Initiator: true, Handshake: IKHandshake { IsComplete: false } }:
+                    var reply = ReadIntro(ch, ch.Handshake.ReadMessage(body));
+                    Learn(ch, reply);
+                    if (reply.TryGetProperty("early", out var answer) && answer.ValueKind == JsonValueKind.Object) { ch.AnsweredEarly(answer); }
+                    ch.Ready.TrySetResult();
                     break;
                 case ChannelKind.Transport when ch is { Handshake.IsComplete: true }:
                     RequirePeer(ch);
@@ -232,8 +344,71 @@ public sealed class ChannelHub
         {
             // A frame that fails authentication ends the channel; Noise state cannot resync.
             if (ch is not null) { Forget(ch, e); }
+            // An IK opening this side cannot take: said at once, so the opener tries XX now
+            // rather than when its patience runs out.
+            if (kind == ChannelKind.IkMsg1 && ch is not null)
+            {
+                try { await SendAsync(ch, ChannelKind.Close, []); }
+                catch (Exception) { }
+            }
             Rejected?.Invoke(from, e);
         }
+    }
+
+    async Task AnswerIkAsync(SecureChannel ch, JsonElement? asked)
+    {
+        try
+        {
+            var answer = asked is { } a ? await EarlyAsync(ch, a) : null;
+            var reply = Intro(true, answer);
+            // An answer too large to go in the reply is left out, and the opener asks again.
+            if (reply.Length + NoiseConst.PubLen + NoiseConst.TagLen > NoiseConst.MaxMessage) { reply = Intro(true); }
+            // The opener gave up meanwhile (its Close came while the answer was worked out).
+            if (ch.Closed.IsCompleted) { return; }
+            var message = ch.Handshake.WriteMessage(reply);
+            // Open before the reply leaves, so the opener's first request, which only the reply
+            // lets it send, finds it open. A reply that fails to send ends it (Forget below).
+            ch.Ready.TrySetResult();
+            await SendAsync(ch, ChannelKind.IkMsg2, message);
+            Accepted?.Invoke(ch);
+        }
+        catch (Exception e)
+        {
+            Forget(ch, e);
+            Rejected?.Invoke(ch.PeerId, e);
+        }
+    }
+
+    // The answer to an IK first message's request, as a response without its re ({ok, result} or
+    // {ok: false, error}), or null to leave it to be asked again once the channel is open: an op
+    // not taken early (never run from the first message, which a relay can replay), or one with
+    // work to follow its response.
+    async Task<JsonNode?> EarlyAsync(SecureChannel ch, JsonElement asked)
+    {
+        if (Handler is null || !asked.TryGetProperty("op", out var o) || o.ValueKind != JsonValueKind.String || o.GetString() is not { } op || !EarlyOps.Contains(op)) { return null; }
+        object? result;
+        try
+        {
+            RequirePeer(ch);
+            result = await Handler(ch, op, asked.TryGetProperty("data", out var d) ? d : default);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return new JsonObject { ["ok"] = false, ["error"] = e.Message };
+        }
+        if (result is null or ChannelReply) { return null; }
+        return new JsonObject { ["ok"] = true, ["result"] = JsonSerializer.SerializeToNode(result, JsonOptions) };
+    }
+
+    // What a responder said of IK: kept for next time if it takes it, forgotten if it no longer does.
+    void Learn(SecureChannel ch, JsonElement intro)
+    {
+        if (KnownPeers is not { } known) { return; }
+        if (intro.TryGetProperty("ik", out var ik) && ik.ValueKind == JsonValueKind.Array)
+        {
+            known.Learn(ch.PeerId, ch.PeerStatic!, [.. ik.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)]);
+        }
+        else { known.Forget(ch.PeerId); }
     }
 
     // What a frame that cannot be taken in ends a channel with: it fails authentication, or it is
@@ -242,7 +417,7 @@ public sealed class ChannelHub
     // opening it, and treats it as a lost connection (RelayClientChannel, the app's fleet).
     public static bool EndsChannel(Exception e) => e is CryptographicException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException;
 
-    void ReadIntro(SecureChannel ch, byte[] payload)
+    JsonElement ReadIntro(SecureChannel ch, byte[] payload)
     {
         if (Wire.DeviceId(ch.PeerStatic!) != ch.PeerId) { throw new PeerMismatchException(); }
         var j = JsonDocument.Parse(payload).RootElement;
@@ -250,6 +425,7 @@ public sealed class ChannelHub
         ch.PeerKind = j.GetProperty("kind").GetString() ?? "";
         ch.PeerInflates = j.TryGetProperty("deflate", out var z) && z.ValueKind == JsonValueKind.True;
         RequirePeer(ch);
+        return j;
     }
 
     async Task ServeAsync(SecureChannel ch, long id, string op, JsonElement data)
@@ -299,3 +475,30 @@ public sealed class ChannelHub
 // needs it: the client must have {revision, count} before the snapshot's upserts, and
 // anything Then sends goes through the channel's send lock after the response has.
 public sealed record ChannelReply(object Result, Func<IProtocolChannel, Task> Then);
+
+// A request to make first, in an IK first message where the responder takes it early
+// (ChannelHub.OpenAsync).
+public sealed record EarlyRequest(string Op, object? Data = null);
+
+// Responders' static keys, from handshakes with responders that said they take IK, for opening the
+// next channel to each with IK (#603). Not secret: a device id is the hash of its key, so a key
+// is only ever kept for the id it hashes to. Shared by an owner's hubs across relay connections.
+public sealed class KnownResponders
+{
+    public sealed record Responder(byte[] Static, IReadOnlyList<string> Early);
+
+    readonly ConcurrentDictionary<string, Responder> peers = new();
+
+    public Responder? Find(string peerId) => peers.TryGetValue(peerId, out var r) ? r : null;
+
+    public void Learn(string peerId, byte[] staticKey, IReadOnlyList<string> early)
+    {
+        if (Wire.DeviceId(staticKey) != peerId) { throw new PeerMismatchException(); }
+        peers[peerId] = new Responder(staticKey, early);
+    }
+
+    public void Forget(string peerId) => peers.TryRemove(peerId, out _);
+
+    // Only that entry: one learned again meanwhile, by another channel, stays.
+    internal void Forget(string peerId, Responder was) => peers.TryRemove(new KeyValuePair<string, Responder>(peerId, was));
+}

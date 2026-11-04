@@ -43,7 +43,12 @@ public sealed class SecureChannel : IProtocolChannel
     // responses: each response is stamped with it.
     long lastReceivedSeq = -1;
 
-    internal XXHandshake Handshake { get; }
+    internal INoiseHandshake Handshake { get; }
+    // An IK opener's first request, sent in its first message (ChannelHub.OpenAsync's early):
+    // the op and its data as serialized, then the responder's answer from its reply, if it gave
+    // one. The channel's first request, if it is exactly that, is answered from it.
+    sealed record EarlyAnswer(string Op, byte[] Data, JsonElement? Response);
+    EarlyAnswer? early;
     internal TaskCompletionSource Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal long CreatedAt { get; } = Environment.TickCount64;
 
@@ -71,7 +76,7 @@ public sealed class SecureChannel : IProtocolChannel
     public Exception? CloseReason => closeReason;
     public bool IsOpen => Ready.Task.IsCompletedSuccessfully && !closed.Task.IsCompleted;
 
-    internal SecureChannel(ChannelHub hub, string peerId, ulong id, bool initiator, XXHandshake handshake, int eventCapacity)
+    internal SecureChannel(ChannelHub hub, string peerId, ulong id, bool initiator, INoiseHandshake handshake, int eventCapacity)
     {
         this.hub = hub; PeerId = peerId; Id = id; Initiator = initiator; Handshake = handshake;
         events = Channel.CreateBounded<ChannelEvent>(new BoundedChannelOptions(eventCapacity)
@@ -95,6 +100,13 @@ public sealed class SecureChannel : IProtocolChannel
     public async Task<(JsonElement Response, long EventsBefore)> RequestOrderedAsync(string op, object? data = null, TimeSpan? timeout = null, CancellationToken ct = default, Action<JsonElement>? progress = null)
     {
         ThrowIfClosed();
+        // The first request only: answered already if it is the one the first message carried.
+        // Any other first request drops that answer, which would be older than what it asks.
+        if (Interlocked.Exchange(ref early, null) is { Response: { } answer } asked && asked.Op == op && asked.Data.AsSpan().SequenceEqual(SerializeData(data)))
+        {
+            Interlocked.Increment(ref nextRequest);
+            return (answer, -1);
+        }
         var id = Interlocked.Increment(ref nextRequest);
         var tcs = new TaskCompletionSource<(JsonElement, long)>(TaskCreationOptions.RunContinuationsAsynchronously);
         pending[id] = tcs;
@@ -131,6 +143,20 @@ public sealed class SecureChannel : IProtocolChannel
     }
 
     internal byte[] Serialize(object message) => JsonSerializer.SerializeToUtf8Bytes(message, hub.JsonOptions);
+
+    // A request's data alone, as it is compared with the first message's.
+    byte[] SerializeData(object? data) => JsonSerializer.SerializeToUtf8Bytes(data, hub.JsonOptions);
+
+    internal void ExpectEarly(string op, object? data) => early = new EarlyAnswer(op, SerializeData(data), null);
+
+    internal byte[]? EarlyData => early?.Data;
+
+    internal void DropEarly() => early = null;
+
+    internal void AnsweredEarly(JsonElement response)
+    {
+        if (early is { } asked) { early = asked with { Response = response.Clone() }; }
+    }
 
     internal Task SendJsonAsync(object message, CancellationToken ct = default) => SendAsync(Serialize(message), ct);
 

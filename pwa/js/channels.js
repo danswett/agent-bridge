@@ -1,13 +1,14 @@
 // End-to-end channels to other devices, as the initiator: Noise_XX_P256 through the relay
-// (spikes/s2-noise-interop, spikes/s4-relay ChannelHub.cs). Each channel carries JSON
+// (spikes/s2-noise-interop, spikes/s4-relay ChannelHub.cs), or Noise_IK_P256 to a host an earlier
+// channel taught the key of and that said it takes IK (#603). Each channel carries JSON
 // messages; HostClient speaks the sessions protocol over one.
 //
 // Channel payload, inside a relay data frame: [kind:1][channel id:8][body].
-import { XXHandshake, hex } from './noise-p256.js';
+import { IKHandshake, XXHandshake, hex } from './noise-p256.js';
 import { concat, fromUtf8, utf8 } from './bytes.js';
 import { deviceIdOf } from './identity.js';
 
-export const KIND = Object.freeze({ msg1: 1, msg2: 2, msg3: 3, transport: 4, close: 5 });
+export const KIND = Object.freeze({ msg1: 1, msg2: 2, msg3: 3, transport: 4, close: 5, ik1: 6, ik2: 7 });
 export const HEADER = 9;
 const EMPTY = new Uint8Array(0);
 
@@ -75,6 +76,8 @@ export class Channel {
   onmessage = null;
   onclose = null;
   closed = false;
+  // An IK opening's first request ({op, data as sent, response}), until the first send.
+  early = null;
 
   constructor(set, peerId, id, hs) {
     Object.assign(this, { set, peerId, id, hs, peerName: '', peerKind: '', peerInflates: false });
@@ -92,6 +95,15 @@ export class Channel {
   // this call only; the chain itself must not stay rejected.
   send(message) {
     if (this.closed) { return Promise.reject(new Error('the channel is closed')); }
+    // The first request only: if it is exactly the one IK's first message carried, the host's
+    // answer came in its reply, and is given as the response without asking again. Any other
+    // first request drops that answer, which would be older than what it asks.
+    const early = this.early;
+    this.early = null;
+    if (early?.response && message?.op === early.op && JSON.stringify(message.data ?? null) === early.data) {
+      queueMicrotask(() => { if (!this.closed) { this.onmessage?.({ re: message.id, ...early.response }); } });
+      return Promise.resolve();
+    }
     const p = this.#sendChain.then(async () => {
       const plain = utf8.encode(JSON.stringify(message));
       // Refused here, before a nonce is spent, as the host's channel does: its JSON must fit one
@@ -125,9 +137,15 @@ export class ChannelSet {
   channels = new Map();
   relay = null;
   onLog = null;
+  // Hosts that said they take IK: peer id -> { static, early }, the key their XX proved and the
+  // ops they answer from IK's first message. Kept across relay connections, so a channel reopened
+  // after the PWA comes back opens in one round trip with its hello answered (#603).
+  known = new Map();
 
-  constructor({ key, deviceId, name }) {
-    Object.assign(this, { key, deviceId, name });
+  // ikPatienceMs: how long an IK opening waits before trying XX instead, for a host that no longer
+  // takes IK (an older version put back), which ignores it.
+  constructor({ key, deviceId, name, ikPatienceMs = 5000 }) {
+    Object.assign(this, { key, deviceId, name, ikPatienceMs });
   }
 
   // A new relay connection: channels on the old one cannot continue (Noise state is per
@@ -143,20 +161,57 @@ export class ChannelSet {
   }
 
   // signal: aborted when the channel is no longer wanted (its machine is no longer shown); the
-  // handshake is given up, and the host told, rather than left to time out.
-  async open(peerId, { timeoutMs = 20000, signal = null } = {}) {
+  // handshake is given up, and the host told, rather than left to time out. early: the request
+  // the caller makes first ({op, data}, hello): to a host that takes it early, IK's first message
+  // carries it and its reply the answer, so it needs no round trip of its own.
+  async open(peerId, { timeoutMs = 20000, signal = null, early = null } = {}) {
     if (!this.relay?.open) { throw new Error('not connected to the relay'); }
+    const known = this.known.get(peerId);
+    if (known) {
+      const started = Date.now();
+      try {
+        return await this.#open(peerId, Math.min(timeoutMs, this.ikPatienceMs), signal, known, early);
+      } catch (e) {
+        if (signal?.aborted) { throw e; }
+        // Unanswered, closed by the host, or a reply that does not decrypt: XX finds out afresh,
+        // and learns the key again if it still holds.
+        if (this.known.get(peerId) === known) { this.known.delete(peerId); }
+        this.onLog?.(`IK to ${peerId.slice(0, 8)} failed (${e.message}); opening with XX`);
+      }
+      timeoutMs -= Date.now() - started;
+      if (timeoutMs <= 0) { throw new Error('the handshake timed out'); }
+    }
+    return this.#open(peerId, timeoutMs, signal, null, null);
+  }
+
+  async #open(peerId, timeoutMs, signal, known, early) {
     const id = crypto.getRandomValues(new Uint8Array(8));
-    const ch = new Channel(this, peerId, id, await XXHandshake.create(true, this.key, prologue(this.deviceId, peerId, id)));
+    const p = prologue(this.deviceId, peerId, id);
+    const ch = new Channel(this, peerId, id, known ? await IKHandshake.create(true, this.key, p, known.static) : await XXHandshake.create(true, this.key, p));
     this.channels.set(ch.key, ch);
-    const timer = setTimeout(() => ch.fail(new Error('the handshake timed out')), timeoutMs);
+    const timer = setTimeout(() => {
+      // The host may still answer an IK opening: told to let go of it now, since XX follows.
+      if (known) { try { ch.frame(KIND.close, EMPTY); } catch { /* the relay is gone anyway */ } }
+      ch.fail(new Error('the handshake timed out'));
+    }, timeoutMs);
     const abandon = () => ch.close();
     if (signal?.aborted) { abandon(); } else { signal?.addEventListener('abort', abandon, { once: true }); }
     try {
-      const msg1 = await ch.hs.writeMessage(EMPTY);
+      let kind = KIND.msg1, payload = EMPTY;
+      if (known) {
+        kind = KIND.ik1;
+        const intro = { name: this.name, kind: 'pwa', ...(DEFLATES ? { deflate: true } : {}) };
+        if (early && known.early.includes(early.op)) {
+          const data = JSON.stringify(early.data ?? null);
+          ch.early = { op: early.op, data, response: null };
+          intro.early = early.data == null ? { op: early.op } : { op: early.op, data: early.data };
+        }
+        payload = utf8.encode(JSON.stringify(intro));
+      }
+      const msg1 = await ch.hs.writeMessage(payload);
       // Given up while it was being written: nothing goes to the host.
       if (ch.closed) { await ch.ready; }
-      ch.frame(KIND.msg1, msg1);
+      ch.frame(kind, msg1);
       await ch.ready;
       return ch;
     } catch (e) {
@@ -168,6 +223,15 @@ export class ChannelSet {
     }
   }
 
+  // What a host said of IK: kept for its next channel if it takes it, forgotten if not.
+  #learn(ch, intro) {
+    if (Array.isArray(intro.ik)) {
+      this.known.set(ch.peerId, { static: ch.hs.remoteStatic, early: intro.ik.filter((op) => typeof op === 'string') });
+    } else {
+      this.known.delete(ch.peerId);
+    }
+  }
+
   async #onData(from, payload) {
     if (payload.length < HEADER) { return; }
     const ch = this.channels.get(`${from}:${hex(payload.subarray(1, HEADER))}`);
@@ -175,7 +239,7 @@ export class ChannelSet {
     const kind = payload[0];
     const body = payload.slice(HEADER);
     try {
-      if (kind === KIND.msg2 && !ch.hs.isComplete) {
+      if (kind === KIND.msg2 && ch.hs instanceof XXHandshake && !ch.hs.isComplete) {
         const intro = JSON.parse(fromUtf8.decode(await ch.hs.readMessage(body)));
         // Self-certifying ids: the key that answered must hash to the id we addressed.
         if (await deviceIdOf(ch.hs.remoteStatic) !== ch.peerId) { throw new Error("the peer's key does not match its device id"); }
@@ -183,6 +247,18 @@ export class ChannelSet {
         ch.peerKind = String(intro.kind ?? '');
         ch.peerInflates = DEFLATES && intro.deflate === true;
         ch.frame(KIND.msg3, await ch.hs.writeMessage(utf8.encode(JSON.stringify({ name: this.name, kind: 'pwa', ...(DEFLATES ? { deflate: true } : {}) }))));
+        this.#learn(ch, intro);
+        ch.resolveReady(ch);
+      } else if (kind === KIND.ik2 && ch.hs instanceof IKHandshake && !ch.hs.isComplete) {
+        const intro = JSON.parse(fromUtf8.decode(await ch.hs.readMessage(body)));
+        // The key is the one an earlier XX proved, kept by the id it hashed to; checked again all
+        // the same, as for XX.
+        if (await deviceIdOf(ch.hs.remoteStatic) !== ch.peerId) { throw new Error("the peer's key does not match its device id"); }
+        ch.peerName = String(intro.name ?? '');
+        ch.peerKind = String(intro.kind ?? '');
+        ch.peerInflates = DEFLATES && intro.deflate === true;
+        if (ch.early && intro.early && typeof intro.early === 'object') { ch.early.response = intro.early; }
+        this.#learn(ch, intro);
         ch.resolveReady(ch);
       } else if (kind === KIND.transport && ch.hs.isComplete) {
         const message = JSON.parse(fromUtf8.decode(await unpack(await ch.hs.receive.decryptWithAd(EMPTY, body))));

@@ -39,7 +39,9 @@ const load = (name) => JSON.parse(readFileSync(path.join(folder, name), 'utf8'))
 const SIGNED = 'signed-command.json';
 // Recorded sessions patched as a host sends them: not records, replayed on their own below.
 const PATCHES = 'session-patches.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES).sort().map((f) => [f, load(f)]);
+// The channel's IK handshake, not records: test/unit/channels.test.mjs replays it.
+const NOISE = 'noise-ik-p256.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 

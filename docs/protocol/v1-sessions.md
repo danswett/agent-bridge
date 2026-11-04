@@ -163,6 +163,41 @@ that took its first event, or the first after subscribing again, as the baseline
 events lost just then). If it sees a gap (it shouldn't, since Noise is ordered),
 it calls `sessions.subscribe` again.
 
+### Opening a channel: XX, or IK
+
+A channel's frames inside the relay's data frames are `[kind:1][channel id:8][body]`. Kinds 1, 2 and 3
+are `Noise_XX_P256_AESGCM_SHA256`'s three handshake messages, 4 a transport message, 5 a close. The
+prologue binds both device ids and the channel id. Each side's handshake payload introduces it,
+`{"name": "…", "kind": "host"}`, and the key that answers must hash to the device id it was reached at.
+
+**IK (#603).** XX takes a round trip and a half, and the client's `hello` another round trip after it.
+An opener that already holds the responder's static key can use `Noise_IK_P256_AESGCM_SHA256`
+instead (same suite, pattern `<- s … -> e, es, s, ss` then `<- e, ee, se`): kind 6 is its first
+message, kind 7 the reply, and the channel is open after one round trip.
+
+* A responder that takes IK says so in each introduction it gives (XX's second message, IK's reply):
+  `"ik": ["hello"]`, listing the ops it answers from an IK first message (possibly none). An opener
+  keeps that responder's key, which the XX proved and which hashes to its id, and opens its next
+  channel to it with IK. An introduction without `ik` makes it forget the key.
+* An opener's first message may carry the request it will make first:
+  `{"name": …, "kind": …, "early": {"op": "hello", "data": {}}}`. Only an op the responder listed
+  goes in it. The reply then carries the answer, as a response without `re`:
+  `"early": {"ok": true, "result": {…}}`. The channel's first request, if it is exactly that op
+  with that data, takes that answer without going to the host. Any other first request is sent,
+  and the answer is dropped.
+* An IK first message is encrypted only to the responder's static key, and a relay can replay it.
+  So a responder answers from it only the ops it listed (a host lists `hello`, which reads), after
+  the same authorization as any request. Anything else is asked again once the channel is open,
+  never run from it. Everything after the first message is forward-secret, as in XX.
+* A responder that cannot read an IK first message closes the channel (kind 5). An opener whose IK
+  gets that, or no reply within 5 s (an older responder ignores kinds it does not know), forgets
+  the key and opens with XX. An older opener never sends IK, so older peers see nothing new beyond
+  the `ik` field in an introduction.
+
+Round trips from an open relay connection to the answer of the first request: 2 with XX (the
+first time, or to an older host), 1 with IK. `ChannelTests` in `tests/AgentBridge.Transport.Tests`
+and `pwa/test/unit/channels.test.mjs` count them. Interop vectors: [`vectors/noise-ik-p256.json`](vectors/README.md).
+
 ### Deflate
 
 Each message above is one Noise transport message whose plaintext is its JSON. From #603 a

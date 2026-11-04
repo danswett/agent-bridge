@@ -11,6 +11,7 @@
 // channel of a machine shown, and read with the once-a-minute look at the others, which comes
 // every few seconds instead while an update there is under way.
 import { HostClient } from './host-client.js';
+import { Ops } from './protocol.js';
 import { USAGE, machineFacts, machineStatus } from './usage.js';
 import { UPDATE, underWay } from './update.js';
 
@@ -271,7 +272,8 @@ export class FleetStatus {
     // last account's readings back, to be kept for the next one.
     const forgotten = () => (this.#epochs.get(id) ?? 0) !== epoch || this.#generation !== generation;
     try {
-      channel = await this.connection.openChannel(id, { timeoutMs: 10000 });
+      // hello goes first: a host that takes it early answers it in the handshake (#603).
+      channel = await this.connection.openChannel(id, { timeoutMs: 10000, early: { op: Ops.hello, data: {} } });
       client = this.makeClient(channel);
       // Each answer is dropped if the machine has been shown meanwhile: its own channel then
       // has newer figures, and the book keeps one report per machine. And if it has been

@@ -16,6 +16,8 @@
 //   -> e
 //   <- e, ee, s, es
 //   -> s, se
+//
+// and, for an initiator that already holds the responder's static key, IK (IKHandshake below).
 
 using System.Security.Cryptography;
 using System.Text;
@@ -227,7 +229,19 @@ public sealed class SymmetricState
     }
 }
 
-public sealed class XXHandshake
+// What a channel needs of its handshake, whichever pattern it is.
+public interface INoiseHandshake
+{
+    byte[]? RemoteStatic { get; }
+    byte[] HandshakeHash { get; }
+    bool IsComplete { get; }
+    CipherState? Send { get; }
+    CipherState? Receive { get; }
+    byte[] WriteMessage(byte[] payload);
+    byte[] ReadMessage(byte[] message);
+}
+
+public sealed class XXHandshake : INoiseHandshake
 {
     readonly bool initiator;
     readonly SymmetricState ss;
@@ -315,6 +329,117 @@ public sealed class XXHandshake
     {
         step++;
         if (step == 3)
+        {
+            var (c1, c2) = ss.Split();
+            (Send, Receive) = initiator ? (c1, c2) : (c2, c1);
+        }
+    }
+}
+
+// Noise_IK_P256_AESGCM_SHA256: the same suite as XX, for an initiator that already holds the
+// responder's static key (learned from an earlier XX with it, #603). One round trip instead of
+// XX's one and a half, so the responder can answer the initiator's first message in its own:
+//   <- s
+//   ...
+//   -> e, es, s, ss
+//   <- e, ee, se
+// The first message's payload is encrypted to the responder's static key only: a relay can replay
+// it, and its secrecy does not survive that key, so only what is safe to repeat goes in it
+// (ChannelHub.EarlyOps). The responder's reply, and everything after, is forward-secret as in XX.
+public sealed class IKHandshake : INoiseHandshake
+{
+    public const string ProtocolName = "Noise_IK_P256_AESGCM_SHA256";
+
+    readonly bool initiator;
+    readonly SymmetricState ss;
+    readonly P256KeyPair s;
+    P256KeyPair? e;
+    byte[]? re;
+    int step;
+
+    public byte[]? RemoteStatic { get; private set; }
+    public byte[] HandshakeHash => ss.H;
+    public bool IsComplete => step == 2;
+    public CipherState? Send { get; private set; }
+    public CipherState? Receive { get; private set; }
+
+    // responderStatic: the initiator's copy of the responder's key; a responder passes none.
+    public IKHandshake(bool initiator, P256KeyPair staticKey, byte[] prologue, byte[]? responderStatic = null, P256KeyPair? fixedEphemeral = null)
+    {
+        this.initiator = initiator;
+        s = staticKey;
+        e = fixedEphemeral;
+        if (initiator)
+        {
+            ArgumentNullException.ThrowIfNull(responderStatic);
+            P256KeyPair.AssertOnCurve(responderStatic);
+            RemoteStatic = responderStatic;
+        }
+        ss = new SymmetricState(ProtocolName);
+        ss.MixHash(prologue);
+        // The pre-message (<- s): both sides hash the responder's static key.
+        ss.MixHash(initiator ? responderStatic! : staticKey.Public);
+    }
+
+    bool MyTurn => initiator ? step == 0 : step == 1;
+
+    public byte[] WriteMessage(byte[] payload)
+    {
+        if (!MyTurn || IsComplete) { throw new InvalidOperationException("not this side's turn"); }
+        var buf = new List<byte>();
+        e ??= P256KeyPair.Generate();
+        buf.AddRange(e.Public); ss.MixHash(e.Public);
+        if (step == 0)
+        {
+            // -> e, es, s, ss
+            ss.MixKey(e.Dh(RemoteStatic!));
+            buf.AddRange(ss.EncryptAndHash(s.Public));
+            ss.MixKey(s.Dh(RemoteStatic!));
+        }
+        else
+        {
+            // <- e, ee, se
+            ss.MixKey(e.Dh(re!));
+            ss.MixKey(e.Dh(RemoteStatic!));
+        }
+        buf.AddRange(ss.EncryptAndHash(payload));
+        if (buf.Count > NoiseConst.MaxMessage) { throw new InvalidOperationException("message too long"); }
+        Advance();
+        return [.. buf];
+    }
+
+    public byte[] ReadMessage(byte[] message)
+    {
+        if (MyTurn || IsComplete) { throw new InvalidOperationException("not the peer's turn"); }
+        int at = 0;
+        byte[] Take(int n)
+        {
+            if (message.Length - at < n) { throw new CryptographicException("short handshake message"); }
+            var r = message[at..(at + n)]; at += n; return r;
+        }
+        re = Take(NoiseConst.PubLen); ss.MixHash(re);
+        if (step == 0)
+        {
+            // -> e, es, s, ss
+            ss.MixKey(s.Dh(re));
+            RemoteStatic = ss.DecryptAndHash(Take(NoiseConst.PubLen + NoiseConst.TagLen));
+            ss.MixKey(s.Dh(RemoteStatic));
+        }
+        else
+        {
+            // <- e, ee, se
+            ss.MixKey(e!.Dh(re));
+            ss.MixKey(s.Dh(re));
+        }
+        var payload = ss.DecryptAndHash(message[at..]);
+        Advance();
+        return payload;
+    }
+
+    void Advance()
+    {
+        step++;
+        if (step == 2)
         {
             var (c1, c2) = ss.Split();
             (Send, Receive) = initiator ? (c1, c2) : (c2, c1);

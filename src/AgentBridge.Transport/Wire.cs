@@ -93,4 +93,6 @@ public static class CloseCodes
     public const int Restarting = 1012;
 }
 
-public enum ChannelKind : byte { Msg1 = 1, Msg2 = 2, Msg3 = 3, Transport = 4, Close = 5 }
+// Msg1-3 are XX's three messages; IkMsg1 and IkMsg2 IK's two (#603), which a peer that knows
+// nothing of them ignores, as it does any kind it does not know.
+public enum ChannelKind : byte { Msg1 = 1, Msg2 = 2, Msg3 = 3, Transport = 4, Close = 5, IkMsg1 = 6, IkMsg2 = 7 }
