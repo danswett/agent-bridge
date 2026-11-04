@@ -480,7 +480,9 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
      - *On exiting*, it PUTs the ruleset with no bypass actors and reads it back. It must match
        `ruleset-main.json` with 0 bypass actors. It then posts "takeover ended" with how long the
        takeover lasted and what it merged. If the check fails, it exits 1 and asks the owner on
-       #170, and does nothing more until the ruleset is right again. After 12 hours it stays in
+       #170, and does nothing more until the ruleset is right again. A read or PUT that fails
+       before the bypass is gone keeps the takeover and tries again next tick, and a receipt that
+       fails to post is kept in the state and posted on a later tick. After 12 hours it stays in
        takeover, but asks the owner once to confirm.
      - `--dry-run` prints the observation, the decision and what it would do, and writes nothing:
        no PUT, comment, merge or state.

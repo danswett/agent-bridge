@@ -181,6 +181,33 @@ public sealed class MergeTakeoverTests : IDisposable
         Assert.True(State().NeedsOwner);
     }
 
+    [Fact]
+    public void A_hand_back_whose_PUT_fails_stays_in_takeover_and_a_receipt_that_fails_to_post_goes_out_next_tick()
+    {
+        InTakeover(Now.AddHours(-1));
+        var github = new FakeGitHub(stall: "none", recovered: true, bypass: true, failPuts: 1, failComments: 1);
+
+        Tick(github, "operational", Now.AddMinutes(-5));
+        var exit = Tick(github, "operational");
+
+        Assert.Equal(2, exit);
+        Assert.True(State().InTakeover);
+        Assert.Empty(github.Comments);
+
+        exit = Tick(github, "operational", Now.AddMinutes(2)); // the PUT lands, the receipt doesn't
+
+        Assert.Equal(2, exit);
+        Assert.False(State().InTakeover);
+        Assert.Empty(github.Comments);
+        Assert.Single(State().PendingComments);
+
+        exit = Tick(github, "operational", Now.AddMinutes(4));
+
+        Assert.Equal(0, exit);
+        Assert.Contains("takeover ended", Assert.Single(github.Comments), StringComparison.Ordinal);
+        Assert.Empty(State().PendingComments);
+    }
+
     [Theory]
     [InlineData(20, false)]
     [InlineData(35, true)]
@@ -269,10 +296,12 @@ public sealed class MergeTakeoverTests : IDisposable
     /// main's ruleset as it was live, and the open pull requests. Writes are recorded, and a PUT
     /// changes the ruleset's bypass as GitHub would, unless told to keep it.
     /// </summary>
-    sealed class FakeGitHub(string stall, int stallMinutes = 20, bool recovered = false, JsonObject? live = null, bool bypass = false, bool putKeepsBypass = false, Pr[]? prs = null) : IGitHub
+    sealed class FakeGitHub(string stall, int stallMinutes = 20, bool recovered = false, JsonObject? live = null, bool bypass = false, bool putKeepsBypass = false, Pr[]? prs = null, int failPuts = 0, int failComments = 0) : IGitHub
     {
         readonly JsonObject ruleset = Ruleset(live, bypass);
         readonly Pr[] prs = prs ?? [];
+        int failPuts = failPuts;
+        int failComments = failComments;
 
         public List<(string Path, string Body)> Puts { get; } = [];
         public List<string> Comments { get; } = [];
@@ -360,13 +389,19 @@ public sealed class MergeTakeoverTests : IDisposable
         {
             if (method == "PUT")
             {
+                if (failPuts-- > 0)
+                    throw new InvalidOperationException("gh: HTTP 502");
                 Puts.Add((path, jsonBody));
                 var put = JsonNode.Parse(jsonBody)!.AsObject();
                 if (!(putKeepsBypass && put["bypass_actors"]!.AsArray().Count == 0))
                     ruleset["bypass_actors"] = put["bypass_actors"]!.DeepClone();
             }
             else if (method == "POST" && path.EndsWith("/issues/170/comments", StringComparison.Ordinal))
+            {
+                if (failComments-- > 0)
+                    throw new InvalidOperationException("gh: HTTP 502");
                 Comments.Add(JsonNode.Parse(jsonBody)!["body"]!.GetValue<string>());
+            }
             else
                 throw new InvalidOperationException($"unexpected {method} {path}");
             return JsonDocument.Parse("{}");

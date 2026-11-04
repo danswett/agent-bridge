@@ -47,6 +47,8 @@ sealed class TakeoverState
     /// <summary>Set when handing back couldn't be verified: nothing more happens until the ruleset is clean again.</summary>
     public bool NeedsOwner { get; set; }
     public List<MergedPullRequest> Merged { get; set; } = [];
+    /// <summary>Receipts for #170 that couldn't be posted yet, oldest first.</summary>
+    public List<string> PendingComments { get; set; } = [];
 }
 
 sealed record MergedPullRequest(int Number, string Sha, DateTimeOffset At);
@@ -115,13 +117,41 @@ static class MergeTakeoverCommand
         var rulesetProblem = false;
         var otherProblem = false;
 
+        // A receipt that fails to post (GitHub's API is often shaky in the same incident) is kept
+        // in the state and posted on a later tick, so #170 never misses a start or an end.
+        void Post(string body)
+        {
+            state.PendingComments.Add(body);
+            Flush();
+        }
+        void Flush()
+        {
+            while (state.PendingComments.Count > 0)
+            {
+                try
+                {
+                    Comment(github, slug, state.PendingComments[0]);
+                }
+                catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                {
+                    output.WriteLine($"Couldn't post a receipt on #{Issue} ({e.Message}); it's kept for the next tick.");
+                    otherProblem = true;
+                    break;
+                }
+                state.PendingComments.RemoveAt(0);
+            }
+            SaveState(statePath, state);
+        }
+        if (!dryRun && state.PendingComments.Count > 0)
+            Flush();
+
         var observed = Observe(github, statusPage, slug, now);
         output.WriteLine($"Status page: Actions is {observed.StatusWords}.");
         output.WriteLine($"merge-rule runs: {observed.Runs}");
         output.WriteLine($"Stalled: {(observed.Stall is { } s ? $"yes, for {Minutes(s)}" : "no")}. Recovered: {(observed.Recovered ? "yes" : "no")}.");
         output.WriteLine(state.InTakeover
             ? $"State: in takeover since {FlakeReport.Pacific(state.EnteredAt!.Value)}, {state.Merged.Count} merged."
-            : $"State: not in takeover{(state.ExitedAt is { } e ? $", last ended {FlakeReport.Pacific(e)}" : "")}.");
+            : $"State: not in takeover{(state.ExitedAt is { } ended ? $", last ended {FlakeReport.Pacific(ended)}" : "")}.");
 
         // Handing back once failed verification: nothing happens until the owner has put the
         // ruleset right, since entering again would build on a ruleset no one has checked.
@@ -168,7 +198,9 @@ static class MergeTakeoverCommand
                     Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
                     File.WriteAllText(backup, live!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
                     output.WriteLine($"Backed up ruleset {id} to {backup}.");
-                    github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, [AdminBypass.DeepClone()]).ToJsonString()).Dispose();
+                    // Saved before the PUT, so a PUT that lands though gh reports a failure is
+                    // still a takeover, and recovery removes its bypass.
+                    var before = JsonSerializer.Serialize(state, Json);
                     state.InTakeover = true;
                     state.EnteredAt = now;
                     state.FirstHealthyAt = null;
@@ -176,18 +208,29 @@ static class MergeTakeoverCommand
                     state.RulesetId = id;
                     state.BackupPath = backup;
                     state.CapNoticePosted = false;
+                    state.NeedsOwner = false;
                     state.Merged = [];
                     SaveState(statePath, state);
+                    try
+                    {
+                        github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, [AdminBypass.DeepClone()]).ToJsonString()).Dispose();
+                    }
+                    catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                    {
+                        output.WriteLine($"The PUT to ruleset {id} failed: {e.Message}");
+                        if (ReadRuleset(github, slug, expected, id) is { Live: { } unchanged } && Bypass(unchanged).Count == 0)
+                        {
+                            output.WriteLine("It didn't land, so this isn't a takeover; the next tick tries again.");
+                            File.WriteAllText(statePath, before);
+                            return 2;
+                        }
+                    }
                     var (_, reread, after) = ReadRuleset(github, slug, expected, id);
                     var verified = after.Count == 0 && OnlyAdminBypass(reread);
                     output.WriteLine(verified ? $"Ruleset {id} now has the one admin pull-request bypass (verified)." : $"::error::merge-takeover: ruleset {id} did NOT verify after the PUT: {string.Join("; ", after.Append(OnlyAdminBypass(reread) ? "" : "its bypass actors aren't exactly the admin pull-request one").Where(p => p.Length > 0))}. Nothing merges until @{Owner} has looked.");
-                    if (!verified)
-                    {
-                        // Still in takeover, so recovery removes the bypass and verifies again.
-                        state.NeedsOwner = true;
-                        SaveState(statePath, state);
-                    }
-                    Comment(github, slug, EnterReceipt(now, id!.Value, evidence, verified));
+                    // Unverified, it stays a takeover, so recovery removes the bypass and verifies again.
+                    state.NeedsOwner = !verified;
+                    Post(EnterReceipt(now, id!.Value, evidence, verified));
                     if (!verified)
                         return 1;
                     merging = true;
@@ -200,17 +243,41 @@ static class MergeTakeoverCommand
                         output.WriteLine($"Would PUT ruleset {state.RulesetId} with no bypass actors, verify it against quality/ruleset-main.json, and post the takeover-ended receipt on #{Issue}.");
                         break;
                     }
-                    var (id, live, _) = ReadRuleset(github, slug, expected, state.RulesetId);
-                    List<string> after;
-                    JsonObject? reread;
+                    // A read or a PUT that fails before anything changed keeps the takeover, so the
+                    // next tick tries again, rather than leave the bypass for the owner to find.
+                    var (id, live, readProblems) = ReadRuleset(github, slug, expected, state.RulesetId);
                     if (live is null)
-                        (after, reread) = (["the ruleset couldn't be found"], null);
-                    else
+                    {
+                        output.WriteLine($"Couldn't read ruleset {state.RulesetId} to hand back ({string.Join("; ", readProblems)}); still in takeover, trying again next tick.");
+                        SaveState(statePath, state);
+                        return 2;
+                    }
+                    var putFailed = false;
+                    try
                     {
                         github.Send("PUT", $"repos/{slug}/rulesets/{id}", PutBody(live, []).ToJsonString()).Dispose();
-                        (_, reread, after) = ReadRuleset(github, slug, expected, id);
-                        if (Bypass(reread).Count > 0)
-                            after.Add($"it still has {Bypass(reread).Count} bypass actor(s)");
+                    }
+                    catch (Exception e) when (MergeRuleCommand.IsReadFailure(e))
+                    {
+                        output.WriteLine($"The PUT to ruleset {id} failed ({e.Message}); checking what landed.");
+                        putFailed = true;
+                    }
+                    var (_, reread, after) = ReadRuleset(github, slug, expected, id);
+                    if (reread is null)
+                    {
+                        output.WriteLine($"Couldn't read ruleset {id} back after the PUT ({string.Join("; ", after)}); still in takeover, checking again next tick.");
+                        SaveState(statePath, state);
+                        return 2;
+                    }
+                    if (Bypass(reread).Count > 0)
+                    {
+                        if (putFailed && OnlyAdminBypass(reread) && after.Count == 0)
+                        {
+                            output.WriteLine($"Ruleset {id} still has the takeover's bypass; still in takeover, trying again next tick.");
+                            SaveState(statePath, state);
+                            return 2;
+                        }
+                        after.Add($"it still has {Bypass(reread).Count} bypass actor(s)");
                     }
                     var merged = state.Merged.ToList();
                     var lasted = now - (state.EnteredAt ?? now);
@@ -227,7 +294,7 @@ static class MergeTakeoverCommand
                         output.WriteLine($"::error::merge-takeover: ruleset {id} did NOT verify after removing the bypass: {string.Join("; ", after)}. It needs @{Owner}.");
                         rulesetProblem = true;
                     }
-                    Comment(github, slug, ExitReceipt(now, id ?? state.RulesetId ?? 0, lasted, merged, observed, after));
+                    Post(ExitReceipt(now, id ?? state.RulesetId ?? 0, lasted, merged, observed, after));
                     break;
                 }
             case "stay in":
@@ -243,8 +310,8 @@ static class MergeTakeoverCommand
                         output.WriteLine($"Would ask @{Owner} on #{Issue} to confirm the takeover, now over {OwnerConfirmsAfter.TotalHours:0} h.");
                     else
                     {
-                        Comment(github, slug, $"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
                         state.CapNoticePosted = true;
+                        Post($"**Quality: the Actions takeover has lasted over {OwnerConfirmsAfter.TotalHours:0} hours** (since {FlakeReport.Pacific(since)}). @{Owner}, please confirm Quality should keep merging under the temporary admin bypass on ruleset {state.RulesetId}. Until Actions recovers it stays in place, with the same rules; {state.Merged.Count} PR(s) merged so far.");
                     }
                 }
                 if (!dryRun)
