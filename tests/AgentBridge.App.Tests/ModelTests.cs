@@ -570,6 +570,153 @@ public sealed class MarkdownTests
         Assert.All(inlines, i => Assert.True(i is MdBreak || (i is MdText { Style: MdStyle.None }) || (i is MdLink l && l.Text == l.Url), $"{i} in {name}"));
         Assert.Equal(Words((string)c["intention"]!), Words(string.Concat(inlines.Select(i => i switch { MdText x => x.Text, MdLink l => l.Text, _ => " " }))));
     }
+
+    // #493: WinUI's text layout failed on about 32,000 characters with nowhere to break, after
+    // other text, and the app ended. Drawn in pieces of at most LongWords.Max between breaks.
+    static List<string> Pieces(int since, params string[] runs)
+    {
+        var all = new List<string>();
+        foreach (var run in runs)
+        {
+            var pieces = LongWords.Pieces(run, ref since);
+            Assert.Equal(run, string.Concat(pieces));
+            all.AddRange(pieces);
+            all.Add("|");
+        }
+        return all;
+    }
+
+    static int Longest(IEnumerable<string> pieces) =>
+        string.Concat(pieces.Select(p => p == "|" ? "" : p + "\0")).Split('\0', '\n').Max(s => s.Length);
+
+    [Fact]
+    public void A_long_word_after_other_text_is_drawn_in_pieces_that_join_to_it_exactly()
+    {
+        var text = "Done: " + new string('[', 32000);
+        var since = 0;
+
+        var pieces = LongWords.Pieces(text, ref since);
+
+        Assert.Equal(text, string.Concat(pieces));
+        // The first cut falls just after "Done: ", where a line could already end.
+        Assert.Equal("Done: ", pieces[0]);
+        Assert.Equal(5, pieces.Count);
+        Assert.All(pieces, p => Assert.InRange(p.Length, 1, LongWords.Max));
+    }
+
+    [Fact]
+    public void Text_of_no_more_than_the_limit_is_drawn_whole()
+    {
+        var since = 0;
+        var prose = Repeat("All 47 tests pass. ", 400);
+
+        Assert.Equal([prose], LongWords.Pieces(prose, ref since));
+        Assert.Equal(prose.Length, since);
+    }
+
+    [Fact]
+    public void A_word_continued_in_the_next_run_is_counted_as_one()
+    {
+        // "aaaa**bbbb**": one word on screen, in two runs, neither alone over the limit.
+        var pieces = Pieces(0, new string('a', 6000), new string('b', 6000), new string('c', 6000));
+
+        Assert.True(Longest(pieces) <= LongWords.Max, $"{Longest(pieces)}");
+    }
+
+    [Fact]
+    public void Spaces_that_allow_no_break_are_still_cut_and_the_cut_falls_just_after_a_space()
+    {
+        // No line may break after `[`, even past spaces (UAX #14 LB14), so "[ [ [" is one word.
+        var text = Repeat("[ ", 20000);
+        var since = 0;
+
+        var pieces = LongWords.Pieces(text, ref since);
+
+        Assert.Equal(text, string.Concat(pieces));
+        Assert.All(pieces, p => Assert.True(p.Length <= LongWords.Max));
+        Assert.All(pieces.SkipLast(1), p => Assert.EndsWith(" ", p, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_cut_keeps_an_accent_on_its_letter_and_a_surrogate_pair_whole()
+    {
+        var accents = Repeat("e\u0301", 10000);
+        var emoji = Repeat("\U0001F600", 10000);
+        var since = 0;
+
+        Assert.All(LongWords.Pieces(accents, ref since).Skip(1), p => Assert.StartsWith("e", p, StringComparison.Ordinal));
+        since = 0;
+        Assert.All(LongWords.Pieces(emoji, ref since), p => Assert.True(char.IsHighSurrogate(p[0]) && !char.IsHighSurrogate(p[^1])));
+        // One cluster longer than the limit: cut inside it rather than not at all.
+        since = 0;
+        var cluster = "e" + new string('\u0301', 20000);
+        var pieces = LongWords.Pieces(cluster, ref since);
+        Assert.Equal(cluster, string.Concat(pieces));
+        Assert.All(pieces, p => Assert.True(p.Length <= LongWords.Max));
+    }
+
+    [Fact]
+    public void A_line_break_starts_the_count_again()
+    {
+        var since = LongWords.Max - 10;
+        var text = "abc\n" + new string('x', LongWords.Max);
+
+        Assert.Equal([text], LongWords.Pieces(text, ref since));
+        Assert.Equal(LongWords.Max, since);
+        Assert.Equal(["", "y"], LongWords.Pieces("y", ref since));
+    }
+}
+
+// #493: what a host sends is held to the protocol's limits on receipt, so a broken, remote or
+// demo host can't send the app text its layout fails on.
+public sealed class ReceivedLimitsTests
+{
+    static int Bytes(string? s) => System.Text.Encoding.UTF8.GetByteCount(s ?? "");
+
+    [Fact]
+    public void A_response_over_the_limit_keeps_its_end_and_says_earlier_text_is_not_shown()
+    {
+        var response = "Done: " + new string('[', 32000) + " the end.";
+        var s = Make.Session() with { Activity = new Activity { Response = response, Reasoning = new string('r', 9000), Own = new OwnActivity { Response = response, Reasoning = new string('o', 9000) } } };
+
+        var fit = ReceivedLimits.Fit(s).Activity;
+
+        Assert.Equal((Limits.Response, true), (Bytes(fit.Response), fit.ResponseTruncated));
+        Assert.EndsWith(" the end.", fit.Response, StringComparison.Ordinal);
+        Assert.Equal((Limits.Response, true), (Bytes(fit.Own!.Response), fit.Own.ResponseTruncated));
+        Assert.Equal((Limits.Reasoning, Limits.Reasoning), (Bytes(fit.Reasoning), Bytes(fit.Own.Reasoning)));
+    }
+
+    [Fact]
+    public void A_question_over_the_limit_keeps_its_start_and_is_answered_at_the_machine()
+    {
+        var q = Make.Form() with { Message = "Which one? " + new string('[', 32000) };
+
+        var fit = ReceivedLimits.Fit(Make.Session(question: q)).Question!;
+
+        Assert.Equal((Limits.QuestionMessage, true), (Bytes(fit.Message), fit.Truncated));
+        Assert.StartsWith("Which one? ", fit.Message, StringComparison.Ordinal);
+        Assert.Equal(q.Id, fit.Id);
+    }
+
+    [Fact]
+    public void A_delegates_own_response_over_the_limit_keeps_its_end()
+    {
+        var a = new Subagent { Id = "agent-1", Kind = SubagentKind.Task, Status = SubagentStatus.Ended, Response = new string('[', 32000) + "!", Reasoning = new string('r', 9000) };
+
+        var fit = ReceivedLimits.Fit(a);
+
+        Assert.Equal((Limits.Response, true, Limits.Reasoning), (Bytes(fit.Response), fit.ResponseTruncated, Bytes(fit.Reasoning)));
+        Assert.EndsWith("!", fit.Response, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_session_within_the_limits_is_kept_as_sent()
+    {
+        var s = Make.Session(question: Make.Approval(), response: new string('[', Limits.Response));
+
+        Assert.Same(s, ReceivedLimits.Fit(s));
+    }
 }
 
 public sealed class UsageTests

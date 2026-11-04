@@ -546,7 +546,7 @@ public sealed class HostConnection : IAsyncDisposable
     {
         Session s;
         bool exact;
-        try { s = Received.Read<Session>(data, out exact); }
+        try { s = ReceivedLimits.Fit(Received.Read<Session>(data, out exact)); }
         catch (JsonException)
         {
             // A session the app could not read may be the busy one: the list is not

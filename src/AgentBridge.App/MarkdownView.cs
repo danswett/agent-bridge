@@ -124,30 +124,61 @@ public sealed class MarkdownView : StackPanel
         if (size is { } s) { rich.FontSize = s; }
         if (bold) { rich.FontWeight = FontWeights.SemiBold; }
         var para = new Paragraph();
-        foreach (var i in inlines) { para.Inlines.Add(Inline(i)); }
+        var since = 0;
+        foreach (var i in inlines) { Inlines(i, para.Inlines, ref since); }
         rich.Blocks.Add(para);
         FitInlineMono(rich);
         return rich;
     }
 
-    static Inline Inline(MdInline inline)
+    // Each inline, in pieces of at most LongWords.Max characters between break opportunities, so
+    // a long word never fails WinUI's text layout (#493). Selecting and copying gives the text as
+    // written: the break is an empty element, never a character.
+    static void Inlines(MdInline inline, InlineCollection into, ref int since)
     {
         switch (inline)
         {
             case MdBreak:
-                return new LineBreak();
+                into.Add(new LineBreak());
+                since = 0;
+                break;
             case MdLink link:
                 {
-                    var h = new Hyperlink { NavigateUri = Uri.TryCreate(link.Url, UriKind.Absolute, out var u) ? u : null };
-                    ToolTipService.SetToolTip(h, link.Url);
-                    h.Inlines.Add(Styled(new Run { Text = link.Text }, link.Style));
-                    return h;
+                    var pieces = LongWords.Pieces(link.Text, ref since);
+                    for (var k = 0; k < pieces.Count; k++)
+                    {
+                        if (k > 0) { into.Add(Break()); }
+                        // A hyperlink holds only text, so a long one is drawn as several to the same place.
+                        var h = new Hyperlink { NavigateUri = Uri.TryCreate(link.Url, UriKind.Absolute, out var u) ? u : null };
+                        ToolTipService.SetToolTip(h, link.Url);
+                        h.Inlines.Add(Styled(new Run { Text = pieces[k] }, link.Style));
+                        into.Add(h);
+                    }
+                    break;
                 }
             case MdText t:
-                return Styled(new Run { Text = t.Text }, t.Style);
+                {
+                    var pieces = LongWords.Pieces(t.Text, ref since);
+                    for (var k = 0; k < pieces.Count; k++)
+                    {
+                        if (k > 0) { into.Add(Break()); }
+                        into.Add(Styled(new Run { Text = pieces[k] }, t.Style));
+                    }
+                    break;
+                }
             default:
-                return new Run();
+                into.Add(new Run());
+                break;
         }
+    }
+
+    // A break opportunity of no width: an empty element a line may end at, which a selection
+    // copies as nothing. A zero-width space would be copied with the text.
+    static InlineUIContainer Break()
+    {
+        var empty = new Border { Width = 0, Height = 0 };
+        AutomationProperties.SetAccessibilityView(empty, AccessibilityView.Raw);
+        return new InlineUIContainer { Child = empty };
     }
 
     static Run Styled(Run run, MdStyle style)

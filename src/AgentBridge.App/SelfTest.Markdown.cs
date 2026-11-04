@@ -60,4 +60,56 @@ static partial class SelfTest
         }
         check(steeper.Count == 0, $"draws such text in time that grows linearly with it ({string.Join("; ", growth)}){(steeper.Count > 0 ? $": not {string.Join("; ", steeper)}" : "")}");
     }
+
+    // A word WinUI's text layout fails on (#493): "Done: " and 32,000 `[` in the conversation's
+    // reading column threw E_FAIL from RichTextBlock's Measure, and the app ended with 0xC000027B.
+    // Drawn now in pieces with breaks of no width between them: every character as written, and
+    // selecting all of it copies exactly the text.
+    static async Task CheckLongWords(MainWindow window, Action<bool, string> check)
+    {
+        var root = (Panel)window.RootElement;
+        var wrong = new List<string>();
+        var times = new List<string>();
+        var a = new string('a', 20000);
+        var b = new string('b', 20000);
+        foreach (var (name, markdown, text) in new[]
+        {
+            ("\"Done: \" and 32,000 [", "Done: " + new string('[', 32000), "Done: " + new string('[', 32000)),
+            ("\"Done: \" and 100,000 [", "Done: " + new string('[', 100000), "Done: " + new string('[', 100000)),
+            // One word on screen across two runs, neither alone near the limit.
+            ("a bold word run on", $"Done: **{a}**{b}", $"Done: {a}{b}"),
+            // No line may end after `[`, even past a space: as unbreakable as the word above.
+            ("\"Done: \" and 20,000 \"[ \"", "Done: " + string.Concat(Enumerable.Repeat("[ ", 20000)), "Done: " + string.Concat(Enumerable.Repeat("[ ", 20000))),
+        })
+        {
+            var view = new MarkdownView { Reading = true };
+            var column = new ReadingColumn { MaxWidth = (double)Application.Current.Resources["AbLayoutReadingMax"], Padding = new Thickness(24, 8, 24, 24) };
+            column.Children.Add(view);
+            var scroll = new ScrollViewer { Width = 700, Height = 600, Content = column, IsHitTestVisible = false, Opacity = 0 };
+            var clock = Stopwatch.StartNew();
+            try
+            {
+                view.Markdown = markdown;
+                root.Children.Add(scroll);
+                scroll.UpdateLayout();
+                clock.Stop();
+                times.Add($"{name} {clock.ElapsedMilliseconds} ms");
+                var blocks = view.Children.OfType<RichTextBlock>().ToList();
+                var drawn = string.Concat(blocks.SelectMany(r => r.Blocks.OfType<Paragraph>()).SelectMany(p => p.Inlines.OfType<Run>()).Select(r => r.Text));
+                if (drawn != text) { wrong.Add($"{name}: {drawn.Length} of {text.Length} characters drawn as written"); }
+                if (view.ActualHeight <= 0) { wrong.Add($"{name}: not drawn"); }
+                var copied = string.Concat(blocks.Select(r =>
+                {
+                    r.SelectAll();
+                    return r.SelectedText;
+                }));
+                if (copied != text) { wrong.Add($"{name}: copies {copied.Length} characters, not the {text.Length} written"); }
+                if (clock.ElapsedMilliseconds > 3000) { wrong.Add($"{name}: {clock.ElapsedMilliseconds} ms"); }
+            }
+            catch (Exception e) { wrong.Add($"{name}: {e.GetType().Name} {e.Message}"); }
+            finally { root.Children.Remove(scroll); }
+            await Task.Delay(50);
+        }
+        check(wrong.Count == 0, $"draws a word too long for WinUI's text layout as written, and copies it exactly ({string.Join(", ", times)}){(wrong.Count > 0 ? $": not {string.Join("; ", wrong)}" : "")}");
+    }
 }

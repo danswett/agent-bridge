@@ -105,6 +105,22 @@ public sealed class ConnectionTests : IAsyncLifetime
         await Wait.UntilAsync(() => connection.Usage.Agents.Count == 1 && connection.Status!.Relay.State == RelayState.Connected, "usage and status");
     }
 
+    // #493: a host past the protocol's limits (the demo's, a broken or a remote one) sent a word
+    // WinUI's text layout failed on, and the app ended. Held to the limits as it arrives.
+    [Fact]
+    public async Task A_session_over_the_protocols_limits_is_cut_to_them_as_it_arrives()
+    {
+        await Wait.UntilAsync(() => connection.Sessions.Get("s1") is not null, "the snapshot");
+
+        var question = Make.Form() with { Message = "Which one? " + new string('[', 9000) };
+        await host.SendAsync(Events.SessionUpsert, Make.Session("s2", question: question, response: "Done: " + new string('[', 32000)));
+
+        await Wait.UntilAsync(() => connection.Sessions.Get("s2") is not null, "the upsert");
+        var s = connection.Sessions.Get("s2")!;
+        Assert.Equal((Limits.Response, true), (s.Activity.Response!.Length, s.Activity.ResponseTruncated));
+        Assert.Equal((Limits.QuestionMessage, true), (s.Question!.Message.Length, s.Question.Truncated));
+    }
+
     // #446: a record the app could not read ended the event pump, and the connection with it; the
     // snapshot after the reconnect sent the same record, so one bad session kept the app
     // reconnecting for good. Now that message alone is refused, logged once for its kind.
