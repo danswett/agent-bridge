@@ -92,6 +92,8 @@ sensitive_paths:
   - src/AgentBridge.Host/SessionTransfers.cs
   - src/AgentBridge.Host/Program.cs # builds the remote-authorization policy
   - src/AgentBridge.Host/HostSettings.cs # authorization settings
+  - src/AgentBridge.Host/HostControl.cs # applies folder trust, approved devices, remote approval
+  - src/AgentBridge.Host/HostConfigFile.cs # persists them
   - src/AgentBridge.App.Core/Transfers.cs # signs commands
   # The Windows app's remote actions: connections, signed transfers and trust, launch
   # permissions, delivery, answers, replies and ending a session.
@@ -99,6 +101,7 @@ sensitive_paths:
   - src/AgentBridge.App.Core/HostConnection.cs
   - src/AgentBridge.App.Core/HostManager.cs
   - src/AgentBridge.App.Core/LaunchViewModel*.cs
+  - src/AgentBridge.App/LaunchView.xaml* # trust-root disclosure and consent
   - src/AgentBridge.App.Core/Deliveries.cs
   - src/AgentBridge.App.Core/QuestionViewModel.cs
   - src/AgentBridge.App.Core/ReplyViewModel.cs
@@ -120,6 +123,8 @@ sensitive_paths:
   - pwa/js/ui/needs-you-view.js
   # Which host and session an answer goes to, and the guard against a stray tap approving.
   - pwa/js/ui/session-card.js
+  # How an approval's command text lays out: whitespace and text direction.
+  - pwa/app.css
   - src/**hiddentext**
   - src/**markdown**
   - src/**needsyou**

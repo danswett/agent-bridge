@@ -206,11 +206,17 @@ static class MergeRuleCommand
                 prs = prs.Where(p => SameSha(p.HeadSha, sha)).ToList();
         }
 
+        // With the open list cut short, a held pull request on any head may be among the unread,
+        // so no pull request gets success from this run, in what's posted or what's shown.
+        List<(PullRequestFacts Pr, MergeVerdict Verdict)> Judged(IEnumerable<(PullRequestFacts Pr, MergeVerdict? Verdict)> assessed, string sha) =>
+            assessed.Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, sha))
+                .Select(j => (j.Pr, Verdict: listCut is not null && j.Verdict!.State == "success" ? MergeRule.ListCut(sha, listCut) : j.Verdict!))
+                .ToList();
+
         var rows = new List<string>();
         foreach (var head in prs.GroupBy(p => p.HeadSha.ToLowerInvariant()))
         {
-            var judged = head.Select(p => Assess(session, p)).Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, head.Key))
-                .Select(j => (j.Pr, Verdict: j.Verdict!)).ToList();
+            var judged = Judged(head.Select(p => Assess(session, p)), head.Key);
             if (judged.Count == 0)
                 continue;
             var combined = MergeRule.Combine(judged);
@@ -220,17 +226,12 @@ static class MergeRuleCommand
                 // have landed since. So read each pull request again just before posting, rather
                 // than overwrite a newer verdict with a stale one. One that has moved to another
                 // head is that head's business: its push starts a run of its own.
-                judged = judged.Select(j => Reread(session, j.Pr)).Where(j => j.Verdict is not null && SameSha(j.Pr.HeadSha, head.Key))
-                    .Select(j => (j.Pr, Verdict: j.Verdict!)).ToList();
+                judged = Judged(judged.Select(j => Reread(session, j.Pr)), head.Key);
                 if (judged.Count == 0)
                     continue;
                 combined = MergeRule.Combine(judged);
             }
-            // With the open list cut short, a held pull request on the same head may be among the
-            // unread, so no head gets success from this run.
-            if (listCut is not null && combined.State == "success")
-                combined = MergeRule.ListCut(head.Key, listCut);
-            if (combined.State == "error" || judged.Any(j => j.Verdict.State == "error"))
+            if (judged.Any(j => j.Verdict.State == "error"))
                 problems++;
             var unchanged = Unchanged(config, judged[0].Pr, combined);
             var action = !post ? "dry run, not posted" : unchanged ? "unchanged, not posted again" : "posted";

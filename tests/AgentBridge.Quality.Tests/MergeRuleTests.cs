@@ -345,12 +345,16 @@ public class MergeRuleTests
         var config = WriteConfig();
         try
         {
-            var all = MergeRuleCommand.Run(["--all", "--config", config, "--post"], new StringWriter(), github);
+            var shown = new StringWriter();
+            var all = MergeRuleCommand.Run(["--all", "--config", config, "--post"], shown, github);
             var one = MergeRuleCommand.Run(["--pr", "42", "--config", config, "--post"], new StringWriter(), github);
 
             Assert.Equal((1, 1), (all, one));
             Assert.Equal(2, github.Posted.Count);
             Assert.All(github.Posted, p => Assert.StartsWith($"{Head} error merge-rule Couldn't read every open pull request, so one on abcdef0 may be unread: gh: HTTP 502", p, StringComparison.Ordinal));
+            // What the log and the summary show is what was posted, not the pull request's own success.
+            Assert.Contains("#42 abcdef0 error: Couldn't read every open pull request", shown.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain(" success:", shown.ToString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -419,6 +423,10 @@ public class MergeRuleTests
     [InlineData("src/AgentBridge.App.Core/HiddenText.cs", true)]
     [InlineData("src/AgentBridge.App.Core/MainViewModel.NeedsYou.cs", true)]
     [InlineData("pwa/js/ui/session-card.js", true)]
+    [InlineData("src/AgentBridge.Host/HostControl.cs", true)]
+    [InlineData("src/AgentBridge.Host/HostConfigFile.cs", true)]
+    [InlineData("src/AgentBridge.App/LaunchView.xaml", true)]
+    [InlineData("pwa/app.css", true)]
     [InlineData("pwa/js/ui/glyph.js", false)]
     [InlineData("apple/Tests/AgentBridgeCoreTests/ProtocolTests.swift", false)]
     public void The_repositorys_sensitive_paths_take_in_authorization_delivery_and_the_build_but_not_docs_or_design(string path, bool sensitive)
