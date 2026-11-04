@@ -1064,6 +1064,8 @@ content.addEventListener('keydown', (e) => {
 
 let menuKey = null;
 function openMenu(key, x, y) {
+  // A row fading out after its session ended can still hold focus or a pointer: it has no menu.
+  if (!items[key] || !els.get(key)) return;
   menuKey = key;
   const r = els.get(key).getBoundingClientRect();
   $('[data-act="pin"]', menu).textContent = items[key].pinned ? 'Unpin' : 'Pin';
