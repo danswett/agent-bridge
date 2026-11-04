@@ -1,19 +1,21 @@
 // The app's relay connection over time. A phone kills the socket whenever it locks or the
 // app goes to the background (1006), and the app must come back by itself when it is next
 // in front (spikes/s5-web-push RESULTS.md, finding 5). So:
-// - after any drop, reconnect with backoff (1 s doubling to 30 s)
+// - after any drop, reconnect with jittered backoff (backoff.js: up to 1 s doubling to 30 s,
+//   and a relay restart's 1012 spread over 0-5 s or the relay's hint)
 // - reconnect at once when the page becomes visible again, is shown from the bfcache, or
 //   the network returns
 // - stop for good when the relay refuses the account (sign in again) or another window has
 //   taken this device over (two would only keep replacing each other)
 import { CLOSE_CODES, Relay } from './relay.js';
 import { ChannelSet } from './channels.js';
+import { ReconnectBackoff } from './backoff.js';
 
 export class BridgeConnection {
   #listeners = new Map();
   #attempt = null;
   #retryTimer = null;
-  #backoff = 1000;
+  #backoff = new ReconnectBackoff();
   #wake = null;
   relay = null;
   presence = [];
@@ -53,7 +55,7 @@ export class BridgeConnection {
   start() {
     if (!this.#wake) {
       this.#wake = () => {
-        if (this.win.document?.visibilityState !== 'hidden') { this.#backoff = 1000; this.#connect(); }
+        if (this.win.document?.visibilityState !== 'hidden') { this.#backoff.reset(); this.#connect(); }
       };
       this.win.document?.addEventListener?.('visibilitychange', this.#wake);
       this.win.addEventListener?.('pageshow', this.#wake);
@@ -108,7 +110,7 @@ export class BridgeConnection {
     r.onClose = (e) => this.#dropped(r, e);
     this.#attempt = r.connect(this.account.token).then(() => {
       this.relay = r;
-      this.#backoff = 1000;
+      this.#backoff.reset();
       this.channels.attach(r);
       this.#setState('connected', r.login ?? '');
       this.#emit('ready', r);
@@ -133,8 +135,7 @@ export class BridgeConnection {
       this.#setState('replaced', 'This app is open in another window or tab.');
       return;
     }
-    const delay = this.#backoff;
-    this.#backoff = Math.min(this.#backoff * 2, 30000);
+    const delay = this.#backoff.next(e.code, e.reason);
     this.retryAt = Date.now() + delay;
     this.#setState('reconnecting', `${e.code ?? ''} ${e.reason ?? ''}`.trim());
     this.#retryTimer = setTimeout(() => this.#connect(), delay);

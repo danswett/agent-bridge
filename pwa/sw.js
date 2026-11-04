@@ -13,7 +13,7 @@ const SHELL = [
   './config.js', './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
   './js/main.js', './js/bytes.js', './js/noise-p256.js', './js/identity.js', './js/signin.js',
-  './js/relay.js', './js/channels.js', './js/connection.js', './js/protocol.js', './js/host-client.js',
+  './js/relay.js', './js/channels.js', './js/backoff.js', './js/connection.js', './js/protocol.js', './js/host-client.js',
   './js/host-session.js', './js/sessions-store.js', './js/session-order.js', './js/needs-you.js', './js/markdown.js', './js/hidden-text.js', './js/demo.js', './js/push.js',
   './js/answers.js', './js/answer-service.js', './js/replies.js', './js/reply-service.js', './js/attachments.js', './js/blobs.js', './js/stop-service.js',
   './js/ui/dom.js', './js/ui/glyph.js', './js/status.js', './js/ui/time.js', './js/ui/meta.js', './js/ui/row-menu.js', './js/ui/question-view.js',

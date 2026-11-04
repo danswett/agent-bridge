@@ -77,7 +77,8 @@ public static class CloseCodes
     public const int Replaced = 4009;
     public const int TooLarge = 4013;
     public const int TooManyDevices = 4029;
-    // Sent by a relay that is shutting down: reconnect now, and land on a replica that is not.
+    // Sent by a relay that is shutting down: reconnect soon, spread over a few seconds
+    // (ReconnectBackoff), and land on a replica that is not.
     public const int Restarting = 1012;
 }
 

@@ -462,6 +462,11 @@ forgetful across restarts.
 - **Probes:** startup and liveness on `/healthz`, readiness on `/readyz`.
 - **Drain:** on SIGTERM the relay marks itself draining (`/readyz` 503, new sockets 503),
   sends every device 1012, and stops within 20 s, inside the 30 s termination grace period.
+- **Reconnects:** every client (host, Windows app, PWA) waits a uniformly random time
+  between 0 and min(30 s, 1 s · 2^n) before retry n, so devices closed together don't retry
+  together (#578). After a 1012 the first retry is spread over 0-5 s; a close reason of
+  `restarting;spread=N` widens that to N seconds (clamped to 1-60) without a client release.
+  The relay sends plain `restarting` today. `ReconnectBackoff.cs` and `pwa/js/backoff.js`.
 - **Limits:** 64 KiB frames (`Wire.MaxFrame`), 4 KiB control messages, 200 frames/s per
   socket, 32 devices per account, 30 pushes/min per account, 60 sign-in calls/min and 120
   new sockets/min per client address, 16 KiB request bodies, 10,000 sockets per replica.

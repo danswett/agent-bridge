@@ -31,7 +31,7 @@ Larger files come next.
 | `js/identity.js` | This device's P-256 key, generated non-extractable and kept in IndexedDB; its device id |
 | `js/signin.js` | GitHub device flow through the relay; the stored account |
 | `js/relay.js` | One relay WebSocket: hello, key proof, presence (with the account's offline machines, `known`), routed frames, `forget`. A send on a dead socket throws |
-| `js/connection.js` | The relay over time: reconnect with backoff, at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window |
+| `js/connection.js` | The relay over time: reconnect with jittered backoff (`js/backoff.js`, tested in `test/unit/backoff.test.mjs`), at once on `visibilitychange`/`pageshow`/`online`; stop on a refused sign-in or a takeover by another window |
 | `js/channels.js` | Noise_XX_P256 channels to hosts, as the initiator, with the peer's key checked against its id |
 | `js/noise-p256.js` | Vendored copy of `spikes/s2-noise-interop/web/noise-p256.js` |
 | `js/protocol.js` | Op and event names, and the tolerant reader: unknown fields dropped, unknown enum values read as the C# reader reads them |
