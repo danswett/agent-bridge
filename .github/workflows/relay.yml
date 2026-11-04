@@ -2,7 +2,8 @@ name: Relay deploy
 
 # Builds the relay image once per commit, rolls it onto staging, smoke-tests it there, and
 # only then offers it to production, which waits for a person to approve (the production
-# environment's required reviewer). Rollback is a workflow_dispatch with an earlier commit.
+# environment's required reviewer). Rollback is a workflow_dispatch with the digest of an image
+# production ran before (infra/rollback-target.sh).
 # No long-lived Azure secret is stored anywhere: every job that touches Azure signs in with GitHub
 # OIDC, and each environment has its own principal with rights over its own app only.
 # Infra itself (infra/) is applied by a person with infra/deploy.ps1; see docs/relay-deploy.md.
@@ -31,7 +32,7 @@ on:
   workflow_dispatch:
     inputs:
       rollback_to:
-        description: 'Roll production back to this earlier commit SHA (its image must be in the registry). Empty: build and deploy this commit.'
+        description: 'Roll production back to the image with this digest (sha256:...), one a production revision ran; the production job''s summary lists the one it replaced. Empty: build and deploy this commit.'
         required: false
         default: ''
 
@@ -59,6 +60,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - name: A rollback goes only to an image production ran before
+        run: bash infra/test-rollback-target.sh
       - run: |
           az bicep install
           az bicep build -f infra/main.bicep --stdout > /dev/null
@@ -73,11 +76,14 @@ jobs:
     # repository, and its runs get this job's id-token grant, so an unreviewed new action release
     # would run with the staging principal (AcrPush, the staging app, staging's token key). Both
     # the actor and the pull request's author are checked: a person pushing to a Dependabot
-    # pull request's branch becomes the run's actor, but the author is still Dependabot.
+    # pull request's branch becomes the run's actor, but the author is still Dependabot. And no
+    # dependabot/ ref either, whoever runs it: a maintainer re-pushing a Dependabot branch, or a
+    # workflow_dispatch on one, would otherwise pass both checks (#418).
     if: >-
       vars.RELAY_DEPLOY == 'true' && inputs.rollback_to == '' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
-      github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]'
+      github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !startsWith(github.head_ref || github.ref_name, 'dependabot/')
     needs: infra
     runs-on: ubuntu-latest
     environment: staging
@@ -299,16 +305,21 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # By digest, and only to one a production revision ran: never a registry tag, which anyone
+      # holding staging's AcrPush could have pushed again (#418).
+      - id: target
+        env:
+          DIGEST: ${{ inputs.rollback_to }}
+        run: ./infra/rollback-target.sh "$DIGEST"
       - id: roll
         env:
-          SHA: ${{ inputs.rollback_to }}
-        run: |
-          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then echo "rollback_to must be a full commit SHA"; exit 1; fi
-          ./infra/roll-production.sh "$REGISTRY.azurecr.io/$IMAGE:$SHA" "$SHA"
+          IMAGE_REF: ${{ steps.target.outputs.image }}
+          VERSION: ${{ steps.target.outputs.version }}
+        run: ./infra/roll-production.sh "$IMAGE_REF" "$VERSION"
       - name: Smoke test
         env:
-          SHA: ${{ inputs.rollback_to }}
+          VERSION: ${{ steps.target.outputs.version }}
           RELAY_URL: ${{ steps.roll.outputs.url }}
         run: |
           dotnet run --project tools/AgentBridge.RelaySmoke -c Release -- \
-            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$SHA" --expect-push --wait 180
+            --relay "$RELAY_URL" --origin "$PWA_ORIGIN" --expect-version "$VERSION" --expect-push --wait 180

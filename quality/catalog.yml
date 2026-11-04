@@ -532,7 +532,7 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     triggers: [infra/**]
-    command: az bicep build -f infra/main.bicep
+    command: az bicep build -f infra/main.bicep; bash infra/test-rollback-target.sh
     where: relay.yml infra
     status: exists
 

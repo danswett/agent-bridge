@@ -115,8 +115,9 @@ replicas no stable addresses to forward to, so that step is the `standard` size 
    required reviewer. `infra/roll-production.sh` refuses an app `infra/` has not adopted,
    writes the image it replaces to the job summary, rolls the digest, and the smoke test
    runs again without a token.
-7. **rollback**: run the workflow by hand with `rollback_to=<earlier commit SHA>`. Same
-   approval, same script, same smoke test. Not scanned again: it returns to an image that ran.
+7. **rollback**: run the workflow by hand with `rollback_to=<image digest>` (`sha256:…`); see
+   [Rollback](#rollback). Same approval, same script, same smoke test. Not scanned again: it
+   returns to an image that ran.
 
 Every job that touches Azure (build, staging, production, rollback) signs in with GitHub OIDC
 (`azure/login`); only those jobs, and `attest`, get `id-token: write`, and `infra`, which only
@@ -139,8 +140,28 @@ the Azure jobs on; without it (a fresh clone) the workflow only compiles `infra/
 pull request never reaches Azure: GitHub gives it a read-only token, no OIDC token and no
 secrets. Dependabot's pull requests skip the Azure jobs too (`build`'s condition), because their
 branches are in this repository: a bumped action reaches staging's sign-in only once a person
-has reviewed and merged it. That condition, not the `staging` environment, which has no branch
-policy or reviewer, is what keeps Dependabot's branches out.
+has reviewed and merged it. That condition, which also skips any `dependabot/` ref whoever runs
+it, not the `staging` environment, which has no branch policy or reviewer, is what keeps
+Dependabot's branches out.
+
+### Proposed, pending the owner's decision (#418)
+
+Rollback by digest stops a re-pushed tag reaching production. Two further changes would narrow
+what staging can do at all; neither is applied, and both change live Azure or GitHub settings,
+so they wait for the owner:
+
+1. **Staging's registry write.** Today `agent-bridge-relay-deploy-staging` holds AcrPush on the
+   whole of `abrelaywus2`, the registry production pulls from. Options, most contained first:
+   a separate staging registry (staging pushes there; production's image is imported into
+   `abrelaywus2` by digest, `az acr import`, when the production job runs, which needs import
+   rights on `abrelaywus2` for the production principal instead); or a repository-scoped ACR token in place of the role
+   (a Basic registry has tokens and scope maps); or ACR tag locking
+   (`az acr repository update --write-enabled false` on each tag after build pushes it, which
+   needs a role beyond AcrPush). Production by digest makes the third the least valuable.
+2. **The `staging` environment.** A required reviewer, or a deployment-branch policy (`main`
+   only, which would also stop pull requests deploying to staging before merge), so that an
+   unreviewed same-repository branch cannot sign in as staging at all. Today `build`'s
+   condition, and GitHub withholding OIDC from forks, are what keep others out.
 
 Infra changes (probes, sizes, secrets, a new region) are not applied by CI. A person runs
 `infra/deploy.ps1`, which never rolls an image: it re-states what each app runs now.
@@ -277,8 +298,27 @@ Staging has its own keys in `kv-abrelay-stg-wus2`; rotating them affects only th
 
 ## Rollback
 
-- **A bad build:** run `relay.yml` with `rollback_to=<previous SHA>` (the SHA is in the
-  production job's summary), and approve it.
+- **A bad build:** run `relay.yml` (Actions, *Relay deploy*, *Run workflow* on `main`) with
+  `rollback_to=<digest>`, the `sha256:…` the production job's summary gives under "roll back"
+  for the image it replaced, and approve the `production` environment as for any deploy.
+  `infra/rollback-target.sh` accepts only a digest that a revision of the production app has
+  run, and takes the commit that revision ran as the version the smoke test expects; anything
+  else is refused before production is touched. To see what production has run:
+  `az containerapp revision list -g rg-agent-bridge-relay -n agent-bridge-relay --all --query "[].{created: properties.createdTime, image: properties.template.containers[0].image, version: properties.template.containers[0].env[?name=='Relay__Version'].value | [0]}" -o table`.
+
+  Why a digest (#418): the registry is shared and the staging principal holds AcrPush on it, so
+  a tag such as `agent-bridge-relay:<old sha>` can be pushed again by anything that runs as
+  staging, a same-repository pull request's build included. Rolling back by a commit's tag
+  would then carry that image to production while the approver saw only a familiar SHA. A
+  digest is the image's bytes, and only production's own approved jobs create production
+  revisions, so neither a re-pushed tag nor an image only staging pushed qualifies.
+
+  Limits: Container Apps keeps up to 100 inactive revisions, so only images production ran
+  within its last 100 revisions qualify; and revisions deployed by tag (before production
+  deployed by digest, or by an earlier tag rollback) carry no digest to match. To return to
+  anything else, deploy it as a new build through staging, or have a person run
+  `./infra/deploy.ps1 -Production -ProductionImage <registry>/agent-bridge-relay@sha256:<digest> -ProductionVersion <sha>`
+  after checking the digest with `gh attestation verify` (pipeline step 4).
 - **The move to relay.bad-duck.com**, while the old stamp still exists: it runs the same
   build with the same keys, so pointing clients back is enough. Revert `S4_RELAY` in
   `.github/workflows/pages.yml` and the app's default in `src/AgentBridge.App/App.xaml.cs` to
@@ -410,7 +450,7 @@ forgetful across restarts.
 
 ### Rolling it back
 
-* **The image:** `relay.yml` with `rollback_to=<previous SHA>`, as for any build. An older relay
+* **The image:** `relay.yml` with `rollback_to=<previous digest>`, as for any build. An older relay
   sends no `known` and ignores `forget`; clients then list only what is online and offer no
   Forget.
 * **The infra:** nothing has to be undone. Left in place, the account is unused by an older image
