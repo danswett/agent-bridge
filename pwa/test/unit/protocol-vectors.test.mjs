@@ -41,7 +41,9 @@ const SIGNED = 'signed-command.json';
 const PATCHES = 'session-patches.json';
 // The channel's IK handshake, not records: test/unit/channels.test.mjs replays it.
 const NOISE = 'noise-ik-p256.json';
-const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE).sort().map((f) => [f, load(f)]);
+// The device roster's encoding, not records: test/unit/roster-vectors.test.mjs replays it.
+const ROSTER = 'roster.json';
+const files = readdirSync(folder).filter((f) => f.endsWith('.json') && f !== SIGNED && f !== PATCHES && f !== NOISE && f !== ROSTER).sort().map((f) => [f, load(f)]);
 const records = new Map(files.flatMap(([file, json]) => Object.entries(json.records).map(([name, r]) => [name, { ...r, file, contexts: json.contexts }])));
 const known = new Map(files.flatMap(([, json]) => json.knownDifferences).filter((d) => d.differs === 'pwa').map((d) => [`${d.vector}:${d.step}`, d]));
 
