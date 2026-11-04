@@ -46,7 +46,8 @@ Larger files come next.
 | `js/prompt-origin.js` | A prompt the person didn't type (#489, [ui.md](../docs/design/ui.md) §6.4): who sent it (`activity.userMessageFrom`: a schedule, an agent, or other; absent is the person), its label line's words and spoken name, its label cleaned and cut to 64 bytes, its hidden characters as escapes, and `PromptMemory`, which folds a schedule's repeat ("same as last time") and dates a prompt by its turn. Pure, and tested in `test/unit/prompt-origin.test.mjs` |
 | `js/needs-you.js` | The Needs you lane (#165): one entry per pending question across the machines shown, oldest first; what each says (title, machine, agent, age, first line or an approval's whole prompt, a delegate by name) and offers (Approve once and Deny, open the session, or answer at the machine); and the app badge with its count |
 | `js/answers.js` | An answer as the form holds it, as the request sends it, and checked first: `checkAnswer` mirrors the C# `Answers.Check` case for case, with its wording |
-| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect |
+| `js/answer-service.js` | Sending answers, one outcome each: a fresh request UUID per answer, resent with the **same** request after a lost response or a reconnect; how far each has got where the machine says (`sessions.progress`: Sent, Typed, Queued) |
+| `js/timing.js` | Timing marks for each answer and reply (#600), kept on this device only: tap, each send, each progress stage and the outcome as `performance` marks and measures, with the machine's own `timings` beside them |
 | `js/replies.js` | A reply checked before it goes: `checkReply` mirrors the C# `Replies.Check`, with its wording |
 | `js/reply-service.js` | Sending replies: `answer-service.js` with `session.reply`, one reply on its way per session, its files sent first |
 | `js/attachments.js` | A file or image for a reply: named, size-checked (a large image is redrawn smaller), hashed, and sent in chunks from where the machine has got to |
@@ -225,7 +226,14 @@ Before anything is sent the form is checked as the host will check it: `required
 values, Other not empty, 4 KiB of UTF-8 per free text (counted in bytes; a counter appears
 near the limit) and 16 KiB per request. A problem is named and focus goes to its field.
 
-While an answer is on its way the controls are disabled and it says so. If the response is
+While an answer is on its way the controls are disabled and it says so: "Sending…" until the
+machine says more. A machine whose `hello` lists `sessions.progress` is asked for it
+(`"progress": true`, [v1-sessions.md](../docs/protocol/v1-sessions.md)), and says how far it
+has got before the outcome comes: "Sent. The machine is typing it…" once it has the answer,
+"Typed. Waiting for the session to take it…" once the keys have gone, or "Queued. The session
+is working, and takes it at its next step." when they went into a working session. A stage
+only moves forward, across resends. A machine from before it says nothing until the outcome,
+as before. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported
@@ -260,7 +268,8 @@ While the session is asking a question the box is disabled and says to answer fi
 words would answer it. Anything typed stays.
 
 One reply per session is on its way at a time, resent with the same `request` like an
-answer. The words stay in the box until the session has them: a delivered reply takes out
+answer, and shows how far it has got like one (Sent, Typed, Queued) where the machine says.
+The words stay in the box until the session has them: a delivered reply takes out
 what was sent (anything typed meanwhile stays), and every other outcome keeps them.
 
 | Outcome | Shown | Then |
@@ -274,6 +283,21 @@ what was sent (anything typed meanwhile stays), and every other outcome keeps th
 A host waits up to a minute for a working session to take a reply, so the request waits
 90 s for its response before it counts as lost. Demo mode replies as a host would
 (`window.agentBridgeDemo.scriptReplies(…)`), only to Copilot sessions.
+
+### Timing marks
+
+Each answer and reply keeps marks on this device (`js/timing.js`, #600), so where the time
+went can be read without a debugger: the tap, each send (a resend is `sent 2`), each progress
+stage and the outcome, as `performance` measures from the tap named
+`agent-bridge reply 1a2b3c4d typed` (the request's first 8 hex digits, as the host's log
+names it), with the machine's own `timings` from the result (ms since it received the request:
+`typed`, `recorded`, `confirmed`). The last 50 are in `agentBridge.timings()` (in the demo,
+`agentBridgeDemo.timings()`), and each outcome has a line on the console's verbose level.
+None of it is ever sent anywhere.
+
+Demo mode plays a machine with progress: `?progress=0` one from before it,
+`?confirmDelay=<ms>` the wait between typing and the outcome (to see Typed), and
+`host.holdBefore('typing' | 'result')` with `releaseBefore` hold a delivery at a stage for a test.
 
 ### Attachments
 
@@ -461,12 +485,14 @@ running another checkout's tests at the same time. CI splits the run over severa
 the job that builds the dev stack. The others set `PWA_SKIP_E2E`, which leaves `test/e2e` out.
 
 * `test/answer.spec.mjs`, in demo mode at a phone's size: answering every field type and
-  kind, defaults, required fields, the byte limit, every outcome, a resend after a lost
+  kind, defaults, required fields, the byte limit, every outcome, Sent then Typed then
+  Delivered from a machine with `sessions.progress`, a resend after a lost
   response (typed once), a question changing or going while being answered, a card moving
   while in use, 44 px targets, and the keyboard.
 * `test/reply.spec.mjs`, in demo mode: a reply delivered as one line and taken out of the
   box (keeping what was typed meanwhile), every outcome keeping the words, a resend after a
-  lost response (typed once), the box held while a question is pending, the checks before
+  lost response (typed once), Sent, Typed and Queued from a machine with `sessions.progress`
+  with the timing marks kept, Sending alone from one without it, the box held while a question is pending, the checks before
   sending, 44 px targets, Ctrl/Cmd+Enter, and no box for a machine without `sessions.reply`.
 * `test/attach.spec.mjs`, in demo mode: a picked file and a pasted screenshot shown as
   chips and typed as `@` mentions ahead of the words, files alone, removing one, the size

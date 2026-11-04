@@ -45,6 +45,7 @@ import { ReleaseWatch } from './release-watch.js';
 import { UsageView } from './ui/usage-view.js';
 import { conceal, reveal, watchDisclosures, watchPresses } from './ui/motion.js';
 import { RelayBlobs } from './blobs.js';
+import { recentTimings } from './timing.js';
 import { edgeSwipeBack, installedOnApple, markPlatform } from './platform.js';
 
 // Installed on iOS or iPadOS, the edge swipe walks the same back stack as Android's Back.
@@ -310,8 +311,12 @@ async function startDemo() {
     // ?updates=1: a host whose app installs updates asked for from here (#51). Never a
     // read-only one, which offers none.
     updating: params.get('updates') === '1' && !ahb,
+    // ?progress=0: a host from before sessions.progress, which says nothing until the outcome.
+    progress: params.get('progress') !== '0',
   });
   host.updateStepMs = Number(params.get('updateStep')) || host.updateStepMs;
+  // ?confirmDelay=: how long after typing an answer or reply the machine confirms it, to see Typed.
+  host.confirmDelayMs = Number(params.get('confirmDelay')) || 0;
   // ?machines=2 or 3: the account's other machines, after this one.
   const machines = [host, ...demoMachines(Number(params.get('machines')) || 1, { answerDelayMs, stopWindowMs })];
   // ?attachDelay= slows each file chunk, so its progress can be watched.
@@ -395,6 +400,8 @@ async function startDemo() {
   const { answers, replies, stops, launches, launchPanel, view } = page;
   window.agentBridgeDemo = {
     host, hosts, connection, store: hosts.sessions, view, answers, replies, stops, launches, launchPanel, book, blobs: blobStore, page,
+    // This device's timing marks for its last answers and replies (timing.js).
+    timings: recentTimings,
     // Each demo machine, by its id: 'demo', 'demo-laptop', 'demo-shadow'.
     machines: Object.fromEntries(machines.map((m) => [m.machine.id, m])),
     get client() { return hosts.link(host.machine.id)?.client ?? null; },
@@ -722,7 +729,7 @@ function begin(account) {
 
   // For the E2E tests and debugging from the console. Holds no secrets beyond what the
   // page already has.
-  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page };
+  window.agentBridge = { connection, hosts, store: hosts.sessions, answers, replies, stops, launches, notices, fleet, book, page, timings: recentTimings };
   drawNotify();
   connection.start();
 }

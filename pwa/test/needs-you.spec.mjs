@@ -137,7 +137,7 @@ test.describe('on a phone', () => {
     await expect(entryFor(page, LAND)).toHaveCount(0);
     await expect(card(page, LAND).locator('.answer-receipt')).toHaveText('Your answer: Delivered. The session has your answer.');
     const sent = await log(page);
-    expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' } }]);
+    expect(sent).toEqual([{ id: LAND, question: 'r1#0123456789abcdef', request: expect.stringMatching(UUID), fields: { decision: 'approve' }, progress: true }]);
   });
 
   test('Deny in the lane is the card\'s Deny', async ({ page }) => {

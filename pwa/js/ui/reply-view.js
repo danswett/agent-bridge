@@ -22,6 +22,7 @@ import { AttachmentLimits, describeSize, prepareAttachment } from '../attachment
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
 import { enter } from './motion.js';
+import { describeStage } from './question-view.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -57,6 +58,8 @@ export function describeReply(entry, { machineName, working = false } = {}) {
         if (p.phase === 'fetch') { return { text: `The machine is receiving ${what}… ${percent}%`, tone: 'progress' }; }
         return { text: `Sending ${what}… ${percent}%`, tone: 'progress' };
       }
+      const staged = describeStage(entry.stage);
+      if (staged) { return { text: staged, tone: 'progress' }; }
       const text = entry.attempts > 1 ? 'Sending again…' : 'Sending…';
       return { text: working ? `${text} The session is working, and takes it at its next step.` : text, tone: 'progress' };
     }

@@ -19,6 +19,15 @@
 // one), 'failed' (the host answered the op with an error, not an outcome; resendable as
 // is), 'done' (outcome and reason set).
 //
+// While it is on its way, a host that offers sessions.progress says how far it has got, which
+// the entry keeps as its `stage`: 'received' (the host has it), 'typed' (the keys have gone),
+// or 'queued' (typed into a working session, which takes it at its next step). It only moves
+// forward, across resends of the same request: a repeat replays the stages reached, and what
+// has been typed stays typed. Null from a host that doesn't say (#600).
+//
+// `marks` ('reply' or 'answer') keeps this device's timing marks for each delivery, from the
+// tap to the outcome (timing.js); null keeps none.
+//
 // `current(hostId)` says whether that host is connected, and its HostClient: { client, hostId }
 // or null. Each entry goes to the host it was given for and to no other, so with several
 // machines shown at once an answer can never reach a session of the same id on another one.
@@ -28,15 +37,19 @@
 // swapped: the op it sends, the request it builds, and which outcomes are final. A settled
 // entry's `detail` is the whole result, for ops whose result says more than outcome and reason.
 
+import { finished, marked, tapped } from './timing.js';
+
 const NO_OUTCOME = 'no outcome came back from the machine in time';
 const MAX_BUSY_RESENDS = 5;
+const STAGE_ORDER = { received: 1, typed: 2, queued: 2 };
 
 export class AnswerService {
   #entries = new Map();
   #listeners = new Map();
   #any = new Set();
 
-  // send(client, data, entry, progress): the op, which may call progress(anything) as it goes.
+  // send(client, data, entry, progress, stage): the op, which may call progress(anything) as it
+  // goes, and passes stage to the client as its onProgress for the host's progress frames.
   // payload(entry): its request data. final(entry): whether a settled outcome stands, so that
   // giving the answer again sends nothing.
   constructor({
@@ -47,7 +60,7 @@ export class AnswerService {
     giveUpMs = 9 * 60 * 1000,
     // How long one entry may go on being resent, when some ops take longer than others.
     giveUpFor = null,
-    send = (client, data) => client.answer(data),
+    send = (client, data, entry, progress, stage) => client.answer(data, { onProgress: stage }),
     payload = (e) => ({ id: e.sessionId, question: e.questionId, request: e.request, ...e.answer }),
     final = (e) => !['busy', 'refused'].includes(e.outcome),
     // Whether busy on a resend means the first copy is still being delivered. A launch's host
@@ -57,8 +70,9 @@ export class AnswerService {
     // went offline, #269) takes nothing new: an answer, reply, stop or launch given from what it
     // showed before it went could act on a question or session that has gone since.
     accepts = () => true,
+    marks = null,
   }) {
-    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts });
+    Object.assign(this, { current, uuid, now, retryMs, giveUpMs, send, payload, final, resendOnBusy, accepts, marks });
     this.giveUpFor = giveUpFor ?? (() => this.giveUpMs);
   }
 
@@ -86,10 +100,11 @@ export class AnswerService {
     if (!this.accepts(hostId)) { return null; }
     const entry = {
       key, hostId, sessionId, questionId, answer,
-      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null,
+      request: this.uuid(), state: 'sending', outcome: null, reason: null, progress: null, stage: null,
       firstSentAt: null, attempts: 0, busyResends: 0, timer: null, token: 0,
     };
     this.#entries.set(key, entry);
+    if (this.marks) { tapped(this.marks, entry.request); }
     this.#attempt(entry);
     return this.#snapshot(entry);
   }
@@ -118,12 +133,13 @@ export class AnswerService {
 
   #snapshot(entry) {
     if (!entry) { return null; }
-    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail = null } = entry;
-    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, detail };
+    const { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, stage, detail = null } = entry;
+    return { key, hostId, sessionId, questionId, answer, request, state, outcome, reason, attempts, progress, stage, detail };
   }
 
   #set(entry, change) {
     Object.assign(entry, change);
+    if (change.state === 'done' && this.marks) { finished(entry.request, entry.outcome, entry.detail?.timings ?? null); }
     const snap = this.#snapshot(entry);
     for (const fn of [...(this.#listeners.get(entry.key) ?? []), ...this.#any]) {
       try { fn(snap); } catch (e) { console.error(e); }
@@ -153,12 +169,22 @@ export class AnswerService {
     entry.attempts++;
     entry.firstSentAt ??= this.now();
     this.#set(entry, { state: 'sending', reason: null, progress: null });
+    if (this.marks) { marked(entry.request, 'sent'); }
     const data = this.payload(entry);
     // What the op has done so far, for one that takes a while (a reply's files going first).
     const progress = (p) => { if (token === entry.token && entry.state === 'sending') { this.#set(entry, { progress: p }); } };
+    // How far the host has got with it (sessions.progress). A stage from an attempt given up
+    // on, or behind one already reached, changes nothing.
+    const stage = ({ stage: s, working }) => {
+      if (token !== entry.token || entry.state !== 'sending') { return; }
+      const next = s === 'typed' && working ? 'queued' : s;
+      if (this.marks) { marked(entry.request, next); }
+      if ((STAGE_ORDER[next] ?? 0) < (STAGE_ORDER[entry.stage] ?? 0) || next === entry.stage) { return; }
+      this.#set(entry, { stage: next });
+    };
     let result;
     try {
-      result = await this.send(client, data, this.#snapshot(entry), progress);
+      result = await this.send(client, data, this.#snapshot(entry), progress, stage);
     } catch (e) {
       if (token !== entry.token) { return; }
       if (e?.fromHost === true) {

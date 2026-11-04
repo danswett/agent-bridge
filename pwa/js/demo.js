@@ -157,6 +157,11 @@ export class DemoHost {
   #letResponsesGo = null;
   #snapshotHeld = null;
   #letSnapshotGo = null;
+  // Holds before a delivery types or before its outcome goes (holdBefore), by step.
+  #heldBefore = new Map();
+  // How long after typing an answer or a reply its outcome goes, as a host waits for the
+  // session to record it: long enough, in the demo (?confirmDelay=), to see Typed (#600).
+  confirmDelayMs = 0;
   #arms = new Map();
   // session.launch: outcomes by request, and every request as received.
   launches = new Map();
@@ -189,12 +194,14 @@ export class DemoHost {
   // launching: false, one that can't launch sessions; transferring: false, one that takes no
   // sessions from other machines. readOnly: why it takes nothing from the phone, as hello says.
   // updating: true plays a host whose app installs updates asked for from the phone (#51).
-  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false } = {}) {
+  // progress: false plays a host from before sessions.progress, which says nothing of an answer
+  // or a reply until its outcome.
+  constructor(fixture, { readOnly = null, machineId = 'demo', machineName = 'Demo machine', answerDelayMs = 700, answering = true, replying = answering, attaching = replying, large = attaching, stopping = answering, approving = answering, stopWindowMs = 10000, usage = true, launching = answering, transferring = launching, trusting = launching, updating = false, progress = true } = {}) {
     this.machine = { id: machineId, name: machineName, os: 'windows', hostVersion: '0.1.0', dev: true, ...(readOnly ? { readOnly } : {}) };
     this.usage = demoUsage();
     this.answerDelayMs = answerDelayMs;
     this.stopWindowMs = stopWindowMs;
-    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : [])];
+    this.capabilities = ['sessions.read', ...(answering ? ['sessions.answer'] : []), ...(answering && approving ? ['sessions.approve'] : []), ...(replying ? ['sessions.reply'] : []), ...(replying && attaching ? ['sessions.attach'] : []), ...(replying && attaching && large ? ['sessions.attach.blob'] : []), ...(stopping ? ['sessions.stop'] : []), ...((answering || replying) && progress ? ['sessions.progress'] : []), ...(usage ? [USAGE.capability] : []), ...(launching ? [LAUNCH.capability] : []), ...(launching && transferring ? [TRANSFER.capability] : []), ...(launching && trusting ? [TRUST.capability] : []), ...(updating ? [UPDATE.capability] : [])];
     if (updating) {
       this.update = { current: '0.1.0', installer: true, available: '0.2.0', notes: 'Updates from your phone', checkedAt: now(), phase: 'idle', automatic: false };
     }
@@ -258,10 +265,10 @@ export class DemoHost {
         return undefined;
       }
       case 'session.answer':
-        return this.#answer(data, reply, (error) => t.deliver({ re: id, ok: false, error }));
+        return this.#answer(data, reply, (error) => t.deliver({ re: id, ok: false, error }), this.#progressTo(t, id, data));
       case 'session.reply':
         if (!this.capabilities.includes('sessions.reply')) { break; }
-        return this.#reply(data, reply);
+        return this.#reply(data, reply, this.#progressTo(t, id, data));
       case 'attachment.start':
       case 'attachment.chunk':
       case 'attachment.discard':
@@ -578,19 +585,77 @@ export class DemoHost {
     }, this.answerDelayMs));
   }
 
-  #reply(data, reply) {
+  #reply(data, reply, progress) {
     this.replyLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     const known = this.replies.get(request);
-    if (known) { known.result.then(reply); return; }
+    if (known) { known.join(progress); known.result.then(reply); return; }
     const step = this.#replyScript.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
-    const result = this.#after(() => this.#decideReply(data, scripted));
-    this.replies.set(request, { result });
+    const delivery = this.#delivery(progress);
+    const result = this.#delivered(delivery, (typed) => this.#decideReply(data, scripted, typed));
+    this.replies.set(request, { result, join: delivery.join });
     result.then((r) => { if (!scripted.drop) { reply(r); } });
   }
 
-  #decideReply(data, scripted) {
+  // Where the request asked for progress and this host offers it (sessions.progress), a
+  // function sending one frame of it to that copy of the request; otherwise null.
+  #progressTo(t, id, data) {
+    return data?.progress === true && this.capabilities.includes('sessions.progress') ? (p) => t.deliver({ re: id, progress: p }) : null;
+  }
+
+  // One answer's or reply's progress, as a host keeps it: each stage goes to every copy of the
+  // request that asked for progress, and a repeat still on its way gets the stages reached so far.
+  #delivery(progress) {
+    const stages = [];
+    const told = new Set(progress ? [progress] : []);
+    const start = Date.now();
+    return {
+      // ms since receipt of each stage reached, for the outcome's timings.
+      timings: progress ? {} : null,
+      tell(p) {
+        if (this.timings && p.stage === 'typed') { this.timings.typed = Date.now() - start; }
+        stages.push(p);
+        for (const fn of told) { fn(p); }
+      },
+      join: (fn) => { if (!fn) { return; } for (const p of stages) { fn(p); } told.add(fn); },
+      done(r) {
+        if (!this.timings || !('typed' in this.timings)) { return r; }
+        const ms = Date.now() - start;
+        return { ...r, timings: { ...this.timings, ...(r.outcome === 'delivered' ? { recorded: ms, confirmed: ms } : {}) } };
+      },
+    };
+  }
+
+  // A delivery as a host makes one: received at once (after any hold of responses), then after
+  // the answer delay and any hold before typing, decide(typed) types, saying typed as it does;
+  // then, after any hold before the result and confirmDelayMs, the outcome, with its timings
+  // where progress was asked for. The holds and the delay let a test, or a person in the demo,
+  // see each stage (#600).
+  #delivered(delivery, decide) {
+    Promise.resolve(this.#responsesHeld).then(() => delivery.tell({ stage: 'received' }));
+    return this.#after(() => this.#heldBefore.get('typing')?.promise)
+      .then(() => decide((working) => delivery.tell({ stage: 'typed', working })))
+      .then(async (r) => {
+        await this.#heldBefore.get('result')?.promise;
+        if (this.confirmDelayMs) { await new Promise((resolve) => setTimeout(resolve, this.confirmDelayMs)); }
+        return delivery.done(r);
+      });
+  }
+
+  // Holds every delivery before it types ('typing') or before its outcome goes ('result'), until
+  // releaseBefore() with the same step: Sent and Typed stay to be looked at however slowly the
+  // browser runs, as holdResponses() keeps Sending.
+  holdBefore(step) {
+    if (this.#heldBefore.has(step)) { return; }
+    let release;
+    const promise = new Promise((resolve) => { release = resolve; });
+    this.#heldBefore.set(step, { promise, release });
+  }
+
+  releaseBefore(step) { this.#heldBefore.get(step)?.release(); this.#heldBefore.delete(step); }
+
+  #decideReply(data, scripted, typed = () => {}) {
     const problem = checkReply(data);
     if (problem) { return { outcome: 'refused', reason: problem }; }
     const s = this.sessions.get(data?.id);
@@ -615,6 +680,7 @@ export class DemoHost {
     for (const f of files) { f.used = true; }
     const mentions = files.map((f) => `@C:\\Users\\demo\\AppData\\Local\\AgentBridge\\default\\attachments\\${stagedName(f.name)}`);
     const said = files.length ? [...mentions, typedForm(data.text ?? '').trim()].filter(Boolean).join(' ') : typedForm(data.text);
+    typed(s.status === 'working');
     this.typedReplies.push({ id: s.id, request: data.request, said, files: files.map(({ name, type, size }) => ({ name, type, size })) });
     this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), activity: { ...s.activity, userMessage: said } });
     this.onReplied?.(s.id, said);
@@ -622,23 +688,29 @@ export class DemoHost {
     return { outcome, reason: scripted.reason ?? (outcome === 'unconfirmed' ? 'the session did not record the reply within 60 seconds' : 'from a newer host') };
   }
 
-  #answer(data, reply, fail) {
+  #answer(data, reply, fail, progress) {
     this.answerLog.push(clone(data ?? null));
     const request = typeof data?.request === 'string' ? data.request : '';
     // A repeat, even of one still being delivered, gets the first one's outcome.
     const known = this.answers.get(request);
-    if (known) { known.result.then(reply); return; }
+    if (known) { known.join(progress); known.result.then(reply); return; }
     const step = this.#script.shift() ?? 'delivered';
     const scripted = typeof step === 'string' ? { outcome: step } : step;
+    const delivery = this.#delivery(progress);
     // error: the host fails the op itself, with nothing typed, so the same request can go again.
-    if (scripted.error) { this.#after(() => null).then(() => fail(scripted.error)); return; }
-    const result = this.#after(() => this.#decide(data, scripted));
-    this.answers.set(request, { result });
+    // A host says it received a request before any check, so that one says so too.
+    if (scripted.error) {
+      Promise.resolve(this.#responsesHeld).then(() => delivery.tell({ stage: 'received' }));
+      this.#after(() => null).then(() => fail(scripted.error));
+      return;
+    }
+    const result = this.#delivered(delivery, (typed) => this.#decide(data, scripted, typed));
+    this.answers.set(request, { result, join: delivery.join });
     // drop: the host did the work, but its response never reached the phone.
     result.then((r) => { if (!scripted.drop) { reply(r); } });
   }
 
-  #decide(data, scripted) {
+  #decide(data, scripted, typed = () => {}) {
     const s = this.sessions.get(data?.id);
     const q = s?.question ? readQuestion(s.question) : null;
     if (!q || q.id !== data.question) { return { outcome: 'stale', reason: 'the session is no longer asking that question' }; }
@@ -650,6 +722,7 @@ export class DemoHost {
     if (outcome === 'refused') { return { outcome, reason: scripted.reason ?? 'the session is running elevated' }; }
     // Typed: the question goes, and the session works on the answer.
     const said = data.text ?? Object.entries(data.fields ?? {}).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('; ');
+    typed(s.status === 'working');
     this.typed.push({ id: s.id, question: q.id, request: data.request, said });
     this.upsert({ ...s, status: 'working', statusSince: now(), updatedAt: now(), question: null, activity: { ...s.activity, userMessage: said } });
     this.onTyped?.(s.id);

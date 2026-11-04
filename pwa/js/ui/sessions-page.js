@@ -187,7 +187,7 @@ export class SessionsPage {
     // holds even if one is pressed anyway. What was sent before stays to be resent: the machine
     // checks it against the live question or session.
     const accepts = (hostId) => !!hosts.route(hostId);
-    this.answers = new AnswerService({ current, accepts, ...timing });
+    this.answers = new AnswerService({ current, accepts, ...timing, marks: 'answer' });
     this.replies = new ReplyService({ current, accepts, ...timing, blobs });
     this.stops = new StopService({ current, accepts, ...timing });
     this.launches = new LaunchService({ current, accepts, ...timing });

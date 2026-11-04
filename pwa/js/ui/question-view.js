@@ -151,13 +151,26 @@ const OUTCOME_TEXT = {
   refused: () => 'The machine refused this answer.',
 };
 
+// How far an answer or a reply on its way has got, where its machine says (sessions.progress,
+// #600): Sent once the machine has it, Typed once the keys have gone, and Queued when they went
+// into a working session, which takes it at its next step. Null before the machine says, or
+// from one that never does: then it is Sending.
+export function describeStage(stage) {
+  switch (stage) {
+    case 'received': return 'Sent. The machine is typing it…';
+    case 'typed': return 'Typed. Waiting for the session to take it…';
+    case 'queued': return 'Queued. The session is working, and takes it at its next step.';
+    default: return null;
+  }
+}
+
 // What an answer's progress or outcome says, for the form and for the card once the
 // question has gone. tone: progress | ok | warn | bad.
 export function describeAnswer(entry, machineName) {
   const at = where(machineName);
   switch (entry.state) {
     case 'sending':
-      return { text: entry.attempts > 1 ? 'Sending again…' : 'Sending…', tone: 'progress' };
+      return { text: describeStage(entry.stage) ?? (entry.attempts > 1 ? 'Sending again…' : 'Sending…'), tone: 'progress' };
     case 'waiting':
       return {
         text: entry.reason === 'still being delivered'

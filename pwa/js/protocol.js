@@ -32,7 +32,7 @@ export const Events = Object.freeze({
   discoveryChanged: 'discovery.changed',
 });
 
-export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', push: 'push' });
+export const Capabilities = Object.freeze({ sessionsRead: 'sessions.read', sessionsPatch: 'sessions.patch', sessionsAnswer: 'sessions.answer', sessionsReply: 'sessions.reply', sessionsAttach: 'sessions.attach', sessionsAttachBlob: 'sessions.attach.blob', sessionsStop: 'sessions.stop', sessionsApprove: 'sessions.approve', sessionsProgress: 'sessions.progress', push: 'push' });
 
 export const Outcomes = Object.freeze(['delivered', 'unconfirmed', 'stale', 'busy', 'refused']);
 
@@ -260,11 +260,26 @@ export function readHello(raw) {
   };
 }
 
-// session.answer's and session.reply's result: { outcome, reason }. Anything unreadable is
-// unconfirmed, since the host may have typed it.
+// session.answer's and session.reply's result: { outcome, reason }, and timings where the host
+// sent them (sessions.progress): each stage it reached, in ms since it received the request
+// ({ typed, recorded, confirmed }). Only for this device's own timing marks, so a stage that
+// isn't a whole number of ms is left out. Anything unreadable is unconfirmed, since the host
+// may have typed it.
 export function readAnswerResult(raw) {
   const r = obj(raw) ?? {};
-  return { outcome: readOutcome(r.outcome), reason: str(r.reason) };
+  const timings = Object.entries(obj(r.timings) ?? {}).filter(([, ms]) => Number.isFinite(ms) && ms >= 0);
+  return { outcome: readOutcome(r.outcome), reason: str(r.reason), ...(timings.length ? { timings: Object.fromEntries(timings) } : {}) };
+}
+
+// An interim frame's progress for a session.reply or session.answer that asked for it
+// (sessions.progress): { stage, working }, stage received (the host has it) or typed (the keys
+// have gone; working: the session was working, and takes it at its next step). Null for a
+// stage this app doesn't know, from a newer host: it says nothing the person can act on.
+export const ProgressStages = Object.freeze(['received', 'typed']);
+export function readProgress(raw) {
+  const p = obj(raw);
+  if (!p || !ProgressStages.includes(p.stage)) { return null; }
+  return { stage: p.stage, working: p.working === true };
 }
 
 // attachment.start's and attachment.chunk's result: { received, complete }. A count that is
