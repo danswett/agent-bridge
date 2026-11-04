@@ -241,22 +241,30 @@ agent's current step"). Delivered, that ring turns to the `check` icon for about
 to "You answered · *value*" in text2: a tap's option, free text's first line with its runs of
 white space as one, cut at a word break within 40 characters, or nothing for a form of several
 fields. A machine from before progress is heard as sending until its outcome, and never as sent.
+The ring and the check sit in a slot each control keeps for them at rest, so they never cover a
+label or a badge and the control never resizes. A host takes a question away as it types the
+answer, before its result: the question stays, its ring on the option that went, until the
+outcome; delivered, it shows the check and then resolves; not confirmed, stale or failed, it stays
+as it went (that option pressed at full opacity, the rest disabled, the line saying why), since a
+host types into a prompt once; busy or refused resolve to the receipt at once.
 
 A line of words appears only for an exception: "Still sending…" after 3 s with nothing heard
 (and for a resend), "Sent · still waiting on *machine*" after 5 s, "Passed to the agent · not
 picked up yet" after 10 s (Up next never stalls), "· still being delivered" after the stage a
 resend met the first copy at, "Waiting for *machine* · it goes when *machine* is back" (the ring
-still), and any outcome but delivered, in today's words. It goes when the next stage or the
+still, in Send's ink at full opacity), and any outcome but delivered, in today's words. It goes when the next stage or the
 outcome makes it untrue. Nothing is shown or heard for the first 400 ms; after that a screen
 reader hears the furthest stage reached, prefixed "Reply" or "Answer", at most one a second (the
-later of two), and the outcome at once. The thresholds are `ReceiptTiming`. All of it is kept
+later of two), and the outcome at once; a failure (refused, failed) is said assertively, on the
+page's alert line and only there (ui.md §9.1 A6), and a file being read is said once as it starts. The thresholds are `ReceiptTiming`. All of it is kept
 by request, so the form, Needs you and the card's receipt after the question has gone share one
 timing and say each change once between them, in a view of the request that is on screen, or
 else on the page's own live line (a session's card while another is open, a receipt gone with
 its question, a reply box moved on to the next reply), never lost and never on a line showing
 another request. From Send the line keeps the room the longest outcome needs (two lines in a
 box under 640 px wide, one above), empty unless it has something to say, until the box is typed
-in again, so nothing moves the box.If the response is
+in again, so nothing moves the box; a Needs you entry keeps its line's room (two lines on a
+phone) in every state. If the response is
 lost (a timeout, the channel or relay dropping) it is resent with the same `request` on
 the next channel to that machine, so the host returns the first outcome and never types it
 twice; after 9 minutes without an outcome (hosts remember requests for 10) it is reported

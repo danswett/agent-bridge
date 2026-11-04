@@ -154,26 +154,37 @@ function stallDue(entry, h, T) {
 }
 
 // at once: an outcome, said now whatever was said in the last second, in place of anything
-// still waiting.
-function speak(h, text, now, gapMs, atOnce) {
-  if (!text || h.said.has(text)) { return; }
+// still waiting. alert: a failure, said assertively on the page's alert line (ui.md §9.1 A6).
+function speak(h, text, now, gapMs, atOnce, alert = false) {
+  if (!text || h.said.has(text)) {
+    // The request is back in a state already said, or one with nothing to say: what was waiting
+    // was about a state it has left (a disconnect's "waiting for" after the connection is back).
+    clearTimeout(h.sayTimer);
+    h.sayTimer = null;
+    h.pending = null;
+    return;
+  }
   h.pending = text;
   if (atOnce) {
     clearTimeout(h.sayTimer);
     h.sayTimer = null;
-    sayNow(h, now);
+    sayNow(h, now, alert);
     return;
   }
   const wait = h.saidAt + gapMs - now();
   if (wait <= 0) { sayNow(h, now); } else if (!h.sayTimer) { h.sayTimer = setTimeout(() => { h.sayTimer = null; sayNow(h, now); }, wait); }
 }
 
-function sayNow(h, now) {
+function sayNow(h, now, alert = false) {
   if (h.pending === null) { return; }
   const text = h.pending;
   h.pending = null;
   h.said.add(text);
   h.saidAt = now();
+  if (alert) {
+    sayAlert(text);
+    return;
+  }
   const voice = [...h.voices].find((v) => v.heard());
   if (voice) { voice.say(text); } else { sayOnPage(text); }
 }
@@ -184,9 +195,23 @@ function sayNow(h, now) {
 // for its first content and not said. One made later (the page's body replaced) takes its words a
 // moment after it is in.
 let pageLine = null;
+let alertLine = null;
 function mountPageLine() {
   pageLine = receiptLive();
-  document.body.append(pageLine);
+  alertLine = h('span', { class: 'sr-only receipt-alert', role: 'alert' });
+  document.body.append(pageLine, alertLine);
+}
+// A failure, on the page's alert line: one line for the page, so it is said whichever view
+// showed it, and only there, so it is never said twice (ui.md §9.1 A6).
+function sayAlert(text) {
+  if (typeof document === 'undefined') { return; }
+  if (alertLine?.isConnected) {
+    alertLine.textContent = text;
+    return;
+  }
+  mountPageLine();
+  const line = alertLine;
+  setTimeout(() => { line.textContent = text; }, 100);
 }
 function sayOnPage(text) {
   if (typeof document === 'undefined') { return; }
@@ -252,7 +277,7 @@ export class ReceiptClock {
       // An outcome is never held: shown and said at once, past any stage not yet said.
       const d = this.describe(entry, { stalled: false });
       this.#put(d.line ? d : ROOM);
-      speak(h, d.speech, this.now, T.announceGapMs, true);
+      speak(h, d.speech, this.now, T.announceGapMs, true, d.tone === 'bad');
       if (entry.state === 'done' && entry.outcome === 'delivered' && this.#seen === entry.request) {
         this.#seen = null;
         this.delivered();
@@ -318,6 +343,15 @@ export function holdCheck(button, { holdMs = ReceiptTiming.sendCheckHoldMs } = {
   button.classList.add('checked');
   clearTimeout(checks.get(button));
   checks.set(button, setTimeout(() => { button.classList.remove('checked'); checks.delete(button); }, holdMs));
+}
+
+// A new request from the same control: an earlier delivery's check gives way to its ring at once,
+// so the new request never looks delivered.
+export function dropCheck(button) {
+  if (!button) { return; }
+  clearTimeout(checks.get(button));
+  checks.delete(button);
+  button.classList.remove('checked');
 }
 
 // The line a screen reader hears the receipt on (ui.md §9): polite, and apart from the words on

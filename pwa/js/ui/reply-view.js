@@ -21,7 +21,7 @@ import { ReplyLimits, checkReply, replyRequest } from '../replies.js';
 import { AttachmentLimits, describeSize, prepareAttachment } from '../attachments.js';
 import { CANCELLED } from '../reply-service.js';
 import { isSendKey, shortcutHints } from '../platform.js';
-import { ReceiptClock, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
+import { ReceiptClock, describeInFlight, drawReceipt, drawn, dropCheck, holdCheck, receiptLive } from './receipt.js';
 
 let seq = 0;
 const where = (machineName) => (machineName ? ` on ${machineName}` : '');
@@ -395,6 +395,8 @@ export class ReplyBox {
     this.#receipt.show(reading ? null : entry);
     if (reading) {
       drawReceipt(e.status, 'answer-status reply-status', { key: 'reading', text: 'Reading the attachment…', more: null, tone: 'progress', line: true });
+      // Its words are drawn, not said (the line isn't live): the live line says it once, as it starts.
+      if (!this.#reading) { e.live.textContent = 'Reading the attachment'; }
     } else if (this.#reading && !entry) {
       drawReceipt(e.status, 'answer-status reply-status', null);
     }
@@ -402,6 +404,8 @@ export class ReplyBox {
     // Send is busy (ui.md §9), not the form: the receipt's live region is in it, and a reader may
     // hold back what a busy region says until it is done.
     e.send.setAttribute('aria-busy', reading || this.#pending(entry) ? 'true' : 'false');
+    // A reply sent during the last one's check: the check goes at once, so the new one never looks delivered.
+    if (reading || this.#pending(entry)) { dropCheck(e.send); }
     // Held on this device for a machine that isn't connected: Send's ring stands still.
     e.send.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.resend.hidden = entry?.state !== 'failed' || entry.request === this.#edited || entry.reason === CANCELLED;
