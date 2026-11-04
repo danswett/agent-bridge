@@ -43,7 +43,7 @@ In addition to design.md [§5.1](../design.md#51-threat-model):
 | **The relay** (operator, storage, a compromised deployment; it mints tokens) | Untrusted for authorization. It stores and serves the roster, routes frames, and can drop, delay, reorder, replay or withhold anything, and act as any number of devices of its own | Forge or alter a roster entry, forge an approval, make a verifier forget an entry it holds, substitute keys in an enrollment or pose as an approver to a new device without the codes failing, or keep a removed device served on a host that any device holding the removal reaches within the freshness window (§6.3). It **can** deny service, show a pending device a misleading name, and keep a removed device served inside a partition it maintains (§6.3), or at a host that does not yet hold the removal's parent (one the remover has no attestation from, or one behind a just-made confirmation) until the roster is imported there (§3.3) |
 | **A compromised machine** (an agent or malware running as the user where a host and the Windows app run) | Holds the host key and the account token, has the use (not a copy) of the app's TPM keys, and can inject input | With the host key: pass a person-only check, add or remove devices, or take another machine's sessions without a person's press. With the app's keys: approve devices or pass person-only checks. The app does either only with a presence proof, which R4 must show same-user code cannot produce (§4.6). It **can**, as that app, read and drive sessions on the account's other machines, as it already can on its own: the residual named in §7.3 |
 | **A pending (unapproved) device** | Has completed sign-in and proved its key | Learn anything but that it is pending: no roster, machines, sessions, usage or names; no pushes or blobs. Hosts in `enforce` hold to this from the start; the relay does once the account's relay mode is `enforce` (§4.5), which the owner switches on after the cutover (§8.2) |
-| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4); touch a device senior to it in any way. Its removals of devices junior to it are not held, and apply at once. It **can** disable devices that are not senior to it by copying their keys: a conflict makes one inactive, and for a device junior to it the copy can displace the genuine enrollment. Both are announced naming it, and undone by removing it (§3.3) |
+| **A newly approved device that turns out to be hostile** (approved by mistake or by a compromised approver) | Holds an approved key | Remove any device that is not junior to it on its own signature, ever, or with a cosigner until its approver has confirmed it; add devices that take effect during its probation (§3.4); touch a device senior to it in any way. Its removals of devices junior to it are not held, and apply at once. It **can** disable devices that are not senior to it by copying their keys: a conflict makes one inactive, and for a device junior to it the copy can displace the genuine enrollment. Both are announced naming it, and undone by removing it, apart from devices its own subtree enrolled and then copied, or enrolled under a copy, which go with it (§3.3) |
 | **A removed device** | Was approved; still holds its keys and maybe a valid token | Anything a pending device cannot, once a host learns of the removal. A host learns of it from any device that holds the removal, or goes stale after the freshness window. Two exceptions are stated: a relay-maintained partition (§6.3), and a host that does not yet hold the removal's parent (one the remover has no attestation from, or one behind a signer's just-made confirmation), where a hostile target can make the removal need more evidence than the limits allow, until the roster is imported at that machine (§3.3) |
 | **The person at an approved device** | Trusted | They are the only source of approval and of person-only actions |
 | **The local pipe and the HA connector** | Unchanged: same-OS-user trust, and Home Assistant credentials respectively | Out of scope for the roster; see §9.5 |
@@ -270,16 +270,20 @@ history state. It is valid only if:
   * a removal of H takes the copies away. A copy is an add H signed, so it is in H's approval
     subtree whatever id it carries: a removal of H revokes every copy that is an ancestor of it,
     and every copy that is not is H's grant concurrent with the removal and void (§3.5). The
-    remover need not hold, find or name any of them, and an honest client never offers a copy
-    for keeping. Conflict sets are formed from adds that are neither void nor revoked (§3.5, the
-    order of computation), so once H is removed the genuine adds are neither subordinate nor
-    conflicted: the devices are active again under their own descriptors, with their subtrees,
-    and with no new enrollment, even when the honest line was built on top of a copy.
+    remover need not hold, find or name any of them, and a copy can never be kept (`remove`,
+    below). Conflict sets are formed from adds that are neither void nor revoked (§3.5, the
+    order of computation), so once H is removed the genuine adds outside H's subtree are neither
+    subordinate nor conflicted: those devices are active again under their own descriptors, with
+    their subtrees, and with no new enrollment, even when the honest line was built on top of a
+    copy. Two kinds of device are taken with H instead, and are enrolled again with a new key:
+    one H's subtree enrolled and then copied, since neither add of its id can be kept and the
+    genuine one is in the subtree too; and one a displaced device enrolled while the copy was its
+    active add, whose signer is the copy.
 
   So the damage is a denial of service, attributed and reversible, never a gain of trust. It
   needs a reset only when no device senior to H is left and the conflicted devices include the two
   cosigners a removal of H would need. Decision 9 states it. Otherwise removing H restores every
-  device its copies disabled. An honest enrollment makes one add, so without a hostile
+  device its copies disabled, apart from the two kinds above. An honest enrollment makes one add, so without a hostile
   approver a conflict needs a dishonest relay or a device enrolled twice while partitioned. A void
   add (§3.5), such as
   one a removed device fabricates on an old head from a key it learned, never conflicts with
@@ -300,9 +304,11 @@ history state. It is valid only if:
     computes the same subtree from the entries alone. The subtree is junior to `t`, and authority
     to remove `t` is authority over it.
   * `keep` names adds of the subtree that stay. Each must be an ancestor of the removal, and
-    signed by `t` or by another kept add, so a kept device's approver is kept too. An honest
-    client never offers a copy of a key (an add of an id that has another add in the parents'
-    history) for keeping.
+    signed by `t` or by another kept add, so a kept device's approver is kept too. A kept add
+    must not be a **copy** (an add of an id that has another add in the removal's parents'
+    history), and no add between it and `t` in its approval lineage may be one: otherwise unticking a device that a
+    displaced device enrolled would keep, through its approvers, the copy that displaced it and
+    the thief's device that made the copy.
   * The removal **revokes** the target's add and every add of the subtree that is an ancestor of
     the removal and is not kept. The subtree's adds that are not its ancestors (concurrent with it,
     on a quarantined branch, or newer than its parent) are not named and need not be: they are
@@ -743,7 +749,13 @@ entries:
   1. M ranks higher than R (§3.3); or
   2. they rank the same and R **yields** to M: some signer of R is in the approval subtree of M's
      target (§3.3), and no signer of M is in the approval subtree of R's target; or
-  3. they rank the same, neither yields, and no signer of M is revoked by R.
+  3. they rank the same, no signer of either is in the approval subtree of the other's target,
+     and no signer of M is revoked by R. A removal signed by devices that the other removal's
+     target approved, directly or through others, therefore never shields against it at equal
+     rank, even when those devices are kept and so not revoked. Without that, devices the person
+     kept from a stolen S's subtree, removing a device P on an older branch, shielded what S
+     added on top of their removal against the person's removal of S, whenever C1, a signer of
+     that recovery, was approved through P.
 
   R still revokes what it takes. Every input here (targets, keep lists, approval subtrees, ranks
   and raw chains) is read from the entries alone, never from another shield, so the rule has no
@@ -763,9 +775,12 @@ entries:
   **What this guarantees.** Let the person remove S with M. M's signers are outside S's subtree or
   kept by M (§3.3). Call **S's side** S's add and every add of S's subtree with no kept add in its
   approval lineage: what S and the devices it made added, as opposed to what the person kept and
-  what kept devices add. Assume that no applying removal with a signer outside S's side revokes a
-  signer of M: that would take the person's own devices, or a compromised device outside S's
-  subtree, acting against M's signers.
+  what kept devices add. Assume that no applying removal with a signer outside S's subtree revokes
+  a signer of M: that would take the person's own devices outside S's subtree, or a compromised
+  device there, acting against M's signers. Removals by S, by devices on S's side and by kept
+  devices are all allowed. The keep list is what M's signers signed; a thief that gets its own
+  device onto it, by having the person cosign a removal it built, is kept by definition, which is
+  why the cosigner's client shows the whole removal (§6.1).
   * **Nothing on S's side survives M.** In every state that holds M, no add on S's side is active
     and no grant signed through one applies. The adds on S's side that are ancestors of M are taken
     by M, and revocation is unconditional. Suppose some other add on S's side is not void in a
@@ -774,11 +789,11 @@ entries:
     is S, which M revokes, or an add on S's side among e's ancestors, which the choice of e
     excludes. So e is concurrent with M, its signer is revoked by M or void because of M, and e is
     void because of M unless a removal X among its ancestors shields it against M. X revokes a
-    signer of M, so by the assumption every signer of X is on S's side. X cannot descend from M,
-    for the same reason as e, so each signer of X is revoked by M: taken by it, or in its raw
-    chain. Rule 3 therefore fails for X. Rule 2 fails: for M to yield to X, no signer of X may be
-    in the subtree of M's target S, so X is signed by S alone and ranks 1; at equal rank M ranks 1
-    too, and its single signer, senior to S, is in the subtree of no device S can remove. Rule 1
+    signer of M, so by the assumption every signer of X is S or in S's subtree, kept or not. Rule
+    3 fails for X: a signer of X is in the subtree of M's target S, or X is signed by S alone,
+    which M revokes. Rule 2 fails: for M to yield to X, no signer of X may be in S's subtree, so X
+    is signed by S alone and ranks 1; at equal rank M ranks 1 too, and its single signer, senior
+    to S, is in the subtree of no device S can remove. Rule 1
     fails: if M ranks 2, nothing outranks it; if M ranks 1, its single signer is senior to S, so
     neither an add of X's target's id nor junior to one, and out of X's reach (above). So
     no X shields e, and e is void. Nothing depends on which of S's adds the remover held or
@@ -1305,10 +1320,23 @@ again to remove", as Forget does), then the presence check. It offers the cascad
 **one** `remove` naming the target's active add and keeping the unticked devices, appends it, and sends
 it to every connected host and device directly as well as through the relay. A more senior
 device, or any device when the target approved others (§3.4), asks for a second device's
-cosignature: the
-other device shows "*Desk app* asks to remove *Old laptop*, which is senior to it" and needs its
-own presence check. Both must be confirmed (§3.4); an unconfirmed device does not offer or accept
-a cosignature. An honest client does not offer to remove the last person's device; if
+cosignature. The other device needs its own presence check, and shows the **whole removal**, not
+only its target: "*Desk app* asks to remove *Old laptop*, which is senior to it, keeping:",
+followed by every kept device with its name, 16 hex characters of its id, its approver and when
+it was added. A thief holding a device J that stolen S made, named "Dan's iPad", could otherwise
+build `remove(S)` with `keep: [J, …]`, have the person cosign it, and keep J for good: every
+validity rule passes (J is kept, so it may sign; the cosign test passes; it ranks 2), and once S
+is revoked the person's own removal of S is no longer valid. So the cosigner's client:
+* warns prominently when the initiating device, or any kept device, is in the target's approval
+  subtree, and most strongly for those the target added after this device's own enrollment, the
+  window in which a thief could have made them;
+* refuses to cosign when the initiating device is in the target's subtree, unless the person
+  chooses "I am holding *Dan's iPad*" and confirms it a second time, and offers instead to start
+  the removal from this device, which builds its own keep list.
+
+A device kept that way is removed afterwards like any other, by a device senior to it or two
+confirmed devices with disjoint lineages (§3.4). Both signers must be confirmed (§3.4); an
+unconfirmed device does not offer or accept a cosignature. An honest client does not offer to remove the last person's device; if
 concurrent removals leave none anyway, only a reset continues (§3.5).
 
 A device can remove itself ("Remove this device"), which also signs it out.
@@ -2032,17 +2060,40 @@ Each slice adds its own. Together they cover:
   under no candidate, S is revoked, J is void as S's grant concurrent with it, and a later Tidy
   adopting J's branch leaves J void.
 * **Two adds of one id.** S adds J; J adds X (`aJ`); S adds X's key itself (`aS`) on a parent
-  from before J's add, within the window; the heads are joined, `aS` wins and `aJ` is
-  subordinate, and J confirms `aJ`. The same for K and X2. C1 and C2 remove S (rank 2), keeping
+  from before J's add, within the window; J confirms `aJ` while it is still active on J's branch,
+  and the heads are then joined: `aS` wins and `aJ` is subordinate. The same for K and X2. C1 and
+  C2, which G approved, remove S (rank 2), keeping
   nothing, on a parent that holds both adds of each id: the removal takes `aS`, J, `aJ`, K and
   both adds of X2, whatever their state, so X and X2 have no active add in any state that holds
   it, and no other add of their ids by S's subtree applies there. X's and X2's rank-2 removal of
-  C1 and C2 on a fork from before it yields to it, and the active set is the person's devices, in
-  every delivery order. The previous revision, which could name only one add per id, left `aJ`
+  C1 and C2 on a fork from before it yields to it: C1 and C2 are revoked, what they enrolled after
+  removing S stands, and the active set is G and those devices, in every delivery order. The
+  previous revision, which could name only one add per id, left `aJ`
   active under the thief's keys.
 * **Two adds of one id, conflicted.** As above, but J and K each add X's key, neither senior to
   the other's add, so X is conflicted and neither add can be targeted. The removal of S takes
   both. S's later rank-1 removal of K on an old head changes nothing: X stays inactive.
+* **Kept devices cannot shield the thief.** G approves S, then P; S approves E1 and E2, P approves
+  C1, and G approves C2; all are confirmed. On a branch from before C1's add, E1 and E2 cosign the
+  removal of P (rank 2: both are junior to P, and independent). Concurrently, C1 and C2 remove S,
+  keeping E1 and E2, and C1 then enrolls F. The thief adds Y through S on top of the removal of
+  P. That removal voids C1, P's grant concurrent with it, and neither removal yields. Under the
+  previous rule 3 the person's removal revoked neither E1 nor E2, so the removal of P shielded Y,
+  and the active set was {G, E1, E2, C2, Y}. Now E1 and E2 are in the subtree of S, the other
+  removal's target, so the removal of P shields nothing: Y is void, as S's grant concurrent with
+  the removal of S, and F is void with C1, whose approver P the person's own devices removed.
+  The active set is {G, E1, E2, C2}, in every delivery order.
+* **A thief-initiated recovery.** J, made and confirmed by stolen S and named "Dan's iPad", builds
+  a removal of S keeping J and Y, which J added, and asks C2 to cosign. C2's client shows the
+  keep list with each device's approver and when it was added, warns that the initiator and both
+  kept devices are in S's subtree, and refuses unless the person overrides it twice. Cosigned
+  anyway, the removal is valid, ranks 2 and keeps J and Y; the person then removes J, with C1 and
+  C2 cosigning, which takes Y.
+* **A copy cannot be kept through its subtree.** J, made by stolen S, displaces E2, which S
+  approved, with a copy carrying E2's keys; E2's device then enrolls E3, whose signer is the
+  copy. Unticking E3 in the cascade does not untick the copy or J: the client cannot keep E3,
+  and a removal keeping E3, the copy or E2's genuine add (its id has two adds) is refused at every
+  verifier. The removal of S takes J, the copy, E2 and E3, which are enrolled again with new keys.
 * **A kept device's own adds.** The person removes S keeping E, which S approved before the
   theft. E enrolls F after the removal, and had enrolled F0 on a branch concurrent with it: F and
   F0 are active, since E is kept. S's grants concurrent with the removal are void.
@@ -2248,7 +2299,11 @@ Each slice adds its own. Together they cover:
   `refused`, identical whatever the host holds; the 257th entry that is not evidence for a removal
   in the submission, and a second submission within a minute from one key, are refused. One
   submission carrying a removal, 256 evidence entries from one signer of the target's subtree and
-  its other missing ancestors is accepted and the removal applies. A flood of submissions from
+  its other missing ancestors is accepted and the removal applies. One of exactly 1,281 entries
+  (the removal, 256 missing ancestors that are not evidence, and 256 evidence entries from each of
+  four signers of the target's subtree) is accepted at a host none of whose 1,024 evidence entries
+  is used, and refused as a whole with one entry more, or at a host that has already admitted
+  any evidence. A flood of submissions from
   many other keys does not stop one holding a valid removal from being checked first.
 * An approver whose head moved before its append asks the person again, and never reuses the old
   signature or assertion.
@@ -2427,8 +2482,8 @@ Each slice adds its own. Together they cover:
    each verifier's persisted monotonic running time: their adds and renames are held until it
    ends, or until the verifier holds a `confirm` of them. Their removals of devices junior to them
    apply at once, since removals are never held or undone, and merges are never held, since they
-   only adopt. Removing a device offers to remove the devices it added, as one removal when all are
-   ticked. What (a) still allows:
+   only adopt. Removing a device offers to remove the devices it added, always as one removal that
+   keeps the unticked ones. What (a) still allows:
    * a delayed takeover, by two hostile devices that the person's own devices approved
      independently and their approvers later confirmed, unnoticed, which can then remove the
      devices above them. That takes two approval mistakes and two confirmation mistakes, each
@@ -2440,9 +2495,11 @@ Each slice adds its own. Together they cover:
      conflict makes the device inactive, and for a device junior to it the copy can displace the
      genuine enrollment, leaving the id active under the approver's own keys. It needs no
      dishonest relay, but never reaches a device senior to it. Both are announced naming it, and
-     removing it (with the full cascade, or signed on a parent from before the copies) restores
-     the devices. Only if no device senior to it is left and the copies have disabled the
-     cosigners its removal would need does it take a reset;
+     removing it, which takes its copies whatever the person keeps, restores the devices outside
+     its own subtree. A device it, or a device it approved, enrolled and then copied is taken with
+     it, since an add whose id has another add cannot be kept, and is enrolled again with a new
+     key. Only if no device senior to it is left and the copies have disabled the cosigners its
+     removal would need does it take a reset;
    * one-time revocations by removed devices, signed on old heads (§3.5). A removed device alone can
      revoke devices that were active and junior to it there. A confirmed pair approved independently
      can also revoke a device that is not junior to them, and with it that device's approval
@@ -2450,7 +2507,7 @@ Each slice adds its own. Together they cover:
      back junior, and such a revocation never voids what descends from the removal that revoked
      the remover, when that removal shields against it (§3.5, precedence): when it ranks higher (a
      cosigned recovery outranks a removal by one device), or ranks the same and the revocation
-     yields to it, or neither yields and the revocation revokes none of its signers. A stolen
+     yields to it, or neither is signed from the other's target's subtree and the revocation revokes none of its signers. A stolen
      senior device whose thief passes its presence check can so revoke the two devices that
      removed it, itself or through devices it approved on an old branch; what they did afterwards
      stands against those revocations.
@@ -2460,7 +2517,14 @@ Each slice adds its own. Together they cover:
      can be incomplete. **Nothing the stolen device or the devices it made add survives the
      recovery, except what the person kept**, on any fork and in any delivery order, unless a
      device outside that subtree (one of the person's own, or a second compromised one) helps
-     revoke one of the recovery's signers. §3.5, "What this guarantees", proves it. Two cases do
+     revoke one of the recovery's signers. Removals by the stolen device, by devices it made and
+     by devices the person kept from its subtree cannot shield anything it adds: a removal signed
+     by devices the other removal's target approved never shields against that removal at equal
+     rank. §3.5, "What this guarantees", proves it. "Kept" means kept by the removal its signers
+     signed, so a person who cosigns a removal built by a device the stolen device made, and
+     keeping that device, keeps it; the cosigner's client shows the whole keep list, warns, and
+     refuses unless the person overrides it twice (§6.1), and the kept device can then be removed
+     like any other. Two cases do
      lose honest work, and are stated here rather than closed. When the recovery is signed by one
      senior device (rank 1), a confirmed pair the stolen device made can still, once, revoke a
      device junior to the stolen device that did not sign the recovery, and what that device did
@@ -2483,6 +2547,10 @@ Each slice adds its own. Together they cover:
      approvers not junior to the stolen device are sure to survive; for the genesis device, to
      which every device is junior, that means a reset. No tie-break over the entries is safe, so
      this is not closed. It is announced;
+   * work lost when the person's own devices act at cross purposes on concurrent branches: devices
+     kept from a stolen device's subtree that remove the device through which a recovery's
+     cosigner was approved void that cosigner and what it enrolled afterwards, and neither removal
+     shields (§3.5, rule 3). Nothing the stolen device adds survives it;
    * the mirror image of the one-time revocations above, since the rule cannot tell the two apart (§3.5): with a relay that
      partitions the account, two confirmed hostile devices approved independently can cosign the
      removal of a senior device and keep the grants they make after it, even if that device
