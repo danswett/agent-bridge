@@ -44,7 +44,7 @@ public sealed partial class ReceiptMarkView : UserControl
         tick.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(10.8, 6.3) });
         var geometry = new PathGeometry();
         geometry.Figures.Add(tick);
-        check.Children.Add(new Path
+        check.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
         {
             Data = geometry,
             Stroke = Ui.Brush("AbLayer"),
