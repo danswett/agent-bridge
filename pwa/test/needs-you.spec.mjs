@@ -126,12 +126,16 @@ test.describe('on a phone', () => {
     await expect(e.getByRole('button').and(page.locator('button:not(.md-copy)'))).toHaveText([/./, 'Approve once', 'Deny']);
     await hold(page);
     await e.getByRole('button', { name: /^Approve once/ }).tap();
-    // On its way, in the lane and on the card alike: one answer, one service entry.
-    await expect(e.locator('.needs-status')).toHaveText('Sending…');
+    // On its way, in the lane and on the card alike: one answer, one service entry, Approve once's
+    // ring, and nothing on either line (ui.md §6.5).
+    // Said once, wherever it is heard: the lane's line or the card's.
+    await expect(page.locator('.receipt-live').filter({ hasText: 'Sending answer' })).toHaveCount(1);
+    await expect(e.locator('.needs-status')).toHaveText('');
+    expect(await e.getByRole('button', { name: /^Approve once/ }).evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
     await expect(e.getByRole('button', { name: /^Deny/ })).toBeDisabled();
     await expect(e.getByRole('button', { name: /^Approve once/ })).toHaveAttribute('aria-pressed', 'true');
     const q = card(page, LAND).locator('.question');
-    await expect(q.locator('.answer-status')).toHaveText('Sending…');
+    await expect(q.locator('.answer-status')).toHaveText('');
     await expect(q.locator('.choice[data-value="deny"]')).toBeDisabled();
     await release(page);
     await expect(entryFor(page, LAND)).toHaveCount(0);

@@ -64,8 +64,11 @@ test.describe('on a phone', () => {
 
     await hold(page);
     await q.locator('.choice[data-value="sqlite"]').tap();
-    // While it is on its way: progress, and nothing can be tapped again.
-    await expect(q.locator('.answer-status')).toHaveText('Sending…');
+    // While it is on its way: the ring on the option tapped, heard and not seen (ui.md §6.5), and
+    // nothing can be tapped again.
+    await expect(q.locator('.receipt-live')).toHaveText('Sending answer');
+    await expect(q.locator('.answer-status')).toHaveText('');
+    expect(await q.locator('.choice[data-value="sqlite"]').evaluate((b) => getComputedStyle(b, '::after').content)).not.toBe('none');
     await expect(q.locator('.answer')).toHaveAttribute('aria-busy', 'true');
     await expect(q.locator('.choice[data-value="pg"]')).toBeDisabled();
     await expect(q.locator('.choice[data-value="sqlite"]')).toHaveAttribute('aria-pressed', 'true');
@@ -82,20 +85,21 @@ test.describe('on a phone', () => {
     await expect(card(page, CODEX)).toHaveAttribute('data-status', 'working');
   });
 
-  test('an answer shows Sent, then Passed to the agent once the question has gone, then You answered with its value, where the machine says (#600)', async ({ page }) => {
+  test('an answer is heard as sent, shows no line on its way once the question has gone, then resolves to You answered with its value, with no badge (#600)', async ({ page }) => {
     await openDemo(page);
     const q = await ask(page, choice());
     await page.evaluate(() => { const h = window.agentBridgeDemo.host; h.holdBefore('typing'); h.holdBefore('result'); });
     await q.locator('.choice[data-value="pg"]').tap();
-    await expect(q.locator('.answer-status')).toHaveText('Sent');
+    await expect(q.locator('.receipt-live')).toHaveText('Answer sent');
+    await expect(q.locator('.answer-status')).toHaveText('');
     await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('typing'));
-    // Typed: the host's upsert takes the question away, and the card says how far the answer has got.
+    // Typed: the host's upsert takes the question away; nothing is wrong, so the card's line is empty.
     await expect(q).toHaveCount(0);
     const receipt = card(page, CODEX).locator('.answer-receipt');
-    await expect(receipt).toHaveText('Your answer: Passed to the agent');
+    await expect(receipt).toHaveText('');
     await page.evaluate(() => window.agentBridgeDemo.host.releaseBefore('result'));
     await expect(receipt).toHaveText('You answered · PostgreSQL (Recommended)');
-    await expect(receipt.locator('svg.receipt-badge use')).toHaveAttribute('href', 'design/sprite.svg#glyph-check');
+    await expect(receipt.locator('svg')).toHaveCount(0);
     const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
     expect(timing).toMatchObject({ kind: 'answer', outcome: 'delivered', host: { typed: expect.any(Number) } });
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);

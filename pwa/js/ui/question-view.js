@@ -9,7 +9,7 @@
 // the same request, until there is an outcome.
 import { h } from './dom.js';
 import { renderMarkdown } from '../markdown.js';
-import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, receiptLive } from './receipt.js';
+import { ReceiptClock, answeredValue, describeInFlight, drawReceipt, drawn, holdCheck, receiptLive } from './receipt.js';
 import {
   Limits, draftText, initialState, isRecommended, optionTone, orderOptions, prepareAnswer,
   tapToAnswer, utf8Bytes,
@@ -144,7 +144,7 @@ export function renderQuestion(q, { machineName, why = 'machine', readOnly = nul
 // ---- answering ----
 
 const OUTCOME_TEXT = {
-  // Said as "You answered · value" (describeAnswer), with its check badge.
+  // Said as "You answered · value" (describeAnswer), in text2 with no badge: the button's check said it went.
   delivered: () => 'You answered',
   unconfirmed: (at) => `Sent, but not confirmed. Check at the machine${at}.`,
   stale: () => 'Already answered or gone: the session is no longer asking this.',
@@ -153,11 +153,12 @@ const OUTCOME_TEXT = {
 };
 
 // What an answer's progress or outcome says, for the form, the Needs you lane and the card once
-// the question has gone: the receipt's words (receipt.js; ui.md §6.4, decided on #617). On its
-// way: Sending…, Sent, Passed to the agent, never Up next and never "answered". Confirmed: "You
-// answered · value", with the check badge, where question gives the value (answeredValue). Any
-// other outcome keeps its words. stalled: whether the state it is in has stalled (ReceiptClock).
-// Returns { key, text, more, tone, mark, speech }; tone: progress | ok | warn | bad.
+// the question has gone: the receipt's words (receipt.js; ui.md §6.4 and §6.5, decided on #617).
+// On its way it is only heard (Sending, Sent, Passed to the agent, never Up next and never
+// "answered"), unless it stalls or waits. Confirmed: the card resolves to "You answered · value",
+// in text2 with no badge, where question gives the value (answeredValue). Any other outcome keeps
+// its words. stalled: whether the state it is in has stalled (ReceiptClock). Returns { key, text,
+// more, tone, line, speech }; tone: progress | done | warn | bad, or room for nothing to show.
 export function describeAnswer(entry, machineName, { question = null, stalled = false } = {}) {
   const at = where(machineName);
   switch (entry.state) {
@@ -166,21 +167,21 @@ export function describeAnswer(entry, machineName, { question = null, stalled = 
       return describeInFlight('answer', entry, { machineName, stalled });
     case 'failed': {
       const text = `Couldn't send it: ${entry.reason ?? 'the machine said no'}.`;
-      return { key: 'failed', text, more: null, tone: 'bad', mark: null, speech: `Answer: ${text}` };
+      return { key: 'failed', text, more: null, tone: 'bad', line: true, speech: `Answer: ${text}` };
     }
     default: {
       const outcome = OUTCOME_TEXT[entry.outcome] ? entry.outcome : 'unconfirmed';
       if (outcome === 'delivered') {
         const value = answeredValue(question, entry.answer);
         return {
-          key: 'delivered', text: 'You answered', more: value, tone: 'ok', mark: 'check',
+          key: 'delivered', text: 'You answered', more: value, tone: 'done', line: true,
           speech: value ? `Answer delivered. You answered ${value}` : 'Answer delivered. You answered',
         };
       }
       let text = OUTCOME_TEXT[outcome](at);
       if (outcome === 'refused' && entry.reason) { text = `The machine refused this answer: ${entry.reason}.`; }
       if (outcome === 'unconfirmed' && entry.reason) { text += ` (${entry.reason})`; }
-      return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', mark: null, speech: `Answer: ${text}` };
+      return { key: outcome, text, more: null, tone: outcome === 'refused' ? 'bad' : 'warn', line: true, speech: `Answer: ${text}` };
     }
   }
 }
@@ -234,6 +235,8 @@ export class QuestionPanel {
       draw: (d) => drawReceipt(this.els.status, 'answer-status', d),
       say: (text) => { this.els.live.textContent = text; },
       heard: () => drawn(this.els.live),
+      // The button that sent it: the option tapped, or Send.
+      delivered: () => holdCheck(this.element.querySelector('.choice[aria-pressed="true"]') ?? this.els.send),
     });
     const { service, hostId, sessionId } = answering;
     this.#unwatch = service.watch(hostId, sessionId, q.id, (e) => this.#show(e));
@@ -509,6 +512,8 @@ export class QuestionPanel {
     this.#receipt.show(entry);
     e.status.hidden = !entry;
     e.form.setAttribute('aria-busy', entry?.state === 'sending' || entry?.state === 'waiting' ? 'true' : 'false');
+    // Held on this device for a machine that isn't connected: the ring on its button stands still.
+    e.form.classList.toggle('still', entry?.state === 'waiting' && entry.reason === 'not connected');
     e.controls.disabled = !again || pause || held;
     e.send.disabled = !again || pause || held;
     e.resend.hidden = entry?.state !== 'failed';

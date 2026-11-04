@@ -5,12 +5,6 @@
    Use: <svg class="..."><use href="design/sprite.svg#glyph-needs"/></svg>, coloured by the
    element's color (currentColor). The ink, the knockout and an icon's stroke width are
    custom properties from design/tokens.css (design/README.md). -->
-  <symbol id="glyph-check" viewBox="0 0 16 16">
-    <g>
-      <circle cx="8" cy="8" r="6.6" fill="currentColor"/>
-      <path d="M5.3 8.2l1.9 1.9 3.6-3.8" fill="none" stroke="var(--ab-glyph-knockout)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="knockout"/>
-    </g>
-  </symbol>
   <symbol id="glyph-delegating" viewBox="0 0 16 16">
     <g>
       <circle cx="8" cy="8" r="6.6" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="1.6 1.9" opacity="0.7"/>
@@ -93,6 +87,11 @@
   <symbol id="icon-back" viewBox="0 0 20 20">
     <g fill="none" stroke="currentColor" stroke-width="var(--ab-icon-stroke, 1.5)" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12.5 4.5L7 10l5.5 5.5"/>
+    </g>
+  </symbol>
+  <symbol id="icon-check" viewBox="0 0 20 20">
+    <g fill="none" stroke="currentColor" stroke-width="var(--ab-icon-stroke, 1.5)" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4.5 10.5l3.5 3.5 7.5-8"/>
     </g>
   </symbol>
   <symbol id="icon-chevron" viewBox="0 0 20 20">

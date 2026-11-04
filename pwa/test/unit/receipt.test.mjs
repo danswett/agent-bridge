@@ -2,76 +2,82 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ReceiptClock, ReceiptTiming, answeredValue, describeInFlight, receiptText } from '../../js/ui/receipt.js';
 
-// The receipt's timing (ui.md §6.5, decided on #617), on a mocked clock: the quiet window, the
-// dwell, an outcome at once, each stall, and the announcements, coalesced.
+// The receipt's timing (ui.md §6.5, decided on #617: quiet unless something's wrong), on a mocked
+// clock: nothing in the quiet window, the normal path heard and not seen, a line only for an
+// exception, an outcome at once, each stall, and the announcements, coalesced.
 
 let n = 0;
-const outcome = (kind) => ({ key: 'delivered', text: 'Delivered', more: null, tone: 'ok', mark: 'check', speech: `${kind === 'answer' ? 'Answer' : 'Reply'} delivered` });
+const outcome = (kind) => ({ key: 'delivered', text: '', more: null, tone: 'room', line: false, speech: `${kind === 'answer' ? 'Answer' : 'Reply'} delivered` });
 
 const mocked = new WeakSet();
 function setup(t, kind = 'reply') {
   if (!mocked.has(t)) { t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 }); mocked.add(t); }
   const drawn = [];
   const said = [];
+  const checks = [];
   const clock = new ReceiptClock({
     describe: (entry, { stalled }) => (entry.state === 'done' ? outcome(kind) : describeInFlight(kind, entry, { machineName: 'ULTRA', stalled })),
     draw: (d) => drawn.push(receiptText(d)),
     say: (text) => said.push(text),
+    delivered: () => checks.push(entry.request),
   });
   const entry = { request: `r${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null };
   const show = (change = {}) => { Object.assign(entry, change); clock.show({ ...entry }); };
   const shown = () => drawn.at(-1);
-  return { clock, show, shown, drawn, said, tick: (ms) => t.mock.timers.tick(ms) };
+  return { clock, show, shown, drawn, said, checks, tick: (ms) => t.mock.timers.tick(ms) };
 }
 
-test('nothing shows for the first 400 ms, then the furthest stage reached, so a fast delivery never flashes Sent', (t) => {
-  const { show, shown, drawn, tick } = setup(t);
+test('the normal path shows no line: Sending, Sent, Passed to the agent and Up next are heard, not seen', (t) => {
+  const { show, drawn, said, tick } = setup(t);
   show();
-  assert.equal(shown(), '');
+  tick(ReceiptTiming.quietMs);
+  assert.deepEqual(said, ['Sending reply']);
+  show({ stage: 'received' });
+  tick(ReceiptTiming.announceGapMs);
+  show({ stage: 'queued' });
+  tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual(said, ['Sending reply', 'Reply sent', "Reply up next, after the agent's current step"]);
+  assert.ok(drawn.every((d) => d === ''));
+});
+
+test('nothing is shown or spoken for the first 400 ms, then the furthest stage reached is spoken, so a fast delivery never says Sent', (t) => {
+  const { show, said, tick } = setup(t);
+  show();
   tick(100);
   show({ stage: 'received' });
   tick(200);
   show({ stage: 'typed' });
-  assert.equal(shown(), '');
+  assert.deepEqual(said, []);
   tick(100);
-  assert.equal(shown(), 'Passed to the agent');
-  assert.ok(!drawn.includes('Sent'));
+  assert.deepEqual(said, ['Reply passed to the agent']);
 });
 
-test('a stage shown stays at least 400 ms before the next replaces it', (t) => {
-  const { show, shown, tick } = setup(t);
+test('an outcome is said at once, past the one-second limit and any stage not yet said, and only the view that saw it go shows Send\'s check', (t) => {
+  const { show, said, checks, drawn, tick } = setup(t);
   show();
+  tick(ReceiptTiming.quietMs);
   tick(100);
   show({ stage: 'received' });
-  tick(ReceiptTiming.quietMs - 100);
-  assert.equal(shown(), 'Sent');
-  tick(100);
-  show({ stage: 'typed' });
-  assert.equal(shown(), 'Sent');
-  tick(299);
-  assert.equal(shown(), 'Sent');
-  tick(1);
-  assert.equal(shown(), 'Passed to the agent');
-});
-
-test('an outcome shows at once, past the quiet window and any stage not yet shown', (t) => {
-  const { show, shown, drawn, tick } = setup(t);
-  show();
-  tick(50);
-  show({ stage: 'received' });
-  tick(50);
   show({ state: 'done', outcome: 'delivered' });
-  assert.equal(shown(), 'Delivered');
-  assert.deepEqual(drawn, ['', 'Delivered']);
+  assert.deepEqual(said, ['Sending reply', 'Reply delivered']);
+  assert.equal(checks.length, 1);
+  assert.ok(drawn.every((d) => d === ''));
+  tick(ReceiptTiming.announceGapMs);
+  assert.deepEqual(said, ['Sending reply', 'Reply delivered']);
+  // A view drawn after the delivery (a card drawn afresh) shows no check, and says nothing again.
+  const late = [];
+  const after = new ReceiptClock({ describe: () => outcome('reply'), draw: () => {}, say: (s) => late.push(s), delivered: () => late.push('check') });
+  after.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  assert.deepEqual(late, []);
 });
 
-test('nothing heard for 3 s says Still sending…, words only', (t) => {
+test('nothing heard for 3 s puts Still sending… on the line, words only', (t) => {
   const { show, shown, tick } = setup(t);
   show();
   tick(ReceiptTiming.quietMs);
-  assert.equal(shown(), 'Sending…');
+  assert.equal(shown(), '');
   tick(ReceiptTiming.stillSendingMs - ReceiptTiming.quietMs - 1);
-  assert.equal(shown(), 'Sending…');
+  assert.equal(shown(), '');
   tick(1);
   assert.equal(shown(), 'Still sending…');
 });
@@ -79,8 +85,9 @@ test('nothing heard for 3 s says Still sending…, words only', (t) => {
 test('Sent with nothing after it for 5 s says it is still waiting on the machine', (t) => {
   const { show, shown, tick } = setup(t);
   show({ stage: 'received' });
-  tick(ReceiptTiming.sentStallMs - 1);
-  assert.equal(shown(), 'Sent');
+  tick(ReceiptTiming.quietMs);
+  tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs - 1);
+  assert.equal(shown(), '');
   tick(1);
   assert.equal(shown(), 'Sent · still waiting on ULTRA');
 });
@@ -88,36 +95,44 @@ test('Sent with nothing after it for 5 s says it is still waiting on the machine
 test('Passed to an idle agent with nothing after it for 10 s says not picked up yet, and Up next never stalls', (t) => {
   const { show, shown, tick } = setup(t);
   show({ stage: 'typed' });
-  tick(ReceiptTiming.passedStallMs);
+  tick(ReceiptTiming.quietMs);
+  tick(ReceiptTiming.passedStallMs - ReceiptTiming.quietMs);
   assert.equal(shown(), 'Passed to the agent · not picked up yet');
 
   const busy = setup(t);
   busy.show({ stage: 'queued' });
   busy.tick(10 * ReceiptTiming.passedStallMs);
-  assert.equal(busy.shown(), "Up next · after the agent's current step");
+  assert.equal(busy.shown(), '');
 });
 
-test('a wait says why: the first copy still being delivered, no answer yet, or no machine to send to', (t) => {
+test('a wait says why on the line: the first copy still being delivered, no answer yet, or no machine to send to', (t) => {
   const { show, shown, tick } = setup(t);
   show({ stage: 'typed' });
-  // Each tick ends where a timer is due: a mocked tick runs what falls due at the time it ends.
   tick(ReceiptTiming.quietMs);
-  tick(ReceiptTiming.dwellMs);
   show({ state: 'waiting', reason: 'still being delivered' });
   assert.equal(shown(), 'Passed to the agent · still being delivered');
-  tick(ReceiptTiming.dwellMs);
   show({ state: 'waiting', reason: 'timed out' });
   assert.equal(shown(), 'Still sending…');
-  tick(ReceiptTiming.dwellMs);
   show({ state: 'waiting', reason: 'not connected' });
   assert.equal(shown(), 'Waiting for ULTRA · it goes when ULTRA is back');
+  assert.equal(describeInFlight('reply', { state: 'waiting', reason: 'not connected' }).still, true);
+});
+
+test('the line goes when the next stage makes it untrue', (t) => {
+  const { show, shown, tick } = setup(t);
+  show({ stage: 'received' });
+  tick(ReceiptTiming.quietMs);
+  tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs);
+  assert.equal(shown(), 'Sent · still waiting on ULTRA');
+  show({ stage: 'typed' });
+  assert.equal(shown(), '');
 });
 
 test('a resend that meets the first copy in flight keeps saying still being delivered, and says so once, as it goes again and again', (t) => {
   const { show, shown, drawn, said, tick } = setup(t);
   show({ stage: 'received' });
   tick(ReceiptTiming.quietMs);
-  tick(ReceiptTiming.sentStallMs);
+  tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs);
   show({ state: 'waiting', reason: 'still being delivered' });
   assert.equal(shown(), 'Sent · still being delivered');
   for (let i = 0; i < 3; i++) {
@@ -133,21 +148,21 @@ test('a resend that meets the first copy in flight keeps saying still being deli
   assert.equal(said.at(-1), 'Reply still being delivered');
 });
 
-test('a machine without progress shows Sending…, Still sending… after 3 s, and a resend reads Still sending…, never Sending again…', (t) => {
-  const { show, shown, drawn, tick } = setup(t);
+test('a machine without progress says nothing of Sent or Passed, puts Still sending… on the line for a resend, never Sending again…', (t) => {
+  const { show, shown, drawn, said, tick } = setup(t);
   show();
   tick(ReceiptTiming.quietMs);
-  assert.equal(shown(), 'Sending…');
+  assert.equal(shown(), '');
   show({ state: 'waiting', reason: 'timed out' });
-  tick(ReceiptTiming.dwellMs);
   show({ state: 'sending', attempts: 2 });
   assert.equal(shown(), 'Still sending…');
   show({ state: 'done', outcome: 'delivered' });
-  assert.equal(shown(), 'Delivered');
+  assert.equal(shown(), '');
   assert.ok(drawn.every((d) => !/again|Sent|Passed/.test(d)));
+  assert.ok(said.every((s) => !/sent|passed/.test(s)));
 });
 
-test('each change is announced once, prefixed, at most one a second, the later of two winning; the outcome always; Sending… never', (t) => {
+test('each change is heard once, prefixed, at most one a second, the later of two winning, and the outcome at once', (t) => {
   const { show, said, tick } = setup(t);
   show();
   tick(100);
@@ -155,12 +170,10 @@ test('each change is announced once, prefixed, at most one a second, the later o
   assert.deepEqual(said, []);
   tick(ReceiptTiming.quietMs - 100);
   assert.deepEqual(said, ['Reply sent']);
-  tick(ReceiptTiming.dwellMs);
+  tick(400);
   show({ stage: 'queued' });
   show({ state: 'done', outcome: 'delivered' });
-  // The Up next inside the second is passed over for the outcome after it.
-  assert.deepEqual(said, ['Reply sent']);
-  tick(ReceiptTiming.announceGapMs);
+  // The Up next inside the second is passed over for the outcome after it, which doesn't wait.
   assert.deepEqual(said, ['Reply sent', 'Reply delivered']);
   // Drawn again (a card redrawn), nothing is said twice.
   show({ state: 'done', outcome: 'delivered' });
@@ -183,35 +196,36 @@ test('the timing belongs to the request, not the drawing: a question card drawn 
     say: (text) => said.push(text),
   });
   again.show(entry);
-  assert.deepEqual(drawn, ['Sent']);
-  first.tick(ReceiptTiming.sentStallMs);
+  assert.deepEqual(drawn, ['']);
+  first.tick(ReceiptTiming.sentStallMs - ReceiptTiming.quietMs);
   assert.equal(drawn.at(-1), 'Sent · still waiting on ULTRA');
   assert.deepEqual(said, ['Answer sent, still waiting on ULTRA']);
 });
 
-test('an outcome still waiting out the one-second limit when its view is drawn afresh is said by the new view, after the same second', (t) => {
+test('a stage still waiting out the one-second limit when its view is drawn afresh is said by the new view, after the same second', (t) => {
   const first = setup(t, 'answer');
   first.show({ stage: 'received' });
   first.tick(ReceiptTiming.quietMs);
-  first.show({ state: 'done', outcome: 'delivered' });
+  first.show({ stage: 'typed' });
   assert.deepEqual(first.said, ['Answer sent']);
   first.clock.destroy();
   const said = [];
-  const again = new ReceiptClock({ describe: () => outcome('answer'), draw: () => {}, say: (text) => said.push(text) });
-  again.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  const again = new ReceiptClock({ describe: (e, { stalled }) => describeInFlight('answer', e, { machineName: 'ULTRA', stalled }), draw: () => {}, say: (text) => said.push(text) });
+  const entry = { request: `r${n}`, state: 'sending', stage: 'typed', attempts: 1, reason: null, progress: null };
+  again.show(entry);
   assert.deepEqual(said, []);
   first.tick(ReceiptTiming.announceGapMs);
-  assert.deepEqual(said, ['Answer delivered']);
-  again.show({ request: `r${n}`, state: 'done', outcome: 'delivered' });
+  assert.deepEqual(said, ['Answer passed to the agent']);
+  again.show(entry);
   first.tick(ReceiptTiming.announceGapMs);
-  assert.deepEqual([...first.said, ...said], ['Answer sent', 'Answer delivered']);
+  assert.deepEqual([...first.said, ...said], ['Answer sent', 'Answer passed to the agent']);
 });
 
 test('of two views of a request the one on screen says it, and a line moved on to the next request never says the last one\'s', (t) => {
   const { tick } = setup(t);
   const said = [];
   const view = (name, heard) => new ReceiptClock({
-    describe: (e, { stalled }) => (e.state === 'done' ? outcome('reply') : describeInFlight('reply', e, { machineName: 'ULTRA', stalled })),
+    describe: (e, { stalled }) => describeInFlight('reply', e, { machineName: 'ULTRA', stalled }),
     draw: () => {},
     say: (text) => said.push(`${name}: ${text}`),
     heard: () => heard,
@@ -224,25 +238,30 @@ test('of two views of a request the one on screen says it, and a line moved on t
   lane.show(first);
   tick(ReceiptTiming.quietMs);
   assert.deepEqual(said, ['lane: Reply sent']);
-  // Delivered inside the second, and the lane moves on to the next reply before it is said: it
-  // goes to the page's own line (none here), never onto the lane now showing the next reply.
-  lane.show({ ...first, state: 'done', outcome: 'delivered' });
+  // Passed to the agent inside the second, and the lane moves on to the next reply before it is
+  // said: it goes to the page's own line (none here), never onto the lane now showing the next.
+  lane.show({ ...first, stage: 'typed' });
   lane.show({ request: `v${++n}`, state: 'sending', stage: null, attempts: 1, reason: null, progress: null });
   card.destroy();
   tick(ReceiptTiming.announceGapMs);
-  assert.deepEqual(said, ['lane: Reply sent']);
-});
-test('an answer never says Up next', () => {
-  assert.equal(describeInFlight('answer', { state: 'sending', stage: 'queued' }).text, 'Passed to the agent');
+  // The lane says only its own request's: the next reply's Sending, never the last one's stage.
+  assert.deepEqual(said, ['lane: Reply sent', 'lane: Sending reply']);
 });
 
-test("a confirmed answer's value: a tap's option by its label, free text's first line cut to about 40 characters, and none for a form", () => {
+test('an answer never says Up next', () => {
+  assert.equal(describeInFlight('answer', { state: 'sending', stage: 'queued' }).speech, 'Answer passed to the agent');
+});
+
+test("a confirmed answer's value: a tap's option by its label, free text's first line cut at a word break within 40 characters, and none for a form", () => {
   const tap = { fields: [{ name: 'answer', type: 'choice', options: [{ value: 'pg', label: 'PostgreSQL (Recommended)' }] }] };
   assert.equal(answeredValue(tap, { fields: { answer: 'pg' } }), 'PostgreSQL (Recommended)');
   assert.equal(answeredValue(tap, { fields: { answer: { other: 'MariaDB\nbecause' } } }), 'MariaDB…');
   const text = { fields: [] };
-  assert.equal(answeredValue(text, { text: 'Fixes first' }), 'Fixes first');
-  assert.equal(answeredValue(text, { text: 'x'.repeat(60) }), `${'x'.repeat(39)}…`);
+  assert.equal(answeredValue(text, { text: 'Fixes   first,\tthen tests' }), 'Fixes first, then tests');
+  assert.equal(answeredValue(text, { text: 'Fix the flaky retry test before the release goes out' }), 'Fix the flaky retry test before the…');
+  // No break after the 20th character: cut at 40.
+  assert.equal(answeredValue(text, { text: 'x'.repeat(60) }), `${'x'.repeat(40)}…`);
+  assert.equal(answeredValue(text, { text: `ab ${'x'.repeat(60)}` }), `${`ab ${'x'.repeat(60)}`.slice(0, 40)}…`);
   const form = { fields: [{ name: 'a', type: 'text' }, { name: 'b', type: 'boolean' }] };
   assert.equal(answeredValue(form, { fields: { a: 'x', b: true } }), null);
 });

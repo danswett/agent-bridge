@@ -53,12 +53,14 @@ test.describe('on a phone', () => {
     await expect(reply.locator('.reply-hint')).toHaveText('Line breaks are sent as spaces: the session gets your reply as one line.');
     await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText('Sending…');
+    // On its way: heard, and Send's ring; nothing on the line (ui.md §6.5).
+    await expect(reply.locator('.receipt-live')).toHaveText('Sending reply');
+    await expect(reply.locator('.reply-status')).toHaveText('');
     await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
     await release(page);
 
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply delivered');
     await expect(reply).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('');
     expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'Looks good.\nNow open the PR – please 🚀', progress: true }]);
@@ -75,12 +77,12 @@ test.describe('on a phone', () => {
     await input.fill('first');
     await hold(page);
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText(/^Sending…/);
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
     // The caret to the end by hand: WebKit on Windows emptied the box on End.
     await input.evaluate((el) => el.setSelectionRange(el.value.length, el.value.length));
     await input.pressSequentially(' and then');
     await release(page);
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
     await expect(input).toHaveValue('and then');
     expect((await log(page)).map((r) => r.text)).toEqual(['first']);
   });
@@ -202,7 +204,7 @@ test.describe('outcomes', () => {
     const reply = box(page, IDLE);
     await reply.getByRole('textbox', { name: 'Reply' }).fill('only once');
     await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered', { timeout: 10000 });
+    await expect(reply).toHaveAttribute('data-reply', 'delivered', { timeout: 10000 });
     const sent = await log(page);
     expect(sent.length).toBeGreaterThanOrEqual(2);
     expect(new Set(sent.map((r) => r.request)).size).toBe(1);
@@ -210,33 +212,41 @@ test.describe('outcomes', () => {
   });
 });
 
-// Where the machine says how far a reply has got (sessions.progress, #600, in #617's words): Sent
-// once it has it, Passed to the agent once the keys have gone, Up next when they went into a
-// working session. The demo host holds before typing and before its outcome, so each stage stays
-// to be looked at.
+// Where the machine says how far a reply has got (sessions.progress, #600; ui.md §6.5 as decided on
+// #617: quiet unless something's wrong): Sent once it has it, Passed to the agent once the keys
+// have gone, Up next when they went into a working session, all heard and none on the line; Send's
+// ring says it is on its way, and its check that it got there. The demo host holds before typing
+// and before its outcome, so each stage stays to be heard.
 test.describe('progress', () => {
   test.use({ viewport: { width: 390, height: 664 } });
   const holdBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.holdBefore(s), step);
   const releaseBefore = (page, step) => page.evaluate((s) => window.agentBridgeDemo.host.releaseBefore(s), step);
 
-  test('a reply shows Sent, then Passed to the agent, then Delivered with its check, and keeps its timing marks on this device', async ({ page }) => {
+  test('a reply\'s stages are heard and not seen, Delivered turns Send\'s ring to its check for a moment, and the timing marks stay on this device', async ({ page }) => {
     await openDemo(page);
     const reply = box(page, IDLE);
     const status = reply.locator('.reply-status');
+    const live = reply.locator('.receipt-live');
+    const send = reply.getByRole('button', { name: 'Send' });
     await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
     await holdBefore(page, 'typing');
     await holdBefore(page, 'result');
-    await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(status).toHaveText('Sent');
-    await expect(reply.getByRole('button', { name: 'Send' })).toHaveAttribute('aria-busy', 'true');
+    await send.click();
+    await expect(live).toHaveText('Reply sent');
+    await expect(send).toHaveAttribute('aria-busy', 'true');
+    await expect(status).toHaveText('');
     await releaseBefore(page, 'typing');
-    await expect(status).toHaveText('Passed to the agent');
-    await expect(reply.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await expect(live).toHaveText('Reply passed to the agent');
+    await expect(status).toHaveText('');
     await releaseBefore(page, 'result');
-    await expect(status).toHaveText('Delivered');
-    await expect(status.locator('svg.receipt-badge use')).toHaveAttribute('href', 'design/sprite.svg#glyph-check');
-    // A screen reader hears it apart from the words on screen, saying what it is about.
-    await expect(reply.locator('.receipt-live')).toHaveText('Reply delivered');
+    await expect(live).toHaveText('Reply delivered');
+    await expect(send).toHaveClass(/\bchecked\b/);
+    await expect(send.locator('.send-check use')).toHaveAttribute('href', 'design/sprite.svg#icon-check');
+    // Its name stays its own: the receipt says it was delivered.
+    await expect(send).toHaveAccessibleName('Send');
+    await expect(status).toHaveText('');
+    // Then Send's own glyph again.
+    await expect(send).not.toHaveClass(/\bchecked\b/);
     expect((await log(page))[0].progress).toBe(true);
     // Tap to outcome, each stage between, and the machine's own timings beside them.
     const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
@@ -244,12 +254,13 @@ test.describe('progress', () => {
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'received', 'typed', 'result']);
   });
 
-  test('Send shows its own ring from the tap while the receipt is quiet, and the receipt keeps one height from Send to the outcome', async ({ page }) => {
+  test('Send shows its own ring from the tap, and the receipt keeps its room from Send until the box is typed in again', async ({ page }) => {
     await openDemo(page);
     const reply = box(page, IDLE);
     const status = reply.locator('.reply-status');
     const send = reply.getByRole('button', { name: 'Send' });
-    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    const input = reply.getByRole('textbox', { name: 'Reply' });
+    await input.fill('carry on');
     await hold(page);
     // Inside the first 400 ms: nothing on the line, which already has its room, and Send's ring.
     const early = await reply.evaluate(async (form) => {
@@ -261,14 +272,30 @@ test.describe('progress', () => {
     });
     expect(early).toMatchObject({ ring: true, words: '' });
     expect(early.height).toBeGreaterThan(0);
-    await expect(status).toHaveText('Sending…');
     await release(page);
-    await expect(status).toHaveText('Delivered');
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    await expect(status).toHaveText('');
     expect((await status.boundingBox()).height).toBeCloseTo(early.height, 0);
     expect(await send.evaluate((b) => getComputedStyle(b, '::after').content)).toBe('none');
+    await input.fill('next');
+    await expect(status).toBeHidden();
   });
 
-  test('a reply typed into a working session shows Up next: the agent takes it after its current step', async ({ page }) => {
+  test('a stall puts its words on the line, and the line goes once the outcome comes', async ({ page }) => {
+    await openDemo(page);
+    const reply = box(page, IDLE);
+    const status = reply.locator('.reply-status');
+    await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
+    await hold(page);
+    await reply.getByRole('button', { name: 'Send' }).click();
+    await expect(status).toHaveText('Still sending…');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply still sending');
+    await release(page);
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
+    await expect(status).toHaveText('');
+  });
+
+  test('a reply typed into a working session is heard as up next: the agent takes it after its current step', async ({ page }) => {
     await openDemo(page);
     await page.evaluate(({ id, t }) => {
       const d = window.agentBridgeDemo;
@@ -279,60 +306,56 @@ test.describe('progress', () => {
     await reply.getByRole('textbox', { name: 'Reply' }).fill('and add a test');
     await holdBefore(page, 'result');
     await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(reply.locator('.reply-status')).toHaveText("Up next · after the agent's current step");
+    await expect(reply.locator('.receipt-live')).toHaveText("Reply up next, after the agent's current step");
+    await expect(reply.locator('.reply-status')).toHaveText('');
     await releaseBefore(page, 'result');
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+    await expect(reply.locator('.receipt-live')).toHaveText('Reply delivered');
   });
 
-  test('in forced colours the receipt\'s ring and check are Highlight, the check knocked out to Canvas, and its words CanvasText', async ({ page, browserName }) => {
+  test('in forced colours Send\'s ring and check take Send\'s own colours, and the line\'s words are CanvasText', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'forced colours are emulated in Chromium only');
     await page.emulateMedia({ forcedColors: 'active' });
     await openDemo(page);
     const reply = box(page, IDLE);
     const status = reply.locator('.reply-status');
-    const probe = () => page.evaluate(() => {
-      const of = (value) => {
-        const i = document.createElement('i');
-        i.style.forcedColorAdjust = 'none';
-        i.style.color = value;
-        document.body.append(i);
-        const c = getComputedStyle(i).color;
-        i.remove();
-        return c;
-      };
-      return { Highlight: of('Highlight'), CanvasText: of('CanvasText'), Canvas: of('Canvas') };
+    const send = reply.getByRole('button', { name: 'Send' });
+    const canvasText = await page.evaluate(() => {
+      const i = document.createElement('i');
+      i.style.forcedColorAdjust = 'none';
+      i.style.color = 'CanvasText';
+      document.body.append(i);
+      const c = getComputedStyle(i).color;
+      i.remove();
+      return c;
     });
-    const system = await probe();
     await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
-    await holdBefore(page, 'result');
-    await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(status).toHaveText('Passed to the agent');
-    expect(await status.evaluate((el) => ({ words: getComputedStyle(el).color, ring: getComputedStyle(el, '::before').borderTopColor })))
-      .toEqual({ words: system.CanvasText, ring: system.Highlight });
-    await releaseBefore(page, 'result');
-    await expect(status).toHaveText('Delivered');
-    const badge = status.locator('svg.receipt-badge');
-    expect(await badge.evaluate((el) => getComputedStyle(el).color)).toBe(system.Highlight);
-    expect(await badge.evaluate((el) => getComputedStyle(el).getPropertyValue('--ab-glyph-knockout').trim())).toBe('Canvas');
-    expect(await status.evaluate((el) => getComputedStyle(el).color)).toBe(system.CanvasText);
+    await hold(page);
+    await send.click();
+    await expect(status).toHaveText('Still sending…');
+    expect(await send.evaluate((el) => getComputedStyle(el, '::after').borderTopColor === getComputedStyle(el).color)).toBe(true);
+    expect(await status.evaluate((el) => getComputedStyle(el).color)).toBe(canvasText);
+    await release(page);
+    await expect(send).toHaveClass(/\bchecked\b/);
+    expect(await send.evaluate((el) => getComputedStyle(el.querySelector('.send-check')).color === getComputedStyle(el).color)).toBe(true);
   });
 
-  test('a machine from before progress is asked for none, and the reply says Sending until its outcome', async ({ page }) => {
+  test('a machine from before progress is asked for none: the reply is heard as sending until its outcome, and never as sent', async ({ page }) => {
     await openDemo(page, '&progress=0');
     const reply = box(page, IDLE);
+    const live = reply.locator('.receipt-live');
     await reply.getByRole('textbox', { name: 'Reply' }).fill('carry on');
     await holdBefore(page, 'typing');
     await reply.getByRole('button', { name: 'Send' }).click();
-    await expect(reply.locator('.reply-status')).toHaveText('Sending…');
+    await expect(live).toHaveText('Sending reply');
     await releaseBefore(page, 'typing');
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+    await expect(live).toHaveText('Reply delivered');
+    await expect(reply.getByRole('button', { name: 'Send' })).toHaveClass(/\bchecked\b/);
     expect(await log(page)).toEqual([{ id: IDLE, request: expect.stringMatching(UUID), text: 'carry on' }]);
     const [timing] = await page.evaluate(() => window.agentBridgeDemo.timings());
     expect(timing).toMatchObject({ kind: 'reply', outcome: 'delivered', host: null });
     expect(timing.client.map(([mark]) => mark)).toEqual(['sent', 'result']);
   });
-});
-test.describe('from a keyboard', () => {
+});test.describe('from a keyboard', () => {
   test('Ctrl+Enter or Cmd+Enter sends, and Enter alone is a new line', async ({ page }) => {
     await openDemo(page);
     const input = box(page, IDLE).getByRole('textbox', { name: 'Reply' });

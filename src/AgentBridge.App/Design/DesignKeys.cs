@@ -95,7 +95,6 @@ static class DesignKeys
 
     public static readonly string[] Glyphs =
     [
-        "AbGlyphCheck",
         "AbGlyphDelegating",
         "AbGlyphDone",
         "AbGlyphDrivenBadge",
@@ -110,6 +109,7 @@ static class DesignKeys
     [
         "AbIconAttach",
         "AbIconBack",
+        "AbIconCheck",
         "AbIconChevron",
         "AbIconClock",
         "AbIconCopy",

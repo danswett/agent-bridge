@@ -72,7 +72,7 @@ test.describe('on a phone', () => {
 
     await reply.getByRole('textbox', { name: 'Reply' }).fill('What do you\nmake of these?');
     await reply.getByRole('button', { name: 'Send' }).tap();
-    await expect(reply.locator('.reply-status')).toHaveText('Delivered');
+    await expect(reply).toHaveAttribute('data-reply', 'delivered');
 
     const [sent] = await typed(page);
     const words = sent.said.split(' ');

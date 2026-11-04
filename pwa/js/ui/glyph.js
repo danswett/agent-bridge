@@ -70,22 +70,6 @@ export function setGlyph(svg, name, { size = 16, label = null, driven = false } 
   return svg;
 }
 
-// A mark beside words rather than a session's state: the check badge of a reply's or an answer's
-// receipt (ui.md §6.5, #600, #617), a disc with the check knocked out to the surface behind it
-// (--ab-glyph-knockout). Decorative: the words beside it say what it means.
-export function checkBadge({ size = 14 } = {}) {
-  const svg = document.createElementNS(NS, 'svg');
-  const px = GLYPH_SIZES.includes(size) ? size : 14;
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('width', String(px));
-  svg.setAttribute('height', String(px));
-  svg.setAttribute('class', 'receipt-badge');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('focusable', 'false');
-  svg.append(use('glyph-check'));
-  return svg;
-}
-
 export const ICON_SIZES = Object.freeze([16, 20, 22, 24]);
 
 // The driven-badge diamond on its own (ui.md §2.1), for a line an agent's prompt heads (#489):
