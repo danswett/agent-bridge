@@ -1168,7 +1168,7 @@ Claude, Codex and organisation-managed sessions. Same account and cross-account.
 **(S) Sandboxed allow-all.** An OS-enforced restriction of the filesystem, credentials, IPC and
 network egress around an allow-all session.
 * It isn't a prerequisite for reads or for cross-account G.
-* **Recommended immediately after AP9** (Q50; the owner decides).
+* **Immediately after AP9**, as AP10 (owner decision, Q50).
 * Removing the gate on the strength of a sandbox would need **separately demonstrated
   boundaries**, not this design's assertion.
 ### 5.8 Provenance and taint
@@ -1215,8 +1215,9 @@ without importing free-form content:
 * **The reader's side fetches PR and CI state** from GitHub, bound to the pinned repository, the
   reader's assigned work items, and the expected PR, head SHA and required checks.
 * **It guides scheduling only.** It never authorizes a merge, a deploy or the use of a credential.
-* **Open design item** (Q52): hosts hold no GitHub token, so v1 fetches through the reader's app,
-  or a separately designed broker. CI state is unavailable while no person device is online.
+* **Owner decision** (Q52): hosts hold no GitHub token, so v1 fetches through the **reader's
+  app**, and a broker comes later as its own design. CI state is unavailable while no person
+  device of the reader is online.
 
 **The badge.** A tainted session's card reads "**External Bridge content retained · @welshofer ·
 14:05**", with its categories. **Residual:** the bridge can't taint what the agent reads through
@@ -1342,7 +1343,7 @@ side may want to start a session on its own machine in response.
 |---|---|---|
 | Who is behind every principal | One person. Every agent works for them | Two people with different interests, either of whom may be careless, compromised or hostile to the other |
 | Root of trust | One roster (#391), approved by the person's own presence-proven devices | Two rosters that never merge. Each side trusts only its **own** person's decision to link, and pins the other's identity at that moment |
-| Data leaving | Stays with the same person (on other machines) | **Disclosure to a third party**. Corporate policy applies (design.md:1338-1343, "Corporate policy (S8)"): a corporate machine's transcripts may not be shareable at all |
+| Data leaving | Stays with the same person (on other machines) | **Disclosure to a third party**. Organisation policy, where actually configured or enforced, applies (design.md:1338-1343, "Corporate policy (S8)"): such a machine's transcripts may not be shareable at all. Otherwise the user decides (Q51) |
 | Inbound text | Instructions from your own agents (still injectable) | Instructions from someone else's agents, to be treated as **untrusted input** |
 | Default reach | Any session (decision 2) | **Nothing**, until both owners consent to a scope |
 | Launch | `ask` in approved workspaces | Opt-in per link, one workspace, `ask` only |
@@ -1638,7 +1639,7 @@ list.
 | **Impersonation** (B's agent claims to be A's owner, or A's own agent) | Display and prefix are built by the receiving host from the link, never from text. The external marker can't be turned off. A's own agents' envelopes verify only under A's roster, and B's only under B's statement, so neither can be mistaken for the other |
 | **Collaborator's machine compromised** | Bounded by B's expose list on A's side, rates, and the link's scope. A's trust in B never exceeds the link |
 | **Compromised relay on either side** | Same as single-account: denial of service and metadata. Plus, at RB, knowledge of the link |
-| **Corporate data** | Links from a machine flagged corporate are refused unless the owner explicitly sets `agents.links.allowOnCorporate` at that machine (design.md:1338-1343) |
+| **Corporate data** | Organisation policy wins **where it is actually configured or enforced** on the machine (design.md:1338-1343, "Corporate policy (S8)"): links are refused, and the app names that policy. Without one, **the user decides**, on a managed machine as on any other (owner decision, Q51). A personal consent button never overrides an organisation-enforced restriction |
 
 ### 7.9 Minimal v1 stub versus the full design
 
@@ -1898,8 +1899,11 @@ SSH-host-key rule.
     **status** (the recommended preset) or **content**, with content's provider-retention
     warning (§7.4), and/or reply. Launch is a separate opt-in.
   * **Organisation policy** is named only when it is actually configured or enforced on this
-    machine; otherwise the app says "External sharing is disabled on this machine". A personal
-    consent button never overrides an organisation-enforced restriction.
+    machine, and then it wins: the link is refused, with the policy named. Without one, the
+    person decides, on a managed machine as on any other (Q51); the app never invents an
+    organisational reason. "External sharing is disabled on this machine" appears only when the
+    person turned federation off there. A personal consent button never overrides an
+    organisation-enforced restriction.
   * **Read** covers @alex's agents **and @alex in their own app** (§7.12): "@alex and their
     agents can read these sessions."
   * **Allow-all sessions** (§5.7), two further opt-ins, unticked, each with its warning:
@@ -2855,7 +2859,7 @@ Each slice is one PR, security-reviewed independently before merge.
 | AP7 | Re-enable `inbound.remote` defaults per machine during the owner's cutover (#391 R8) | AP5, R8 | Yes, live |
 | AP8 | **The gate, as the main path** (§5.7 G, §5.3 (B)), and **provenance** (§5.8). It covers:<br>• `inbound.*.gate` (`off`/`quiet`/`push`, default `quiet`), holds with absolute expiry, the bounded queue, `held` and the `gateDenied`/`gateExpired`/`gateCancelled` codes;<br>• the Needs-you `agentMessage` item with its deterministic partial summary and full text;<br>• the presence-signed `gate v1` approval, batches, windows over fixed instance sets with the expansion fold, and G delegation grants;<br>• **gated launches**, with the manifest, source report and fresh worktree;<br>• mute, pause and block without biometrics, and the refusal nudge;<br>• taint tracking, `driverFrom.origins`, `taint`, `replyPath`, the badge, and "Start a fresh coordinator";<br>• workflow budgets;<br>• audit of origin, authorizer, grant and outcome.<br>**Exit tests:**<br>• an approval for different text, sender, origins, target or instance is refused, and so is a replayed one;<br>• an approval without presence, or from an agent connection, a connector or the `homeassistant:` path, is refused;<br>• a hold expires at its absolute deadline even when approved late, and the person's input cancels it;<br>• **no hold is ever pushed individually**;<br>• a batch can't change after signing;<br>• a window never grows except by a presence-signed expansion, and pauses on a new origin;<br>• taint survives resume, compaction, transfer and a person's reply, and a tainted sender can't use O;<br>• a gated launch can't change after approval;<br>• a connector reply into allow-all is refused with no hold;<br>• delivery still runs §5.2's guard | AP1, AP6, #391 person commands with presence (§7.2) and R6. Remote targets also AP5 | Same machine first; remote with AP5 |
 | AP9 | **Own agents into own allow-all sessions** (§5.7 O): `inbound.*.allowAllTargets`, its warning in Settings, workspace scope. **Exit tests:** off by default; refused for another account's, a connector's, a federated or `homeassistant:` principal, for a chain with a cross-account hop, and for a tainted sender; refused outside the workspace scope; `allowAllPerTargetPerMinute`, depth and budget apply; the guard still applies | AP1 (`inbound.local`). `inbound.remote`: AP5 | Local first; remote with AP5 |
-| AP10 | **Sandboxed allow-all** (§5.7 S): OS-enforced restriction of the filesystem, credentials, IPC and network egress. **Recommended immediately after AP9; the owner decides (Q50).** It doesn't remove the gate without separately demonstrated boundaries | AP9, a separate design and review | Local |
+| AP10 | **Sandboxed allow-all** (§5.7 S): OS-enforced restriction of the filesystem, credentials, IPC and network egress. **Immediately after AP9 (owner decision, Q50).** It doesn't remove the gate without separately demonstrated boundaries | AP9, a separate design and review | Local |
 | F1-F7 | Federation (§7.10), with repo discovery (§7.11) as F6 and the person view (§7.12) as F7 | AP5, owner approval, separate review. F6 also needs the Cosmos DB directory store (§7.11.10) | Cross-account |
 | C1-C6 | Connector API (§9.7). C1 is the read-only first slice | C1: #534, #407. Production (C5): §8.7 | C5 only |
 
@@ -2923,9 +2927,9 @@ Each has a recommendation. None is decided by this note.
     (§7.4).
 14. **Q14. Audit content.** **Recommended:** metadata and hashes only, 30 days. The text stays in
     the target session's transcript. Keeping full text is an opt-in for debugging.
-15. **Q15. Corporate machines and federation.** **Recommended:** links refused on a machine the
-    owner marks corporate unless allowed at that machine, pending the S8 policy check
-    (design.md:1338-1343).
+15. **Q15. Corporate machines and federation.** **Answered by Q51** (owner decision): organisation
+    policy wins where it is actually configured or enforced (the S8 check, design.md:1338-1343);
+    otherwise the user decides, and a managed machine isn't refused for being managed.
 16. **Q16. The connector's production trust anchor** (§8.7). (a) The #55 roster, with a new
     `connector` kind approved by a presence-proven person's device, plus a local per-host grant.
     (b) #407's local pins as the production anchor before #55, which needs every person's device
@@ -3046,7 +3050,7 @@ Decisions the reviews of `f3559996` asked to make explicit:
     demonstrated boundaries.
     **Revision 11 (the adversarial PM/Security review)** changes two defaults within this
     decision. Own-account G is **on in `quiet` mode** (a hold runs nothing without presence, and
-    is never pushed). A launch that isn't provably forced-ask is **held as a gated launch** rather
+    is never pushed), **confirmed by the owner (2026-11-03, 21:14 PT)**. A launch that isn't provably forced-ask is **held as a gated launch** rather
     than refused. Cross-account G, O and R stay off until opted in.
 35. **Q35. Replies into working sessions.** **Recommended:** refused as `notIdle`, idle only
     (§5.2), re-checked before Enter. That is a new additive refusal code, since `busy` already
@@ -3180,23 +3184,20 @@ Decisions the reviews of `f3559996` asked to make explicit:
       the pipe or connectors (revision 11).
     * **Deferred:** the person replying into a collaborator's session, which would be its own
       future grant, presence-signed and separately reviewed.
-50. **Q50. When to build sandboxed allow-all (S).** It is not a prerequisite for reads or for
-    cross-account G (§5.7 S). (a) Immediately after AP9. (b) After federation (F7). (c) Not
-    planned. **Recommended: (a)**, because most of the owner's sessions run allow-all, and a
-    sandbox narrows what an approved message can do. It removes the gate only with separately
-    demonstrated boundaries.
-51. **Q51. The supported audience, and managed enterprises, before public launch.**
-    * **Minors:** no birth dates are collected by default, and GitHub's age terms alone aren't
-      sufficient (§7.11.5). (a) Adults only, stated in the terms. (b) Minors with a reduced
-      preset (no cross-account content, no external G). **Recommended: (a)** until a separate
-      review designs (b).
-    * **Managed enterprises:** there is no effective-policy signal (§5.3). (a) Launch with G and
-      O as the only paths on managed accounts, and name organisation policy only when it is
-      actually configured. (b) Hold enterprise launch until a signal exists.
-      **Recommended: (a).**
-52. **Q52. Where typed status gets PR and CI state.** Hosts hold no GitHub token (§5.8). (a) The
-    reader's app fetches it with the person's own token, so CI state is unavailable while no
-    person device of the reader is online. (b) A separately designed broker with its own
-    narrowly scoped GitHub App. **Recommended: (a) in v1**, with (b) designed only if offline
-    status proves necessary. Either way status guides scheduling only, and never authorizes a
-    merge, a deploy or the use of a credential.
+50. **Q50. When to build sandboxed allow-all (S).** **Decided by the owner (2026-11-03, 21:12 PT):
+    immediately after AP9** (AP10, §5.7 S). It is not a prerequisite for reads or for
+    cross-account G, and it removes the gate only with separately demonstrated boundaries.
+51. **Q51. The supported audience, and managed machines.** **Decided by the owner (2026-11-03,
+    21:12 PT).**
+    * **Adults only**, stated in the terms. No birth dates are collected (§7.11.5).
+    * **On a managed machine, the user decides.** Organisation policy wins only where it is
+      actually configured or enforced on that machine: then links are refused and the app names
+      the policy. Without such a policy, a managed machine is treated like any other, and the
+      absence of policy never refuses a link. A personal consent button never overrides an
+      organisation-enforced restriction (§7.8, §7.11.5). Forced-ask is unaffected: managed
+      accounts still reach agents through G and O (§5.3).
+52. **Q52. Where typed status gets PR and CI state.** **Decided by the owner (2026-11-03, 21:12
+    PT):** the **reader's app** fetches it with the person's own token in v1, so CI state is
+    unavailable while no person device of the reader is online. A broker comes later, as its own
+    design. Either way status guides scheduling only, and never authorizes a merge, a deploy or
+    the use of a credential (§5.8).
