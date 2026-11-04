@@ -377,8 +377,9 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
         }
         report: {
           type: 'Http'
-          // Runs whatever happened above, so a malformed answer still reports (as no evidence) rather
-          // than going silent; A-GHA-SILENT catches the watch not reporting at all.
+          // Runs whatever happened above, so a malformed answer still reports, as no evidence and with
+          // the message saying "unreadable", rather than going silent. A-GHA-SILENT catches the watch
+          // not reporting at all.
           runAfter: { degradedNames: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'], stalled: ['Succeeded', 'Failed', 'Skipped', 'TimedOut'] }
           // The instrumentation key stays out of run history.
           runtimeConfiguration: { secureData: { properties: ['inputs'] } }
@@ -400,7 +401,7 @@ resource githubWatch 'Microsoft.Logic/workflows@2019-05-01' = {
                     duration: '00:00:01'
                     runLocation: 'azure-logic-app'
                     success: '@and(equals(length(coalesce(body(\'degraded\'), json(\'[]\'))), 0), equals(length(coalesce(body(\'stalled\'), json(\'[]\'))), 0))'
-                    message: '@{concat(\'status page: \', if(equals(outputs(\'status\')?[\'statusCode\'], 200), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(body(\'degradedNames\'), \', \')), \'unreachable\'), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(equals(outputs(\'runs\')?[\'statusCode\'], 200), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\')))}'
+                    message: '@{concat(\'status page: \', if(not(equals(outputs(\'status\')?[\'statusCode\'], 200)), \'unreachable\', if(and(equals(actions(\'statusAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'degraded\')?[\'status\'], \'Succeeded\')), if(equals(length(coalesce(body(\'degradedNames\'), json(\'[]\'))), 0), \'Actions and Pages operational\', join(coalesce(body(\'degradedNames\'), json(\'[]\')), \', \')), \'unreadable\')), \'; runs queued over \', string(parameters(\'stallMinutes\')), \' min: \', if(not(equals(outputs(\'runs\')?[\'statusCode\'], 200)), concat(\'unknown (API \', string(outputs(\'runs\')?[\'statusCode\']), \')\'), if(and(equals(actions(\'runsAnswered\')?[\'status\'], \'Succeeded\'), equals(actions(\'stalled\')?[\'status\'], \'Succeeded\')), string(length(coalesce(body(\'stalled\'), json(\'[]\')))), \'unreadable\')))}'
                   }
                 }
               }
