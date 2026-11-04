@@ -12,7 +12,9 @@
 # Needs the .NET 10 SDK, vpk 1.2.161 (dotnet tool install -g vpk --version 1.2.161) and, for
 # the NativeAOT injector and hook, the MSVC linker (Visual Studio's C++ build tools, with the
 # ARM64 build tools for -Runtime win-arm64 on an x64 machine; CI builds Arm64 on Arm64). Unsigned
-# unless -SignParams or -AzureTrustedSignFile is given (docs/app-windows.md, Signing).
+# unless -SignParams or -AzureTrustedSignFile is given (docs/app-windows.md, Signing). With
+# -RequireSignature -SignerEku, it refuses to start without a signing hook, and fails unless every
+# file packed carries the pinned publisher's timestamped signature (build/app-signing.ps1).
 [CmdletBinding()]
 param(
     [string]$Version = '0.1.0',
@@ -31,12 +33,24 @@ param(
     # Signing metadata.json. vpk signs every executable in the package and Setup.exe.
     [string]$SignParams,
     [string]$AzureTrustedSignFile,
+    # Signing is expected (CI's APP_SIGNING): vpk only warns when it signs nothing, so this checks
+    # what it packed against the publisher's Artifact Signing identity EKU, and fails if any is not.
+    [switch]$RequireSignature,
+    [string]$SignerEku,
     # Markdown the package carries as its release notes (build/release-notes.ps1): what an
     # installed copy's toast says changed after it updates.
     [string]$ReleaseNotes
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+if ($RequireSignature) {
+    # Before building anything: a signed release that cannot be signed must not become an unsigned one.
+    . (Join-Path $PSScriptRoot 'app-signing.ps1')
+    Assert-AppSignerEku $SignerEku
+    if ($NoPack) { throw '-RequireSignature checks the package, and -NoPack packs none' }
+    if (-not $SignParams -and -not $AzureTrustedSignFile) { throw 'signing is required, but neither -AzureTrustedSignFile nor -SignParams was given' }
+    if ($AzureTrustedSignFile -and -not (Test-Path -LiteralPath $AzureTrustedSignFile -PathType Leaf)) { throw "signing is required, but there is no $AzureTrustedSignFile" }
+}
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $target = Get-AppChannel $Runtime
 if (-not $Out) { $Out = Join-Path $root 'out' $(if ($Runtime -eq 'win-x64') { 'app' } else { 'app-arm64' }) }
@@ -133,4 +147,9 @@ if ($ReleaseNotes) { $more += @('--releaseNotes', [IO.Path]::GetFullPath($Releas
 if ($Runtime -ne 'win-x64') { $more += @('--runtime', $Runtime) }
 & vpk pack -u $packId -v $Version -c $target.Channel -p $publish -e AgentBridge.exe -o $releases --packTitle $AppProductName --icon (Join-Path $publish $AppIconFile) @more
 if ($LASTEXITCODE) { throw 'vpk pack failed' }
+if ($RequireSignature) {
+    $check = Test-AppReleaseSignature $releases $target.Channel $Version $SignerEku (Join-Path $Out 'signature-check')
+    if ($check.Problems) { throw "signing is required, but the packed release is not signed as it must be:`n  $($check.Problems -join "`n  ")" }
+    Write-Host "every file packed is signed by $($check.Signer), with a timestamp"
+}
 Write-Host "packed $Version for the $($target.Channel) channel to $releases"

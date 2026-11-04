@@ -49,7 +49,38 @@ $global:PpBuildsFor = $null
 $global:PpFeedExtra = $null
 $global:PpGeneratedNotes = $null
 $global:PpPublishedBody = $null
+$global:PpPackMakes = $false
+$global:PpTamper = $null
 
+# --- Authenticode, as Get-AuthenticodeSignature reports it, for the signing checks
+# (build/app-signing.ps1). Each file is signed by this publisher unless $global:PpSign names its
+# leaf: 'unsigned', 'other' (another Artifact Signing publisher), 'notimestamp', 'nopublictrust' or
+# 'microsoft'. The certificates are made in memory for these checks and never written anywhere.
+$global:PpEku = '1.3.6.1.4.1.311.97.123456789.12345.67890.1'
+$global:PpSign = @{}
+function global:New-PpCertificate([string]$subject, [string[]]$ekus) {
+    $rsa = [Security.Cryptography.RSA]::Create(2048)
+    $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new($subject, $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $oids = [Security.Cryptography.OidCollection]::new()
+    foreach ($e in $ekus) { [void]$oids.Add([Security.Cryptography.Oid]::new($e)) }
+    $request.CertificateExtensions.Add([Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($oids, $false))
+    $request.CreateSelfSigned([DateTimeOffset]::Now.AddDays(-1), [DateTimeOffset]::Now.AddDays(2))
+}
+$global:PpCertificates = @{
+    ours          = New-PpCertificate 'CN=Agent Bridge Test Publisher' @($global:PpEku, '1.3.6.1.4.1.311.97.1.0', '1.3.6.1.5.5.7.3.3')
+    nopublictrust = New-PpCertificate 'CN=Agent Bridge Test Publisher' @($global:PpEku, '1.3.6.1.5.5.7.3.3')
+    other         = New-PpCertificate 'CN=Someone Else' @('1.3.6.1.4.1.311.97.987654321.1.2.3', '1.3.6.1.4.1.311.97.1.0', '1.3.6.1.5.5.7.3.3')
+    microsoft     = New-PpCertificate 'CN=Microsoft Corporation' @('1.3.6.1.5.5.7.3.3')
+    timestamp     = New-PpCertificate 'CN=Test Timestamping' @('1.3.6.1.5.5.7.3.8')
+}
+function global:Get-AuthenticodeSignature {
+    param([string]$FilePath, [string]$LiteralPath)
+    $leaf = Split-Path $(if ($LiteralPath) { $LiteralPath } else { $FilePath }) -Leaf
+    $state = if ($global:PpSign.ContainsKey($leaf)) { $global:PpSign[$leaf] } else { 'ours' }
+    if ($state -eq 'unsigned') { return [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null; TimeStamperCertificate = $null } }
+    $certificate = $global:PpCertificates[$(if ($state -eq 'notimestamp') { 'ours' } else { $state })]
+    [pscustomobject]@{ Status = 'Valid'; SignerCertificate = $certificate; TimeStamperCertificate = $(if ($state -ne 'notimestamp') { $global:PpCertificates.timestamp }) }
+}
 # What vpk names a channel's full package (build/app-channels.ps1): x64's `win` without a suffix.
 function global:Get-PpFull([string]$channel, [string]$version) {
     "AgentBridgeApp-$version$(if ($channel -ne 'win') { "-$channel" })-full.nupkg"
@@ -95,6 +126,17 @@ function global:gh {
             $r.draft = $false; $global:PpTags.Add("refs/tags/$($r.tag_name)")
         }
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'upload') {
+    } elseif ($a[0] -eq 'release' -and $a[1] -eq 'download') {
+        # What vpk upload github put up for the tag; as gh does, a pattern matching nothing fails.
+        $store = Join-Path $scratch 'uploaded' $a[2]
+        $dest = $a[[array]::IndexOf($a, '-D') + 1]
+        New-Item -ItemType Directory -Force $dest | Out-Null
+        for ($i = 0; $i -lt $a.Count; $i++) {
+            if ($a[$i] -ne '-p') { continue }
+            $file = Join-Path $store $a[$i + 1]
+            if (-not (Test-Path -LiteralPath $file)) { $global:LASTEXITCODE = 1; return }
+            Copy-Item -LiteralPath $file $dest -Force
+        }
     } elseif ($a[0] -eq 'release' -and $a[1] -eq 'list') {
         $global:PpReleases | Where-Object { -not $_.draft } | Select-Object -Last 1 | ForEach-Object tag_name
     } elseif ($a[0] -eq 'api' -and $a[1] -like "repos/$repo/compare/*") {
@@ -116,6 +158,19 @@ function global:vpk {
         $existing = $global:PpReleases | Where-Object tag_name -EQ (Arg '--tag')
         if ($existing -and -not $merge) { $global:LASTEXITCODE = 1; return }
         if (-not $existing) { New-PpRelease (Arg '--tag') $true $true }
+        # The assets go up as vpk sends them, with a releases.<channel>.json of their hashes and sizes.
+        $channel = Arg '--channel'
+        $store = Join-Path $scratch 'uploaded' (Arg '--tag')
+        New-Item -ItemType Directory -Force $store | Out-Null
+        $entries = foreach ($asset in @(Get-Content (Join-Path (Arg '--outputDir') "assets.$channel.json") -Raw | ConvertFrom-Json)) {
+            Copy-Item -LiteralPath (Join-Path (Arg '--outputDir') $asset.RelativeFileName) $store -Force
+            if ($asset.Type -in 'Full', 'Delta') {
+                $file = Get-Item -LiteralPath (Join-Path $store $asset.RelativeFileName)
+                @{ FileName = $file.Name; Type = $asset.Type; SHA256 = (Get-FileHash -LiteralPath $file.FullName).Hash; Size = $file.Length }
+            }
+        }
+        @{ Assets = @($entries) } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $store "releases.$channel.json")
+        if ($global:PpTamper) { & $global:PpTamper $store $channel }
     } elseif ($a[0] -eq 'upload' -and $a[1] -eq 'local') {
         $channel = Arg '--channel'
         $global:PpCalls.Add("vpk upload local --channel $channel")
@@ -145,6 +200,14 @@ function global:vpk {
     } elseif ($a[0] -eq 'pack') {
         $global:PpPackArgs = $a
         $global:PpPackSaw = @(Get-ChildItem (Arg '-o') -Filter *.nupkg -ErrorAction SilentlyContinue | ForEach-Object Name)
+        if ($global:PpPackMakes) {
+            $channel = Arg '-c'
+            $machine = if ((Arg '--runtime') -eq 'win-arm64') { 'arm64' } else { 'x64' }
+            New-Item -ItemType Directory -Force (Arg '-o') | Out-Null
+            New-Package (Join-Path (Arg '-o') (Get-PpFull $channel (Arg '-v'))) 'dev' $machine
+            New-PpExe (Join-Path (Arg '-o') "AgentBridgeApp-$channel-Setup.exe") $machine
+            New-PpPortable (Join-Path (Arg '-o') "AgentBridgeApp-$channel-Portable.zip") $machine
+        }
     } else { throw "stand-in vpk: unexpected $($a -join ' ')" }
 }
 
@@ -175,7 +238,7 @@ function global:dotnet {
 function Reset([int]$prereleases = 0) {
     $global:PpReleases.Clear(); $global:PpTags.Clear(); $global:PpCalls.Clear(); $global:PpPublishRids.Clear()
     $global:PpDownload = $null; $global:PpPackSaw = $null; $global:PpPackArgs = $null; $global:PpIgnoreRelease = $false; $global:PpCompare = @()
-    $global:PpBuildsFor = $null; $global:PpFeedExtra = $null
+    $global:PpBuildsFor = $null; $global:PpFeedExtra = $null; $global:PpPackMakes = $false; $global:PpTamper = $null; $global:PpSign = @{}
     $global:PpGeneratedNotes = "## What's Changed`n* A change (#200)`n`n**Full Changelog**: https://github.com/$repo/compare/v0.1.503...v0.1.600"
     $global:PpPublishedBody = $null
     for ($i = 1; $i -le $prereleases; $i++) { New-PpRelease "v0.1.$(500 + $i)" }
@@ -183,13 +246,30 @@ function Reset([int]$prereleases = 0) {
 }
 
 function New-Package([string]$path, [string]$kind, [string]$machine) {
-    # A full package as vpk packs it, as far as host-identity.ps1 and publishing read one: the
-    # host and the app's executable under lib/app.
+    # A full package as vpk packs it, as far as host-identity.ps1, publishing and the signing
+    # checks read one: the host, the app's executables, Velopack's Update.exe (as Squirrel.exe)
+    # and launcher stub, and a runtime file someone else signed, under lib/app.
     $stage = Join-Path $scratch 'stage'
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-    New-Item -ItemType Directory -Force (Join-Path $stage 'lib' 'app') | Out-Null
-    Copy-Item $global:PpHost[$kind] (Join-Path $stage 'lib' 'app' 'agent-bridge-host.dll')
-    New-PpExe (Join-Path $stage 'lib' 'app' 'AgentBridge.exe') $machine
+    $app = Join-Path $stage 'lib' 'app'
+    New-Item -ItemType Directory -Force $app | Out-Null
+    Copy-Item $global:PpHost[$kind] (Join-Path $app 'agent-bridge-host.dll')
+    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe', 'Squirrel.exe', 'AgentBridge_ExecutionStub.exe', 'Microsoft.Runtime.dll') {
+        New-PpExe (Join-Path $app $exe) $machine
+    }
+    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
+    Remove-Item $stage -Recurse -Force
+}
+
+function New-PpPortable([string]$path, [string]$machine) {
+    # Velopack's portable zip: Update.exe and the launcher at its root, the app under current/.
+    $stage = Join-Path $scratch 'stage'
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    New-Item -ItemType Directory -Force (Join-Path $stage 'current') | Out-Null
+    foreach ($exe in 'Update.exe', 'Agent Bridge.exe') { New-PpExe (Join-Path $stage $exe) $machine }
+    foreach ($exe in 'AgentBridge.exe', 'agent-bridge-host.exe', 'agent-bridge-hostw.exe', 'agent-bridge-injector.exe', 'agent-bridge-host-hook.exe') {
+        New-PpExe (Join-Path $stage 'current' $exe) $machine
+    }
     [IO.Compression.ZipFile]::CreateFromDirectory($stage, $path)
     Remove-Item $stage -Recurse -Force
 }
@@ -217,6 +297,8 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(),
         switch ($a.Type) {
             'Full' { New-Package $path $(if ($DevBuild) { 'dev' } else { 'release' }) $Machine }
             'Delta' { Set-Content $path "delta $DeltaFrom->$version" }
+            'Installer' { New-PpExe $path $Machine }
+            'Portable' { New-PpPortable $path $Machine }
             default { Set-Content $path 'stand-in' }
         }
     }
@@ -225,11 +307,13 @@ function New-Folder([string]$version, [string]$DeltaFrom, [string[]]$Skip = @(),
 }
 
 # Both architectures' folders, as the publish job downloads them, unless -Only names one.
-function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan) {
+function Invoke-Publish([string]$version, [switch]$DryRun, [string]$DeltaFrom, [string[]]$Skip = @(), [switch]$DevBuild, [string[]]$Only = @('win', 'win-arm64'), [hashtable]$Machine = @{}, [switch]$Plan, [switch]$Sign) {
     $dirs = @(foreach ($channel in $Only) { New-Folder $version -DeltaFrom $DeltaFrom -Skip $Skip -DevBuild:$DevBuild -Channel $channel -Machine $Machine[$channel] })
+    # -Sign: as CI publishes once APP_SIGNING is on.
+    $signing = if ($Sign) { @{ RequireSignature = $true; SignerEku = $global:PpEku } } else { @{} }
     # -Plan: what it says it does, rather than nothing.
-    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>&1 | Out-String }
-    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun 6>$null }
+    if ($Plan) { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun @signing 6>&1 | Out-String }
+    else { & $publishScript -Version $version -ReleasesDir $dirs -Repository $repo -Commit $commit -DryRun:$DryRun @signing 6>$null }
 }
 
 function Get-Asset([string]$channel = 'win') { @(Get-Content (Join-Path (Get-PpDir $channel) "assets.$channel.json") -Raw | ConvertFrom-Json) }
@@ -524,6 +608,110 @@ Check 'Each app job dry-runs only its own folder' {
     }
 }
 
+# --- Signing (#734): with -RequireSignature, every file the pinned publisher's, before anything
+# goes up and again in the draft, downloaded back, before it is published.
+function Published { [bool]($global:PpReleases | Where-Object { $_.tag_name -eq 'v0.1.600' -and -not $_.draft }) }
+
+Check 'A signed release is checked, uploaded as a draft, downloaded back and checked again, then published naming its signer' {
+    Reset 3
+    $global:PpSign = @{ 'Microsoft.Runtime.dll' = 'microsoft' }
+    Invoke-Publish '0.1.600' -DeltaFrom '0.1.503' -Sign
+    Assert (Published) 'not published'
+    $downloads = @($global:PpCalls | Where-Object { $_ -like 'gh release download v0.1.600 *' })
+    Assert ($downloads.Count -eq 2) "downloads: $($downloads -join '; ')"
+    Assert ($downloads[0] -like '*-p AgentBridgeApp-0.1.600-full.nupkg*-p AgentBridgeApp-win-Setup.exe*-p AgentBridgeApp-win-Portable.zip*-p AgentBridgeApp-0.1.600-delta.nupkg*-p releases.win.json*') "download: $($downloads[0])"
+    Assert ((CallIndex 'gh release download*') -lt (CallIndex 'gh api -X PATCH*')) "calls: $($global:PpCalls -join '; ')"
+    Assert ($global:PpPublishedBody -like '*Signed by CN=Agent Bridge Test Publisher with Azure Artifact Signing*SmartScreen may still warn*') "notes: $global:PpPublishedBody"
+    Assert ($global:PpPublishedBody -notlike '*Unsigned*') "notes: $global:PpPublishedBody"
+}
+
+foreach ($case in @(
+        @{ Name = 'an unsigned NativeAOT injector'; Sign = @{ 'agent-bridge-injector.exe' = 'unsigned' }; Says = '*agent-bridge-injector.exe: NotSigned*' }
+        @{ Name = "Velopack's Update.exe signed by another publisher"; Sign = @{ 'Squirrel.exe' = 'other' }; Says = '*Squirrel.exe: signed by CN=Someone Else, not the pinned publisher*' }
+        @{ Name = 'a Setup.exe without a timestamp'; Sign = @{ 'AgentBridgeApp-win-arm64-Setup.exe' = 'notimestamp' }; Says = '*AgentBridgeApp-win-arm64-Setup.exe: no timestamp*' }
+        @{ Name = 'a launcher stub whose certificate is not Public Trust'; Sign = @{ 'AgentBridge_ExecutionStub.exe' = 'nopublictrust' }; Says = '*AgentBridge_ExecutionStub.exe: the signer has no 1.3.6.1.4.1.311.97.1.0 EKU*' }
+        @{ Name = 'an unsigned runtime file'; Sign = @{ 'Microsoft.Runtime.dll' = 'unsigned' }; Says = '*Microsoft.Runtime.dll: NotSigned*' }
+        @{ Name = 'a portable launcher signed by another publisher'; Sign = @{ 'Agent Bridge.exe' = 'other' }; Says = '*Portable.zip Agent Bridge.exe: signed by CN=Someone Else*' }
+    )) {
+    Check "A release with $($case.Name) uploads nothing when signing is required" {
+        Reset 3
+        $global:PpSign = $case.Sign
+        $threw = $false
+        try { Invoke-Publish '0.1.600' -Sign } catch { $threw = $_.Exception.Message -like "*not signed as it must be; nothing was published*$($case.Says.TrimStart('*'))" ; if (-not $threw) { throw "message: $($_.Exception.Message)" } }
+        Assert $threw 'it did not refuse'
+        Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+        Assert (-not (Published)) 'published'
+    }
+}
+
+Check 'A package missing an executable is refused, not passed for having nothing to check' {
+    Reset 3
+    $global:PpSign = @{}
+    $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
+    # Repack x64's full package without the hook.
+    $full = Join-Path $dirs[0] (Get-PpFull 'win' '0.1.600')
+    $zip = [IO.Compression.ZipFile]::Open($full, 'Update')
+    $zip.GetEntry('lib/app/agent-bridge-host-hook.exe').Delete()
+    $zip.Dispose()
+    $threw = $false
+    try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $global:PpEku 6>$null } catch { $threw = $_.Exception.Message -like "*has no lib$([IO.Path]::DirectorySeparatorChar)app$([IO.Path]::DirectorySeparatorChar)agent-bridge-host-hook.exe*" }
+    Assert $threw 'a package without the hook passed'
+    Assert (@(Uploads).Count -eq 0) "uploads: $(Uploads)"
+}
+
+Check "A pull request's dry run checks the signatures too when signing is required" {
+    Reset 3
+    $global:PpSign = @{ 'agent-bridge-host-hook.exe' = 'unsigned' }
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -DryRun -Only 'win' -Sign } catch { $threw = $_.Exception.Message -like '*agent-bridge-host-hook.exe: NotSigned*' }
+    Assert $threw 'the dry run passed an unsigned hook'
+}
+
+Check 'A draft whose package changed after it was checked stays a draft' {
+    Reset 3
+    $global:PpTamper = { param($store, $channel) if ($channel -eq 'win-arm64') { Add-Content -LiteralPath (Join-Path $store (Get-PpFull 'win-arm64' '0.1.600')) 'x' } }
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -Sign } catch { $threw = $_.Exception.Message -like "*left a draft, not published*the draft's AgentBridgeApp-0.1.600-win-arm64-full.nupkg is not the file checked*releases.win-arm64.json: AgentBridgeApp-0.1.600-win-arm64-full.nupkg's SHA256 is not the file's*" }
+    Assert $threw 'a changed package was published'
+    Assert (-not (Published)) 'published'
+    Assert ((CallIndex 'gh api -X PATCH*') -lt 0) "calls: $($global:PpCalls -join '; ')"
+}
+
+Check "A draft whose feed lists another package stays a draft" {
+    Reset 3
+    $global:PpTamper = {
+        param($store, $channel)
+        $feed = Join-Path $store "releases.$channel.json"
+        $json = Get-Content $feed -Raw | ConvertFrom-Json
+        $json.Assets += [pscustomobject]@{ FileName = 'AgentBridgeApp-0.1.599-full.nupkg'; Type = 'Full'; SHA256 = '00'; Size = 1 }
+        $json | ConvertTo-Json -Depth 4 | Set-Content $feed
+    }
+    $threw = $false
+    try { Invoke-Publish '0.1.600' -Sign } catch { $threw = $_.Exception.Message -like '*releases.win.json lists AgentBridgeApp-0.1.599-full.nupkg, which is not this release*' }
+    Assert $threw 'a feed with a stranger was published'
+    Assert (-not (Published)) 'published'
+}
+
+Check 'Signing required with no publisher to pin refuses before reading the repository' {
+    foreach ($eku in '', '1.3.6.1.4.1.311.97.1.0', '1.3.6.1.5.5.7.3.3') {
+        Reset 3
+        $dirs = @(foreach ($channel in 'win', 'win-arm64') { New-Folder '0.1.600' -Channel $channel })
+        $threw = $false
+        try { & $publishScript -Version '0.1.600' -ReleasesDir $dirs -Repository $repo -Commit $commit -RequireSignature -SignerEku $eku 6>$null } catch { $threw = $_.Exception.Message -like '*not an Artifact Signing identity validation EKU*' }
+        Assert $threw "EKU '$eku' was taken"
+        Assert ($global:PpCalls.Count -eq 0) "calls: $($global:PpCalls -join '; ')"
+    }
+}
+
+Check 'Without signing, a release is published as before: unsigned, said so, and never downloaded back' {
+    Reset 3
+    $global:PpSign = @{ 'agent-bridge-injector.exe' = 'unsigned' }
+    Invoke-Publish '0.1.600'
+    Assert (Published) 'not published'
+    Assert ($global:PpPublishedBody -like '*Unsigned: Windows SmartScreen warns on first install*') "notes: $global:PpPublishedBody"
+    Assert (-not ($global:PpCalls | Where-Object { $_ -like 'gh release download*' })) "calls: $($global:PpCalls -join '; ')"
+}
+
 # --- The delta base pack-app.ps1 gives vpk pack.
 function Invoke-Pack([string]$version, [string]$Runtime = 'win-x64') {
     & $packScript -Version $version -Runtime $Runtime -Out $scratch -DeltaFrom "https://github.com/$repo" 6>$null 3>$null
@@ -632,7 +820,60 @@ Check 'A pack whose host is not the build asked for stops before packing' {
     Assert ($null -eq $global:PpPackSaw) 'vpk pack ran'
 }
 
-if (Test-Path $scratch) { Remove-Item $scratch -Recurse -Force }
+# --- Signing in pack-app.ps1 (#734): vpk signs through Artifact Signing's metadata, and the pack
+# fails unless what it packed is the pinned publisher's.
+. (Join-Path $PSScriptRoot 'app-signing.ps1')
+function New-PpMetadata { $path = Join-Path $scratch 'signing' 'metadata.json'; New-AppSigningMetadata -Path $path -Endpoint 'https://eus.codesigning.azure.net/' -Account 'agent-bridge' -CertificateProfile 'agent-bridge-public'; $path }
+
+Check 'A signing pack hands vpk the Artifact Signing metadata and checks every file it packed' {
+    foreach ($runtime in 'win-x64', 'win-arm64') {
+        Reset
+        $global:PpPackMakes = $true
+        $global:PpSign = @{ 'Microsoft.Runtime.dll' = 'microsoft' }
+        $metadata = New-PpMetadata
+        & $packScript -Version '0.1.600' -Runtime $runtime -Out $scratch -Release -AzureTrustedSignFile $metadata -RequireSignature -SignerEku $global:PpEku 6>$null 3>$null
+        Assert ((PackArg '--azureTrustedSignFile') -eq $metadata) "vpk pack $($global:PpPackArgs -join ' ')"
+        Assert (-not (Test-Path (Join-Path $scratch 'signature-check'))) 'the expanded packages were left behind'
+    }
+}
+
+Check 'A signing pack with an unsigned NativeAOT hook fails' {
+    Reset
+    $global:PpPackMakes = $true
+    $global:PpSign = @{ 'agent-bridge-host-hook.exe' = 'unsigned' }
+    $threw = $false
+    try { & $packScript -Version '0.1.600' -Out $scratch -Release -AzureTrustedSignFile (New-PpMetadata) -RequireSignature -SignerEku $global:PpEku 6>$null 3>$null } catch { $threw = $_.Exception.Message -like '*packed release is not signed as it must be*agent-bridge-host-hook.exe: NotSigned*' }
+    Assert $threw 'an unsigned hook was packed'
+}
+
+Check 'A pack required to sign, without the means to, builds nothing' {
+    foreach ($case in @(
+            @{ Args = @{ SignerEku = $global:PpEku }; Says = '*neither -AzureTrustedSignFile nor -SignParams*' }
+            @{ Args = @{ SignerEku = $global:PpEku; AzureTrustedSignFile = 'no-such-metadata.json' }; Says = '*there is no no-such-metadata.json*' }
+            @{ Args = @{ SignerEku = '1.3.6.1.4.1.311.97.1.0'; SignParams = '/n x' }; Says = '*not an Artifact Signing identity validation EKU*' }
+            @{ Args = @{ SignerEku = $global:PpEku; SignParams = '/n x'; NoPack = $true }; Says = '*-NoPack packs none*' }
+        )) {
+        Reset
+        $a = $case.Args
+        $threw = $false
+        try { & $packScript -Version '0.1.600' -Out $scratch -Release -RequireSignature @a 6>$null 3>$null } catch { $threw = $_.Exception.Message -like $case.Says }
+        Assert $threw "not refused: $($case.Says)"
+        Assert ($global:PpPublishRids.Count -eq 0) "dotnet publish ran: $($case.Says)"
+    }
+}
+
+Check 'The Artifact Signing metadata names the account and profile, the Azure CLI sign-in alone, and no secret' {
+    Reset
+    $metadata = Get-Content (New-PpMetadata) -Raw | ConvertFrom-Json
+    Assert ($metadata.Endpoint -eq 'https://eus.codesigning.azure.net' -and $metadata.CodeSigningAccountName -eq 'agent-bridge' -and $metadata.CertificateProfileName -eq 'agent-bridge-public') "metadata: $($metadata | ConvertTo-Json -Compress)"
+    Assert ((@($metadata.PSObject.Properties.Name) | Sort-Object) -join ',' -eq 'CertificateProfileName,CodeSigningAccountName,Endpoint,ExcludeCredentials') "fields: $($metadata.PSObject.Properties.Name)"
+    Assert ($metadata.ExcludeCredentials -notcontains 'AzureCliCredential' -and $metadata.ExcludeCredentials -contains 'EnvironmentCredential' -and $metadata.ExcludeCredentials -contains 'ManagedIdentityCredential') "excluded: $($metadata.ExcludeCredentials)"
+    foreach ($bad in @(@('http://eus.codesigning.azure.net', 'a-b-c', 'p-q-r'), @('https://evil.example.net', 'a-b-c', 'p-q-r'), @('https://eus.codesigning.azure.net', '', 'p-q-r'), @('https://eus.codesigning.azure.net', 'a-b-c', 'p q'))) {
+        $threw = $false
+        try { New-AppSigningMetadata -Path (Join-Path $scratch 'bad.json') -Endpoint $bad[0] -Account $bad[1] -CertificateProfile $bad[2] } catch { $threw = $true }
+        Assert $threw "taken: $($bad -join ', ')"
+    }
+} { Remove-Item $scratch -Recurse -Force }
 if (Test-Path $fixtures) { Remove-Item $fixtures -Recurse -Force }
 Remove-Item Env:GH_TOKEN
 if ($failures) { Write-Output "$failures failed"; exit 1 }

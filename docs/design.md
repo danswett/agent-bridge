@@ -1063,8 +1063,9 @@ signs a roster `remove` for this device.
   asset, plus `SHA256SUMS`. The host's macOS self-updater verifies the attestation
   bundle, not only the hash.
 * **Authenticode signing**, so SmartScreen and Defender do not flag a product people
-  install. Options: SignPath Foundation (free for OSS), Azure Trusted Signing
-  (about $10 per month), or an OV certificate. See §11.
+  install. Decided by the owner (#734): **Azure Artifact Signing** over OIDC from CI, no key or
+  secret on a build agent; built, and off until the owner provisions it
+  ([app-windows.md](app-windows.md#signing)). See §11.
 * Keep the release discipline: one release at a time, draft first, all assets
   attached (now including Velopack packages, mac host builds and hook builds), then
   publish.
@@ -1339,7 +1340,8 @@ through a managed identity. It costs about $14/month plus $5 for the registry; G
 would remove the registry cost. The trial must be converted to pay-as-you-go before it
 ends, or the relay stops. Measured cost confirms the low end of the estimate above.
 
-**Production checklist (before public launch):** Authenticode signing; privacy policy
+**Production checklist (before public launch):** Authenticode signing turned on (Azure
+Artifact Signing, #734) and its first signed release checked; privacy policy
 and terms (the relay sees metadata); account deletion; rate limits and abuse
 controls on sign-in, pairing and frames; relay monitoring (§5.10) and a public status page fed by the synthetic probes;
 crash reporting, opt-in only and never including content; protocol compatibility

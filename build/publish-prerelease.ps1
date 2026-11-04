@@ -12,6 +12,12 @@
 # `win-arm64` (build/app-channels.ps1). A release carries both, so publishing needs both.
 #
 # Needs gh and vpk 1.2.161, and GH_TOKEN with contents: write unless -DryRun.
+#
+# -RequireSignature -SignerEku <identity EKU> (CI's APP_SIGNING, docs/app-windows.md, Signing):
+# every folder must carry the pinned publisher's timestamped signatures before anything else, and
+# the draft release is downloaded back and checked again (its feeds' hashes too) before it is
+# published; a failure leaves it a draft, which installed copies never see. Without it, releases
+# are unsigned as before.
 #Requires -Version 7
 [CmdletBinding()]
 param(
@@ -22,11 +28,17 @@ param(
     # How many pre-releases stay. Velopack's GitHub source reads the newest ten releases' feeds,
     # so deltas never need more; the rest are for going back by hand.
     [ValidateRange(1, 1000)][int]$Keep = 20,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$RequireSignature,
+    [string]$SignerEku
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'app-channels.ps1')
+if ($RequireSignature) {
+    . (Join-Path $PSScriptRoot 'app-signing.ps1')
+    Assert-AppSignerEku $SignerEku
+}
 
 $packId = $AppPackId
 $tag = "v$Version"
@@ -115,6 +127,20 @@ foreach ($b in $builds) {
         Write-Plan "the host is a $identity build in the $($b.Channel) package; the publish path packs a release build (pack-app.ps1 -Release)"
     }
     $b.Identity = $identity
+}
+
+# --- Signed, when signing is required: by the pinned publisher, every file, before anything is
+# read from or written to the repository.
+$signer = $null
+if ($RequireSignature) {
+    foreach ($b in $builds) {
+        $check = Test-AppReleaseSignature $b.Dir $b.Channel $Version $SignerEku (Join-Path $work 'signatures')
+        if ($check.Problems) { throw "the $($b.Channel) folder is not signed as it must be; nothing was published:`n  $($check.Problems -join "`n  ")" }
+        if ($signer -and $check.Signer -ne $signer) { throw "the $($b.Channel) folder is signed by $($check.Signer), another folder by $signer; nothing was published" }
+        $signer = $check.Signer
+        Write-Plan "the $($b.Channel) release is signed by $signer, with a timestamp"
+    }
+    if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 }
 
 # --- Whether to publish: once per version, and never a version older than one already out.
@@ -246,6 +272,32 @@ if ($publishing) {
         $draft = @(Get-Release | Where-Object { $_.draft -and $_.tag_name -eq $tag })
         if ($draft.Count -ne 1) { throw "expected one draft $tag after the upload, found $($draft.Count)" }
         foreach ($b in $builds) { Invoke-Gh release upload $tag $b.AssetsFile -R $Repository --clobber | Out-Null }
+        if ($RequireSignature) {
+            # What clients would download, read back from the draft: each file the one checked
+            # above, still signed, and each feed's hashes those of the packages beside it.
+            Reset-Work
+            $problems = foreach ($b in $builds) {
+                $dir = Join-Path $work "draft-$($b.Channel)"
+                $names = @($b.Expected.Full, $b.Expected.Installer, $b.Expected.Portable)
+                if (Test-Path $b.DeltaPath) { $names += $b.Expected.Delta }
+                $feedName = "releases.$($b.Channel).json"
+                $patterns = @($names + $feedName | ForEach-Object { '-p'; $_ })
+                Invoke-Gh release download $tag -R $Repository -D $dir @patterns | Out-Null
+                foreach ($name in $names) {
+                    $downloaded = Join-Path $dir $name
+                    if (-not (Test-Path -LiteralPath $downloaded)) { "the draft has no $name"; continue }
+                    if ((Get-FileHash -LiteralPath $downloaded).Hash -ne (Get-FileHash -LiteralPath (Join-Path $b.Dir $name)).Hash) { "the draft's $name is not the file checked" }
+                }
+                $packages = @{ $b.Expected.Full = Join-Path $dir $b.Expected.Full }
+                if (Test-Path $b.DeltaPath) { $packages[$b.Expected.Delta] = Join-Path $dir $b.Expected.Delta }
+                if (Test-Path (Join-Path $dir $feedName)) { Get-AppFeedProblem (Join-Path $dir $feedName) $packages } else { "the draft has no $feedName" }
+                (Test-AppReleaseSignature $dir $b.Channel $Version $SignerEku (Join-Path $work 'draft-signatures')).Problems
+            }
+            $problems = @($problems | Where-Object { $_ })
+            if ($problems) { throw "the draft $tag, downloaded back, is not what was checked; it was left a draft, not published:`n  $($problems -join "`n  ")" }
+            Remove-Item $work -Recurse -Force
+            Write-Plan "the draft $tag, downloaded back, is the release checked: signed by $signer, its feeds' hashes its packages'"
+        }
         $run = if ($env:GITHUB_RUN_ID) { " (CI run $env:GITHUB_SERVER_URL/$Repository/actions/runs/$env:GITHUB_RUN_ID)" } else { '' }
         $hasDelta = [bool]($builds | Where-Object { Test-Path $_.DeltaPath })
         $installers = @($builds | ForEach-Object { "$($_.Expected.Installer) on $(if ($_.Machine -eq 'x64') { 'an x64 PC' } else { 'a Windows on Arm PC' })" })
@@ -256,7 +308,11 @@ if ($publishing) {
             ''
             '## Installation and updates'
             ''
-            "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
+            $(if ($RequireSignature) {
+                    "Signed by $signer with Azure Artifact Signing: Setup.exe, the app and every executable in it. Windows SmartScreen may still warn on first install until the publisher's reputation builds (More info, then Run anyway). To install, run $($installers -join ', or ')."
+                } else {
+                    "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
+                })
             ''
             "An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' }), and only ever for its own architecture."
         ) -join "`n"
