@@ -91,6 +91,27 @@ Each selected agent home gets `agent-bridge-owner.json`. Setup is repeatable; fa
 report incomplete setup and retain ownership so retry/removal is possible. Multiple agents
 are handled in order, not as one transaction.
 
+Setup also installs product guidance in Copilot's `instructions\agent-bridge.instructions.md`,
+Claude's `CLAUDE.md` and Codex's `AGENTS.md`. The block is delimited by
+`<!-- agent-bridge-owner:... -->` and `<!-- /agent-bridge-owner -->`, with ownership bound
+to the host profile. It explains the user versus `agent@session` principal, reading real
+prompt replies rather than treating spool/heartbeat state as approval, and never sweeping
+a worktree root. Other text is preserved byte for byte, including whitespace, BOM,
+UTF-8/UTF-16/UTF-32 encoding and line endings. Unsupported or damaged text encoding,
+foreign/legacy ownership, multiple blocks and incomplete boundaries refuse the operation
+before hook changes. Shared instruction-file targets (including symlinks) and hard links
+are refused rather than removing another agent's guidance. Retained legacy Copilot guidance
+and legacy markers in Codex's `AGENTS.override.md` also block fresh setup.
+Codex setup also refuses a nonempty user override because it would hide the installed
+`AGENTS.md` guidance; merge the user guidance into `AGENTS.md` and remove the override
+before setup. Removing the connection never removes the user's override.
+The first existing file is backed up under
+`<profile>\hooks\backups\instructions`; backups are retained.
+Writes use the same checked, recoverable file replacement as migration. A concurrent user
+save is preserved and reported as incomplete setup, leaving ownership for retry/removal.
+Removal deletes only the owned block and its inserted separators; a new file containing
+only that block is deleted, but pre-existing empty files and user-owned links remain.
+
 Inspect `agent-bridge-host hooks status` after restart: intake must be on, the heartbeat
 fresh, and hook runs must appear when the new sessions emit events. A fresh heartbeat alone
 does **not** prove an agent loaded its hooks. Workspace approval is separate from agents'
@@ -107,8 +128,8 @@ Removal touches only owned entries/plugin registrations; unrelated hooks, settin
 and backups remain. An empty dedicated Copilot file is deleted; one containing somebody
 else's additions retains its ownership marker so it can safely be reinstalled later.
 The private binary/runtime/intake remain for already-open sessions
-until those end. Removing an unowned agent is refused. Automatic uninstall cleanup,
-instruction blocks and CLI bootstrapping remain follow-up work (#54, #231).
+until those end. Removing an unowned agent is refused. Automatic uninstall cleanup
+and CLI bootstrapping remain follow-up work (#54, #231).
 
 ## Decision: the host ships its own native hook, speaking agent-ha-bridge's spool contract
 

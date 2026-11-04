@@ -23,6 +23,14 @@ public sealed class StandaloneHooks(
     string Hook => Path.Combine(HookFolder, "agent-bridge-host-hook.exe");
     string Runtime => Path.Combine(profile, "runtime");
     string CodexMarketplace => Path.Combine(HookFolder, "codex");
+    string Instructions(string agent) => agent switch
+    {
+        "copilot" => Path.Combine(homes.Copilot, "instructions", "agent-bridge.instructions.md"),
+        "claude" => Path.Combine(homes.Claude, "CLAUDE.md"),
+        "codex" => Path.Combine(homes.Codex, "AGENTS.md"),
+        _ => throw new ArgumentException("Choose copilot (also Agency), claude or codex."),
+    };
+    string InstructionBackup(string agent) => Path.Combine(HookFolder, "backups", "instructions", $"{agent}.bin");
 
     string Home(string agent) => agent switch
     {
@@ -49,6 +57,16 @@ public sealed class StandaloneHooks(
         if (Same(copilotHome, claudeHome) || Same(copilotHome, codexHome) || Same(claudeHome, codexHome))
         {
             throw new InvalidOperationException("Copilot, Claude and Codex require separate agent homes; shared hook ownership cannot be safely installed or removed. Inspect existing registrations before changing these homes.");
+        }
+        var instructionTargets = new[] { "copilot", "claude", "codex" }.Select(agent =>
+        {
+            var target = DurableFile.Target(Instructions(agent));
+            return Path.Combine(PhysicalHome(Path.GetDirectoryName(target)!), Path.GetFileName(target));
+        }).ToArray();
+        if (Same(instructionTargets[0], instructionTargets[1]) || Same(instructionTargets[0], instructionTargets[2])
+            || Same(instructionTargets[1], instructionTargets[2]))
+        {
+            throw new InvalidOperationException("Agents require separate instruction files; shared targets cannot be safely installed or removed.");
         }
         if (active() is { } why) { throw new InvalidOperationException($"agent-ha-bridge is active or cannot be checked ({why}); use Migrate instead"); }
         // Even a stopped legacy install must go through its reversible migration, not
@@ -78,9 +96,14 @@ public sealed class StandaloneHooks(
         else if (removing) { throw new InvalidOperationException($"{agent} has no hook registration owned by this profile"); }
         if (!removing && !File.Exists(hookSource)) { throw new FileNotFoundException("The native hook is missing beside the host; reinstall the app.", hookSource); }
         foreach (var path in new[] { Path.Combine(homes.Copilot, "hooks", "decision-notifier.json"), Path.Combine(homes.Claude, "ha-bridge"),
-            Path.Combine(homes.Codex, "agent-ha-bridge-owner.json") })
+            Path.Combine(homes.Codex, "agent-ha-bridge-owner.json"),
+            Path.Combine(homes.Copilot, "instructions", "agent-ha-bridge.instructions.md") })
         {
             if (File.Exists(path) || Directory.Exists(path)) { throw new InvalidOperationException($"{path} is a legacy registration; use Migrate"); }
+        }
+        foreach (var path in new[] { Instructions("claude"), Instructions("codex"), Path.Combine(homes.Codex, "AGENTS.override.md") })
+        {
+            ManagedInstructions.CheckLegacy(path);
         }
         var claudeSettings = Path.Combine(homes.Claude, "settings.json");
         if (File.Exists(claudeSettings))
@@ -99,7 +122,7 @@ public sealed class StandaloneHooks(
     internal static bool Same(string left, string right) =>
         string.Equals(Normal(left), Normal(right), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    static string Normal(string path)
+    internal static string Normal(string path)
     {
         if (OperatingSystem.IsWindows())
         {
@@ -176,6 +199,8 @@ public sealed class StandaloneHooks(
             // marketplace there; writing ownership below creates it before the first CLI write.
             marketplacePresent = Directory.Exists(homes.Codex) && await CheckMarketplaceAsync(executable, owned, ct);
         }
+        if (agent == "codex") { ManagedInstructions.CheckNotShadowed(Path.Combine(homes.Codex, "AGENTS.override.md")); }
+        var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: false);
         Preflight(agent, removing: false);
         output.WriteLine($"{(dryRun ? "Would register" : "Registering")} {agent} hooks for {profile}; runtime {Runtime}.");
         if (dryRun) { return; }
@@ -187,6 +212,7 @@ public sealed class StandaloneHooks(
         // Save ownership first: an interrupted install can be safely retried or removed.
         DurableFile.Replace(owner, Bytes(new JsonObject { ["version"] = 1, ["profile"] = profile }), ownerBefore);
         RefreshFiles(profile, hookSource);
+        instructions.Apply(InstructionBackup(agent));
         if (root is not null) { DurableFile.Replace(path, Bytes(root), before); }
         else
         {
@@ -230,6 +256,7 @@ public sealed class StandaloneHooks(
             before = MigrationRecord.Hash(path);
             if (before is not null) { root = Read(path); Unregister(root, agent); }
         }
+        var instructions = ManagedInstructions.Plan(Instructions(agent), profile, removing: true);
         Preflight(agent, removing: true);
         output.WriteLine($"{(dryRun ? "Would remove" : "Removing")} only {agent} hooks owned by {profile}.");
         if (dryRun) { return; }
@@ -246,6 +273,7 @@ public sealed class StandaloneHooks(
             if (agent == "copilot" && root.All(p => p.Key == "version")) { DurableFile.Remove(path, before); }
             else { DurableFile.Replace(path, Bytes(root), before); }
         }
+        instructions.Apply(InstructionBackup(agent));
         var owner = Path.Combine(Home(agent), OwnerFile);
         // A dedicated Copilot file with somebody else's additions must remain attributable,
         // otherwise reinstall would have to claim an unowned file or permanently refuse it.

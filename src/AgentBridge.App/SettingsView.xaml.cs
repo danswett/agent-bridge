@@ -49,8 +49,8 @@ public sealed partial class SettingsView : UserControl
             XamlRoot = XamlRoot,
             Title = remove ? "Remove this agent's connection?" : "Connect this agent?",
             Content = remove
-                ? "Remove only this installation's hook registrations. Other settings, CLI sign-in and hook trust stay unchanged. Existing sessions keep their hooks until they end."
-                : "Register hooks owned by this installation, preserving other settings. Copilot and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
+                ? "Remove only this installation's hook registrations and owned guidance blocks. Other settings, instructions, CLI sign-in and hook trust stay unchanged. Existing sessions keep their hooks until they end."
+                : "Register hooks and guidance owned by this installation, preserving other settings and instructions. Copilot and Agency share their hooks. You will need to restart the host and start a new agent session. Codex also asks you to trust its hooks at this machine. Nothing restarts or accepts trust automatically.",
             PrimaryButtonText = remove ? "Remove connection" : "Set up hooks",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
