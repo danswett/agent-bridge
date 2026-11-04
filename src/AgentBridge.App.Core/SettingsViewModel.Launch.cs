@@ -149,7 +149,7 @@ public sealed partial class SettingsViewModel
         launchDraft = draft with
         {
             Workspaces = [.. draft.Workspaces.Except(removed)],
-            DefaultWorkspace = removed.Any(w => w.Label == draft.DefaultWorkspace || w.Path == draft.DefaultWorkspace) ? null : draft.DefaultWorkspace,
+            DefaultWorkspace = removed.Any(w => w.Label == draft.DefaultWorkspace) ? null : draft.DefaultWorkspace,
         };
         LaunchDraftChanged(workspacesChanged: true);
     }

@@ -323,6 +323,63 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Removing_a_workspace_does_not_clear_another_workspaces_default_label_that_matches_its_path()
+    {
+        var removedPath = Path.Combine(app, "removed");
+        var retained = new ApprovedWorkspace(removedPath, Path.Combine(app, "retained"), false);
+        var saved = HostLaunchSettings.Default with
+        {
+            Workspaces = [new ApprovedWorkspace("Removed", removedPath, false), retained],
+            DefaultWorkspace = retained.Label,
+        };
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: saved) });
+
+        settings.RemoveWorkspace(removedPath);
+
+        Assert.Equal(retained, Assert.Single(settings.Workspaces));
+        Assert.Equal(retained.Label, settings.DefaultWorkspace);
+        Assert.True(settings.CanSaveLaunchSettings);
+    }
+
+    [Fact]
+    public async Task An_overlapping_sign_in_preference_change_cannot_unlock_or_replace_an_in_flight_launch_save()
+    {
+        await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });
+        settings.DefaultAgent = "claude";
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.Settings, async d =>
+        {
+            var request = d.Deserialize<SettingsRequest>(ProtocolJson.Options)!;
+            await release.Task.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+            host.Status = host.Status with { Settings = host.Status.Settings with { Launch = request.Launch } };
+            return new SettingsResult(host.Status.Settings, true);
+        });
+
+        var pending = settings.SaveLaunchSettingsAsync(confirmed: true);
+        try
+        {
+            await Wait.UntilAsync(() => host.Sent(HostOps.Settings).Count == 1, "the pending launch save");
+            settings.AppStartsAtSignIn = true;
+
+            Assert.Equal(new[] { true }, atSignIn.Sets);
+            Assert.True(settings.Busy);
+            Assert.False(settings.CanEditLaunchSettings);
+            Assert.False(settings.CanReloadLaunchSettings);
+            Assert.False(settings.CanSaveLaunchSettings);
+            settings.DefaultAgent = "codex";
+            Assert.Equal("claude", settings.DefaultAgent);
+        }
+        finally { release.TrySetResult(); await pending; }
+
+        Assert.False(settings.HasError, settings.Error);
+        Assert.False(settings.Busy);
+        Assert.True(settings.CanEditLaunchSettings);
+        Assert.True(settings.CanReloadLaunchSettings);
+        Assert.False(settings.CanSaveLaunchSettings);
+        Assert.Equal("claude", settings.DefaultAgent);
+    }
+
+    [Fact]
     public async Task Workspace_conflicts_keep_the_draft_and_require_a_deliberate_reload_instead_of_overwriting()
     {
         await ConnectedWith(FakeHost.StatusOf() with { Settings = new HostSettingsView(true, Launch: HostLaunchSettings.Default) });

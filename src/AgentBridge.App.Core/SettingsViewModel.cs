@@ -43,8 +43,7 @@ public sealed partial class SettingsViewModel : Observable
     string machineName = "";
     bool nameEdited;
     string? error;
-    bool busy;
-    int busyActions;
+    int activeActions;
     string updateStatus = "";
     string? updateVersion;
     string log = "";
@@ -390,10 +389,16 @@ public sealed partial class SettingsViewModel : Observable
 
     public string? Error { get => error; private set { if (Set(ref error, value)) { Raise(nameof(HasError)); } } }
     public bool HasError => error is not null;
-    public bool Busy
+    public bool Busy => Volatile.Read(ref activeActions) > 0;
+
+    void RaiseBusy()
     {
-        get => busy;
-        private set { if (Set(ref busy, value)) { Raise(nameof(CanCheckAgents)); Raise(nameof(CanManageAgents)); Raise(nameof(CanInstallAgents)); Raise(nameof(Agents)); RaiseLaunchSettings(); } }
+        Raise(nameof(Busy));
+        Raise(nameof(CanCheckAgents));
+        Raise(nameof(CanManageAgents));
+        Raise(nameof(CanInstallAgents));
+        Raise(nameof(Agents));
+        RaiseLaunchSettings();
     }
     public string UpdateStatus { get => updateStatus; private set => Set(ref updateStatus, value); }
     public bool UpdateAvailable => updateVersion is not null;
@@ -594,8 +599,8 @@ public sealed partial class SettingsViewModel : Observable
     async Task RunAsync(Func<Task> act)
     {
         Error = null;
-        busyActions++;
-        Busy = true;
+        Interlocked.Increment(ref activeActions);
+        RaiseBusy();
         try { await act(); }
         catch (Exception e) when (e is not (OutOfMemoryException or StackOverflowException))
         {
@@ -603,7 +608,8 @@ public sealed partial class SettingsViewModel : Observable
         }
         finally
         {
-            Busy = --busyActions > 0;
+            Interlocked.Decrement(ref activeActions);
+            RaiseBusy();
             RaiseAll();
         }
     }

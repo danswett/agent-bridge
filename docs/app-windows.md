@@ -64,7 +64,9 @@ not an app-side configuration writer. Folder selection and add/remove actions ed
 **Review and save launch settings** shows the exact authorization scope, defaults and
 permission mode in a cancel-default confirmation. No folder, permission bypass, CLI trust
 or restart is implicit. Another window's changes block stale saves until the person
-discards the draft and reloads. Unavailable/read-only/older hosts cannot save. This editor
+discards the draft and reloads. Editing and reload remain disabled until all in-flight
+Settings actions finish, even if an overlapping preference change completes first.
+Unavailable/read-only/older hosts cannot save. This editor
 is also the shared operation for first-run; it is not the guided setup or its health gate.
 
 * **Same protocol as the relay channel.** The pipe carries the v1 messages exactly as a
