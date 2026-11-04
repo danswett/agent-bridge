@@ -874,12 +874,22 @@ asked and answer it.", with no question and no buttons.
 | Your own agent | filled Agent diamond, Agent left edge | "Sent by copilot on *DESK*" |
 | An external agent | **outlined** External diamond, dashed External outline, no filled edge | "**external** · Sent by an agent on *WS-LAPTOP* · **@welshofer**", then "Their session: “…”" |
 | Any agent that carries external content | its own mark, plus a second line with a small outlined External diamond | "Carries **external** content from **@welshofer**" |
+| Any agent that carries other retained content | its own mark, plus a second neutral line, no External colour or diamond | "Carries automation content from *Home Assistant*", "Carries forwarded content", "Carries content of unknown origin" |
 
 **Retained origins** (`agent-principals.md` §5.8): a message whose `driverFrom.origins` is not
-empty keeps them visible beside the immediate sender, whoever that is, so content from another
-account never arrives looking like your own agent's alone. The line names each origin's verified
-@login, joined with commas, and "another account" for an origin without one ("origins unknown"
-where the host lost them). The held-message card shows the same line under its sender.
+empty keeps them visible beside the immediate sender, whoever that is, so outside content never
+arrives looking like your own agent's alone. The wording follows each origin's category, one
+line per category:
+- `external:<account>`: "Carries **external** content from **@login**", logins joined with
+  commas, with "another account" only for an external origin whose login isn't verified. Only
+  this line takes the External colour and the outlined diamond.
+- `automation:<connector>`: "Carries automation content from *Home Assistant*" (the
+  connector's name), neutral. Your own automations are not another account.
+- `forwarded`: "Carries forwarded content", neutral.
+- `unknown:<machine>`, or `origins` reported as `"unknown"`: "Carries content of unknown
+  origin", neutral, never guessed into another category.
+
+The held-message card shows the same lines under its sender.
 
 **Involving external agents.** A filter chip in the list header (in "More filters" on a phone),
 with the outlined diamond, and a window of **1 h · 24 h · 7 days**, 24 h by default. It shows

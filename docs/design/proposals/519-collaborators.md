@@ -132,7 +132,8 @@ On your own sessions' messages:
 | You | none | none |
 | Your own agent (today) | filled violet ◆, violet left edge | Sent by copilot on *DESK* |
 | An external agent | **outlined ◇** in External, a dashed External outline, no filled edge | **external** · Sent by an agent on *WS-LAPTOP* · **@welshofer** |
-| Any agent carrying external content (§5.8 retained origins) | its own mark, plus a small outlined ◇ line | Carries **external** content from **@welshofer** |
+| Any agent carrying external content (§5.8 retained origins) | its own mark, plus a small outlined ◇ line | Carries **external** content from **@welshofer** (*another account* only for an external origin without a verified login) |
+| Any agent carrying automation, forwarded or unknown content (§5.8) | its own mark, plus a neutral line, no External colour | Carries automation content from *Home Assistant* · Carries forwarded content · Carries content of unknown origin |
 
 Under the external label, secondary and quoted: *Their session: "Port the pairing tests"*.
 The filled-versus-outlined contrast and the word "external" keep the two apart in forced
@@ -301,7 +302,8 @@ when selected) carries the user's own theme contrast.
 
 ### 4.4 Colour vision
 
-CIEDE2000 ΔE between External and each existing role, normal / protan / deutan / tritan
+CIE76 ΔE\*ab (straight-line distance in CIELAB, not CIEDE2000; on this scale the values run
+roughly twice CIEDE2000's) between External and each existing role, normal / protan / deutan / tritan
 simulation:
 
 | vs | Dark | Light |
