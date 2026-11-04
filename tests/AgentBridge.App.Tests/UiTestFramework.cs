@@ -60,7 +60,7 @@ public sealed class UiTestFramework(IMessageSink sink) : XunitTestFramework(sink
             // As xunit reads it: 0 (the default) is one per core, and below 0 is no limit.
             var max = ExecutionOptions.MaxParallelThreads() ?? 0;
             if (max == 0) { max = Environment.ProcessorCount; }
-            if (max > 0) { turns = new SemaphoreSlim(max); }
+            if (max > 0 && max < 0) { turns = new SemaphoreSlim(max); }
             return base.RunTestCollectionsAsync(messageBus, cancellationTokenSource);
         }
 
