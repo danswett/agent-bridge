@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentBridge.App.Core;
 using AgentBridge.Local;
 using AgentBridge.Protocol;
@@ -60,6 +61,7 @@ public sealed class SettingsTests : IAsyncLifetime
             return new { stopping = true };
         });
         host.Capabilities.Add(HostOps.AgentSetupCapability);
+        host.Capabilities.Add(HostOps.AgentInstallCapability);
         host.Start();
         connection = host.Connect(ui);
         manager = new HostManager(new InstallLayout(app, host.Folder, "test"), tasks, processes,
@@ -111,6 +113,180 @@ public sealed class SettingsTests : IAsyncLifetime
             new(ReadinessState.Unknown, "Sign-in has not been verified."),
             new(ReadinessState.Unknown, "Trust and a new session have not been verified.")),
     ]);
+
+    [Fact]
+    public async Task CLI_installation_sends_explicit_consent_and_preserves_the_result_if_the_readiness_recheck_fails()
+    {
+        await Connected();
+        host.On(HostOps.AgentsInstall, d =>
+        {
+            var request = d.Deserialize<AgentInstallRequest>(ProtocolJson.Options)!;
+            Assert.Equal("claude", request.Agent);
+            Assert.True(request.AcceptAgreements);
+            return new AgentInstallResult(true, "Fixture executable installed; sign-in is still unverified.", "fixture.exe");
+        });
+        host.On(HostOps.AgentsRefresh, _ => throw new InvalidOperationException("fixture readiness failure"));
+        await settings.InstallAgentAsync("claude");
+        Assert.Contains("Fixture executable installed", settings.AgentInstallStatus);
+        Assert.Contains("fixture readiness failure", settings.Error);
+        Assert.False(settings.AgentInstallInProgress);
+        Assert.False(settings.Busy);
+        Assert.Empty(host.Sent(HostOps.Restart));
+        Assert.Empty(host.Sent(HostOps.AgentsSetup));
+        Assert.Empty(host.Sent(HostOps.SignIn));
+    }
+
+    [Fact]
+    public async Task Cancelling_installation_does_not_clear_busy_before_the_installer_returns()
+    {
+        await Connected();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            entered.SetResult();
+            await stopped.Task;
+            return new AgentInstallResult(false, "Fixture cancellation completed.");
+        });
+        host.On(HostOps.AgentsInstallCancel, _ => new { cancellationRequested = true });
+        host.On(HostOps.AgentsRefresh, _ => Readiness("1.2.3"));
+        var pending = settings.InstallAgentAsync("claude");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(settings.AgentInstallInProgress);
+            await settings.CancelAgentInstallAsync();
+            Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
+            Assert.True(settings.Busy);
+            Assert.False(settings.CanInstallAgents);
+            Assert.False(pending.IsCompleted);
+        }
+        finally { stopped.TrySetResult(); }
+        await pending;
+        Assert.Contains("cancellation completed", settings.AgentInstallStatus);
+        Assert.True(settings.HasError);
+        Assert.False(settings.Busy);
+    }
+
+    [Fact]
+    public async Task Another_Settings_action_or_duplicate_install_cannot_hide_cancellation_for_the_active_installer()
+    {
+        await Connected();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            entered.SetResult();
+            await stopped.Task;
+            return new AgentInstallResult(false, "Fixture installation stopped.");
+        });
+        host.On(HostOps.Settings, _ => new SettingsResult(FakeHost.StatusOf().Settings, false));
+        host.On(HostOps.AgentsRefresh, _ => Readiness("1.2.3"));
+        var pending = settings.InstallAgentAsync("claude");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await settings.SaveNameAsync();
+            Assert.True(settings.Busy);
+            Assert.False(settings.CanInstallAgents);
+            await settings.InstallAgentAsync("codex");
+            Assert.Single(host.Sent(HostOps.AgentsInstall));
+            Assert.True(settings.AgentInstallInProgress);
+            Assert.True(settings.Busy);
+            Assert.Contains("still running", settings.Error);
+        }
+        finally { stopped.TrySetResult(); }
+        await pending;
+        Assert.False(settings.AgentInstallInProgress);
+        Assert.False(settings.Busy);
+    }
+
+    [Fact]
+    public async Task A_lost_install_reply_keeps_cancellation_visible_and_recovers_host_progress_on_reconnect()
+    {
+        await Connected();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            host.Status = host.Status with { AgentInstallation = new("claude", true, "Fixture installation is still running.") };
+            entered.SetResult();
+            await stopped.Task;
+            return new AgentInstallResult(false, "Fixture installation stopped.");
+        });
+        host.OnAsync(HostOps.AgentsInstallCancel, async _ =>
+        {
+            host.Status = host.Status with { AgentInstallation = new("claude", false, "Fixture cancellation completed.") };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            return new { cancellationRequested = true };
+        });
+        var pending = settings.InstallAgentAsync("claude");
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await host.StopAsync();
+            await pending.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(settings.AgentInstallInProgress);
+            Assert.Contains("result is unavailable", settings.AgentInstallStatus);
+            Assert.False(settings.CanInstallAgents);
+            settings.Refresh();
+            Assert.True(settings.AgentInstallInProgress);
+
+            host.Start();
+            await Wait.UntilAsync(() => settings.HostRunning && settings.AgentInstallStatus.Contains("still running"), "reconciled installation");
+            Assert.True(settings.AgentInstallInProgress);
+            Assert.False(settings.CanInstallAgents);
+            Assert.False(settings.CanManageAgents);
+            await settings.CancelAgentInstallAsync();
+            Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
+            await Wait.UntilAsync(() => !settings.AgentInstallInProgress, "confirmed cancellation");
+            Assert.Contains("cancellation completed", settings.AgentInstallStatus);
+        }
+        finally { stopped.TrySetResult(); await pending; }
+    }
+
+    [Fact]
+    public async Task A_terminal_host_status_received_before_an_error_reply_is_reconciled_without_another_event()
+    {
+        await Connected();
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            host.Status = host.Status with { AgentInstallation = new("claude", false, "Fixture installation stopped before the error reply.") };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => connection.Status?.AgentInstallation?.Detail.Contains("before the error reply") == true, "terminal installation status");
+            throw new InvalidOperationException("fixture installation error");
+        });
+
+        await settings.InstallAgentAsync("claude");
+
+        Assert.False(settings.AgentInstallInProgress);
+        Assert.Contains("stopped before the error reply", settings.AgentInstallStatus);
+        Assert.Contains("fixture installation error", settings.Error);
+        Assert.True(settings.CanInstallAgents);
+        Assert.True(settings.CanManageAgents);
+    }
+
+    [Fact]
+    public async Task A_new_Settings_page_recovers_installation_progress_and_a_cleanup_block_from_the_host()
+    {
+        await Connected();
+        host.Status = host.Status with { AgentInstallation = new("codex", true, "Fixture installation started in another window.") };
+        await connection.RefreshStatusAsync();
+        await Wait.UntilAsync(() => settings.AgentInstallInProgress, "host installation progress");
+        var reopened = new SettingsViewModel(connection, manager, updater, atSignIn, () => prefs, p => prefs = p, "0.1.0", "https://relay.default");
+        Assert.True(reopened.AgentInstallInProgress);
+        Assert.Contains("another window", reopened.AgentInstallStatus);
+        Assert.False(reopened.CanInstallAgents);
+        host.On(HostOps.AgentsInstallCancel, _ => new { cancellationRequested = true });
+        await reopened.CancelAgentInstallAsync();
+        Assert.Single(host.Sent(HostOps.AgentsInstallCancel));
+
+        host.Status = host.Status with { AgentInstallation = new("codex", false, "Fixture cleanup is unconfirmed; installations are blocked.", Blocked: true) };
+        await host.SendAsync(HostOps.StatusEvent, host.Status);
+        await Wait.UntilAsync(() => !reopened.AgentInstallInProgress, "cleanup block");
+        Assert.Contains("cleanup is unconfirmed", reopened.AgentInstallStatus);
+        Assert.False(reopened.CanInstallAgents);
+    }
 
     [Fact]
     public async Task Settings_shows_host_readiness_without_claiming_an_installed_CLI_is_signed_in_or_ready()

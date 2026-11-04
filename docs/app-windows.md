@@ -38,6 +38,27 @@ and ownership detection but explicitly report version probing unavailable for no
 Home Assistant setup, configuration and verification are outside the first-run design
 while its model is redesigned (#384); existing integrations are unchanged.
 
+**Install CLI** is a separate, cancel-default confirmation for missing Copilot, Claude and
+Codex executables. It uses Windows Package Manager's community `winget` source with fixed
+IDs `GitHub.Copilot`, `Anthropic.ClaudeCode` and `OpenAI.Codex`, keeping package hash checks
+and Windows policy intact. Consent covers source/package agreements and required runtimes:
+Copilot may need PowerShell, and Codex may need ripgrep and the Visual C++ runtime.
+User scope applies to the selected CLI, **not necessarily its dependencies**; required
+runtimes can request Windows administrator approval. No existing CLI is upgraded,
+no package manager is silently bootstrapped, and no credentials, hooks, folder trust or
+permission bypasses are configured. Agency remains organization-managed.
+Missing App Installer or an explicitly configured executable gets actionable feedback.
+Progress belongs to the host and is recovered by new Settings windows and after reconnect.
+A lost reply leaves cancellation visible instead of implying the installer stopped.
+The host contains WinGet in a process job, confirms cleanup before another install, and
+cancels and awaits active installation cleanup before shutdown or replacement. Unconfirmed
+cleanup blocks further installs in that host and requires checking Windows installation
+activity before restarting. Cancellation cannot promise rollback of external installers,
+and Windows deployment services outside the job may already have changed the machine.
+The host refreshes executable discovery
+before reporting installation and Settings rechecks readiness even after incomplete work.
+This is not yet a complete first-run wizard or a clean-machine qualification.
+
 * **Same protocol as the relay channel.** The pipe carries the v1 messages exactly as a
   Noise channel does (`{id, op, data}`, `{re, ok, result|error}`, `{ev, seq, data}`), so
   `SessionService` serves both through one interface (`IProtocolChannel`). Answers,

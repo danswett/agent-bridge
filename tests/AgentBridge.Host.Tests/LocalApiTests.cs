@@ -77,6 +77,8 @@ public sealed class LocalApiTests : IAsyncLifetime
         {
             Agents = readiness,
             AgentSetup = setup,
+            AgentInstall = new AgentInstallService(profile, new SetupAgents(), () => { }, new NoCommands(),
+                () => throw new InvalidOperationException("an existing fixture CLI must not invoke WinGet"), _ => { }),
             Updates = updates,
             Profile = "test",
             Folder = profile,
@@ -263,6 +265,43 @@ public sealed class LocalApiTests : IAsyncLifetime
 
         Assert.Null(IntakeState.Load(profile).State);
         Assert.False(setup.RestartRequired);
+    }
+
+    [Fact]
+    public async Task Only_the_local_app_can_request_installation_and_an_existing_CLI_is_reused()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentInstallCapability, (await ch.HelloAsync()).Capabilities);
+        var result = await ch.CallAsync<AgentInstallResult>(HostOps.AgentsInstall, new AgentInstallRequest("claude", true));
+        Assert.True(result.Completed, result.Detail);
+        Assert.Equal("fixture-claude", result.Executable);
+        Assert.Null(IntakeState.Load(profile).State);
+        Assert.Equal(0, restarts);
+    }
+
+    [Theory]
+    [InlineData(CallerKind.Agent)]
+    [InlineData(CallerKind.Other)]
+    [InlineData(CallerKind.HostCli)]
+    public async Task Other_callers_cannot_install_or_cancel_CLI_installation(CallerKind kind)
+    {
+        callers.Current = new FixedCallerGuard(new Caller(kind, "test caller"));
+        var ch = await ConnectAsync();
+        Assert.DoesNotContain(HostOps.AgentInstallCapability, (await ch.HelloAsync()).Capabilities);
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsInstall, new AgentInstallRequest("claude", true)));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsInstallCancel));
+    }
+
+    [Fact]
+    public async Task CLI_installation_reclassifies_the_caller_after_an_app_hello()
+    {
+        var ch = await ConnectAsync();
+        Assert.Contains(HostOps.AgentInstallCapability, (await ch.HelloAsync()).Capabilities);
+        callers.Current = new FixedCallerGuard(new Caller(CallerKind.Agent, "now an agent"));
+        await Assert.ThrowsAsync<HostErrorException>(() =>
+            ch.CallAsync(HostOps.AgentsInstall, new AgentInstallRequest("claude", true)));
+        await Assert.ThrowsAsync<HostErrorException>(() => ch.CallAsync(HostOps.AgentsInstallCancel));
     }
 
     sealed class SetupAgents : IAgentLocator
