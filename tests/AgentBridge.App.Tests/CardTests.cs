@@ -696,6 +696,25 @@ public sealed class CardTests : IAsyncLifetime
         Assert.Single(host.Sent(Ops.SessionAnswer));
     }
 
+    // Nor once the question, changed, is rebuilt again for the machine's capabilities alone.
+    [Fact]
+    public async Task An_answer_that_failed_to_go_before_its_question_changed_is_not_offered_again_after_a_capabilities_change()
+    {
+        host.On(Ops.SessionAnswer, _ => throw new InvalidOperationException("the host failed after reading it"));
+        var caps = new List<string>(connection.Capabilities);
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice("q1")), Context(caps: () => caps));
+        card.Question!.Choose(card.Question.Fields[0].Options.Single(o => o.Value == "sqlite"));
+        await Wait.UntilAsync(() => card.Question!.ShowResend, "the failure");
+        card.Update(Make.Session(question: Make.Choice("q1", false, "sqlite", "duckdb")));
+
+        caps.Add(Capabilities.SessionsApprove);
+        card.Update(Make.Session(question: Make.Choice("q1", false, "sqlite", "duckdb")));
+
+        Assert.False(card.Question!.ShowResend);
+        Assert.True(card.Question.CanAnswer);
+        Assert.EndsWith("The question changed since, so answer it again.", card.Question.StatusText, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Words_typed_for_a_question_that_comes_back_cut_under_its_id_are_kept_on_the_card()
     {

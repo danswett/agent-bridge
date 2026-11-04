@@ -482,6 +482,29 @@ public sealed class AnswerTests : IDisposable
         Assert.Single(answered);
     }
 
+    // A tap that reached nothing (refused) is not one already used once the approval, armed again
+    // for what it now says, is seen waiting: the same option may be tapped again.
+    [Fact]
+    public async Task An_approval_tap_refused_before_it_came_to_read_otherwise_can_be_made_again_after()
+    {
+        outcome = _ => answered.Count == 1 ? new AnswerResult(AnswerOutcome.Refused, "busy") : new AnswerResult(AnswerOutcome.Delivered);
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Single(answered);
+
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        Assert.StartsWith("Delegate Run full test suite asks:", Attributes(SessionEntities.Decision(Node)).GetProperty("question").GetString());
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+
+        Assert.Equal(2, answered.Count);
+    }
+
     [Fact]
     public async Task An_answer_the_host_refuses_is_said_to_be_not_sent_and_can_be_given_again()
     {

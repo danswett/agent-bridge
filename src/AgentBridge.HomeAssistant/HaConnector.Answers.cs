@@ -72,10 +72,6 @@ public sealed partial class HaConnector
         // the card or a phone is taken for it from then until the card is armed for what it says now,
         // however long that takes.
         public bool Superseded;
-        // How often the question has been armed again for saying something else. Its phone buttons
-        // carry it (NotifyId), so a tap on the notification of what it said before is never read by
-        // index against what it says now.
-        public int Revision;
     }
 
     // Get-CopilotDecisionChannelObservation: present (with a value), absent (determinately
@@ -224,9 +220,9 @@ public sealed partial class HaConnector
         // The question as it was before, armed again for what it says now: what it has been through
         // stays with it (Again).
         var was = p.Armed is { Superseded: true } superseded && superseded.Question.Id == question.Id ? superseded : null;
-        // The last question's buttons, still on the phones, or this one's as it read before: gone with it.
-        if (p.Notify.Shown is { } shown && (shown != question.Id || was is not null)) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
         var plan = HaDecision.Plan(question, full);
+        // The last question's buttons, still on the phones, or this one's as it read before: gone with it.
+        if (p.Notify.Shown is { } shown && shown != NotifyId(question.Id, plan)) { await ClearButtonsAsync(full.Id, p.Notify, forget: true, ct); }
         var armedSlots = p.ArmedSlots >= 0 ? p.ArmedSlots : await ArmedSlotsAsync(p.Node, ct);
         var unset = await RunAsync(HaDecision.Arm(plan, p.Node, name, options.MachineName, armedSlots, time.GetLocalNow()), p.Node, ct);
         // Everything the card is told about this question is out; nothing reported before now was
@@ -274,7 +270,10 @@ public sealed partial class HaConnector
         now.UsedStamp = was.UsedStamp;
         now.SpentPress = was.SpentPress;
         now.PhoneTaps.UnionWith(was.PhoneTaps);
-        now.Revision = was.Revision + 1;
+        // A tap that reached nothing (Busy, Refused), with the selector seen waiting under the new
+        // arming: the same option may be tapped again, as after RearmAsync. Kept, it ignored the
+        // next Approve as one already used.
+        if (!now.AwaitTap && now.UsedPress?.StartsWith("tap:", StringComparison.Ordinal) == true) { now.UsedPress = null; }
     }
 
     // What a card's answer channels held just before it was read ahead of a re-arm.

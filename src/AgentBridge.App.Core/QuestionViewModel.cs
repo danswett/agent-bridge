@@ -170,6 +170,10 @@ public sealed partial class QuestionViewModel : Observable
             if (old.Fields.FirstOrDefault(o => o.Name == f.Name) is { } was) { f.TakeDraft(was); }
         }
         OtherOpen = Tap && Fields[0].OtherChosen;
+        // An answer that failed to go for what the question said before stays one not to send again
+        // (Reworded), whatever else the question is rebuilt for.
+        earlier = old.earlier;
+        Refresh();
     }
 
     // A click on one of a tap question's options is the whole answer.

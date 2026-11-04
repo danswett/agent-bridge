@@ -126,10 +126,16 @@ public sealed partial class HaConnector
     // (the daemon has no marker for one, so never sends it, however the card shows it).
     static bool Wanted(Published p) => p.Armed is { Settled: false, Superseded: false } a && a.Question.Kind != QuestionKind.Approval;
 
-    // What a question's notification is known by: its id, and how often it has been armed again for
-    // saying something else (Armed.Revision). A tap echoes it back, and its actions are named from it,
-    // so one on the notification of what the question said before matches nothing it offers now.
-    static string NotifyId(Armed armed) => armed.Revision == 0 ? armed.Question.Id : $"{armed.Question.Id}~{armed.Revision}";
+    // What a question's notification is known by: its id and a digest of what its card shows and takes
+    // (the plan), a fixed 16 characters after a '~'. A tap echoes it back, and its actions are named
+    // from it, so a tap on the notification of what the question said before, under the same id, matches
+    // nothing it offers now (#220). Bound to the plan's contents, not to how often it was armed, it is
+    // the same after a restart, which armed it afresh, and no other question's id can spell it: the
+    // suffix's fixed length says where the id ends.
+    static string NotifyId(Armed armed) => NotifyId(armed.Question.Id, armed.Plan);
+
+    internal static string NotifyId(string questionId, DecisionPlan plan) =>
+        $"{questionId}~{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(plan))).AsSpan(0, 8))}";
 
     // The buttons' notification for the question a session's card is armed with.
     (JsonArray Actions, JsonObject Payload) Buttons(string sessionId, Published p, Armed armed)
