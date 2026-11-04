@@ -869,6 +869,13 @@ asked and answer it.", with no question and no buttons.
 | You | none | none |
 | Your own agent | filled Agent diamond, Agent left edge | "Sent by copilot on *DESK*" |
 | An external agent | **outlined** External diamond, dashed External outline, no filled edge | "**external** · Sent by an agent on *WS-LAPTOP* · **@welshofer**", then "Their session: “…”" |
+| Any agent that carries external content | its own mark, plus a second line with a small outlined External diamond | "Carries **external** content from **@welshofer**" |
+
+**Retained origins** (`agent-principals.md` §5.8): a message whose `driverFrom.origins` is not
+empty keeps them visible beside the immediate sender, whoever that is, so content from another
+account never arrives looking like your own agent's alone. The line names each origin's verified
+@login, joined with commas, and "another account" for an origin without one ("origins unknown"
+where the host lost them). The held-message card shows the same line under its sender.
 
 **Involving external agents.** A filter chip in the list header (in "More filters" on a phone),
 with the outlined diamond, and a window of **1 h · 24 h · 7 days**, 24 h by default. It shows
@@ -880,12 +887,15 @@ and [Clear filter].
 
 **A message from an external agent, held for you.** With a link's "Ask me before each message"
 opt-in, a message from its agents to an allow-all session, or to one whose mode is unknown, is
-held for 5 minutes (`agent-principals.md` §5.7); without it, such a message is refused. It is
-the one collaborator item that is yours: a pending question on its target session, counted in
-N and notified with Open only, like an approval (§7). Its card is unlike an approval's:
-- the title "Message from an external agent", the outlined diamond, and "Held · 4:12 left";
+held until the host's absolute expiry for it (`agent-principals.md` §5.7: 60 minutes for a quiet
+hold, 5 to 15 for a pushed one); without it, such a message is refused. It is the one
+collaborator item that is yours: a pending question on its target session, counted in N. It is
+**never pushed on its own** (§7). Its card is unlike an approval's:
+- the title "Message from an external agent", the outlined diamond, and "Held · 52 min left",
+  counted down to the host's expiry, never a client's own timer;
 - a From / To block: *From* "external · an agent on *machine* (their name) · **@login**", their
-  session title quoted below; *To* your session, its agent, machine and mode;
+  session title quoted below, then its retained origins ("Carries external content from
+  **@login**"); *To* your session, its agent, machine and mode;
 - the **whole** message in the code face, escaped and never read as Markdown, exactly as an
   approval's (§6.4), in a scrolling box with a visible scrollbar, under "Shown exactly as sent, N
   characters. Not formatted.";
@@ -895,7 +905,7 @@ N and notified with Open only, like an approval (§7). Its card is unlike an app
   *machine*.";
 - **Deny**, **Approve once**, **Allow @*login* here for… ▾** (5, 15, 30 or 60 minutes, nothing
   chosen), in that order, all secondary: no Bridge primary makes any of them the easy one;
-- after the hold, "Expired · not delivered", and it leaves Needs you;
+- once the host reports the hold expired, "Expired · not delivered", and it leaves Needs you;
 - while a window is open, a quiet strip on the session: "Allowing @*login*'s agent here", "11 min
   left · 3 messages delivered" and [Stop allowing @*login*].
 
@@ -911,7 +921,7 @@ device." and [Back to sessions]. It is never a notification and never in Needs y
 | You revoked it | Revoked by you |
 | GitHub write access lost | Link suspended: write access removed |
 | A pinned workspace's remote changed | Link suspended: a pinned workspace's remote changed |
-| The descriptor expired (90 days) | Link expired: @*login* hasn't renewed it |
+| The link expired (its descriptor's own expiry, 30 days unless renewed) | Link expired: @*login* hasn't renewed it |
 | Their read grant removed | @*login* stopped sharing read |
 | Collaboration paused on this machine | Collaboration paused on *machine* |
 
@@ -924,12 +934,20 @@ device." and [Back to sessions]. It is never a notification and never in Needs y
   fix, [Re-confirm workspaces]), Revoked (hollow Neutral dot, the date and who ended it). Opened,
   a link shows its history (accepted, verified, renewed, suspended, revoked, each with its cause
   and device), [Message audit] and [Revoke…].
-- **The link dialog:** "What @*login* can do": Read, Reply and Launch, nothing ticked; the two
-  allow-all opt-ins, each with its warning; "Workspaces (pinned now)"; "Who can end this link",
-  which asks for a device other than this machine ("Add a device that can end this link") before
-  it can be accepted; an optional "Link code (optional, stronger)" read aloud; and "Accept with
-  Windows Hello" (or the platform's presence check), off until a scope, a workspace and that
-  device exist.
+- **The link dialog:** "What @*login* can do", nothing ticked: **Read status** (working, waiting
+  or idle; no titles, no text), **Read content** (titles and the latest response), Reply and
+  Launch, the separate grants of `agent-principals.md` §7.4. Read content carries its warning:
+  "@*login* and their AI provider may process and retain what their agents read, under their own
+  policies. Read-only access and later revocation don't retract copies." The two allow-all
+  opt-ins follow, each with its warning, and the read one repeats that retention. Then
+  "Workspaces (pinned now)"; "Who can end this link", which asks for a revoker off this machine,
+  a separate device or an offline recovery key ("Add a device or a recovery key that can end
+  this link", [Add *PHONE*] [Recovery key…]); "Identity", which says "Verified by @*login*'s
+  GitHub signing key" when that proof checks; and the link code, read aloud: "Link code
+  (optional, stronger)" with that proof, and "Link code (required)" without it (§7.11.3).
+  "Accept with Windows Hello" (or the platform's presence check) stays off until a scope, a
+  workspace and an off-machine revoker exist and the identity is verified, by the key or by
+  matching codes.
 
 **Home Assistant card.** Gated on the `collaborators` feature (CARD_VERSION, or
 `hello.features`). A card without it is never sent collaborators' sessions, and a held message
@@ -957,8 +975,10 @@ question, as choosing its row does.
   question is the one shown.
 - The count each platform shows is Needs you's N (§6.1).
 - **Collaborators (#519):** their sessions are never notified, badged or counted. A message
-  from an external agent held for you is notified as an approval is, with Open only, as
-  "A message from an external agent is waiting for your approval".
+  from an external agent held for you is counted in N but **never pushed on its own**, unlike
+  an approval (`agent-principals.md` §5.7, normative). A person can opt in to one aggregated
+  push an hour at most, with a count and no text ("3 agent messages are waiting"), which opens
+  Needs you.
 
 **Windows (WinUI 3):**
 - **Window:** Mica, with a custom 48 px title bar carrying the mark, the app name (12/16)
@@ -1144,7 +1164,7 @@ file from them ([design/README.md](../../design/README.md#app-icon)).
   - The read-only line is the pane's description, read once when it opens. An external
     message's name starts "External agent message from @*login* on *machine*".
   - A held message is announced as Needs you items are, title first ("Message from an external
-    agent, from @*login*, held, 4 minutes left"); its text is a focusable scrolling region named
+    agent, from @*login*, held, 52 minutes left", from the host's expiry, as the card shows); its text is a focusable scrolling region named
     "Message text, N characters".
   - Revocation is announced once, politely ("@*login*'s sessions are hidden. Revoked by
     @*login*."), never as an alert.

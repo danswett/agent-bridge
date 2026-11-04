@@ -132,6 +132,7 @@ On your own sessions' messages:
 | You | none | none |
 | Your own agent (today) | filled violet ◆, violet left edge | Sent by copilot on *DESK* |
 | An external agent | **outlined ◇** in External, a dashed External outline, no filled edge | **external** · Sent by an agent on *WS-LAPTOP* · **@welshofer** |
+| Any agent carrying external content (§5.8 retained origins) | its own mark, plus a small outlined ◇ line | Carries **external** content from **@welshofer** |
 
 Under the external label, secondary and quoted: *Their session: "Port the pairing tests"*.
 The filled-versus-outlined contrast and the word "external" keep the two apart in forced
@@ -180,20 +181,24 @@ A new page in Settings, after Devices.
 
 **The link dialog** (board 7), from "Review and connect" or "Link by invitation…":
 
-- *What @mira-k can do*: **Read**, **Reply**, **Launch**, each with one plain line. Nothing
-  is pre-ticked.
+- *What @mira-k can do*: **Read status**, **Read content**, **Reply**, **Launch** (the separate
+  grants of agent-principals §7.4), each with one plain line. Nothing is pre-ticked. Read
+  content carries the §7.4 warning that @mira-k and their AI provider may retain what their
+  agents read, and that revocation doesn't retract copies.
 - *Allow-all sessions*: two separate opt-ins (read my allow-all sessions; ask me before each
   message to an allow-all session), each with its §7.11.5 warning inline in Needs you text
   colour.
 - *Workspaces (pinned now)*: each workspace as it resolves at acceptance, with its path and
   remote. New workspaces are never added on their own; a changed remote suspends the link.
 - *Who can end this link*: if no revoker device exists off the custodian's machine, an amber
-  requirement box, *Add a device that can end this link*, with **[Add PHONE]** (or a
-  recovery key).
-- *Link code (optional, stronger)*: four word groups, `MAPLE·RIVER·OTTER·NINE`, to read
+  requirement box, *Add a device or a recovery key that can end this link*, with **[Add PHONE]**
+  and **[Recovery key…]**; either one satisfies it.
+- *Identity*: "Verified by @mira-k's GitHub signing key" when that proof checks. *Link code
+  (optional, stronger)* with that proof, *Link code (required)* without it (§7.11.3): four word groups, `MAPLE·RIVER·OTTER·NINE`, to read
   aloud by voice or video. Matching it records "Verified" in history.
 - **Accept with Windows Hello** (or the platform's presence check) stays disabled until one
-  scope, one workspace and a revoker exist. **Cancel** is always available.
+  scope, one workspace and an off-machine revoker exist and the identity is verified (by the
+  signing key or matching link codes). **Cancel** is always available.
 - If the other side's descriptor says single machine, a side card says so, in §7.3's words.
 
 ### 3.6 Per-message approval in Needs you (board 8)
@@ -202,12 +207,14 @@ When you chose "Ask me before each message" for a link (the `gate` opt-in, off b
 messages from that collaborator's agents to an **allow-all** session or to a session whose
 mode is **unknown** are held for you (§5.7). Without the opt-in they're refused and nothing
 reaches Needs you. This *is* yours to decide, so it is the one collaborator item that enters Needs
-you: amber edge, counted, notified like any approval.
+you: amber edge and counted, but never pushed on its own (agent-principals §5.7 is normative:
+quiet holds are counted only, and an opted-in push is one text-free summary an hour at most).
 
 The card is built to look unlike a tool approval:
 
 - Title **Message from an external agent** (a tool approval's title is the action, e.g.
-  *Run a command?*), the outlined ◇ and *Held · 4:12 left*.
+  *Run a command?*), the outlined ◇ and *Held · 52 min left*, counted down to the host's
+  absolute expiry (60 minutes quiet, 5 to 15 pushed), never a client timer.
 - A **From / To** block: *From* ◇ external · an agent on *WS-LAPTOP* (their name) ·
   **@welshofer**, with only the login bold, and their session title quoted and secondary;
   *To* your session, agent, machine and its mode.
@@ -240,7 +247,7 @@ you.
 | You revoked the link | Revoked by you |
 | GitHub write access lost | Link suspended: write access removed |
 | A pinned workspace's remote changed | Link suspended: a pinned workspace's remote changed |
-| The descriptor expired (90 days) | Link expired: @welshofer hasn't renewed it |
+| The link expired (the descriptor's own expiry, 30 days unless renewed) | Link expired: @welshofer hasn't renewed it |
 | Their read grant removed | @welshofer stopped sharing read |
 | Federation paused on this machine | Collaboration paused on ULTRA |
 
@@ -324,7 +331,7 @@ header remain; fills drop. Selected rows use `Highlight` / `HighlightText` as to
 - An external message's name starts *External agent message from @welshofer on
   WS-LAPTOP*; the quoted title follows as a description.
 - The external-message approval is announced like any Needs you item, with the title first:
-  *Message from an external agent, from @welshofer, held, 4 minutes left.* The message box is
+  *Message from an external agent, from @welshofer, held, 52 minutes left.* (from the host's expiry, like the card) The message box is
   a focusable, scrollable region named *Message text, 294 characters*.
 - The revocation notice is announced politely once (*@welshofer's sessions are hidden.
   Revoked by @welshofer.*), not as an alert.
@@ -415,11 +422,12 @@ and changes them there, not here:
 - Collaboration: *Find collaborators who use Slipgates on {repo}*; the §7.11.5 suggestion
   copy; *Review and connect*; *Not now*; *Never for this repo*; *Link by invitation…*;
   *Active*, *Suspended*, *Revoked*; *Re-confirm workspaces*; *Revoke…*; *Message audit*.
-- Link dialog: *What @{login} can do*; *Read*, *Reply*, *Launch* and their lines; the two
+- Link dialog: *What @{login} can do*; *Read status*, *Read content*, *Reply*, *Launch* and their lines; the Read content retention
+  warning; the two
   allow-all opt-ins and warnings; *Workspaces (pinned now)*; *Who can end this link*; *Add a
-  device that can end this link*; *Link code (optional, stronger)*; *Accept with Windows
+  device or a recovery key that can end this link*; *Identity*; *Link code (optional, stronger)*; *Link code (required)*; *Accept with Windows
   Hello*.
-- Approval: *Message from an external agent*; *Held · 4:12 left*; *Shown exactly as sent,
+- Approval: *Message from an external agent*; *Held · 52 min left*; *Shown exactly as sent,
   N characters. Not formatted.*; the allow-all and unknown-mode consequence sentences;
   *Deny*, *Approve once*, *Allow @{login} here for…*; *Expired · not delivered*; *Stop
   allowing @{login}*.
@@ -471,7 +479,9 @@ gathered in its new §6.7 Collaborators:
 ## 12. Owner decisions
 
 **Decided 2026-11-03: the owner chose (a), the recommended option, for all 12.** The options
-are kept as the record. Decision 12 is a request to the #522 spec, not a UI change; until
+are kept as the record. Decision 11's "notified" is narrowed by agent-principals §5.7 (merged
+in #522), which is normative: a held message is counted, never pushed on its own, and an
+opted-in push is a text-free hourly summary. Decision 12 is a request to the #522 spec, not a UI change; until
 #522 adds the logins, line 2 shows kinds only.
 
 1. **External hue.** (a) **Chosen (recommended):** orchid, `#F769CF` dark / `#A3177F` light. (b) No
