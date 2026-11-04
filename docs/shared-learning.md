@@ -94,7 +94,9 @@ deduplicate by that id. Distinct test cases with the same method aggregate as oc
 The importer does not retain display names, theory arguments, diagnostic messages, stack
 traces, attachments or machine paths. Unsupported outcomes, missing failure identities,
 empty results, run-level failures without test failures and counter mismatches are visible
-as `unparsed`, not silently counted as clean. Invalid XML and external entities are refused.
+as `unparsed`, not silently counted as clean. Contradictory execution totals and nonzero
+unsupported outcome counters are included in that accounting. Duplicate singleton report
+sections, invalid XML and external entities are refused.
 The head is labeled `declaredHead`: this tool cannot prove that the report ran on that SHA.
 Capture records are observations, not diagnoses or proposed remedies.
 

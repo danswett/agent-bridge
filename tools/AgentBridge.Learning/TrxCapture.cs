@@ -31,6 +31,10 @@ static class TrxCapture
         });
         var root = XDocument.Load(reader).Root;
         if (root?.Name != Ns + "TestRun") throw new FormatException("Expected a TRX TestRun in the 2010 namespace.");
+        foreach (var section in new[] { "Results", "ResultSummary", "TestDefinitions" })
+            RequireSingleton(root, section);
+        var summary = root.Element(Ns + "ResultSummary");
+        if (summary is not null) RequireSingleton(summary, "Counters");
         var definitions = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var test in root.Element(Ns + "TestDefinitions")?.Elements(Ns + "UnitTest") ?? [])
         {
@@ -73,7 +77,6 @@ static class TrxCapture
                 default: unparsed++; break;
             }
         }
-        var summary = root.Element(Ns + "ResultSummary");
         var summaryOutcome = (string?)summary?.Attribute("outcome");
         var runFailed = summaryOutcome is "Failed" or "Error" or "Timeout" or "Aborted";
         if (summaryOutcome is not ("Completed" or "Passed" or "Failed" or "Error" or "Timeout" or "Aborted" or "Inconclusive" or "NotExecuted"))
@@ -83,13 +86,27 @@ static class TrxCapture
         var counters = summary?.Element(Ns + "Counters");
         if (!int.TryParse((string?)counters?.Attribute("total"), out var total) || total != results.Count)
             unparsed++;
+        var checkedCounters = new HashSet<XName> { "total", "executed" };
         foreach (var outcome in new[] { "Passed", "Failed", "Error", "Timeout", "Aborted", "NotExecuted", "Inconclusive", "NotRunnable" })
         {
             var expected = results.Count(r => (string?)r.Attribute("outcome") == outcome);
             var counter = char.ToLowerInvariant(outcome[0]) + outcome[1..];
+            checkedCounters.Add(counter);
             var raw = (string?)counters?.Attribute(counter);
             if (raw is null && expected == 0) continue;
             if (!int.TryParse(raw, out var actual) || actual != expected) unparsed++;
+        }
+        if (counters?.Attribute("executed") is { } executed)
+        {
+            var notRun = results.Count(r => (string?)r.Attribute("outcome") is "NotExecuted" or "NotRunnable");
+            if (!int.TryParse(executed.Value, out var count) || count < passed + failed || count > results.Count - notRun)
+                unparsed++;
+        }
+        foreach (var counter in counters?.Attributes() ?? [])
+        {
+            if (counter.IsNamespaceDeclaration || checkedCounters.Contains(counter.Name)) continue;
+            // Standard or future outcomes outside our supported set must not disappear from the report.
+            if (!int.TryParse(counter.Value, out var count) || count != 0) unparsed++;
         }
         if (unparsed > 0) signatures.AddRange(Enumerable.Repeat($"{suite}|unparsed", unparsed));
         var hash = JsonData.Hash(bytes);
@@ -97,6 +114,12 @@ static class TrxCapture
         return new(1, recordId, stage, runId, suite, head, hash, results.Count, passed, failed, skipped, unparsed,
             runFailed || failed > 0, signatures.GroupBy(s => s).OrderBy(g => g.Key, StringComparer.Ordinal)
                 .Select(g => new FailureSignature(g.Key, g.Count())).ToArray());
+    }
+
+    static void RequireSingleton(XElement parent, string name)
+    {
+        if (parent.Elements(Ns + name).Skip(1).Any())
+            throw new FormatException($"TRX contains more than one {name} section.");
     }
 
     static bool Symbol(string? value) => value is not null && value.Length <= 512

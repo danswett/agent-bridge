@@ -1,5 +1,6 @@
 using System.Text;
 using System.Xml;
+using System.Xml.Linq;
 
 namespace AgentBridge.Learning.Tests;
 
@@ -118,6 +119,58 @@ public class TrxCaptureTests
         var result = Capture(Encoding.UTF8.GetBytes(text));
         Assert.Equal(1, result.Failed);
         Assert.Equal(0, result.Unparsed);
+    }
+
+    [Theory]
+    [InlineData("Results")]
+    [InlineData("ResultSummary")]
+    [InlineData("TestDefinitions")]
+    [InlineData("Counters")]
+    public void Duplicate_singleton_sections_cannot_hide_a_second_report(string section)
+    {
+        var document = XDocument.Parse(Encoding.UTF8.GetString(Fixture.Trx("Passed", summary: "Completed")));
+        var root = document.Root!;
+        var ns = root.Name.Namespace;
+        var parent = section == "Counters" ? root.Element(ns + "ResultSummary")! : root;
+        var duplicate = new XElement(parent.Element(ns + section)!);
+        if (section == "Results")
+            duplicate.Descendants(ns + "UnitTestResult").Single().SetAttributeValue("outcome", "Failed");
+        parent.Add(duplicate);
+        Assert.Throws<FormatException>(() => Capture(Encoding.UTF8.GetBytes(document.ToString())));
+    }
+
+    [Theory]
+    [InlineData("executed", "0")]
+    [InlineData("executed", "2")]
+    [InlineData("passedButRunAborted", "1")]
+    [InlineData("disconnected", "1")]
+    [InlineData("warning", "1")]
+    [InlineData("inProgress", "1")]
+    [InlineData("futureOutcome", "1")]
+    [InlineData("pending", "invalid")]
+    public void Contradictory_or_unsupported_counters_cannot_look_like_a_clean_run(string name, string value)
+    {
+        var result = Capture(WithCounter(Fixture.Trx("Passed", summary: "Completed"), name, value));
+        Assert.True(result.Unparsed > 0);
+        Assert.Contains(result.Failures, failure => failure.Signature == "host|unparsed");
+    }
+
+    [Fact]
+    public void Execution_counts_respect_passes_and_tests_that_did_not_run()
+    {
+        Assert.Equal(0, Capture(WithCounter(Fixture.Trx("Passed", summary: "Completed"), "executed", "1")).Unparsed);
+        Assert.Equal(0, Capture(WithCounter(Fixture.Trx("NotExecuted", summary: "Completed"), "executed", "0")).Unparsed);
+        Assert.True(Capture(WithCounter(Fixture.Trx("NotExecuted", summary: "Completed"), "executed", "1")).Unparsed > 0);
+        Assert.Equal(0, Capture(WithCounter(Fixture.Trx("Passed", summary: "Completed"), "passedButRunAborted", "0")).Unparsed);
+    }
+
+    static byte[] WithCounter(byte[] bytes, string name, string value)
+    {
+        var document = XDocument.Parse(Encoding.UTF8.GetString(bytes));
+        var root = document.Root!;
+        var ns = root.Name.Namespace;
+        root.Element(ns + "ResultSummary")!.Element(ns + "Counters")!.SetAttributeValue(name, value);
+        return Encoding.UTF8.GetBytes(document.ToString());
     }
 
     static CaptureResult Capture(byte[] bytes) => TrxCapture.Parse(bytes, "host", Fixture.Sha, "run-1", "ci");
