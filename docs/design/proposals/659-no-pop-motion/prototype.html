@@ -314,10 +314,22 @@ function depart(container, els, { dy = 0, dur = T.itemOut } = {}) {
     // doesn't jump.
     const cs = getComputedStyle(el);
     g.dataset.from = cs.opacity;
-    Object.assign(g.style, { top: `${el.offsetTop + new DOMMatrix(cs.transform).m42}px`, left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px` });
+    g.drawn = el.getBoundingClientRect();
+    // offsetTop and offsetLeft already include its margin, which the copy mustn't add again.
+    Object.assign(g.style, { top: `${el.offsetTop + new DOMMatrix(cs.transform).m42}px`, left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px`, margin: '0' });
     return g;
   });
-  flip(container, () => { els.forEach((e) => e.remove()); container.prepend(...ghosts); });
+  flip(container, () => {
+    els.forEach((e) => e.remove());
+    container.prepend(...ghosts);
+    // The container itself can move as the item goes (a margin that collapsed through it, say),
+    // so the copy is put back exactly where the item was drawn.
+    for (const g of ghosts) {
+      const now = g.getBoundingClientRect();
+      g.style.top = `${parseFloat(g.style.top) + g.drawn.top - now.top}px`;
+      g.style.left = `${parseFloat(g.style.left) + g.drawn.left - now.left}px`;
+    }
+  });
   for (const g of ghosts) {
     const to = dy && !S.reduced ? { opacity: 0, transform: `translateY(${dy}px)` } : { opacity: 0 };
     const a = g.animate([{ opacity: Number(g.dataset.from), transform: 'translateY(0)' }, to],
@@ -385,6 +397,9 @@ function toolRow(t) {
 }
 const realTools = () => toolList.querySelectorAll(':scope > .tool:not(.ghost)');
 const atTop = () => toolList.scrollTop <= 2;
+// Keeps the newest 50. Only at the top: evicting from the bottom while the reader is scrolled away
+// would shrink the scroll range under them and move what they read.
+const trim = () => { while (realTools().length > 50) { realTools()[realTools().length - 1].remove(); } };
 function addTool() {
   pending.push(makeTool());
   if (!flushing) { flushing = true; requestAnimationFrame(flushTools); }
@@ -407,13 +422,11 @@ function flushTools() {
     const first = realTools()[0];
     if (first) { first.before(...els); } else { toolList.append(...els); }
   };
-  const trim = () => { while (realTools().length > 50) { realTools()[realTools().length - 1].remove(); } };
   if (!atTop() && !returning) {
     // Scrolled away: anchor what is read. The new calls go in above, the offset grows by their
     // height in the same frame, and the pill counts them.
     place();
     toolList.scrollTop += els.reduce((n, e) => n + e.offsetHeight, 0);
-    trim();
     showPill(fresh + items.length);
     return;
   }
@@ -441,7 +454,7 @@ function hidePill() {
   a.onfinish = done;
 }
 pill.addEventListener('click', () => { returning = true; toolList.scrollTo({ top: 0, behavior: S.reduced || today() ? 'auto' : 'smooth' }); hidePill(); });
-toolList.addEventListener('scroll', () => { if (atTop()) { returning = false; hidePill(); } }, { passive: true });
+toolList.addEventListener('scroll', () => { if (atTop()) { returning = false; hidePill(); trim(); } }, { passive: true });
 
 // While the pill's smooth scroll to the top runs, new calls arrive as at the top: anchoring
 // would move the scroll under it and stop it short.
@@ -536,11 +549,15 @@ disc.addEventListener('click', () => {
   disc.setAttribute('aria-expanded', String(open));
   disc.querySelector('span').textContent = open ? 'Hide reasoning' : 'Show reasoning';
   // From where it is drawn, so reversing mid-way never jumps back to full or to nothing.
-  const from = reasoning.hidden ? 0 : Number(getComputedStyle(reasoning).opacity);
+  const cs = getComputedStyle(reasoning);
+  const from = reasoning.hidden ? 0 : Number(cs.opacity);
+  // The clip and the settle too, for a turn while it is still opening.
+  const clip = cs.clipPath === 'none' ? 'inset(0 0 0 0)' : cs.clipPath;
+  const tf = cs.transform === 'none' ? 'translateY(0)' : cs.transform;
   reasoning.getAnimations().forEach((a) => a.cancel());
   if (open && !reasoning.hidden) {
     // Reopened while its fade-out ran: the space is still open, so only the fade turns back.
-    if (!today() && !S.reduced) { reasoning.animate([{ opacity: from }, { opacity: 1 }], { duration: T.disc, easing: E.dec }); }
+    if (!today() && !S.reduced) { reasoning.animate([{ opacity: from, clipPath: clip, transform: tf }, { opacity: 1, clipPath: 'inset(0 0 0 0)', transform: 'translateY(0)' }], { duration: T.disc, easing: E.dec }); }
   } else if (open) {
     flip(conv, () => { reasoning.hidden = false; });
     if (today() || S.reduced) { return; }
@@ -551,7 +568,7 @@ disc.addEventListener('click', () => {
   } else {
     if (today() || S.reduced) { flip(conv, () => { reasoning.hidden = true; }); return; }
     // Closing: the content fades out, quicker; then the space closes and the lines below ease up.
-    const a = reasoning.animate([{ opacity: from }, { opacity: 0 }], { duration: T.discOut, easing: E.acc, fill: 'forwards' });
+    const a = reasoning.animate([{ opacity: from, clipPath: clip, transform: tf }, { opacity: 0, clipPath: clip, transform: tf }], { duration: T.discOut, easing: E.acc, fill: 'forwards' });
     a.onfinish = () => {
       if (token !== discToken) { return; }
       flip(conv, () => { reasoning.hidden = true; });

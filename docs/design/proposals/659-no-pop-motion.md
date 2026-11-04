@@ -301,15 +301,19 @@ Tested with Playwright 1.56 in Chromium and WebKit
   and end two rows lower;
 - with the list scrolled away, a call arriving keeps the row in view at the same place on
   screen, the pill says "1 new", and pressing it returns to the top and hides it;
+- with the list full (50 calls) and scrolled to its end, calls arriving still don't move the
+  row in view: the oldest are evicted only once the reader is back at the top;
 - reduced motion: every animation started (Tools, rows, values, banner, reasoning) has no
   translation or clip and lasts at most 83 ms;
 - a session row leaving fades where it was (an inert copy) while the row below eases up;
 - Needs you arrives with its first entry as one insertion, the entry fades without travel,
   and its count cross-fades for the next;
-- Show reasoning's space eases (the line below it is mid-move), and closing too;
+- Show reasoning's space eases (the line below it is mid-move), and closing too; closing it while
+  it is still opening fades from the clip it had reached, not from fully open;
 - a Details value cross-fades without the cell narrowing, and a second change inside 1 s is
   at once;
-- the banner pushes the page down with an ease, and leaves the same way;
+- the banner pushes the page down with an ease, and leaves the same way, its copy starting
+  exactly where the banner was;
 - nothing runs past 300 ms;
 - and no test leaves a script error on the page.
 
@@ -320,7 +324,8 @@ Tested with Playwright 1.56 in Chromium and WebKit
   to its old place and animate to zero with the `AbMotionShift*` resources (or an
   `ImplicitAnimationCollection` on `Offset` for an `ItemsRepeater`). The list's
   `ItemContainerTransitions` stays empty. Tools moves from `Clear`/`Add` to a keyed merge, and
-  inserts in batches per 167 ms. A leaving row needs a stand-in: a `Visual` snapshot
+  the calls that arrive in one rendering frame (`CompositionTarget.Rendering`) are one insertion; a
+  later one retargets the move already running (D2), never waiting for it. A leaving row needs a stand-in: a `Visual` snapshot
   (`CompositionVisualSurface`) or keeping the container until its fade ends. Values: a
   `CrossFadeText` control holding two `TextBlock`s. Banners: `Motion.Banner` gains an exit.
   `AnswerGuard` (App.Core/Motion.cs) already counts a scroll offset change; the shift adds

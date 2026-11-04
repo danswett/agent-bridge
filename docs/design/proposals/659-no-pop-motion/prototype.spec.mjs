@@ -115,6 +115,28 @@ test('with Tools scrolled away from the top, a new call keeps what is read in pl
   await expect(page.locator('#pill')).toBeHidden();
 });
 
+test('with Tools full and scrolled to its end, new calls never move what is read', async ({ page }) => {
+  await page.evaluate(() => window.proto.burst(30));
+  await expect(page.locator(tools)).toHaveCount(50);
+  await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  const list = page.locator('#tools');
+  await list.evaluate((l) => { l.scrollTop = l.scrollHeight; });
+  const read = await list.evaluate((l) => {
+    const bottom = l.getBoundingClientRect().bottom;
+    const el = [...l.querySelectorAll(':scope > .tool')].filter((li) => li.getBoundingClientRect().bottom <= bottom).at(-1);
+    return { id: el.dataset.id, top: el.getBoundingClientRect().top };
+  });
+  for (let i = 0; i < 3; i += 1) {
+    await clickAndFreeze(page, '#tool-one', 40);
+    const now = await page.evaluate((id) => document.querySelector(`#tools > [data-id="${id}"]`).getBoundingClientRect().top, read.id);
+    expect(Math.abs(now - read.top)).toBeLessThan(1);
+    await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
+  }
+  // Back at the top, the list keeps the newest 50 again.
+  await page.click('#pill');
+  await expect(page.locator(tools)).toHaveCount(50);
+});
+
 test('under reduced motion nothing travels: arrivals and values cross-fade over 83 ms, and the rest is at once', async ({ page }) => {
   await page.evaluate(() => window.proto.setReduced(true));
   await record(page);
@@ -187,6 +209,21 @@ test('Show reasoning eases its space open and shut, with the lines below moving 
   expect(await ty(page, '#ev-first')).toBeGreaterThan(1);
 });
 
+test('closing Show reasoning while it is still opening fades from where it is drawn, clip and all', async ({ page }) => {
+  await clickAndFreeze(page, '#disc', 60);
+  const mid = await page.evaluate(() => getComputedStyle(document.getElementById('reasoning')).clipPath);
+  expect(mid).not.toBe('none');
+  const after = await page.evaluate(() => {
+    document.getElementById('disc').click();
+    for (const a of document.getAnimations()) { a.pause(); a.currentTime = 0; }
+    const cs = getComputedStyle(document.getElementById('reasoning'));
+    return { clip: cs.clipPath, opacity: Number(cs.opacity) };
+  });
+  expect(after.clip).toBe(mid);
+  expect(after.opacity).toBeGreaterThan(0);
+  expect(after.opacity).toBeLessThan(1);
+});
+
 test('a Details value cross-fades in place, and a second change within a second is at once', async ({ page }) => {
   const cell = '#details .val[data-k="turns"]';
   const width = await page.locator('#details .val[data-k="status"]').evaluate((e) => e.getBoundingClientRect().width);
@@ -218,7 +255,13 @@ test('a banner slides 12 in and pushes the page down with an ease, and leaves th
   expect(await ty(page, '#banner')).toBeLessThan(0);
   expect(await ty(page, '#page-h')).toBeLessThan(-1);
   await page.evaluate(() => { for (const a of document.getAnimations()) { a.finish(); } });
-  await clickAndFreeze(page, '#banner-toggle', 40);
+  const was = await page.locator('#banner').boundingBox();
+  await clickAndFreeze(page, '#banner-toggle', 0);
+  // The leaving copy starts exactly where the banner was, its margin not added twice.
+  const copy = await page.locator('#page > .ghost').boundingBox();
+  expect(Math.abs(copy.x - was.x)).toBeLessThan(0.5);
+  expect(Math.abs(copy.y - was.y)).toBeLessThan(0.5);
+  await freezeAt(page, 40);
   
   expect(await ty(page, '#page-h')).toBeGreaterThan(1);
   const ghost = await opacity(page, '#page > .ghost');
