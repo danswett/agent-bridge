@@ -835,8 +835,11 @@ A collaborator is another GitHub account linked to yours (`agent-principals.md`,
 sessions are theirs: you can see them, never act on them. Decided 2026-11-03; the boards and the
 reasons are in [proposals/519-collaborators.md](proposals/519-collaborators.md).
 
-**Identity.** Every name here comes from verified fields only: the bold @login is
-`principal.login`. A collaborator's machine name is theirs, so it is shown as "*WS-LAPTOP* ·
+**Identity.** Every name here comes from verified fields only. The bold @login has two
+sources, never a free-text name: on a message, the sender's `driverFrom.login`
+(`agent-principals.md` §6.1); on a person header, a link or the Collaboration page, the
+collaborator's login that the host resolves from the link's T2-verified GitHub user id at
+display time (§7.11.3), or the locally set link name where there is no T2 proof. A collaborator's machine name is theirs, so it is shown as "*WS-LAPTOP* ·
 their name" on headers and in italics elsewhere. A sender's session title is secondary, quoted
 after "Their session:", one line with an ellipsis, and whole in the tooltip.
 
@@ -855,7 +858,8 @@ from": Everyone (the default), Mine, and one entry per collaborator. It never sh
 **Read-only.** A collaborator's row follows §2.2 rule 9. Opening it shows only what the link's
 read projection carries: the title, the status, the **latest response** ("Latest response · 2
 min ago") and whether it waits. Never their prompts, questions, reasoning, tool history or
-delegates' words. The header reads "@*login* · *machine* (their name) · *status*" with the
+delegates: the projection carries no `subagents` (`agent-principals.md` §7.4), so their rows
+have no delegate nest or count. The header reads "@*login* · *machine* (their name) · *status*" with the
 External tag. The reply box, the action bar, Stop, Transfer, Launch here and every swipe and
 menu verb are **absent**, not disabled. In the reply box's place, one line: "Read-only ·
 @*login*'s session. Only @*login* can reply, approve or stop it." While it waits, an outlined

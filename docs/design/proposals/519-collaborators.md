@@ -139,7 +139,9 @@ The filled-versus-outlined contrast and the word "external" keep the two apart i
 colours and in greyscale; the dashed outline keeps them apart for people who can't tell the
 hues apart (§4.2).
 
-Only `principal.login` is bold identity. The machine name stays in italics as their label,
+Only a verified login is bold identity: `driverFrom.login` on a message (agent-principals
+§6.1), and on headers and links the login the host resolves from the link's T2-verified
+GitHub user id (§7.11.3). The machine name stays in italics as their label,
 as on board 5's own-agent mark. The session title is
 regular weight, in quotes, after "Their session:" and is truncated with an ellipsis at one
 line; its full text is in the tooltip and the accessible description.
@@ -395,8 +397,9 @@ are emulated, not captured; Mica is drawn as flat surfaces.
 ## 8. What this doesn't change
 
 - No change to the S glyphs, the ink plate, row height, typography, spacing or motion.
-- Delegates keep their rings. A collaborator's delegates nest under their session the same
-  way, in External.
+- Delegates keep their rings on your own sessions. A collaborator's delegates are not shown:
+  the read projection carries no `subagents` (agent-principals §7.4), so their rows have no
+  delegate nest or count.
 - Needs you, notifications, badges and counts keep their meaning: only things waiting on
   you.
 - The word "gate" appears in no status or error copy.
