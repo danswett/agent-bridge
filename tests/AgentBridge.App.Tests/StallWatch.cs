@@ -95,16 +95,17 @@ static class StallWatch
     {
         // About ten seconds of counts, to say what happened over a stall that began before it was seen.
         var history = new Queue<Counts>();
-        var last = Now;
         var lastStacks = long.MinValue / 2;
         while (true)
         {
+            // From just before the sleep, so the time a stack reading took is not counted as the
+            // watch held.
+            var slept = Now;
             Thread.Sleep(Tick);
             try
             {
                 var now = Now;
-                var late = now - last - (long)Tick.TotalMilliseconds;
-                last = now;
+                var late = now - slept - (long)Tick.TotalMilliseconds;
                 var counts = Counts.Take();
                 var before = history.Count > 0 ? history.Peek() : counts;
                 var previous = history.Count > 0 ? history.Last() : counts;

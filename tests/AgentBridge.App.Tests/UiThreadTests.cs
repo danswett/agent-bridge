@@ -59,6 +59,12 @@ public sealed class UiThreadTests
         Assert.False(other.OnIt);
     }
 
+    // The harness runs no more test classes at once than xunit would, one per core (#660). From
+    // #401 to #660 it ran them all together, and their waits stopped for seconds at a time.
+    [Fact]
+    public void No_more_tests_run_at_once_than_there_are_cores() =>
+        Assert.InRange(UiTestFramework.MostAtOnce, 1, Environment.ProcessorCount);
+
     // What StallWatch writes down when a test's waits stop looking (#660): every thread's stack,
     // a blocked one's included, read while the process goes on.
     [Fact]
