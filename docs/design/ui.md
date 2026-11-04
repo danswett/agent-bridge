@@ -557,7 +557,9 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
     when a filter leaves fewer than 2. Under reduced motion it only fades.
   - **Drop:** the order is committed at release. The settle that follows is only drawn: a
     key, a menu or a press during it acts on the committed order, and a press lands on the
-    card now in that place. The list's own updates wait until the drop.
+    card now in that place. The settle aims at where the card stays: if the drop empties
+    Pinned, Pinned and its header close in the same motion rather than after it. The list's
+    own updates wait until the drop.
   - **Keys and the menu:** Alt+↑/↓ on a row, or the row menu (a long press released without
     moving, a right-click, or Shift+F10 / the menu key), whose items are Move up, Move down
     and Pin (or Unpin). These move one place and stay within the row's group: at its end they
@@ -577,7 +579,8 @@ their view models (`pwa/js/session-order.js`, `App.Core`), not in the markup.
     pointer, a second finger, the window losing focus, or the sort leaving Your order puts the
     card back where it came from. So does the list recycling the held card's view (a
     virtualized list reusing it mid-drag): it is put back rather than carried on, and announced
-    as a cancel. If a host removes the held session, the drag ends and the card fades out where
+    as a cancel. A key or menu move while a card is held puts the held card back first, and
+    then moves. If a host removes the held session, the drag ends and the card fades out where
     it is (Arriving and leaving).
   - **Answers wait:** a lift holds Needs you's Approve once, Deny and Resend from the pointer
     (§5.3, Scroll to a question), through the whole drag, and for 1 s after a drop, a cancel,

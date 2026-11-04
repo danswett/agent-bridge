@@ -850,7 +850,6 @@ function drop(cancel) {
   cancelAnimationFrame(g.raf);
   const holdOnly = g.type === 'touch' && !g.armed && !cancel;
   if (cancel || g.outside || holdOnly) { g.candidate = g.origin; }
-  const p = placeSocket(false);
   // The order is committed here, at release (ui.md §6.1). The settle below is only drawn, so a
   // key, a menu or a press during it acts on the new order and can't be overwritten by it.
   const moved = !same(g.candidate, g.origin);
@@ -861,6 +860,13 @@ function drop(cancel) {
       items[g.key].pinned = g.candidate.gid === 'pinned';
     } else order = gs[0].keys;
   }
+  // The settle aims at the final layout: an emptied Pinned closes, and its header and the drag's
+  // placeholders go, so the card and its neighbours arrive where they stay.
+  headersShown = anyPinned();
+  const L = layout(groupsNow(), headersShown);
+  const p = L.pos.get(g.key);
+  Object.assign(socket.style, { width: p.w + 'px', height: p.h + 'px', transform: `translate3d(${p.x}px, ${p.y}px, 0)` });
+  apply(L, g.key);
   const cr = content.getBoundingClientRect();
   const li = g.li;
   g.phase = 'settling';
@@ -902,6 +908,13 @@ function cancelDrag(silent) {
   if (g.phase === 'pending') { abort(); return; }
   if (g.phase === 'lifted') { drop(true); if (silent) clearTimeout(sayTimer); }
 }
+// Before a key or menu changes the order, any gesture ends: a held card is put back (announced
+// as a cancel) and its settle finished, so its drop can't rebuild the order from a stale snapshot.
+function quiesce() {
+  if (g && g.phase === 'lifted') drop(true);
+  settleNow();
+  if (g && g.phase === 'pending') abort();
+}
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && g && g.phase === 'lifted') { e.preventDefault(); drop(true); } });
 window.addEventListener('blur', () => cancelDrag(false));
 document.addEventListener('visibilitychange', () => { if (document.hidden) cancelDrag(false); });
@@ -916,7 +929,7 @@ new ResizeObserver(() => {
 
 // ---- Keyboard and menu ----------------------------------------------------------------
 function move(key, delta) {
-  settleNow();
+  quiesce();
   if (sorted) { showToast('Switch to Your order to move sessions.'); return; }
   const gs = headersShown ? groupsNow() : [{ id: 'sessions', keys: order.slice() }];
   const grp = gs.find((x) => x.keys.includes(key));
@@ -944,7 +957,7 @@ function reveal(key) {
   else if (top + p.h > list.scrollTop + list.clientHeight) list.scrollTop = top + p.h - list.clientHeight;
 }
 function togglePin(key) {
-  settleNow();
+  quiesce();
   const s = items[key];
   s.pinned = !s.pinned;
   order = order.filter((k) => k !== key);

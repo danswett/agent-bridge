@@ -349,7 +349,9 @@ the order is committed at release, so Alt+↓ pressed during the settle keeps bo
 press during the settle opens the card now in that place; the hint keeps its place and only
 fades under reduced motion; the Pin chip is a solid Bridge fill with on-Bridge text; Recent
 has no grip and no grip column; and the hint shows once by itself on touch in Your order, then
-only on a grip tap.
+only on a grip tap. Also: dropping the last pinned card settles straight into the final layout,
+with Pinned closed, and a key move while a card is lifted puts the card back first and is
+kept.
 
 Screenshots of the prototype mid-drag:
 
