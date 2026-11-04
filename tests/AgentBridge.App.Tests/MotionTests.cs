@@ -247,6 +247,24 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void Answers_drifting_less_than_a_pixel_a_look_are_held_once_the_drift_adds_up_to_more()
+    {
+        // A centred column drifting 0.75 a look (a window edge dragged slowly): the second look is
+        // 1.5 from where they were last taken to be, and so on every other look.
+        var moves = From(Look());
+        var found = Enumerable.Range(1, 40).Where(i => moves.Read(Look(dx: 0.75 * i))).ToList();
+        Assert.Equal(Enumerable.Range(1, 20).Select(i => 2 * i), found);
+
+        // Rounding back and forth adds up to nothing.
+        moves = From(Look());
+        Assert.All(Enumerable.Range(0, 20), i => Assert.False(moves.Read(Look(dy: i % 2 == 0 ? 0.5 : -0.5))));
+
+        // The person's scrolling is taken off as it adds up too.
+        moves = From(Look());
+        Assert.All(Enumerable.Range(1, 40), i => Assert.False(moves.Read(Look(dy: 0.75 * i, offset: 300 - 0.75 * i, person: true))));
+    }
+
+    [Fact]
     public void A_scroll_and_a_move_in_the_same_look_still_find_the_move()
     {
         // The person scrolls 120 back as the strip appears above the conversation and pushes it 60 down.
@@ -270,6 +288,11 @@ public sealed class MotionTests
         // Pulled back to 0 as it stops overflowing.
         moves = From(Look(offset: 50, scrollable: 50, extent: 750));
         Assert.True(moves.Read(Look(dy: 50, offset: 0, scrollable: 0, person: true, extent: 700)));
+
+        // Pulled back from 300 to its new end at 200, and scrolled 50 further up by the person in
+        // the same look: none of it taken off.
+        moves = From(Look());
+        Assert.True(moves.Read(Look(dy: 150, offset: 150, scrollable: 200, person: true, extent: 900)));
 
         // The person scrolling to the end is no clamp.
         moves = From(Look(offset: 100));

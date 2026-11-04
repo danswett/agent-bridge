@@ -212,8 +212,9 @@ public sealed record AnswerLook(
     IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null);
 
 // Answers moved under a still pointer (#491, the app's half of #559's watchMoves): each look is
-// compared with the last, and a move of more than a pixel of any answer, across or down, or a
-// change in how many are shown, is a move: AnswerGuard holds them again. Whatever moved them: a
+// compared with where the answers were last taken to be, and a move of more than a pixel of any
+// answer, across or down, or a change in how many are shown, is a move: AnswerGuard holds them
+// again. Whatever moved them: a
 // title wrapping, the delegate strip coming or going, a banner, the pane or the window resized, or
 // a scroller pulled back as what it scrolls gets shorter at its end. Only a scroll the person
 // makes is taken off where the answers were, by how far it went: their own scroll isn't a move
@@ -227,6 +228,10 @@ public sealed class AnswerMoves
     public const double Slack = 1;
 
     AnswerLook? was;
+    // Where the answers were last taken to be, less the person's scrolling since: each look is
+    // measured from here, not from the look before, so moves too small to count one by one (a
+    // centred column drifting half a pixel a pass) add up to one that does.
+    (double X, double Y)[] at = [];
 
     // own: the person's own act in the question (a key, a click, typing) is being laid out. Their
     // question laying itself out in answer (Other's box opening, an error under a field) isn't a
@@ -235,21 +240,30 @@ public sealed class AnswerMoves
     {
         var before = was;
         was = now;
-        if (before is null) { return false; }
-        if (now.Answers.Count != before.Answers.Count) { return !(own && Theirs(before, now)); }
-        var (dx, dy) = Scrolled(before, now);
-        var moved = false;
-        for (var i = 0; i < now.Answers.Count && !moved; i++)
+        if (before is null)
         {
-            var (x, y) = now.Answers[i];
-            var (wx, wy) = before.Answers[i];
-            moved = Math.Abs(x - (wx - dx)) > Slack || Math.Abs(y - (wy - dy)) > Slack;
+            at = [.. now.Answers];
+            return false;
         }
-        return moved && !(own && Theirs(before, now));
+        var (dx, dy) = Scrolled(before, now);
+        var moved = now.Answers.Count != at.Length;
+        for (var i = 0; i < at.Length && !moved; i++)
+        {
+            at[i] = (at[i].X - dx, at[i].Y - dy);
+            var (x, y) = now.Answers[i];
+            moved = Math.Abs(x - at[i].X) > Slack || Math.Abs(y - at[i].Y) > Slack;
+        }
+        if (!moved) { return false; }
+        at = [.. now.Answers];
+        return !(own && Theirs(before, now));
     }
 
     // Measured afresh from the next look: a new set of answers drawn, or none shown.
-    public void Forget() => was = null;
+    public void Forget()
+    {
+        was = null;
+        at = [];
+    }
 
     // How far the person's own scrolling moved what the scrollers hold since the last look; nothing
     // if the scrollers aren't the same ones.
@@ -267,9 +281,11 @@ public sealed class AnswerMoves
         return (x, y);
     }
 
-    // Pulled back to its end: scrolled further than it can be now, and now at the end.
+    // Pulled back from past its new end: it was scrolled further than it can be now. However far
+    // it went, part of it wasn't the person's, so none of it is taken off: a person scrolling up in
+    // the same look as the clamp ends short of the end, and still finds the move.
     public static bool Clamped(double was, double now, double scrollable) =>
-        now < was - Slack && was > scrollable + Slack && now >= scrollable - Slack;
+        now < was - Slack && was > scrollable + Slack;
 
     // The person's own question resized, and nothing outside it changed: the window and every
     // scroller's viewport the same size and in the same place, the question where it was in what

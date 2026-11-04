@@ -32,10 +32,15 @@ public sealed class QuestionView : StackPanel
     // Who asks, again: a delegate's name can arrive after its question (S1's subagents list).
     public string Heading { get => head.Text; set => head.Text = value; }
 
-    public QuestionView(QuestionViewModel vm, Action<bool> editing, string? heading = null)
+    // acted: the person activated one of its controls (a click, a key, UI Automation), as the control
+    // acts: what the question lays out next is theirs (SessionView's AnswerWatch.Own). Called as the
+    // click happens, not as the pointer went down: a press held longer than a frame or two, or Space
+    // held down, acts only on release.
+    public QuestionView(QuestionViewModel vm, Action<bool> editing, string? heading = null, Action? acted = null)
     {
         this.vm = vm;
         this.editing = editing;
+        this.acted = acted;
         Spacing = 8;
         Padding = new Thickness(12);
         CornerRadius = new CornerRadius(8);
@@ -72,7 +77,7 @@ public sealed class QuestionView : StackPanel
         if (vm.Answerable)
         {
             error.Foreground = Ui.Brush("AbDangerText");
-            resend.Click += (_, _) => vm.Resend();
+            Acting(resend).Click += (_, _) => vm.Resend();
             AutomationId(resend, "Resend");
             var footer = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             if (send is not null) { footer.Children.Add(send); }
@@ -85,6 +90,14 @@ public sealed class QuestionView : StackPanel
         Watch(vm, Refresh);
         Refresh();
         drawn = true;
+    }
+
+    readonly Action? acted;
+
+    T Acting<T>(T b) where T : ButtonBase
+    {
+        b.Click += (_, _) => acted?.Invoke();
+        return b;
     }
 
     // Past the first draw: what changes from here is news (an answer's outcome).
@@ -147,7 +160,7 @@ public sealed class QuestionView : StackPanel
             if (o.Recommended || (vm.Approval && o.Tone == "allow")) { b.Style = (Style)Application.Current.Resources["AccentButtonStyle"]; }
             if (vm.Approval && o.Tone == "deny") { b.Foreground = Ui.Brush("AbDangerText"); }
             AutomationProperties(b, o.Label, $"Option:{o.Value}");
-            b.Click += (_, _) => vm.Choose(o);
+            Acting(b).Click += (_, _) => vm.Choose(o);
             refreshers.Add(() =>
             {
                 b.IsEnabled = vm.CanAnswer;
@@ -162,7 +175,7 @@ public sealed class QuestionView : StackPanel
 
         var other = new ToggleButton { Content = "Other…", HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left };
         AutomationProperties(other, "Other", "Other");
-        other.Click += (_, _) => vm.ToggleOther();
+        Acting(other).Click += (_, _) => vm.ToggleOther();
         panel.Children.Add(other);
         var box = Box("Type your own answer", multiline: false);
         box.Text = f.OtherText;
@@ -218,7 +231,7 @@ public sealed class QuestionView : StackPanel
                     var group = $"{vm.Id}:{f.Name}";
                     foreach (var o in f.Options)
                     {
-                        ToggleButton choice = f.Type == FieldType.Choice ? new RadioButton { GroupName = group } : new CheckBox();
+                        var choice = Acting<ToggleButton>(f.Type == FieldType.Choice ? new RadioButton { GroupName = group } : new CheckBox());
                         choice.Content = new TextBlock { Text = o.Label, TextWrapping = TextWrapping.Wrap };
                         AutomationProperties(choice, o.Label, $"Option:{f.Name}:{o.Value}");
                         choice.IsChecked = o.IsSelected;
@@ -229,7 +242,7 @@ public sealed class QuestionView : StackPanel
                     }
                     if (f.AllowOther)
                     {
-                        ToggleButton other = f.Type == FieldType.Choice ? new RadioButton { GroupName = group, Content = "Other" } : new CheckBox { Content = "Other" };
+                        var other = Acting<ToggleButton>(f.Type == FieldType.Choice ? new RadioButton { GroupName = group, Content = "Other" } : new CheckBox { Content = "Other" });
                         AutomationProperties(other, "Other", $"Other:{f.Name}");
                         other.IsChecked = f.OtherChosen;
                         other.Checked += (_, _) => f.OtherChosen = true;
@@ -251,8 +264,8 @@ public sealed class QuestionView : StackPanel
                     AutomationProperties(yes, $"{f.Label}: Yes", $"Yes:{f.Name}");
                     AutomationProperties(no, $"{f.Label}: No", $"No:{f.Name}");
                     void Show() { yes.IsChecked = f.BoolValue == true; no.IsChecked = f.BoolValue == false; }
-                    yes.Click += (_, _) => { f.ToggleBool(true); Show(); };
-                    no.Click += (_, _) => { f.ToggleBool(false); Show(); };
+                    Acting(yes).Click += (_, _) => { f.ToggleBool(true); Show(); };
+                    Acting(no).Click += (_, _) => { f.ToggleBool(false); Show(); };
                     Watch(f, Show);
                     Show();
                     panel.Children.Add(yes);
@@ -302,7 +315,7 @@ public sealed class QuestionView : StackPanel
     {
         var b = new Button { Content = WithRing(new TextBlock { Text = vm.SendLabel }), Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
         AutomationProperties(b, vm.SendLabel, "SendAnswer");
-        b.Click += (_, _) => vm.Send();
+        Acting(b).Click += (_, _) => vm.Send();
         return b;
     }
 

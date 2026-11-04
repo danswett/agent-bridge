@@ -97,6 +97,33 @@ static partial class SelfTest
                 AppLog.Write($"self-test: the delegate strip's moves are checked at three panes only, not at {size}");
             }
 
+            // The person's own act laid out is theirs: Other's box opening as Other is activated,
+            // here through UI Automation (as a key, or a press held past a frame or two, acts on
+            // release), holds nothing, so their next click goes into the box.
+            card.Update(original with
+            {
+                Question = new Question
+                {
+                    Id = "self-test-other",
+                    Kind = QuestionKind.Form,
+                    Message = "Which store should the sessions use?",
+                    AskedAt = DateTimeOffset.UtcNow,
+                    Fields = [new Field { Name = "answer", Type = FieldType.Choice, AllowOther = true, Options = [new Option("pg", "PostgreSQL"), new Option("sqlite", "SQLite")] }],
+                },
+            });
+            var offered = await Until(() => ById<ToggleButton>(view, "Other") is { ActualWidth: > 0 } && view.QuestionShown is { IsHitTestVisible: true }, TimeSpan.FromSeconds(5));
+            if (offered && ById<ToggleButton>(view, "Other") is { } otherToggle)
+            {
+                ((Microsoft.UI.Xaml.Automation.Provider.IToggleProvider)new Microsoft.UI.Xaml.Automation.Peers.ToggleButtonAutomationPeer(otherToggle)
+                    .GetPattern(Microsoft.UI.Xaml.Automation.Peers.PatternInterface.Toggle)).Toggle();
+                var opened = await Until(() => ById<TextBox>(view, "OtherText") is { ActualHeight: > 0 }, TimeSpan.FromSeconds(5));
+                await Task.Delay(100);
+                var held = view.QuestionShown is { IsHitTestVisible: false };
+                check(opened && !held, $"holds nothing as the person's own act lays out their question: Other's box opening as Other is activated (opened: {opened}; held: {held})");
+            }
+            else { check(false, $"draws a question with Other to open ({size})"); }
+            card.Update(original);
+
             // Needs you: on screen beside the session, or, in one column, with the session closed.
             if (layout.Mode == PaneMode.One) { main.Selected = null; }
             var listed = await Until(() => layout.ShowList, TimeSpan.FromSeconds(5));

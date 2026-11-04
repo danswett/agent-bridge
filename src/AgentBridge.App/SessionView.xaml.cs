@@ -431,7 +431,7 @@ public sealed partial class SessionView : UserControl
         var q = Card?.Question;
         if (questionView is not null && q is not null && ReferenceEquals(questionView.Tag, q)) { return; }
         questionView?.Detach();
-        questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText) { Tag = q };
+        questionView = q is null ? null : new QuestionView(q, Editing, Card?.AsksText, answers.Own) { Tag = q };
         QuestionHost.Content = questionView;
         answers.Forget();
         if (questionView is not null) { GuardAnswer(); }
