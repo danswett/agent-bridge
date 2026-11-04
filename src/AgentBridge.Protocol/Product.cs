@@ -1,8 +1,8 @@
 namespace AgentBridge.Protocol;
 
-// The product's user-facing name, the one place the Windows app, the host and the launcher read it
-// from (#537). It was typed by hand in about 25 places, so renaming it (#535) meant a hunt through
-// copy and the tests that pinned it; now the rename is a change here.
+// The product's user-facing names, the one place the Windows app, the host and the launcher read them
+// from (#537). The name itself is the brand token (design/tokens.json brand, generated into
+// DesignBrand); this adds the phrases built on it that the copy uses (docs/design/brand.md §3.1).
 //
 // Only what a person reads comes from here. Identifiers that happen to contain the name stay as
 // they are, because installed copies, other clients and the owner's automations find things by
@@ -19,16 +19,18 @@ public
 #endif
 static class Product
 {
-    public const string Name = "Agent Bridge";
+    public const string Name = DesignBrand.Name;
 
-    // The Windows app, as the host's messages and the app's own copy name it ("the Agent Bridge app").
+    // The Windows app, as the host's messages and the app's own copy name it ("the Slipgates app").
     public const string App = Name + " app";
 
-    // The host service on each machine, in the app's status and error copy. A term of its own today;
-    // the brand spec (#536, naming decision N1) decides what it becomes.
-    public const string HostName = "Bridge Host";
+    // The host service on each machine (brand.md N1): "the Slipgates host" in every message, since
+    // each can be read on its own. The Settings section that is already about it says "Host".
+    public const string HostName = Name + " host";
 
-    // What this machine's app is called on the person's other devices (their machine lists and
-    // push devices). Only new connections take it: a device already known keeps the name it had.
-    public static string DeviceName(string machine) => $"{machine} · {App}";
+    // What this machine's app is called on the person's other devices, their machine lists and push
+    // devices (brand.md N5: "{device} · Slipgates" on every client). The relay takes it afresh on
+    // each connection, so a renamed product renames every existing device too; the device's
+    // identity is its key, never this name (FleetTests).
+    public static string DeviceName(string machine) => $"{machine} · {Name}";
 }

@@ -26,7 +26,8 @@ public sealed partial class SettingsView : UserControl
     public void Opened() => viewModel?.RefreshLog();
 
     public static string HaNote(string? why) => $"{why}. {Product.Name} only watches while it runs: answering, replying and ending sessions stay with agent-ha-bridge until you move over.";
-    public static string HostSection => $"{Product.HostName} on this machine";
+    // The section is already about the host, so it needs no product name (brand.md N1).
+    public static string HostSection => "Host on this machine";
     public static string HostLine(string version, string profile) => version.Length > 0 ? $"Version {version} · profile {profile}" : $"Profile {profile}";
     public static string AppLine(string version, string installed) => $"App {version} · {installed}";
 

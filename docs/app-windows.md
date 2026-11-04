@@ -160,7 +160,7 @@ the relay does not offer it, files go up to 256 KiB, and an image is shrunk to f
   longer approval, a Codex one, a
   form and anything this app can't answer open the session in the session pane, its row selected; a prompt marked
   `answerAtMachine` says so, with no controls. The lane never moves a row. Its count is the
-  tray's "N waiting on you" and the Sessions badge.
+  tray's "Slipgates · N need you" and the Sessions badge.
 
 ### Starting the host at logon: a scheduled task
 
@@ -529,14 +529,18 @@ without opening a window. Only the installed app registers anything: a developme
 another `--profile` and the demo show no toasts and write nothing to the registry.
 
 **The product's name and art** (#537): every place the app, the host and its launcher name
-the product, or the host service ("Bridge Host"), reads it from `Product` (`AgentBridge.Protocol`):
+the product, Slipgates, or the host service ("the Slipgates host"), reads it from `Product`
+(`AgentBridge.Protocol`), whose name is the brand token's (`DesignBrand`, generated from
+`design/tokens.json` `brand`; [brand.md](design/brand.md) §2):
 the window and title bar, the tray's tooltip (`MainViewModel.TrayTip`) and menu, the toasts'
 sender (the AUMID's `DisplayName`, not the AUMID) and default title, the update toast, the
 device name other devices see, the logon task's description and the host's messages. The exe's
 `Product` and `AssemblyTitle`, its icon and the toast icon are named once in the app's project
 (`Product`, `AppIconFile`, `AppLogoFile`); `build/app-channels.ps1` reads them for the
 installer's title and icon and the releases' titles, and the app's code reads the files from
-`AppAssets`. `AppBrandTests` holds these together and fails on copy that names the product by
+`AppAssets`. The host's executables carry the name too, as "Slipgates host" and so on, in
+Task Manager and their properties; their file names stay. The title bar draws the mark's
+native 20 px cut (`AbIconMark20`). `AppBrandTests` holds these together and fails on copy that names the product by
 hand. Identifiers that contain the name (the AUMID, the pack id, exe names, paths, the pipe,
 HA ids and names) are not the name and stay (#541).
 
