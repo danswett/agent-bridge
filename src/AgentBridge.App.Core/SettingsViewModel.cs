@@ -513,8 +513,8 @@ public sealed class SettingsViewModel : Observable
         {
             installRequestPending = false;
             agentInstallInProgress = !reported;
-            installStatusSeen = Status;
             if (!reported) { AgentInstallStatus = "The installation result is unavailable. It may still be running; reconnect to recover progress and cancellation before retrying."; }
+            Refresh();
         }
         if (host.Can(HostOps.AgentReadinessCapability))
         {

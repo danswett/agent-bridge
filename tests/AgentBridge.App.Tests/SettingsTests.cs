@@ -246,6 +246,27 @@ public sealed class SettingsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_terminal_host_status_received_before_an_error_reply_is_reconciled_without_another_event()
+    {
+        await Connected();
+        host.OnAsync(HostOps.AgentsInstall, async _ =>
+        {
+            host.Status = host.Status with { AgentInstallation = new("claude", false, "Fixture installation stopped before the error reply.") };
+            await host.SendAsync(HostOps.StatusEvent, host.Status);
+            await Wait.UntilAsync(() => connection.Status?.AgentInstallation?.Detail.Contains("before the error reply") == true, "terminal installation status");
+            throw new InvalidOperationException("fixture installation error");
+        });
+
+        await settings.InstallAgentAsync("claude");
+
+        Assert.False(settings.AgentInstallInProgress);
+        Assert.Contains("stopped before the error reply", settings.AgentInstallStatus);
+        Assert.Contains("fixture installation error", settings.Error);
+        Assert.True(settings.CanInstallAgents);
+        Assert.True(settings.CanManageAgents);
+    }
+
+    [Fact]
     public async Task A_new_Settings_page_recovers_installation_progress_and_a_cleanup_block_from_the_host()
     {
         await Connected();
