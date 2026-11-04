@@ -306,12 +306,50 @@ public sealed class MotionTests
     }
 
     [Fact]
+    public void The_persons_own_act_holds_until_their_question_first_lays_out_then_a_moment_after_each_pass()
+    {
+        var t0 = DateTimeOffset.UnixEpoch;
+        var act = new OwnAct();
+        Assert.False(act.Holds(t0));
+
+        // Other's box first laid out most of a second after the click, on a busy machine: still theirs.
+        act.Acted(t0);
+        Assert.True(act.Holds(t0 + TimeSpan.FromMilliseconds(811)));
+        act.Read(t0 + TimeSpan.FromMilliseconds(811), theirs: true, found: false);
+        // Its later passes, each within a moment of the one before.
+        Assert.True(act.Holds(t0 + TimeSpan.FromMilliseconds(1100)));
+        act.Read(t0 + TimeSpan.FromMilliseconds(1100), theirs: true, found: false);
+        Assert.True(act.Holds(t0 + TimeSpan.FromMilliseconds(1399)));
+        Assert.False(act.Holds(t0 + TimeSpan.FromMilliseconds(1400)));
+
+        // An act that lays nothing out holds no longer than First.
+        act.Acted(t0);
+        Assert.True(act.Holds(t0 + OwnAct.First - TimeSpan.FromMilliseconds(1)));
+        Assert.False(act.Holds(t0 + OwnAct.First));
+
+        // A move that isn't theirs ends it.
+        act.Acted(t0);
+        act.Read(t0 + TimeSpan.FromMilliseconds(50), theirs: false, found: true);
+        Assert.False(act.Holds(t0 + TimeSpan.FromMilliseconds(50)));
+
+        // The app drawing in the question holds nothing for a moment, whatever the person does.
+        act.Acted(t0);
+        act.Drawn(t0);
+        Assert.False(act.Holds(t0 + OwnAct.Then - TimeSpan.FromMilliseconds(1)));
+        Assert.True(act.Holds(t0 + OwnAct.Then));
+    }
+
+    [Fact]
     public void The_persons_own_question_growing_as_they_type_is_theirs_only_when_nothing_else_changed()
     {
         // Other's box opens: the question grows 40, what scrolls grows 40, Send is 40 lower and a
         // box is added. Theirs, when they did it; a move when they didn't.
         var grown = Look(question: 200, extent: 1040) with { Answers = [(240, 150), (240, 230), (240, 270)] };
-        Assert.False(From(Look()).Read(grown, own: true));
+        var mine = From(Look());
+        Assert.False(mine.Read(grown, own: true));
+        Assert.True(mine.Took);
+        Assert.False(mine.Read(grown, own: true));
+        Assert.False(mine.Took);
         Assert.True(From(Look()).Read(grown, own: false));
 
         // Anything else in the same look is a move whatever they are doing: the window resized, the

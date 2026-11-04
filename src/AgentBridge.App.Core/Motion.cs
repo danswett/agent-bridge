@@ -211,6 +211,34 @@ public readonly record struct LookBox(double X, double Y, double Width, double H
 public sealed record AnswerLook(
     IReadOnlyList<(double X, double Y)> Answers, IReadOnlyList<ScrollerLook> Scrollers, double WindowWidth, double WindowHeight, LookBox? Question = null);
 
+// How long the person's own act in their question holds what it lays out as theirs (#491; see
+// AnswerMoves.Theirs). Not a count of frames, and not a fixed moment from the act: the first layout
+// pass of a control shown for the first time (Other's box) can come most of a second after the act
+// on a busy machine, and its later passes a frame or more apart. So the act holds for up to First
+// until the question first lays itself out, then for Then after each pass that does; a move that
+// isn't theirs ends it. The app drawing in the question itself (who asks) holds nothing for Then.
+public sealed class OwnAct
+{
+    public static readonly TimeSpan First = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan Then = TimeSpan.FromMilliseconds(300);
+
+    DateTimeOffset until = DateTimeOffset.MinValue;
+    DateTimeOffset drawnUntil = DateTimeOffset.MinValue;
+
+    public void Acted(DateTimeOffset now) => until = now + First;
+
+    public void Drawn(DateTimeOffset now) => drawnUntil = now + Then;
+
+    public bool Holds(DateTimeOffset now) => now < until && now >= drawnUntil;
+
+    // After a read made while it held: theirs, the question laid itself out; found, something else moved.
+    public void Read(DateTimeOffset now, bool theirs, bool found)
+    {
+        if (theirs) { until = now + Then; }
+        else if (found) { until = now; }
+    }
+}
+
 // Answers moved under a still pointer (#491, the app's half of #559's watchMoves): each look is
 // compared with where the answers were last taken to be, and a move of more than a pixel of any
 // answer, across or down, or a change in how many are shown, is a move: AnswerGuard holds them
@@ -238,6 +266,7 @@ public sealed class AnswerMoves
     // move under their pointer, but only if nothing else changed with it: see Theirs.
     public bool Read(AnswerLook now, bool own = false)
     {
+        Took = false;
         var before = was;
         was = now;
         if (before is null)
@@ -255,8 +284,12 @@ public sealed class AnswerMoves
         }
         if (!moved) { return false; }
         at = [.. now.Answers];
-        return !(own && Theirs(before, now));
+        Took = own && Theirs(before, now);
+        return !Took;
     }
+
+    // The last look's move was the person's own question laying itself out (own, and Theirs).
+    public bool Took { get; private set; }
 
     // Measured afresh from the next look: a new set of answers drawn, or none shown.
     public void Forget()

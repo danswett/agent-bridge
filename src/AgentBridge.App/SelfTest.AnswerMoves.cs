@@ -116,6 +116,9 @@ static partial class SelfTest
             {
                 ((Microsoft.UI.Xaml.Automation.Provider.IToggleProvider)new Microsoft.UI.Xaml.Automation.Peers.ToggleButtonAutomationPeer(otherToggle)
                     .GetPattern(Microsoft.UI.Xaml.Automation.Peers.PatternInterface.Toggle)).Toggle();
+                // A busy machine: the box's first layout pass comes most of a second after the act
+                // (CI's three panes, and this machine under load, held the person's own click so).
+                Thread.Sleep(800);
                 var opened = await Until(() => ById<TextBox>(view, "OtherText") is { ActualHeight: > 0 }, TimeSpan.FromSeconds(5));
                 await Task.Delay(100);
                 var held = view.QuestionShown is { IsHitTestVisible: false };

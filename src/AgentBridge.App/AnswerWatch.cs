@@ -54,18 +54,17 @@ sealed class AnswerWatch
     // A new set of answers drawn (another question, another session): measured from where they are.
     public void Forget() => moves.Forget();
 
-    // The person pressed, typed, pasted or clicked in the question: what it lays out for a moment
-    // after is theirs, if nothing else changes with it (AnswerMoves.Theirs). Each act holds it from
-    // the latest. A moment, not a count of frames: a control shown for the first time (Other's box)
-    // takes more than one layout pass, and on a machine drawing at 60 Hz two frames had gone before
-    // the last of them, so the person's own click held their question (CI, x64). Where nothing is
-    // drawn (a disconnected session) frames hardly come at all, and the window never closed.
+    // The person pressed, typed, pasted or clicked in the question: what it lays out after is
+    // theirs, if nothing else changes with it (AnswerMoves.Theirs), for as long as OwnAct says. Each
+    // act holds it from the latest.
     public void Own()
     {
         ownAt = DateTimeOffset.UtcNow;
-        ownUntil = ownAt + Act;
+        act.Acted(ownAt);
         told = false;
     }
+
+    readonly OwnAct act = new();
 
     // When the person's act was, and whether a hold near it has been logged: the first is, with
     // what moved, so a hold of their own click can be told apart from a real move afterwards.
@@ -75,7 +74,7 @@ sealed class AnswerWatch
 
     // The app drew something in the question itself (who asks, its heading): whatever moves in the
     // moment it is drawn in counts, whatever the person is doing.
-    public void NotOwn() => forcedUntil = DateTimeOffset.UtcNow + Act;
+    public void NotOwn() => act.Drawn(DateTimeOffset.UtcNow);
 
     // Rows of the list holding the answers came, went or moved: the list may keep the rows in sight
     // in place by scrolling (ListView's KeepItemsInView), which moves Needs you above them. For a
@@ -83,7 +82,7 @@ sealed class AnswerWatch
     public void Unsettled() => unsettledUntil = DateTimeOffset.UtcNow + Act;
 
     static readonly TimeSpan Act = TimeSpan.FromMilliseconds(300);
-    DateTimeOffset ownUntil, forcedUntil, unsettledUntil;
+    DateTimeOffset unsettledUntil;
     // Set while a pointer's press lays out what is pending: the read that layout pass brings, as
     // the one after it, exempts nothing.
     bool checking;
@@ -138,11 +137,13 @@ sealed class AnswerWatch
                 root.Size.Height,
                 QuestionBox(chain.FirstOrDefault()));
             var now = DateTimeOffset.UtcNow;
-            var found = moves.Read(look, own: exempt && !checking && now < ownUntil && now >= forcedUntil);
-            if (found && !told && now < ownUntil + TimeSpan.FromSeconds(1))
+            var own = exempt && !checking && act.Holds(now);
+            var found = moves.Read(look, own);
+            if (own) { act.Read(now, moves.Took, found); }
+            if (found && !told && now < ownAt + OwnAct.First)
             {
                 told = true;
-                AppLog.Write($"answers: held {(now - ownAt).TotalMilliseconds:0} ms after the person's own act (checking: {checking}; app drawing: {now < forcedUntil}): {Brief(last)} -> {Brief(look)}");
+                AppLog.Write($"answers: held {(now - ownAt).TotalMilliseconds:0} ms after the person's own act (as theirs: {own}; checking: {checking}): {Brief(last)} -> {Brief(look)}");
             }
             last = look;
             if (found) { foundChecking |= checking; moved(); }
