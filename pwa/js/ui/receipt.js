@@ -119,15 +119,17 @@ export const receiptText = (d) => (d ? (d.more ? `${d.text} · ${d.more}` : d.te
 
 // What a request's receipt has been through, by request, kept apart from any one view: a question
 // card is drawn afresh on each update of its session, and the quiet window, the dwell, the stalls
-// and what was announced belong to the request, not to the drawing: an announcement still waiting
-// out the rate limit when its view goes is said by the next view of the request, and the limit
-// carries over. said: what has been spoken; pending: what is to be, once the limit allows.
+// and what was announced belong to the request, not to the drawing. So does its announcement's
+// timer: one still waiting out the rate limit when its view goes is said all the same, by another
+// view of the request on screen (voices), or else on the page's own line, never lost and never
+// said on a line now showing another request. said: what has been spoken; pending: what is to be,
+// once the limit allows.
 const KEEP = 50;
 const histories = new Map();
 function historyFor(request, now) {
   let h = histories.get(request);
   if (!h) {
-    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, shown: null, said: new Set(), pending: null, saidAt: -Infinity };
+    h = { start: now, stage: null, stageAt: now, sendingSince: null, delivering: false, shown: null, said: new Set(), pending: null, saidAt: -Infinity, sayTimer: null, voices: new Set() };
     histories.set(request, h);
     if (histories.size > KEEP) { histories.delete(histories.keys().next().value); }
   }
@@ -144,18 +146,48 @@ function stallDue(entry, h, T) {
   return null;
 }
 
+function announce(h, now, gapMs) {
+  if (h.pending === null) { return; }
+  const wait = h.saidAt + gapMs - now();
+  if (wait <= 0) { sayNow(h, now); } else if (!h.sayTimer) { h.sayTimer = setTimeout(() => { h.sayTimer = null; sayNow(h, now); }, wait); }
+}
+
+function sayNow(h, now) {
+  if (h.pending === null) { return; }
+  const text = h.pending;
+  h.pending = null;
+  h.said.add(text);
+  h.saidAt = now();
+  const voice = [...h.voices].find((v) => v.heard());
+  if (voice) { voice.say(text); } else { sayOnPage(text); }
+}
+
+// The page's own line, for an announcement no view of its request is on screen to say: a receipt
+// gone with its question, a reply box moved on to the next reply, a session's card while another
+// is open. Made once, the first time it is needed.
+let pageLine = null;
+function sayOnPage(text) {
+  if (typeof document === 'undefined') { return; }
+  if (!pageLine?.isConnected) {
+    pageLine = receiptLive();
+    document.body.append(pageLine);
+  }
+  pageLine.textContent = text;
+}
+
 const QUIET = Object.freeze({ key: 'quiet', text: '', more: null, tone: 'quiet', mark: null, speech: null });
 
 // describe(entry, { stalled }): the words for the entry as it is now (describeReply,
 // describeAnswer). draw(d): puts them on the line when they change, or clears it (d null).
 // say(text): the announcement, rate-limited here. heard(): whether say is heard now: a view not
 // drawn (a session's card while another is open) leaves the request's announcement to one that is,
-// such as Needs you, rather than saying it where nobody hears and so never at all.
+// such as Needs you, or to the page's line, rather than saying it where nobody hears.
 export class ReceiptClock {
   #entry = null;
   #timer = null;
   #drawn = undefined;
-  #sayTimer = null;
+  // The history of the request this clock shows, whose announcements it may say.
+  #h = null;
 
   constructor({ describe, draw, say = () => {}, heard = () => true, now = () => Date.now(), timing = ReceiptTiming }) {
     Object.assign(this, { describe, draw, say, heard, now, timing });
@@ -168,18 +200,26 @@ export class ReceiptClock {
 
   destroy() {
     clearTimeout(this.#timer);
-    clearTimeout(this.#sayTimer);
-    this.#timer = this.#sayTimer = null;
+    this.#timer = null;
+    this.#voice(null);
+  }
+
+  #voice(h) {
+    if (h === this.#h) { return; }
+    this.#h?.voices.delete(this);
+    this.#h = h;
+    h?.voices.add(this);
   }
 
   #tick() {
     clearTimeout(this.#timer);
     this.#timer = null;
     const entry = this.#entry;
-    if (!entry) { this.#put(null); return; }
+    if (!entry) { this.#voice(null); this.#put(null); return; }
     const T = this.timing;
     const t = this.now();
     const h = historyFor(entry.request, t);
+    this.#voice(h);
     if (entry.state !== 'sending' && entry.state !== 'waiting') {
       // An outcome is never held, and replaces whatever shows.
       this.#show(h, this.describe(entry, { stalled: false }), t);
@@ -198,12 +238,10 @@ export class ReceiptClock {
     let wake = due !== null && t < due ? due : null;
     if (t < h.start + T.quietMs) {
       this.#put(QUIET);
-      this.#announce(h);
       wake = h.start + T.quietMs;
     } else if (h.shown && h.shown.key !== d.key && h.shown.inFlight && t < h.shown.at + T.dwellMs) {
       // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
       this.#put(h.shown.d);
-      this.#announce(h);
       wake = Math.min(wake ?? Infinity, h.shown.at + T.dwellMs);
     } else {
       this.#show(h, d, t);
@@ -217,7 +255,7 @@ export class ReceiptClock {
     // Each change is said once for the request, however often a card is drawn again; of two
     // inside the rate limit, the later replaces the earlier, unsaid.
     if (d.speech && !h.said.has(d.speech)) { h.pending = d.speech; }
-    this.#announce(h);
+    announce(h, this.now, this.timing.announceGapMs);
   }
 
   #put(d) {
@@ -226,22 +264,6 @@ export class ReceiptClock {
       this.#drawn = signature;
       this.draw(d);
     }
-  }
-
-  #announce(h) {
-    if (h.pending === null) { return; }
-    const wait = h.saidAt + this.timing.announceGapMs - this.now();
-    if (wait <= 0) { this.#flush(h); } else if (!this.#sayTimer) { this.#sayTimer = setTimeout(() => this.#flush(h), wait); }
-  }
-
-  #flush(h) {
-    this.#sayTimer = null;
-    if (h.pending === null || !this.heard()) { return; }
-    const text = h.pending;
-    h.pending = null;
-    h.said.add(text);
-    h.saidAt = this.now();
-    this.say(text);
   }
 }
 
