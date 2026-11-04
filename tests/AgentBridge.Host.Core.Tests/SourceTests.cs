@@ -333,12 +333,32 @@ public class SourceTests
         var writes = new TranscriptWrites();
         source.TranscriptWritten += writes.Written;
         await source.StartAsync();
-        var next = writes.Next(events);
-        Assert.False(next.IsCompleted);
+        using var next = writes.Next(events);
+        Assert.False(next.Written.IsCompleted);
 
         Fixture.Append(events, Copilot.Assistant("written", 2));
 
-        await next.WaitAsync(TimeSpan.FromSeconds(20));
+        await next.Written.WaitAsync(TimeSpan.FromSeconds(20));
+    }
+
+    [Fact]
+    public void A_transcript_is_kept_only_while_a_delivery_waits_on_it_and_waiters_on_it_share_one_signal()
+    {
+        var writes = new TranscriptWrites();
+        var path = Path.Combine(Path.GetTempPath(), "events.jsonl");
+        var first = writes.Next(path);
+        var second = writes.Next(path);
+        Assert.Same(first.Written, second.Written);
+
+        first.Dispose();
+        Assert.Equal(1, writes.Waited);
+        second.Dispose();
+        Assert.Equal(0, writes.Waited);
+
+        using var third = writes.Next(path);
+        writes.Written(path);
+        Assert.True(third.Written.IsCompleted);
+        Assert.Equal(0, writes.Waited);
     }
 
     [Fact]

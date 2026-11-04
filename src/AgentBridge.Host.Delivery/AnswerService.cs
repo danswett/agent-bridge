@@ -238,7 +238,7 @@ public sealed class AnswerService : ISessionAnswerer
         {
             var elapsed = options.Time.GetElapsedTime(started);
             // Taken before the look, so a record written between the look and the wait wakes it.
-            var written = options.Writes?.Next(transcript);
+            using var written = options.Writes?.Next(transcript);
             var state = CopilotTranscript.Since(transcript, toolCallId, from);
             if (state.Answer is { } record)
             {
@@ -341,7 +341,7 @@ public sealed class AnswerService : ISessionAnswerer
         var started = options.Time.GetTimestamp();
         while (true)
         {
-            var written = options.Writes?.Next(transcript);
+            using var written = options.Writes?.Next(transcript);
             var result = CopilotPermissionTranscript.Since(transcript, requestId, from);
             if (result.Kind is { } kind)
             {
@@ -425,7 +425,7 @@ public sealed class AnswerService : ISessionAnswerer
         while (true)
         {
             var elapsed = options.Time.GetElapsedTime(started);
-            var written = options.Writes?.Next(transcript);
+            using var written = options.Writes?.Next(transcript);
             var state = ClaudeTranscript.Since(transcript, toolUseId, from);
             if (state.Answer is { } record)
             {

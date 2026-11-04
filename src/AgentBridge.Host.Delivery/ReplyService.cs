@@ -121,6 +121,8 @@ public sealed class ReplyService : ISessionReplier
         if (options.PreRead && options.PlatformSupported)
         {
             source.Changed += OnSessionChanged;
+            // Writes that change nothing shown (hook and model records) send no upsert.
+            if (options.Writes is { } writes) { writes.Heard += OnTranscriptWritten; }
             _ = Task.Run(PreReadAsync);
             // Found before this service was made: the source has already said so.
             foreach (var s in source.Snapshot()) { QueuePreRead(s); }
@@ -139,10 +141,31 @@ public sealed class ReplyService : ISessionReplier
         if (change.Session is { } session) { QueuePreRead(session); }
     }
 
+    // Only a Copilot transcript, <CopilotHome>/session-state/<id>/events.jsonl; whether its
+    // session is live is asked when it is read.
+    void OnTranscriptWritten(string path)
+    {
+        try
+        {
+            if (!string.Equals(Path.GetFileName(path), "events.jsonl", StringComparison.OrdinalIgnoreCase)) { return; }
+            var id = Path.GetFileName(Path.GetDirectoryName(path));
+            if (id is null || !Guid.TryParseExact(id, "D", out _)) { return; }
+            if (!string.Equals(Path.GetFullPath(path), Path.GetFullPath(CopilotTranscript(id)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) { return; }
+            QueuePreRead(id);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { }
+    }
+
     void QueuePreRead(Session session)
     {
         if (session.Agent != AgentKind.Copilot || !Guid.TryParseExact(session.Id, "D", out _)) { return; }
-        if (preReading.TryAdd(session.Id, 0)) { preReads.Writer.TryWrite(session.Id); }
+        QueuePreRead(session.Id);
+    }
+
+    void QueuePreRead(string id)
+    {
+        if (preReading.TryAdd(id, 0)) { preReads.Writer.TryWrite(id); }
     }
 
     // Catches each session's CopilotInput up with its transcript off the typing path: the read a
@@ -153,9 +176,12 @@ public sealed class ReplyService : ISessionReplier
         {
             preReading.TryRemove(id, out _);
             // Gone meanwhile: nothing is kept for it.
-            if (source.Get(id) is null) { continue; }
-            try { inputs.GetOrAdd(CopilotTranscript(id), path => new CopilotInput(path)).Read(); }
+            if (source.Get(id) is not { Agent: AgentKind.Copilot }) { continue; }
+            var path = CopilotTranscript(id);
+            try { inputs.GetOrAdd(path, p => new CopilotInput(p)).Read(); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            // Removed while it was read: its removal may have come before the input was added.
+            finally { if (source.Get(id) is null) { inputs.TryRemove(path, out _); } }
         }
     }
 
@@ -478,7 +504,7 @@ public sealed class ReplyService : ISessionReplier
             var started = options.Time.GetTimestamp();
             while (options.Time.GetElapsedTime(started) < options.SubmitAfter)
             {
-                var written = options.Writes?.Next(transcript);
+                using var written = options.Writes?.Next(transcript);
                 if (Prompts(agent, transcript, from).Prompts.Any(plan.Says)) { return; }
                 await TranscriptWrites.WaitAsync(written, options.PollInterval, options.Time);
             }
@@ -541,7 +567,7 @@ public sealed class ReplyService : ISessionReplier
         while (true)
         {
             // Taken before the look, so a record written between the look and the wait wakes it.
-            var written = options.Writes?.Next(transcript);
+            using var written = options.Writes?.Next(transcript);
             var since = Prompts(agent, transcript, from);
             foreach (var prompt in since.Prompts)
             {
@@ -604,7 +630,7 @@ public sealed class ReplyService : ISessionReplier
         var other = false;
         while (true)
         {
-            var written = options.Writes?.Next(transcript);
+            using var written = options.Writes?.Next(transcript);
             var since = CopilotPrompts.Since(transcript, from);
             foreach (var prompt in since.Prompts)
             {

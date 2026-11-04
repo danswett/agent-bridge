@@ -503,6 +503,26 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Assert.InRange(replier.InputOf(Id)!.BytesRead, length, length + 16 * 1024);
     }
 
+    [Fact]
+    public async Task A_write_that_changes_nothing_shown_is_still_read_ahead_once_it_is_heard()
+    {
+        var writes = new TranscriptWrites();
+        var replier = new ReplyService(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+        {
+            CopilotHome = f.CopilotHome,
+            PlatformSupported = true,
+            Writes = writes,
+        }, gate: gate);
+        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == new FileInfo(events).Length, "the transcript to be read ahead", Patience);
+
+        // No refresh, so no upsert: as for hook and model records, which change nothing shown.
+        Fixture.Append(events, [.. Enumerable.Range(0, 100).Select(_ => Copilot.Assistant(new string('x', 1000), second))]);
+        writes.Written(events);
+
+        var length = new FileInfo(events).Length;
+        await Wait.UntilAsync(() => replier.InputOf(Id)?.BytesRead == length, "the write to be read ahead", Patience);
+    }
+
     // Long enough that only a write can wake a confirmation within the client's 15 s.
     static readonly TimeSpan SlowPoll = TimeSpan.FromSeconds(30);
 

@@ -181,7 +181,7 @@ In order, for every reply:
    since a subagent's question stops only that subagent and other work can write any
    amount after it (and the session source does not report a subagent's question): it is
    read from the start once per session, in the background as soon as the session is found
-   and again as it changes (a 96 to 169 MB `events.jsonl` took 0.3 to 0.6 s, which the first
+   and again as the session changes or its file is heard written (a 96 to 169 MB `events.jsonl` took 0.3 to 0.6 s, which the first
    reply after a start used to spend before typing, #599), and from where it was
    left on every later read, so the read before typing covers only what was written since. A transcript that cannot be read is `refused`, never taken to
    mean nothing is asking. A Copilot session with no `events.jsonl` yet (its folder there,
