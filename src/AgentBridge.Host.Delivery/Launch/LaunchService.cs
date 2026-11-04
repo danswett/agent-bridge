@@ -176,7 +176,7 @@ public sealed partial class LaunchService : ISessionLauncher
     // approved folders it caches, and so decides the resume labels over.
     const int KindsAmong = 200;
 
-    public bool Available => Config.Enabled && options.PlatformSupported && probe.Active() is null && starter.Unavailable() is null;
+    public bool Available => Config.Enabled && options.PlatformSupported && probe.Recent() is null && starter.Unavailable() is null;
 
     public bool AnswersTrust => Available;
 

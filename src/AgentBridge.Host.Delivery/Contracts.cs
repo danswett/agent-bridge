@@ -34,6 +34,10 @@ public sealed record ConsoleScreen(IReadOnlyList<string>? Rows, string? Problem)
 public interface IAgentHaBridgeProbe
 {
     string? Active();
+
+    // The same answer, perhaps a moment old (SharedAgentHaBridgeProbe), for what is only offered or
+    // reported. Never for anything that acts: what types, presses, stops or launches asks Active.
+    string? Recent() => Active();
 }
 
 // Why a process must not be typed into (it runs elevated, say), or null.

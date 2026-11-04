@@ -65,6 +65,9 @@ public sealed class UpdateService
     public string HostVersion { get; }
     // Why this machine acts on nothing from another device now, or null: hello's readOnly.
     public Func<string?> ReadOnly { get; init; } = () => null;
+    // The same, perhaps a moment old (SharedAgentHaBridgeProbe), for what hello offers only:
+    // everything that acts on an update asks ReadOnly. ReadOnly where not set.
+    public Func<string?>? OfferedReadOnly { get; init; }
     // Raised when the asks change, so the host's status (which the app follows) is sent again.
     public event Action? AsksChanged;
 
@@ -74,7 +77,7 @@ public sealed class UpdateService
     internal void AttachPresence(Func<IReadOnlyList<PresenceEntry>>? devices) => Volatile.Write(ref presence, devices);
 
     // hello's update: through the relay, on a machine that is not read-only.
-    public bool Offered(IProtocolChannel channel) => channel is SecureChannel && ReadOnly() is null;
+    public bool Offered(IProtocolChannel channel) => channel is SecureChannel && (OfferedReadOnly ?? ReadOnly)() is null;
 
     // The presses waiting for the app. None on a machine that has become read-only since they
     // were taken: they are let go, not handed to the app. ReadOnly is uncached (it scans for

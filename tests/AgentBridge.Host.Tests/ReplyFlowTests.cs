@@ -7,6 +7,7 @@ using AgentBridge.Host.Delivery.Staging;
 using AgentBridge.Protocol;
 using AgentBridge.Transport;
 using AgentBridge.Transport.Tests;
+using Microsoft.Extensions.Time.Testing;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -58,7 +59,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         f.Dispose();
     }
 
-    ReplyService Replier(bool platform = true) => new(source, f.Processes, probe, new NoGuard(), injector, new ReplyOptions
+    ReplyService Replier(bool platform = true, IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new ReplyOptions
     {
         CopilotHome = f.CopilotHome,
         PlatformSupported = platform,
@@ -66,7 +67,7 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         PollInterval = TimeSpan.FromMilliseconds(25),
     }, gate: gate);
 
-    AnswerService Answerer() => new(source, f.Processes, probe, new NoGuard(), injector, new AnswerOptions
+    AnswerService Answerer(IAgentHaBridgeProbe? g5 = null) => new(source, f.Processes, g5 ?? probe, new NoGuard(), injector, new AnswerOptions
     {
         CopilotHome = f.CopilotHome,
         // Set, not left to the default (Windows only), so these run the same on Linux.
@@ -133,6 +134,51 @@ public sealed class ReplyFlowTests : IAsyncLifetime
         Serve(null, null);
         Assert.Equal(("refused", "this host does not take replies; reply at the machine"), await ReplyAsync(ch, "hello"));
         Assert.Empty(injector.Plans);
+    }
+
+    [Fact]
+    public async Task A_burst_of_hellos_looks_for_agent_ha_bridge_once_and_a_reply_still_looks_afresh_before_typing()
+    {
+        var looks = new CountingProbe(probe);
+        var time = new FakeTimeProvider();
+        var g5 = new SharedAgentHaBridgeProbe(looks, time);
+        var shared = new ReadOnlyGate(g5, null);
+        served = new SessionService(source, new MachineInfo("host-id", "Test host", "windows", "0.1.0"), answers: Answerer(shared), replies: Replier(g5: shared))
+        {
+            Drivers = drivers,
+            G5 = g5,
+            ReadOnly = shared.Recent,
+        };
+        host.Hub.Handler = served.HandleAsync;
+        var ch = await OpenAsync();
+
+        for (var i = 0; i < 10; i++) { Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch)); }
+        Assert.Equal(1, looks.Count);
+
+        // agent-ha-bridge starts within the 2 s a look is kept: a hello still offers replying, but a
+        // reply looks again before anything is typed, and the next hello says what it found.
+        probe.Reason = "agent-ha-bridge is running for this user";
+        Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
+        Assert.Equal(("refused", probe.Reason), await ReplyAsync(ch, "hello"));
+        Assert.Empty(injector.Plans);
+        Assert.Equal(2, looks.Count);
+        Assert.Equal([Capabilities.SessionsRead], await CapabilitiesAsync(ch));
+
+        probe.Reason = null;
+        time.Advance(SharedAgentHaBridgeProbe.Keep);
+        Assert.Contains(Capabilities.SessionsReply, await CapabilitiesAsync(ch));
+        Assert.Equal(3, looks.Count);
+    }
+
+    sealed class CountingProbe(IAgentHaBridgeProbe inner) : IAgentHaBridgeProbe
+    {
+        public int Count;
+
+        public string? Active()
+        {
+            Interlocked.Increment(ref Count);
+            return inner.Active();
+        }
     }
 
     async Task<DriverKind?> DriverAsync(DriverKind? wanted)
