@@ -224,7 +224,7 @@ static class ReportCommand
         }
 
         /// <summary>
-        /// GraphQL connection pages, newest cursor first; stop says, of a page's last node, that
+        /// GraphQL connection pages, in the query's order; stop says, of a page's last node, that
         /// the rest are outside the window.
         /// </summary>
         IEnumerable<JsonElement> Pages(string query, Dictionary<string, object> variables, string connection, Func<JsonElement, bool> stop)
@@ -264,8 +264,10 @@ static class ReportCommand
                 if (items.Count < perPage)
                     yield break;
             }
+            // GitHub's filtered run lists stop at 1,000 results, so a full last page can't be told
+            // from a cut one: that fails too.
             if (complete)
-                throw new InvalidOperationException($"More than {maxPages} pages of {path}: the report would be cut short.");
+                throw new InvalidOperationException($"{maxPages} full pages of {path}: the report would be cut short.");
         }
 
         /// <summary>
@@ -319,7 +321,6 @@ static class ReportCommand
             var list = runs.ToList();
             if (list.Count == 0)
                 return [];
-            var at = new Dictionary<long, DateTimeOffset>();
             var jobs = new List<(long, DateTimeOffset)>();
             foreach (var chunk in list.Chunk(100))
             {

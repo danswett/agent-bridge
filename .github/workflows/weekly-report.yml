@@ -8,7 +8,8 @@ name: Weekly quality report
 #
 # The jobs, by what they may do:
 #   report   reads pull requests, issues, statuses, checks and Actions runs and their logs
-#            (read-only), writes the report to the job summary, and keeps it as an artifact.
+#            (read-only), writes the report to the job summary and its log, and, when it's to be
+#            posted, keeps it as an artifact for post.
 #   post     the only job that may write issues, and only on main, on the schedule or a dispatch
 #            with dry_run off: it comments the report, read as data, on the epic. It checks out
 #            nothing and runs no code from the repository.
