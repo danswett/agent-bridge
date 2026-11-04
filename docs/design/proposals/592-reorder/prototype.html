@@ -633,8 +633,9 @@ content.addEventListener('pointerdown', (e) => {
   if (!li) return;
   closeMenu(false);
   suppressClick = false;
+  const lr = li.getBoundingClientRect();
   g = { id: e.pointerId, type: e.pointerType, key: li.dataset.key, li, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY,
-        phase: 'pending', onGrip, timer: 0 };
+        px: e.clientX - lr.left, py: e.clientY - lr.top, phase: 'pending', onGrip, timer: 0 };
   li.classList.add('pressed');
   if (e.pointerType === 'touch') {
     if (sorted) { g.timer = setTimeout(() => pressMenu(), cfg.longPressMs); return; }
@@ -742,6 +743,8 @@ content.addEventListener('click', (e) => {
   if (!li || (hit ? hit.onGrip : e.target.closest('.grip'))) return;
   selected = li.dataset.key;
   syncDom();
+  // The press focused the card that was sliding under it; keys must act on the one now there.
+  if (hit) $('.row-main', li).focus({ preventScroll: true });
 }, true);
 
 function lift() {
@@ -749,7 +752,10 @@ function lift() {
   endPress();
   const li = g.li;
   const r = li.getBoundingClientRect();
-  g.offX = g.x - r.left; g.offY = g.y - r.top; g.w = r.width; g.h = r.height; g.x0 = r.left;
+  // The grab point is where the press began on the card: a body drag lifts only after crossing the
+  // slop, and measuring from there would leave the card that far behind the pointer for the whole
+  // drag. It is kept relative to the card, so a scroll before the lift doesn't shift it.
+  g.offX = g.px; g.offY = g.py; g.w = r.width; g.h = r.height; g.x0 = r.left;
   g.show = headersShown;
   g.groups0 = groupsNow();
   g.origin = locate(g.groups0, g.key, g.show);
@@ -757,7 +763,7 @@ function lift() {
   g.phase = 'lifted'; g.armed = false; g.lx = g.x; g.ly = g.y; g.acc = 0; g.outside = false;
   li.style.transition = 'none';
   li.style.width = g.w + 'px';
-  li.style.transform = `translate3d(${r.left}px, ${r.top}px, 0)`;
+  li.style.transform = `translate3d(${columns() > 1 ? g.x - g.offX : r.left}px, ${g.y - g.offY}px, 0)`;
   li.classList.add('lifted');
   if (g.type !== 'touch') { try { content.setPointerCapture(g.id); } catch { /* the pointer may already be gone */ } }
   void li.offsetWidth;
