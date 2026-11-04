@@ -88,8 +88,8 @@ builds, and guard G6 limits their HA connector to a disposable HA.
 ## Relay deploys
 
 - `relay.yml` deploys to staging and smoke-tests it.
-- Production is a separate job gated on the owner as required reviewer. Never approve a production deploy without the owner's go-ahead.
-- An older run waiting at the production gate blocks newer ones (concurrency group `relay-production`), so cancel superseded runs.
+- Production is a separate job gated on the owner as required reviewer. Never approve a production deploy without the owner's go-ahead. After its smoke test it bakes for 10 minutes, and if anything fails once the roll has applied, the same approved job rolls back and an incident is opened (#577); nothing else is approved automatically.
+- An older run waiting at the production gate blocks newer ones (concurrency group `relay-production`), so cancel superseded runs, by hand: it isn't automated, since a cancel can't be made conditional on the run still waiting, and one approved meanwhile would be cancelled mid-roll.
 - Infrastructure changes go through `infra/deploy.ps1` (staging), then `-Production` with `-ProductionImage <running digest>` to keep the current image ([docs/relay-deploy.md](docs/relay-deploy.md)).
 
 ## Guards you will meet

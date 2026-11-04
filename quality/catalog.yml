@@ -612,7 +612,7 @@ suites:
     platforms: [linux-x64]
     runner: hosted
     triggers: [infra/**]
-    command: az bicep build -f infra/main.bicep; bash infra/test-rollback-target.sh
+    command: az bicep build -f infra/main.bicep; bash infra/test-rollback-target.sh; bash infra/test-bake-production.sh
     where: relay.yml infra
     status: exists
 
@@ -635,6 +635,7 @@ suites:
     platforms: [linux-x64]
     runner: staging
     # rollback is production's other path: an earlier image, rolled out and smoke-tested the same way.
+    # Both then bake for 10 minutes (infra/bake-production.sh, #577); production rolls back on a failure.
     command: see relay.yml production and rollback
     where: relay.yml production, rollback
     status: exists

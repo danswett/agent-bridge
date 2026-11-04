@@ -56,7 +56,7 @@ Signals:
 | A-CANARY-SLOW | 3 | AT | Canary p95 round trip > 500 ms for 30 min (S3) | [relay-resources](runbooks/relay-resources.md) | #576 | Planned |
 | A-FORWARD | 3 | M `relay.forward.duration` | p99 > 5 ms for 30 min (S4) | [relay-resources](runbooks/relay-resources.md) | #569 | Planned |
 | A-SOCKETS | 3 | M `relay.connections` | > 60% of `MaxConnections` (6,000) for 1 h; Sev 2 at 80% | [relay-resources](runbooks/relay-resources.md) | #585 | Planned |
-| A-BAKE | 2 | relay.yml production job | The post-deploy bake failed and rolled back on its own (DEP-1) | [relay-bad-deploy](runbooks/relay-bad-deploy.md) | #577 | Planned |
+| A-BAKE | 2 | relay.yml production and rollback jobs | A deploy failed after its roll (the roll partway, the smoke test, or the 10-minute bake of `infra/bake-production.sh`): the production job rolled back on its own and opened an incident, or says in it that it couldn't; a rollback's own failure opens one too | [relay-bad-deploy](runbooks/relay-bad-deploy.md) | #577 | Built |
 
 ## Stamp-wide
 

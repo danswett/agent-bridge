@@ -1,10 +1,15 @@
 # A bad relay deploy
 
-**Alerts:** A-BAKE (the bake rolled back on its own, once DEP-1 ships), or any relay alert
-within an hour of a production deploy.
+**Alerts:** A-BAKE (a deploy failed after its roll: the production job rolled back on its own
+and opened an incident, or says in the incident that it couldn't), or any relay alert within
+an hour of a production deploy.
 
 **Rule: roll back first, diagnose after.** Rolling back returns production to an image it ran
 before the deploy, and costs each device one reconnect.
+
+**If the incident says Status: mitigated**, the production job already rolled back and its smoke
+test passed: confirm (step 4 below) and go on to "Keep it from coming back". Otherwise, roll
+back by hand.
 
 ## Roll back (Owner approves)
 
@@ -45,4 +50,4 @@ before the deploy, and costs each device one reconnect.
   without a token (no presence, echo or blobs) until the canary (SYN-1) exists.
 - Compare the two revisions' `warnings` and `connections` in
   [queries/relay.kql](../queries/relay.kql).
-- If the bake should have caught it and didn't, tune DEP-1's checks.
+- If the bake should have caught it and didn't, tune its checks (`infra/bake-production.sh`).

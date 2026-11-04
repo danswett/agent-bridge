@@ -299,9 +299,16 @@ At a deploy, every device is told to reconnect (1012), so the clearest health si
    reaches production through the approved promotion, never as a rollback target. PPE gets a
    check of its own, against PPE's revisions.
 
+Production's side is built (`infra/bake-production.sh`, the production and rollback jobs in
+`relay.yml`; [docs/relay-deploy.md](../docs/relay-deploy.md) step 6): a failed roll, smoke test or
+bake after the new image applied rolls back automatically; a manual rollback is baked too but
+never rolled back automatically. PPE's comes with PPE (#590).
+
 The rollback returns to an image production just ran, so its blast radius is smaller than
-the bad deploy's (§2.5). The same issue automates cancelling superseded runs that are waiting
-at the production gate.
+the bad deploy's (§2.5). #577 also asked to cancel superseded runs waiting at the production
+gate automatically. That part is not built: GitHub's cancel has no "only while still waiting"
+condition, so a run approved a moment before the cancel would be cancelled mid-roll. Until a
+guard exists that can't race an approval, a person cancels them (AGENTS.md, Relay deploys).
 
 The current pipeline stays as it is: staging smoke, Trivy, attestation, the owner's approval
 and rollback by digest.
