@@ -164,15 +164,23 @@ function sayNow(h, now) {
 
 // The page's own line, for an announcement no view of its request is on screen to say: a receipt
 // gone with its question, a reply box moved on to the next reply, a session's card while another
-// is open. Made once, the first time it is needed.
+// is open. Mounted empty as the app starts: a live region filled as it is inserted can be taken
+// for its first content and not said. One made later (the page's body replaced) takes its words a
+// moment after it is in.
 let pageLine = null;
+function mountPageLine() {
+  pageLine = receiptLive();
+  document.body.append(pageLine);
+}
 function sayOnPage(text) {
   if (typeof document === 'undefined') { return; }
-  if (!pageLine?.isConnected) {
-    pageLine = receiptLive();
-    document.body.append(pageLine);
+  if (pageLine?.isConnected) {
+    pageLine.textContent = text;
+    return;
   }
-  pageLine.textContent = text;
+  mountPageLine();
+  const line = pageLine;
+  setTimeout(() => { line.textContent = text; }, 100);
 }
 
 const QUIET = Object.freeze({ key: 'quiet', text: '', more: null, tone: 'quiet', mark: null, speech: null });
@@ -287,3 +295,6 @@ export const receiptLive = () => h('span', { class: 'sr-only receipt-live', role
 
 // Whether a live line is drawn, so what it says is heard: one inside a hidden view has no boxes.
 export const drawn = (live) => live.getClientRects().length > 0;
+
+// The page's line, there before anything is said on it (sayOnPage).
+if (typeof document !== 'undefined' && document.body) { mountPageLine(); }
