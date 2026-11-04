@@ -22,6 +22,9 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     readonly Fixture f = new();
     readonly Probe probe = new();
     readonly Screen console = new();
+    // The reply's time: it moves on only while the reply waits between its looks, so its looks and
+    // its timeouts do not race the wall clock (#486).
+    readonly PollClock clock = new();
     SessionSource source = null!;
     AttachmentStore store = null!;
     string claude = "";
@@ -49,6 +52,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     {
         store.Dispose();
         await source.DisposeAsync();
+        await clock.DisposeAsync();
         f.Dispose();
     }
 
@@ -61,6 +65,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         SubmitAfter = TimeSpan.FromMilliseconds(200),
         SubmitPatience = submitPatience,
         ImageWait = TimeSpan.FromMilliseconds(500),
+        Time = clock,
     }, attachments: store);
 
     ReplyService? replier;
@@ -125,6 +130,11 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
     }, second++);
 
     static string Typed(KeyPlan plan) => string.Concat(plan.Sends.Select(s => s.Text));
+
+    // What the agent does only after the reply has looked at it once more, as it was typed into.
+    // Real delays and Task.Run raced the reply's 25 ms looks; a timer on the reply's own clock could
+    // still fire before the reply's first look, and the test pass without what it is about (#486).
+    void Later(Action then) => clock.OnNextWait(then);
 
     // ---- Claude Code ----
 
@@ -273,12 +283,18 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         console.OnInject = plan =>
         {
             if (plan.Sends is [{ Text: "", Enter: true }]) { Fixture.Append(claude, ClaudePrompt("drawn late")); return; }
-            // At the first look the box shows only the start of the words; the rest comes after.
+            // The box shows only the start of the words until it has been looked at so; the rest comes after.
             console.Rows = ClaudeIdle("dra");
-            _ = Task.Run(async () => { await Task.Delay(300); console.Rows = ClaudeIdle("drawn late"); });
+        };
+        var part = ClaudeIdle("dra");
+        var lookedAtPart = 0;
+        console.AfterRead = rows =>
+        {
+            if (rows.SequenceEqual(part)) { lookedAtPart++; console.Rows = ClaudeIdle("drawn late"); }
         };
 
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "drawn late")).Outcome);
+        Assert.Equal(1, lookedAtPart);
         Assert.Equal(2, console.Plans.Count);
     }
 
@@ -322,11 +338,7 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             var line = Typed(plan);
             Fixture.Append(claude, ClaudeQueued(line));
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(300);
-                Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..]));
-            });
+            Later(() => Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..])));
         };
 
         Assert.Equal(AnswerOutcome.Delivered, (await ReplyAsync(ClaudeId, "and this", shot)).Outcome);
@@ -342,9 +354,8 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
         {
             var line = Typed(plan);
             Fixture.Append(claude, ClaudeQueued(line));
-            _ = Task.Run(async () =>
+            Later(() =>
             {
-                await Task.Delay(300);
                 Fixture.Append(claude, ClaudePrompt("an earlier thought", source: "queued"));
                 Fixture.Append(claude, ClaudePrompt(line, source: "queued"), ClaudeRead(line.Split(' ')[0][1..]));
             });
@@ -633,8 +644,16 @@ public sealed class AgentReplyFlowTests : IAsyncLifetime
             return Task.FromResult(new InjectionResult(InjectionStatus.Typed, "ok"));
         }
 
-        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default) =>
-            FailReads ? throw new IOException("the console went away") : Task.FromResult(new ConsoleScreen([.. Rows], null));
+        public Task<ConsoleScreen> ReadScreenAsync(int processId, CancellationToken cancellationToken = default)
+        {
+            if (FailReads) { throw new IOException("the console went away"); }
+            var rows = Rows;
+            AfterRead?.Invoke(rows);
+            return Task.FromResult(new ConsoleScreen([.. rows], null));
+        }
+
+        // What the agent does once it has been looked at, with what was seen.
+        public Action<List<string>>? AfterRead;
 
         public volatile bool FailReads;
     }
