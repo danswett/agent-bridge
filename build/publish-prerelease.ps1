@@ -214,6 +214,17 @@ if ($DryRun) {
 }
 
 if ($publishing) {
+    if (-not $DryRun) {
+        # Generate under the publish lock, against the release actually preceding this one:
+        # packing may have happened before another release, or several merges may not have shipped.
+        $generate = @('api', '-X', 'POST', "repos/$Repository/releases/generate-notes",
+            '-f', "tag_name=$tag", '-f', "target_commitish=$Commit")
+        $previous = $released | Select-Object -First 1
+        if ($previous) { $generate += @('-f', "previous_tag_name=v$previous") }
+        $generated = Invoke-Gh @generate | ConvertFrom-Json
+        if ([string]::IsNullOrWhiteSpace($generated.body)) { throw 'GitHub generated no release notes; the release was not published' }
+        $changeNotes = $generated.body
+    }
     foreach ($leftover in @($releases | Where-Object { $_.draft -and $_.tag_name -eq $tag })) {
         # A draft is all a failed attempt leaves (it is published only after every upload), and
         # vpk refuses a tag that has one.
@@ -241,11 +252,18 @@ if ($publishing) {
         $notes = @(
             "Pre-release of the Agent Bridge Windows app and host, built from main at $Commit$run."
             ''
+            $changeNotes
+            ''
+            '## Installation and updates'
+            ''
             "Unsigned: Windows SmartScreen warns on first install (More info, then Run anyway). To install, run $($installers -join ', or ')."
             ''
             "An installed copy installs it by itself once its host is idle, or at once from Settings, Check for updates (pre-releases included)$(if ($hasDelta) { ', downloading only the delta from the previous one' }), and only ever for its own architecture."
         ) -join "`n"
-        Invoke-Gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" -f "body=$notes" -F draft=false -F prerelease=true | Out-Null
+        # Full changelogs can exceed Windows' command-line limit; send the body through stdin.
+        $payload = @{ body = $notes; draft = $false; prerelease = $true } | ConvertTo-Json -Compress
+        $payload | gh api -X PATCH "repos/$Repository/releases/$($draft[0].id)" --input - | Out-Null
+        if ($LASTEXITCODE) { throw "gh release publication failed ($LASTEXITCODE)" }
         # For CI's attest job: these assets are this run's, so its SBOMs describe them. A run that
         # uploads nothing (a re-run, or an older version) leaves it unset and attests nothing.
         if ($env:GITHUB_OUTPUT) { Add-Content -Path $env:GITHUB_OUTPUT -Value 'published=true' }

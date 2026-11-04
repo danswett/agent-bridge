@@ -76,7 +76,7 @@ The work has been built phone-first. All merged PRs are listed in §7.
 | PWA | Cards, answers, replies, attachments, launch, stop, usage, push, All machines view, Machines fold, folder trust, remote update, Copy button on code blocks |
 | Relay | Production at https://relay.bad-duck.com, image `7c17d4a` (2026-11-01), with a roster store. Staging, then production on approval, via `.github/workflows/relay.yml` |
 | HA connector | Stages 1–7, so a migrated machine stays on the existing HA dashboard: status, answers, replies, stop, launch, phone notifications, update buttons, upkeep and forget. Contract pinned to agent-ha-bridge v1.33.33 |
-| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas), x64 and, since #222, native Arm64 in a channel of its own. Latest: v0.1.1088 or later. Installed apps check every 30 min and install when idle |
+| Releases | Every merge to `main` publishes a release-build pre-release of the Windows app (`v0.1.<run>`, Velopack, with deltas), x64 and, since #222, native Arm64 in a channel of its own. Public release notes automatically include GitHub-generated changes since the previous published version, alongside install instructions and CI provenance. Installed apps check every 30 min and install when idle |
 | Rehearsal (#39) | Done: four runs on a Hyper-V VM and Azure VMs. Verdict: **ready for a supervised migration of one real machine** ([rehearsal-2026-10.md](rehearsal-2026-10.md)) |
 
 ### Machines
