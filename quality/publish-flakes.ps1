@@ -3,6 +3,8 @@
     `agent-bridge-quality flakes --plan` wrote: opens an issue for each new flaky or always-failing
     test, and comments the new counts on one already open, adding the `flaky` label to an issue
     filed by hand before the hunt existed. Creates the `flaky` label if the repository lacks it.
+    An issue the hunt already opened for the same marker is not opened again, so a report job
+    re-run after a later gh call failed doesn't file the same flake twice.
 
     The plan is read as data only: issue numbers must be numbers, labels must be ones the hunt
     uses, and every text goes to gh as a file or a single argument, never through a shell.
@@ -43,6 +45,11 @@ if ($labels -notcontains 'flaky') {
     Write-Host "$(if ($DryRun) { 'Would create' } else { 'Created' }) the flaky label."
 }
 
+# Issues the hunt opened (GITHUB_TOKEN: app/github-actions to gh), each carrying its marker.
+$hunted = @(& gh issue list --repo $Repository --state open --limit 1000 --json 'number,body,author' | ConvertFrom-Json |
+    Where-Object { $_.author -and $_.author.login -in @('app/github-actions', 'github-actions[bot]') })
+if ($LASTEXITCODE -ne 0) { throw 'gh issue list failed' }
+
 $i = 0
 foreach ($action in $actions) {
     $i++
@@ -55,6 +62,13 @@ foreach ($action in $actions) {
         'create' {
             $title = [string]$action.title
             if ($title.Length -eq 0 -or $title.Length -gt 200) { throw "plan item $i has no usable title" }
+            $key = [string]$action.key
+            if ($key -cnotmatch '^<!-- flake-hunt: ') { throw "plan item $i has no marker" }
+            $already = $hunted | Where-Object { ([string]$_.body).Contains($key) } | Select-Object -First 1
+            if ($already) {
+                Write-Host "Already open as #$($already.number), so not opened again: $title"
+                break
+            }
             $ghArgs = @('issue', 'create', '--repo', $Repository, '--title', $title, '--body-file', $bodyFile)
             foreach ($label in @($action.labels)) { $ghArgs += @('--label', $label) }
             $url = Invoke-Gh $ghArgs
