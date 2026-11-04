@@ -19,6 +19,7 @@ are generated.
 | `signed-command.json` | Fixed keys, the commands they sign with the MAC each gives, and commands the machine must refuse |
 | `noise-ik-p256.json` | Not records: the channel's Noise IK handshake (#603) with fixed keys (spike S2's), each message and the transport messages after it, byte for byte. `NoiseTests.cs` in `tests/AgentBridge.Transport.Tests` writes it, and `pwa/test/unit/channels.test.mjs` replays it with WebCrypto |
 | `session-patches.json` | The recorded sessions in `tests/fixtures` as a subscriber that asked for patches is sent them: the snapshot's upsert, then each `session.patch` with the session the client must then hold |
+| `roster.json` | Not records: the signed device roster's encoding ([devices.md](../devices.md), #55): framing, keys, ids, entries and the code each refused one gets, presence assertions and enrollment values. `RosterVectorTests.cs` in `tests/AgentBridge.Roster.Tests` writes it, and `pwa/test/unit/roster-vectors.test.mjs` replays it |
 
 ## Shape
 
