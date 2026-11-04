@@ -521,6 +521,34 @@ changes, and the committed `nuget.config`, which CI uses, keeps nuget.org.
     `gh workflow run flake-hunt.yml --ref <branch> -f runs=50 -f projects=AgentBridge.Host.Tests -f filter="FullyQualifiedName~AnswerFlowTests"`.
   - Nothing is skipped without the owner's say-so (AGENTS.md: never weaken tests).
   - The `--blame-hang` setting stays in place.
+- **The weekly report** (`weekly-report`, [weekly-report.yml](../.github/workflows/weekly-report.yml))
+  is how the flake record gets read, so flakes are fixed rather than re-run. Every Monday at 08:00
+  PT, `agent-bridge-quality report` reads the past 7 days from GitHub and the workflow comments it
+  on the quality epic, #357, as short tables:
+  1. **Flakes:** open `flaky` issues ranked by the hunt's failures this week, with their OSes and
+     when last seen; new and fixed ones; `main`'s CI runs that went red, split into flakes (green
+     on a rerun of the same commit) and those still red, with how many of those the next commit's
+     run turned green (most likely flakes no one reran); and the 5 tests that failed most, from the
+     logs of up to 30 failed CI test jobs (half `main`'s, half pull requests', newest first) and
+     the hunt's tallies.
+  2. **Throughput:** pull requests open, opened, merged and closed; the median and 90th
+     percentile from open to merge and from ready to merge; those open more than 7 days.
+  3. **Where open pull requests are stuck:** counted by the first item `merge-rule`'s description
+     names (draft, held, Copilot review, independent review, a red check, CodeQL...), passing over
+     a red `main`, which it names first on every one; then, for one `merge-rule` passed,
+     conflicts, unresolved threads or a red `main`; and per head-branch
+     prefix (`codex/`, `perf/`, `quality/`...), the open ones, how deep they stack, and their
+     merges this week, to see whether pull requests per session and stack depth slow merging.
+  4. **CI health:** the median wall time of the last 50 completed pull request runs of `ci.yml`,
+     and their 3 slowest jobs.
+
+  Its cost is bounded and printed at the end: a few paginated GraphQL queries and REST lists, a
+  jobs list for each earlier attempt of a run rerun to green (every such `main` run, and up to 15
+  pull requests'), and at most 30 job logs. Only the `post` job may write issues,
+  only on `main`. A pull request that changes the reporter or the workflow runs it as a dry run,
+  and `gh workflow run weekly-report.yml --ref <branch>` (a dry run by default, and always off
+  `main`) does too: either writes the report to the job summary only, and
+  `dotnet run --project tools/AgentBridge.Quality -c Release -- report` prints it locally.
 - **Where results go:** artifacts per run. A `quality-data` orphan branch, written only by
   `main`'s and nightly runs, keeps the time series (coverage, durations, flakes, benchmarks,
   selection misses). It's rendered at `https://danswett.github.io/agent-bridge/quality/` by
@@ -618,7 +646,8 @@ Each phase is a few PRs, and each PR leaves CI green and useful on its own.
 3. `agent-drift` nightly.
 4. `lab-e2e-agents`: the soak driver as a scenario runner on test accounts.
 5. `perf-host` corpus replay and `perf-relay-load` on staging; `relay-dast`; fuzz targets.
-6. The flake record (the nightly flake hunt, done in #509) and the selection-miss report.
+6. The flake record (the nightly flake hunt, done in #509, read each Monday in the weekly
+   report on #357) and the selection-miss report.
 
 **Phase 4: releases (weeks 8–10)**
 1. `dev`, `beta` and `stable` channels with promotion by digest. Migrated machines move to
