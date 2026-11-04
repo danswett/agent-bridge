@@ -234,13 +234,18 @@ public sealed class AgentReadinessTests : IDisposable
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         commands.Run = _ => { entered.TrySetResult(); return release.Task; };
-        var service = Service();
+        // Only shutdown ends the probe here, never its own timeout: with the usual three seconds,
+        // a test stalled that long before shutting down would see the scan finish with a report
+        // instead. Shutdown still waits out the two seconds the service gives a cancelled probe
+        // to clean up, so the bounds below only stop a real hang: five seconds left three for
+        // everything else, and a loaded windows-11-arm runner took longer (#638).
+        var service = Service(timeout: TimeSpan.FromMinutes(1));
         var pending = service.RefreshAsync();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var disposing = service.DisposeAsync().AsTask();
         try
         {
-            await disposing.WaitAsync(TimeSpan.FromSeconds(5));
+            await disposing.WaitAsync(TimeSpan.FromSeconds(30));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
             Assert.Null(service.Snapshot);
         }
