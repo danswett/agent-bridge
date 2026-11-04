@@ -8,6 +8,7 @@ public class CiPlanTests
           plan:
             outputs:
               whole-ring: ${{ steps.whole-ring.outputs.whole-ring }}
+              product-os: ${{ steps.whole-ring.outputs.whole-ring == 'true' && '["ubuntu-latest","windows-latest","windows-11-arm"]' || steps.select.outputs.product-os }}
               product: ${{ steps.select.outputs.product }}
               ha-integration: ${{ steps.select.outputs.ha-integration }}
             steps:
@@ -18,7 +19,12 @@ public class CiPlanTests
           product:
             needs: plan
             if: github.event_name != 'pull_request' || needs.plan.outputs.whole-ring == 'true' || needs.plan.outputs.product == 'true'
+            strategy:
+              matrix:
+                os: ${{ fromJSON(needs.plan.outputs.product-os) }}
+            runs-on: ${{ matrix.os }}
             env:
+              SUITES: ${{ needs.plan.outputs.suites }}
               WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}
             steps:
               - name: The NativeAOT transport
@@ -40,7 +46,7 @@ public class CiPlanTests
 
     const string StepIf = "runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))";
     const string StepProblem = "ci.yml job product step \"The NativeAOT transport\" must run on main and in the whole ring whatever the plan selected: " +
-        "its if: must be [runner.os == '...' && | !cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
+        "its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)";
 
     static IEnumerable<string> Check(string yaml) => CiPlan.Check(Fixture.Catalog(), yaml).Select(p => p.Message);
 
@@ -80,10 +86,18 @@ public class CiPlanTests
 
     [Theory]
     [InlineData("runner.os == 'Windows' && contains(fromJSON(env.SUITES), 'transport')")]
+    // Actions reads function and context names in any case; the check holds them to one spelling.
+    [InlineData("runner.os == 'Windows' && contains(fromJson(env.SUITES), 'transport')")]
+    [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(ENV.suites), 'transport'))")]
     // A bypass that's there but can't bypass: main would still skip it unless protocol is selected.
     [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')) && contains(fromJSON(env.SUITES), 'protocol')")]
     [InlineData("runner.os == 'Windows' && (github.event_name != 'pull_request' || contains(fromJSON(env.SUITES), 'transport'))")]
     [InlineData("runner.os == 'Windows' && github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport')")]
+    // Guards that hold nowhere: two OSes, or one no runner has.
+    [InlineData("runner.os == 'Windows' && runner.os == 'Linux' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
+    [InlineData("runner.os == 'Windwos' && (github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), 'transport'))")]
+    // The plan's suites read straight from needs, not through env.SUITES.
+    [InlineData("runner.os == 'Windows' && github.event_name == 'pull_request' && contains(fromJSON(needs.plan.outputs.suites), 'transport')")]
     public void A_suite_gated_step_that_main_or_the_whole_ring_could_skip_is_reported(string condition)
     {
         Assert.Equal([StepProblem], Check(Wired.Replace(StepIf, condition)));
@@ -95,6 +109,16 @@ public class CiPlanTests
         var problems = Check(Wired.Replace("WHOLE_RING: ${{ needs.plan.outputs.whole-ring }}", "WHOLE_RING: ${{ needs.plan.outputs.whole_ring }}"));
 
         Assert.Equal(["ci.yml job product has steps that run when a suite is selected, but its env WHOLE_RING isn't ${{ needs.plan.outputs.whole-ring }}"], problems);
+    }
+
+    [Fact]
+    public void The_plans_suites_reach_steps_only_as_SUITES_bound_to_the_plan()
+    {
+        Assert.Equal(["ci.yml job product has steps that run when a suite is selected, but its env SUITES isn't ${{ needs.plan.outputs.suites }}"],
+            Check(Wired.Replace("SUITES: ${{ needs.plan.outputs.suites }}", "SUITES: '[]'")));
+        // An alias would let a step test the suites without the step checks seeing it.
+        Assert.Equal(["ci.yml job product env PICKED reads the plan's suites, which steps may read only as SUITES"],
+            Check(Wired.Replace("SUITES: ${{ needs.plan.outputs.suites }}", "SUITES: ${{ needs.plan.outputs.suites }}\n      PICKED: ${{ needs['plan'].outputs.suites }}")));
     }
 
     [Fact]
@@ -163,12 +187,76 @@ public class CiPlanTests
     }
 
     [Theory]
-    [InlineData("needs: [quality-gate]", "needs: [plan, product, ha-integration]", "ci.yml publish-gate doesn't need quality-gate, so a release could publish past a failed check")]
-    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.product.result == 'success'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its && conditions, with no ||)")]
-    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.quality-gate.result == 'success' || always()", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its && conditions, with no ||)")]
+    [InlineData("needs: [quality-gate]", "needs: [plan, product, ha-integration]", "ci.yml delivery job publish-gate must need exactly [quality-gate]")]
+    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.product.result == 'success'", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its top-level && conditions, with no || and no ${{ }} inside)")]
+    [InlineData("&& needs.quality-gate.result == 'success'", "&& needs.quality-gate.result == 'success' || always()", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its top-level && conditions, with no || and no ${{ }} inside)")]
+    // Inside a negation it's always true, not required.
+    [InlineData("&& needs.quality-gate.result == 'success'", "&& !(false && needs.quality-gate.result == 'success' && false)", "ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its top-level && conditions, with no || and no ${{ }} inside)")]
     public void A_publish_gate_that_doesnt_stand_on_quality_gate_is_reported(string from, string to, string problem)
     {
         Assert.Equal([problem], Check(Wired.Replace(from, to)));
+    }
+
+    [Fact]
+    public void A_publish_gate_if_that_mixes_text_and_an_expression_is_reported_since_any_such_string_is_true()
+    {
+        var problems = Check(Wired.Replace("!cancelled() && github.event_name == 'push'", "${{ !cancelled() && github.event_name == 'push' }}"));
+
+        Assert.Equal(["ci.yml publish-gate's if: doesn't require needs.quality-gate.result == 'success' (as one of its top-level && conditions, with no || and no ${{ }} inside)"], problems);
+    }
+
+    [Fact]
+    public void Without_publish_gate_nothing_holds_a_release_to_the_gate()
+    {
+        var problems = Check(Wired[..Wired.IndexOf("  publish-gate:", StringComparison.Ordinal)]);
+
+        Assert.Equal(["ci.yml has no publish-gate job, so nothing holds a release to quality-gate"], problems);
+    }
+
+    [Theory]
+    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true'", null)]
+    [InlineData("[plan]", "github.event_name == 'push'", "ci.yml delivery job publish must need exactly [publish-gate]")]
+    [InlineData("[publish-gate]", "always() && needs.publish-gate.outputs.newest == 'true'", IfProblem)]
+    [InlineData("[publish-gate]", "needs.publish-gate.outputs.newest == 'true' || github.event_name == 'push'", IfProblem)]
+    public void Publish_runs_only_after_publish_gate_succeeded(string needs, string condition, string? problem)
+    {
+        var problems = Check(Wired + $"\n  publish:\n    needs: {needs}\n    if: {condition}\n");
+
+        Assert.Equal(problem is null ? [] : [problem], problems);
+    }
+
+    const string IfProblem = "ci.yml publish's if: has a ||, ${{ }} inside or a status function, so it could run without publish-gate succeeding";
+
+    [Fact]
+    public void A_check_job_renamed_to_a_delivery_job_is_reported_since_delivery_jobs_are_pinned_to_their_place()
+    {
+        var problems = Check(Wired.Replace("relay-image-sarif:\n    needs: product", "relay-image-sarif:\n    needs: plan").Replace("relay-image-sarif:\r\n    needs: product", "relay-image-sarif:\r\n    needs: plan"));
+
+        Assert.Equal(["ci.yml delivery job relay-image-sarif must need exactly [product]"], problems);
+    }
+
+    [Fact]
+    public void Products_runners_are_pinned_so_main_and_the_whole_ring_get_every_os()
+    {
+        Assert.Equal(["ci.yml plan's output product-os isn't ${{ steps.whole-ring.outputs.whole-ring == 'true' && '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]' || steps.select.outputs.product-os }}"],
+            Check(Wired.Replace("&& '[\"ubuntu-latest\",\"windows-latest\",\"windows-11-arm\"]'", "&& '[\"ubuntu-latest\"]'")));
+        // And with Linux alone, the Windows step could never run.
+        Assert.Equal(["ci.yml job product's strategy.matrix.os isn't ${{ fromJSON(needs.plan.outputs.product-os) }}", StepProblem],
+            Check(Wired.Replace("os: ${{ fromJSON(needs.plan.outputs.product-os) }}", "os: [ubuntu-latest]")));
+    }
+
+    [Fact]
+    public void A_step_guarded_on_an_os_its_job_never_runs_on_is_reported()
+    {
+        Assert.Equal([StepProblem], Check(Wired.Replace(StepIf, StepIf.Replace("'Windows'", "'macOS'"))));
+    }
+
+    [Fact]
+    public void A_quality_gate_that_a_failed_check_would_skip_is_reported()
+    {
+        var problems = Check(Wired.Replace("if: always()", "if: success()"));
+
+        Assert.Equal(["ci.yml quality-gate's if: isn't always(), so a failed check would skip the gate, and a skipped required check passes"], problems);
     }
 
     // Reads the live ci.yml and catalog: the wiring the plan depends on must hold there, not only

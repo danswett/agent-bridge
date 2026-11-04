@@ -18,23 +18,46 @@ static partial class CiPlan
     // The output the plan job sets, outside the selector, when the whole ring must run: it gates
     // nothing by its own name.
     const string WholeRing = "whole-ring";
-    // Jobs that deliver rather than check, so quality-gate doesn't wait on them.
-    static readonly HashSet<string> Delivery = new(StringComparer.Ordinal) { PublishGate, "publish", "attest", "relay-image-sarif" };
+    // Jobs that deliver rather than check, so quality-gate doesn't wait on them, each with the one
+    // job it follows.
+    static readonly Dictionary<string, string[]> DeliveryNeeds = new(StringComparer.Ordinal)
+    {
+        [PublishGate] = [Gate],
+        ["publish"] = [PublishGate],
+        ["attest"] = ["publish"],
+        ["relay-image-sarif"] = ["product"],
+    };
+    static readonly HashSet<string> Delivery = new(DeliveryNeeds.Keys, StringComparer.Ordinal);
+    static readonly string[] ProductRunners = ["ubuntu-latest", "windows-latest", "windows-11-arm"];
+    static readonly string ProductOsBinding =
+        $"${{{{ steps.{WholeRing}.outputs.{WholeRing} == 'true' && '[{string.Join(",", ProductRunners.Select(r => $"\"{r}\""))}]' || steps.select.outputs.product-os }}}}";
+    const string ProductMatrix = "${{ fromJSON(needs.plan.outputs.product-os) }}";
 
     // Any read of the plan in a job's if:, in either property syntax and with or without a
     // comparison: a bare needs.plan.outputs.x once escaped a match that wanted "== 'true'" (#523).
-    [GeneratedRegex(@"needs\s*(?:\.\s*plan\b|\[\s*['""]plan['""]\s*\])")]
+    [GeneratedRegex(@"needs\s*(?:\.\s*plan\b|\[\s*['""]plan['""]\s*\])", RegexOptions.IgnoreCase)]
     private static partial Regex ReadsPlan();
-    [GeneratedRegex(@"contains\(\s*fromJSON\(\s*env\.SUITES\s*\)\s*,\s*'([^']*)'\s*\)")]
+    // Actions' function and context names are case-insensitive, so fromJson(ENV.suites) is the
+    // same test: found in any case here, then held to the canonical spelling by the shape check.
+    [GeneratedRegex(@"contains\(\s*fromJSON\(\s*env\.SUITES\s*\)\s*,\s*'([^']*)'\s*\)", RegexOptions.IgnoreCase)]
     private static partial Regex SuiteTest();
+    // Any read of the plan's suites at all, however it's spelled, makes a step suite-gated.
+    [GeneratedRegex(@"env\s*(?:\.\s*suites\b|\[\s*['""]suites['""]\s*\])", RegexOptions.IgnoreCase)]
+    private static partial Regex ReadsSuites();
     [GeneratedRegex(@"^needs\.quality-gate\.result == 'success'$")]
     private static partial Regex GatePassed();
     // The only shape a suite-gated step's if: may take: guards that hold on main too (the runner's
     // OS, not cancelled), then a disjunction of exactly the main and whole-ring bypasses and the
     // suite tests. A substring check passed `... || contains(...)) && contains(...)`, which main
     // would skip whenever the second suite wasn't selected (#523's review).
-    [GeneratedRegex(@"^(?:runner\.os == '[A-Za-z]+'|!cancelled\(\)) && ")]
+    // At most one of each, and only an OS a runner has: runner.os == 'Windows' && runner.os ==
+    // 'Linux', or a misspelt OS, would never run the step anywhere.
+    [GeneratedRegex(@"^(?:(?<os>runner\.os == '(?<name>Windows|Linux|macOS)')|(?<live>!cancelled\(\))) && ")]
     private static partial Regex Guard();
+    [GeneratedRegex(@"^\$\{\{ matrix\.([A-Za-z0-9_-]+) \}\}$")]
+    private static partial Regex MatrixValue();
+    [GeneratedRegex(@"\b(?:always|cancelled|failure|success)\s*\(", RegexOptions.IgnoreCase)]
+    private static partial Regex StatusFunction();
     [GeneratedRegex(@"^contains\(fromJSON\(env\.SUITES\), '[^']*'\)$")]
     private static partial Regex SuiteTerm();
     [GeneratedRegex(@"\s+")]
@@ -110,12 +133,39 @@ static partial class CiPlan
                 Add($"ci.yml plan's output {output} is {actual.Trim()}, not {binding}");
         }
 
+        // product's runners: on main and in the whole ring all three, whatever the selector says,
+        // or its Windows-only steps (the AOT checks, the build scripts) would have no runner.
+        if (jobs.TryGetValue("product", out var product))
+        {
+            var productOs = planOutputs is null ? null : Scalar(planOutputs, "product-os");
+            if (Normalize(productOs ?? "") != ProductOsBinding)
+                Add($"ci.yml plan's output product-os isn't {ProductOsBinding}");
+            var matrix = Child(product, "strategy") is YamlMappingNode strategy ? Child(strategy, "matrix") as YamlMappingNode : null;
+            if (Normalize((matrix is null ? null : Scalar(matrix, "os")) ?? "") != ProductMatrix)
+                Add($"ci.yml job product's strategy.matrix.os isn't {ProductMatrix}");
+        }
+
+        // A delivery job stays out of quality-gate's needs by name, so each is pinned to its place:
+        // a check job renamed to one, needing the plan, would otherwise drop out of the gate.
+        foreach (var (id, expected) in DeliveryNeeds)
+            if (jobs.TryGetValue(id, out var delivery))
+            {
+                if (!Needs(delivery).SetEquals(expected))
+                    Add($"ci.yml delivery job {id} must need exactly [{string.Join(", ", expected)}]");
+                if (gated.Contains(id))
+                    Add($"ci.yml delivery job {id} reads the plan, as only a check job does");
+            }
+
         // quality-gate: every job that needs the plan, so none can fail, or be skipped when it had
         // to run, without failing the gate.
         if (!jobs.TryGetValue(Gate, out var gate))
             Add($"ci.yml has no {Gate} job");
         else
         {
+            // Without always(), the implicit success() skips the gate when a check fails, and a
+            // skipped required check counts as passed.
+            if (Expression(Scalar(gate, "if") ?? "") != "always()")
+                Add($"ci.yml {Gate}'s if: isn't always(), so a failed check would skip the gate, and a skipped required check passes");
             var gateNeeds = Needs(gate);
             if (!gateNeeds.Contains(Plan))
                 Add($"ci.yml {Gate} doesn't need plan, so a failed plan would skip every job and pass the gate");
@@ -128,16 +178,27 @@ static partial class CiPlan
                     Add($"ci.yml job {id} isn't in {Gate}'s needs, so its result wouldn't count (only {string.Join(", ", Delivery.Order(StringComparer.Ordinal))} may stay out)");
         }
 
-        // publish-gate stands on quality-gate rather than a second copy of its needs (#512).
-        if (jobs.TryGetValue(PublishGate, out var publishGate))
+        // publish-gate stands on quality-gate rather than a second copy of its needs (#512), and
+        // publish stands on publish-gate: without either link a release ships past a red check.
+        if (!jobs.TryGetValue(PublishGate, out var publishGate))
+            Add($"ci.yml has no {PublishGate} job, so nothing holds a release to {Gate}");
+        else
         {
-            if (!Needs(publishGate).Contains(Gate))
-                Add($"ci.yml {PublishGate} doesn't need {Gate}, so a release could publish past a failed check");
-            // One of the conditions joined by &&, with no || that could route around it.
+            // A top-level conjunct, with no || anywhere that could route around it: a split on &&
+            // also matched one inside !(false && ... && false), which is always true. And a single
+            // expression: ${{ }} mixed with text is a string template, and any such string is true.
             var publishIf = Expression(Scalar(publishGate, "if") ?? "");
-            if (publishIf.Contains("||", StringComparison.Ordinal)
-                || !publishIf.Split("&&").Any(t => GatePassed().IsMatch(t.Trim())))
-                Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success' (as one of its && conditions, with no ||)");
+            if (publishIf.Contains("||", StringComparison.Ordinal) || IsTemplate(publishIf)
+                || !TopLevelConjuncts(publishIf).Any(t => GatePassed().IsMatch(t)))
+                Add($"ci.yml {PublishGate}'s if: doesn't require needs.{Gate}.result == 'success' (as one of its top-level && conditions, with no || and no ${{{{ }}}} inside)");
+        }
+        if (jobs.TryGetValue("publish", out var publish))
+        {
+            // No status function: then the implicit success() holds publish to publish-gate's.
+            var publishCondition = Expression(Scalar(publish, "if") ?? "");
+            if (publishCondition.Contains("||", StringComparison.Ordinal) || IsTemplate(publishCondition)
+                || StatusFunction().IsMatch(publishCondition))
+                Add($"ci.yml publish's if: has a ||, ${{{{ }}}} inside or a status function, so it could run without {PublishGate} succeeding");
         }
 
         // Steps that run when a suite is selected: the suite must exist, say it runs in this job,
@@ -150,9 +211,11 @@ static partial class CiPlan
             foreach (var step in Steps(job))
             {
                 var condition = Scalar(step, "if") ?? "";
-                var ids = SuiteTest().Matches(condition).Select(m => m.Groups[1].Value).Distinct().ToList();
-                if (ids.Count == 0)
+                // Reading the plan's suites by any route (needs.plan.outputs.suites directly too)
+                // holds a step to the one shape.
+                if (!ReadsSuites().IsMatch(condition) && !ReadsPlan().IsMatch(condition))
                     continue;
+                var ids = SuiteTest().Matches(condition).Select(m => m.Groups[1].Value).Distinct().ToList();
                 stepsTestingSuites = true;
                 var name = Scalar(step, "name") ?? Scalar(step, "id") ?? Scalar(step, "uses") ?? "(unnamed)";
                 foreach (var suiteId in ids)
@@ -162,17 +225,52 @@ static partial class CiPlan
                     else if (!RunsIn(suite, id))
                         Add($"ci.yml job {id} step \"{name}\" runs when suite {suiteId} is selected, but that suite's where: doesn't name ci.yml {id}");
                 }
-                if (!BypassesSelection(condition))
+                if (!BypassesSelection(condition, JobOses(job)))
                     Add($"ci.yml job {id} step \"{name}\" must run on main and in the whole ring whatever the plan selected: " +
-                        $"its if: must be [runner.os == '...' && | !cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)");
+                        $"its if: must be [runner.os == 'Windows|Linux|macOS' && ][!cancelled() && ](github.event_name != 'pull_request' || env.WHOLE_RING == 'true' || contains(fromJSON(env.SUITES), '...') || ...)");
             }
-            var wholeRingEnv = Child(job, "env") is YamlMappingNode jobEnv ? Scalar(jobEnv, "WHOLE_RING") : null;
-            if (stepsTestingSuites && Normalize(wholeRingEnv ?? "") != $"${{{{ needs.plan.outputs.{WholeRing} }}}}")
-                Add($"ci.yml job {id} has steps that run when a suite is selected, but its env WHOLE_RING isn't ${{{{ needs.plan.outputs.{WholeRing} }}}}");
+            var jobEnvMap = Child(job, "env") as YamlMappingNode;
+            if (stepsTestingSuites)
+                foreach (var (key, output) in new[] { ("WHOLE_RING", WholeRing), ("SUITES", "suites") })
+                {
+                    var binding = $"${{{{ needs.plan.outputs.{output} }}}}";
+                    if (Normalize((jobEnvMap is null ? null : Scalar(jobEnvMap, key)) ?? "") != binding)
+                        Add($"ci.yml job {id} has steps that run when a suite is selected, but its env {key} isn't {binding}");
+                }
         }
+
+        // The plan's suites and whole-ring reach steps only as SUITES and WHOLE_RING: under another
+        // name a step could test them without the checks above seeing it.
+        var envs = new List<(string Where, YamlMappingNode Env)>();
+        if (Child(root, "env") is YamlMappingNode workflowEnv)
+            envs.Add(("ci.yml env", workflowEnv));
+        foreach (var (id, job) in jobs)
+        {
+            if (Child(job, "env") is YamlMappingNode jobEnv)
+                envs.Add(($"ci.yml job {id} env", jobEnv));
+            foreach (var step in Steps(job))
+                if (Child(step, "env") is YamlMappingNode stepEnv)
+                    envs.Add(($"ci.yml job {id} step \"{Scalar(step, "name") ?? Scalar(step, "id") ?? "(unnamed)"}\" env", stepEnv));
+        }
+        foreach (var (where, envMap) in envs)
+            foreach (var (keyNode, valueNode) in envMap.Children)
+            {
+                var key = (keyNode as YamlScalarNode)?.Value ?? "";
+                var value = (valueNode as YamlScalarNode)?.Value ?? "";
+                foreach (var (output, allowed) in new[] { ("suites", "SUITES"), (WholeRing, "WHOLE_RING") })
+                    if (ReadsOutput(output).IsMatch(value) && key != allowed)
+                        Add($"{where} {key} reads the plan's {output}, which steps may read only as {allowed}");
+            }
 
         return problems;
     }
+
+    static Regex ReadsOutput(string output) =>
+        new($@"needs\s*(?:\.\s*plan|\[\s*['""]plan['""]\s*\])\s*(?:\.\s*outputs|\[\s*['""]outputs['""]\s*\])\s*(?:\.\s*{Regex.Escape(output)}\b|\[\s*['""]{Regex.Escape(output)}['""]\s*\])", RegexOptions.IgnoreCase);
+
+    // ${{ }} left inside an if: after unwrapping makes it a string template, which is always true.
+    static bool IsTemplate(string expression) =>
+        expression.Contains("${{", StringComparison.Ordinal) || expression.Contains("}}", StringComparison.Ordinal);
 
     /// <summary>
     /// Whether a suite-gated step's if: is guards that hold on main too, then a disjunction of
@@ -180,12 +278,18 @@ static partial class CiPlan
     /// between them: a substring check passed `(main || contains(a)) && contains(b)`, which main
     /// would skip whenever b wasn't selected (#523's review).
     /// </summary>
-    static bool BypassesSelection(string condition)
+    static bool BypassesSelection(string condition, IReadOnlySet<string>? jobOses)
     {
         var expression = Expression(condition);
         var guarded = false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var guard = Guard().Match(expression); guard.Success; guard = Guard().Match(expression))
         {
+            if (!seen.Add(guard.Groups["os"].Success ? "os" : "live"))
+                return false;
+            // An OS the job never runs on would skip the step everywhere.
+            if (guard.Groups["os"].Success && jobOses is not null && !jobOses.Contains(guard.Groups["name"].Value))
+                return false;
             expression = expression[guard.Length..];
             guarded = true;
         }
@@ -201,6 +305,89 @@ static partial class CiPlan
     /// <summary>A value as written in YAML, with runs of whitespace collapsed.</summary>
     static string Normalize(string value) =>
         Spaces().Replace(value, " ").Trim().Replace("( ", "(", StringComparison.Ordinal).Replace(" )", ")", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The OSes a job runs on (Windows, Linux, macOS), from its runs-on or the matrix values it
+    /// names; product's matrix, pinned above, is all three runners. Null when it can't be told.
+    /// </summary>
+    static HashSet<string>? JobOses(YamlMappingNode job)
+    {
+        var runsOn = Scalar(job, "runs-on");
+        if (runsOn is null)
+            return null;
+        var label = Normalize(runsOn);
+        var labels = new List<string>();
+        var fromMatrix = MatrixValue().Match(label);
+        if (!fromMatrix.Success)
+        {
+            if (IsTemplate(label))
+                return null;
+            labels.Add(label);
+        }
+        else
+        {
+            var key = fromMatrix.Groups[1].Value;
+            var matrix = Child(job, "strategy") is YamlMappingNode strategy ? Child(strategy, "matrix") as YamlMappingNode : null;
+            if (matrix is null)
+                return null;
+            switch (Child(matrix, key))
+            {
+                case YamlSequenceNode values:
+                    labels.AddRange(values.Children.OfType<YamlScalarNode>().Select(v => v.Value ?? ""));
+                    break;
+                case YamlScalarNode value when Normalize(value.Value ?? "") == ProductMatrix:
+                    labels.AddRange(ProductRunners);
+                    break;
+                case YamlScalarNode:
+                    return null;
+            }
+            if (Child(matrix, "include") is YamlSequenceNode include)
+                labels.AddRange(include.Children.OfType<YamlMappingNode>().Select(i => Scalar(i, key)).OfType<string>());
+        }
+        if (labels.Count == 0)
+            return null;
+        var oses = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var l in labels)
+        {
+            var os = l.Contains("windows", StringComparison.OrdinalIgnoreCase) ? "Windows"
+                : l.Contains("ubuntu", StringComparison.OrdinalIgnoreCase) ? "Linux"
+                : l.Contains("macos", StringComparison.OrdinalIgnoreCase) ? "macOS" : null;
+            if (os is null)
+                return null;
+            oses.Add(os);
+        }
+        return oses;
+    }
+
+    /// <summary>
+    /// The terms joined by && outside any parentheses or quoted string, so a clause inside a
+    /// negation or a call isn't taken for one the whole expression requires.
+    /// </summary>
+    static IEnumerable<string> TopLevelConjuncts(string expression)
+    {
+        var depth = 0;
+        var quoted = false;
+        var start = 0;
+        for (var i = 0; i < expression.Length; i++)
+        {
+            var c = expression[i];
+            if (c == '\'')
+                quoted = !quoted;
+            else if (quoted)
+                continue;
+            else if (c == '(')
+                depth++;
+            else if (c == ')')
+                depth--;
+            else if (depth == 0 && c == '&' && i + 1 < expression.Length && expression[i + 1] == '&')
+            {
+                yield return expression[start..i].Trim();
+                start = i + 2;
+                i++;
+            }
+        }
+        yield return expression[start..].Trim();
+    }
 
     /// <summary>An if: as an expression: normalized, and without the optional ${{ }} around it.</summary>
     static string Expression(string condition)

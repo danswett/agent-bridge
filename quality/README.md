@@ -298,10 +298,14 @@ laptop, through `quality/run.ps1`, and ring 1 in CI, so both agree on what a cha
    (its own output, and it runs on `main` and in the whole ring whatever the plan says); the plan
    step's `JOBS`, the jobs gated on the plan and the plan's outputs, bound to the steps that
    compute them, agree; every check job in ci.yml is in `quality-gate`'s needs (all but the
-   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`);
-   `publish-gate` needs `quality-gate` and requires its success; and each step that runs when a
-   suite is selected names a suite the catalog has, whose `where:` names that job explicitly,
-   and runs on `main` and in the whole ring whatever the plan selected.
+   delivery jobs: `publish-gate`, `publish`, `attest`, `relay-image-sarif`, each pinned to the one
+   job it follows), and its `if:` is
+   `always()`; `publish-gate` needs `quality-gate` and requires its success as a top-level
+   condition, and `publish` needs `publish-gate` with no status function; the plan's suites and
+   whole-ring reach steps only as `SUITES` and `WHOLE_RING`; and each step that reads the plan's
+   suites names suites the catalog has, whose `where:` names that job explicitly, in the one
+   condition shape that runs on `main` and in the whole ring whatever the plan selected, with an
+   OS guard only for an OS its job runs on (`product`'s runners are pinned to all three there).
    The plan writes the "what runs and why" table to the run's summary, and outputs:
    - a true or false per job, from the selected suites' `where:`. So the catalog, not ci.yml,
      says which suites a job runs, and moving a suite moves its trigger. On a pull request a
