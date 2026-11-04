@@ -12,7 +12,7 @@
 import { answerability, tapToAnswer } from './answers.js';
 import { parseMarkdown } from './markdown.js';
 import { delegateTitle } from './attribution.js';
-import { hasHidden, hasRightToLeft, reveal } from './hidden-text.js';
+import { hasHidden, hasRightToLeft, reveal, unescapeShown } from './hidden-text.js';
 
 export { reveal };
 
@@ -149,6 +149,8 @@ export function wholePrompt(q) {
   // Nor is one with right-to-left letters, which reorder what is drawn around them without any
   // control: three Hebrew letters before `; rm -rf / #` show its comment marker first.
   if (hasHidden(raw) || hasRightToLeft(raw)) { return false; }
+  // A host sends them as escapes (\u202E, #220), so their escapes count as them.
+  if (unescapeShown(raw) !== raw) { return false; }
   // Every line ending the renderer breaks on is counted: a bare CR is a line too.
   const m = raw.trim().replace(/\r\n?/g, '\n');
   return m.length > 0 && m.length <= PROMPT_MAX.chars && m.split('\n').length <= PROMPT_MAX.lines

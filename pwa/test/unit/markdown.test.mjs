@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { codeText, parseApproval, parseMarkdown, renderMarkdown, revealed, safeHref, textOf, toDom } from '../../js/markdown.js';
+import { approvalNotes, codeText, parseApproval, parseMarkdown, renderMarkdown, revealed, safeHref, textOf, toDom } from '../../js/markdown.js';
 import { hasHidden, hasRightToLeft, notesFor, reveal, revealLineSeparators } from '../../js/hidden-text.js';
 
 // Every element and link the parser would put on the page.
@@ -290,6 +290,14 @@ const notesOfBlock = (md) => {
   const find = (nodes) => nodes.map((n) => (n?.tag === 'pre' ? n : find(n?.children ?? []))).find(Boolean);
   return notesFor(textOf(find(parseMarkdown(md))));
 };
+
+// A host sends an approval's hidden characters and right-to-left letters as escapes (#220), and Approve
+// once is offered for it: its card still says what they stand for.
+test('an approval a host sent escaped still says it contains hidden characters and right-to-left text', () => {
+  assert.deepEqual(approvalNotes('Allow **shell**?\n\n```\n# just a note\\u000D Write-Output RAN\n```'), ['Contains hidden characters']);
+  assert.deepEqual(approvalNotes('Allow **shell**?\n\n```\necho \\u05D0#;\\u05D1;rm -rf ~ \\u{E0041}\n```'), ['Contains hidden characters', 'Contains right-to-left text']);
+  assert.deepEqual(approvalNotes('Allow **shell**?\n\n```\nprintf \'\\u0041\\u{1F600}\'\n```'), []);
+});
 
 test('a block with a bare carriage return says it contains hidden characters', () => {
   // PowerShell ends a `#` comment at a bare CR: drawn on one line, this still reads as a comment, and runs.

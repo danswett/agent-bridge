@@ -761,6 +761,15 @@ joined words at a separator, since a fact can carry a delegate's name (#286).
     no Copy ("An approval's card", below, #220). Approve once stays offered whatever it holds,
     the owner's "escape and allow" (#253). It wraps and is never cut, so a long command or a
     diff keeps Approve once.
+  - **A host sends an approval's hidden characters and right-to-left letters as escapes**
+    (`\u202E`, `\u05D0`, #220). The card's notes, and Needs you, which never offers such a
+    prompt inline (§6.1), count a host's escape as the character it stands for.
+  - **An approval Markdown would not draw as written** is held at the machine by the Windows
+    app's card and by Home Assistant's, though both draw every approval as its source (the app's
+    since #323; Home Assistant's in one code block nothing in it can close, #220): a character
+    reference that would decode to such a character (`&#x202E;`), the agent's own words closing
+    the command's fence, a link, an image or HTML, text after a block, or a line in a block shaped
+    as a fence (`ApprovalShape`). Both say the same notes above an approval.
   - **`answerAtMachine`:** the whole question, no controls, and one line in Needs you's text
     colour: "Answer at the machine · *machine*". A prompt that reached the device cut short
     (`truncated`) can't be answered from here either, as before. Leaving the session is never

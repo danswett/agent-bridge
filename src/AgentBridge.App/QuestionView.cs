@@ -45,6 +45,12 @@ public sealed class QuestionView : StackPanel
 
         head = new TextBlock { Text = heading ?? vm.Heading, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Brush("AbNeedsHead") };
         Children.Add(head);
+        // What its escapes stand for, above its text (ui.md §6.4): an escape can be read past while its
+        // character still acts.
+        foreach (var note in vm.Notes)
+        {
+            Children.Add(new TextBlock { Text = note, Style = Muted(), TextWrapping = TextWrapping.Wrap });
+        }
         Children.Add(new MarkdownView { Approval = vm.Approval, Markdown = vm.Message });
 
         if (!vm.Answerable)

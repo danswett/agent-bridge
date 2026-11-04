@@ -16,17 +16,26 @@ internal static class QuestionMapper
 
     static bool? IsCut(string message) => Cut(message).Length < message.Length ? true : null;
     // A permission prompt: a fixed approve-or-deny choice. atMachine marks one no host can
-    // answer from another device, so a client shows it without the buttons.
-    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false) => new()
+    // answer from another device, so a client shows it without the buttons. Whatever agent
+    // asked, a character not drawn where it runs, and a right-to-left letter, is shown as a
+    // visible escape, and Approve once is still offered (#220; the owner's #253 decision 3): what
+    // a reader is shown is then what runs. A client that cannot draw it exactly as written holds
+    // it at the machine itself.
+    public static Question Approval(string id, string message, DateTimeOffset askedAt, bool atMachine = false)
     {
-        Id = id,
-        Kind = QuestionKind.Approval,
-        Message = Cut(message),
-        Truncated = IsCut(message),
-        Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
-        AskedAt = askedAt,
-        AnswerAtMachine = atMachine ? true : null,
-    };
+        // Escaped from no more than it can carry (RevealWithin): still cut, and said to be, if it is over.
+        var shown = ShownText.RevealWithin(message, Limits.QuestionMessage, rightToLeft: true);
+        return new()
+        {
+            Id = id,
+            Kind = QuestionKind.Approval,
+            Message = Cut(shown),
+            Truncated = IsCut(shown),
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = ApprovalOptions, Required = true }],
+            AskedAt = askedAt,
+            AnswerAtMachine = atMachine ? true : null,
+        };
+    }
 
     // Copilot's ask_user. Current builds pass `message` and `requestedSchema` (a JSON
     // Schema form); older ones passed `question` and a `choices` list, sometimes as a

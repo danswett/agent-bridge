@@ -346,6 +346,28 @@ public sealed class AnswerTests : IDisposable
         Assert.Equal("deny", request.Fields!["decision"].GetString());
     }
 
+    // An intention ending in `~~~` opened a block that swallowed the host's fence, so the command's
+    // backtick lines were markers the card never drew, and bash ran them as command substitutions
+    // (#220): the card publishes the approval as its source, and does not arm it.
+    [Fact]
+    public async Task An_approval_whose_intention_opens_a_tilde_fence_is_published_as_its_source_and_not_armed()
+    {
+        const string message = "Allow **shell**?\n\nCheck the toolchain.\n\n~~~\n\n````\n~~~\n```\necho rm -rf ~\n```\n```\nnode --version\n````";
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with
+        {
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = message, AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+            },
+        });
+        await using var c = Connector();
+        await Pass(c);
+        var attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.False(attributes.TryGetProperty("answer_on_tap", out var tap) && tap.GetBoolean());
+        Assert.StartsWith($"~~~~\n{message}\n~~~~\n", attributes.GetProperty("question").GetString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_delegates_permission_prompt_is_armed_and_answered_on_the_card_as_the_sessions_own_said_to_be_the_delegates()
     {
@@ -362,7 +384,7 @@ public sealed class AnswerTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         var attributes = Attributes(SessionEntities.Decision(Node));
-        Assert.Equal("Delegate Run full test suite asks:\n\nAllow dotnet test?", attributes.GetProperty("question").GetString());
+        Assert.Equal("Delegate Run full test suite asks:\n\n```\nAllow dotnet test?\n```", attributes.GetProperty("question").GetString());
         Assert.Equal(("agent-3a91", "Run full test suite"), (attributes.GetProperty("agent").GetString(), attributes.GetProperty("agent_name").GetString()));
         Assert.True(attributes.GetProperty("answer_on_tap").GetBoolean());
 
@@ -376,6 +398,111 @@ public sealed class AnswerTests : IDisposable
         attributes = Attributes(SessionEntities.Decision(Node));
         Assert.Equal("Cut the release?", attributes.GetProperty("question").GetString());
         Assert.False(attributes.TryGetProperty("agent", out _));
+    }
+
+    [Fact]
+    public async Task A_delegates_approval_armed_on_the_tap_goes_to_the_terminal_when_a_name_drawn_other_than_as_it_runs_arrives()
+    {
+        var approval = new Question
+        {
+            Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+            Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+        };
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = approval });
+        await using var c = Connector();
+        await Pass(c);
+        Assert.True(Attributes(SessionEntities.Decision(Node)).GetProperty("answer_on_tap").GetBoolean());
+
+        // The session's list of delegates catches up after the question, under the same id.
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+
+        var attributes = Attributes(SessionEntities.Decision(Node));
+        Assert.False(attributes.TryGetProperty("answer_on_tap", out var tap) && tap.GetBoolean());
+        Assert.Empty(attributes.GetProperty("choices").EnumerateArray());
+        Assert.StartsWith("Delegate etius tset asks:", attributes.GetProperty("question").GetString());
+        Assert.Contains("answered in the terminal", attributes.GetProperty("question").GetString());
+    }
+
+    static Question DelegatesApproval => new()
+    {
+        Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+        Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")], Required = true }],
+    };
+
+    // The card cannot always be armed again on the pass that finds its question reads otherwise (a
+    // channel Home Assistant cannot read just then): a tap made meanwhile, on what it said before,
+    // answers nothing, here an approval its delegate's name now holds to the terminal.
+    [Fact]
+    public async Task A_tap_made_while_an_approval_that_now_reads_otherwise_cannot_yet_be_armed_again_answers_nothing()
+    {
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        Assert.True(Attributes(SessionEntities.Decision(Node)).GetProperty("answer_on_tap").GetBoolean());
+
+        ha.GetFailsFor = id => id == SessionEntities.ReplyPayload(Node);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "\u202Eetius tset", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Empty(answered);
+
+        ha.GetFailsFor = null;
+        await Pass(c);
+        Assert.Contains("answered in the terminal", Attributes(SessionEntities.Decision(Node)).GetProperty("question").GetString());
+        Assert.Empty(Attributes(SessionEntities.Decision(Node)).GetProperty("choices").EnumerateArray());
+        Assert.Empty(answered);
+    }
+
+    // An answer that may have reached the terminal is never typed again: the same approval coming to
+    // read otherwise (its delegate's name arriving) is not offered afresh.
+    [Fact]
+    public async Task An_approval_answered_unconfirmed_is_not_offered_again_when_it_comes_to_read_otherwise()
+    {
+        outcome = _ => new AnswerResult(AnswerOutcome.Unconfirmed);
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Single(answered);
+
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+
+        Assert.Single(answered);
+    }
+
+    // A tap that reached nothing (refused) is not one already used once the approval, armed again
+    // for what it now says, is seen waiting: the same option may be tapped again.
+    [Fact]
+    public async Task An_approval_tap_refused_before_it_came_to_read_otherwise_can_be_made_again_after()
+    {
+        outcome = _ => answered.Count == 1 ? new AnswerResult(AnswerOutcome.Refused, "busy") : new AnswerResult(AnswerOutcome.Delivered);
+        sessions.Set(FakeSessions.Copilot(A, status: SessionStatus.Waiting) with { WaitingOn = "agent-3a91", Question = DelegatesApproval });
+        await using var c = Connector();
+        await Pass(c);
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+        Assert.Single(answered);
+
+        sessions.Set(sessions.Get(A)! with
+        {
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "Run full test suite", Status = SubagentStatus.Waiting }],
+        });
+        await Pass(c);
+        Assert.StartsWith("Delegate Run full test suite asks:", Attributes(SessionEntities.Decision(Node)).GetProperty("question").GetString());
+        await Do(c, ha.Choose(SessionEntities.Decision(Node), "Approve"));
+
+        Assert.Equal(2, answered.Count);
     }
 
     [Fact]

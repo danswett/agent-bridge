@@ -95,9 +95,25 @@ public sealed class NotifyTests : IDisposable
 
     static string ActionOf(JsonObject buttons, int i) => buttons["data"]!["actions"]![i]!["action"]!.GetValue<string>();
 
-    // A tap, as Home Assistant fires it: each a new event unless one is given.
-    void Tap(HaConnector c, string action, string? reply = null, string decision = "q1", string session = A, string? user = "person", string? id = null)
+    // What the notification last sent for a session is known by (HaConnector.NotifyId: its question's
+    // id and a digest of its plan), which a tap on it echoes back.
+    static string DecisionIn(JsonObject buttons) => buttons["data"]!["action_data"]!["decision"]!.GetValue<string>();
+    string DecisionOf(string session = A) =>
+        Buttons().LastOrDefault(b => b["data"]!["action_data"]!["session"]!.GetValue<string>() == session) is { } last ? DecisionIn(last) : "q1";
+
+    // An action of the notification last sent for a session, by its index or "text", named as
+    // HaNotify.Actions names it from the notification's id.
+    string Act(string which, string session = A)
     {
+        var key = System.Text.RegularExpressions.Regex.Replace(DecisionOf(session), "[^a-zA-Z0-9]", "");
+        return $"BRIDGE_{(key.Length > 12 ? key[^12..] : key)}_{which}";
+    }
+
+    // A tap, as Home Assistant fires it: each a new event unless one is given. On the notification
+    // last sent for the session unless another's id is given.
+    void Tap(HaConnector c, string action, string? reply = null, string? decision = null, string session = A, string? user = "person", string? id = null)
+    {
+        decision ??= DecisionOf(session);
         var data = new JsonObject
         {
             ["action"] = action,
@@ -211,7 +227,11 @@ public sealed class NotifyTests : IDisposable
         Assert.Equal(Tag, sent["data"]!["tag"]!.GetValue<string>());
         Assert.Equal("/agent-decisions/decision", sent["data"]!["url"]!.GetValue<string>());
         Assert.Equal($"{Machine} - waiting on you", sent["data"]!["subtitle"]!.GetValue<string>());
-        Same(new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = "q1" }, sent["data"]!["action_data"], "action_data");
+        // As the daemon's, but the question named with a digest of what it shows (#220), so a tap on a
+        // notification of what it said before under the same id answers nothing.
+        Assert.Matches("^q1~[0-9a-f]{16}$", DecisionIn(sent));
+        Assert.Equal(HaConnector.NotifyId("q1", HaDecision.Plan(sessions.Get(A)!.Question!, sessions.Get(A)!)), DecisionIn(sent));
+        Same(new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = DecisionIn(sent) }, sent["data"]!["action_data"], "action_data");
         Assert.Equal(["Cut the release now", "Wait for the fix", "Type an answer"],
             sent["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()));
 
@@ -266,6 +286,93 @@ public sealed class NotifyTests : IDisposable
         Assert.Single(answered);
     }
 
+    // The same form can come back under its id with its options in another order (#220): its
+    // notification is sent again, and a tap on the one before, read by its button's index, would be
+    // another option now. It answers nothing.
+    [Fact]
+    public async Task A_tap_on_the_notification_of_what_a_form_said_before_it_changed_under_its_id_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        var before = Buttons()[0];
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+        await Pass(c);
+        Tap(c, ActionOf(before, 1));
+        await Pass(c);
+        Assert.Empty(answered);
+
+        var now = Buttons()[^1];
+        Assert.NotSame(before, now);
+        Assert.Equal(["Wait for the fix", "Cut the release now"], now["data"]!["actions"]!.AsArray().Take(2).Select(a => a!["title"]!.GetValue<string>()));
+        Tap(c, ActionOf(now, 1), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+        Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
+    // A phone that could not be reached keeps the notification of what a form said before it changed
+    // under its id, and the connector restarts: the form is armed afresh, and a tap on that
+    // notification, read by index, would be another option now. It answers nothing.
+    [Fact]
+    public async Task A_tap_on_a_notification_kept_through_a_restart_from_before_its_form_changed_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        JsonObject before;
+        await using (var c = Connector())
+        {
+            await Pass(c);
+            before = Buttons()[0];
+            ha.NotifyFailsFor = s => s == Phone;
+            Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+            await Pass(c);
+        }
+        await using var again = Connector();
+        await Pass(again);
+        Tap(again, ActionOf(before, 1), decision: DecisionIn(before));
+        await Pass(again);
+
+        Assert.Empty(answered);
+    }
+
+    // A question can have any id, the name of another's notification among them: a tap on that
+    // notification is not one on this question's.
+    [Fact]
+    public async Task A_tap_on_a_notification_whose_name_another_question_has_for_its_id_answers_nothing()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Wait for the fix"), new Option("cut_now", "Cut the release now")] }));
+        await Pass(c);
+        var changed = Buttons()[^1];
+
+        Ask(Form(DecisionIn(changed), Release));
+        await Pass(c);
+        Tap(c, ActionOf(changed, 0), decision: DecisionIn(changed));
+        await Pass(c);
+
+        Assert.Empty(answered);
+    }
+
+    // Two forms can show the same labels over other values: what a label sends is what the form
+    // says now.
+    [Fact]
+    public async Task A_form_whose_options_values_change_under_the_same_labels_answers_with_the_new_values()
+    {
+        Ask(Form("q1", Release));
+        await using var c = Connector();
+        await Pass(c);
+
+        Ask(Form("q1", Release with { Options = [new Option("wait", "Cut the release now"), new Option("cut_now", "Wait for the fix")] }));
+        await Pass(c);
+        var now = Buttons()[^1];
+        Tap(c, ActionOf(now, 0), decision: now["data"]!["action_data"]!["decision"]!.GetValue<string>());
+        await Pass(c);
+
+        Assert.Equal("wait", Assert.Single(answered).Fields!["release"].GetString());
+    }
+
     [Fact]
     public async Task A_tap_made_by_an_agent_is_the_agents_answer()
     {
@@ -297,16 +404,16 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q2", Count));
         await Pass(c);
         Assert.Equal(["Type an answer"], Buttons()[^1]["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()));
-        Tap(c, "BRIDGE_q2_text", reply: "three", decision: "q2");
+        Tap(c, Act("text"), reply: "three");
         await Pass(c);
         Assert.Single(answered);
-        Tap(c, "BRIDGE_q2_text", reply: "3", decision: "q2");
+        Tap(c, Act("text"), reply: "3");
         await Pass(c);
         Assert.Equal(3, answered[^1].Fields!["count"].GetInt32());
 
         Ask(new Question { Id = "q3", Kind = QuestionKind.Form, Message = "What should the notes say?", AskedAt = FakeSessions.T0, Fields = [] });
         await Pass(c);
-        Tap(c, "BRIDGE_q3_text", reply: "Fixes the relay", decision: "q3");
+        Tap(c, Act("text"), reply: "Fixes the relay");
         await Pass(c);
         Assert.Equal("Fixes the relay", answered[^1].Text);
         Assert.Equal(3, answered.Count);
@@ -319,13 +426,13 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.DoesNotContain(Buttons()[0]["data"]!["actions"]!.AsArray(), a => a!["title"]!.GetValue<string>() == "Type an answer");
-        Tap(c, "BRIDGE_q1_text", reply: "something else");
+        Tap(c, Act("text"), reply: "something else");
         await Pass(c);
         Assert.Empty(answered);
 
         Ask(Form("q2", Pick));
         await Pass(c);
-        Tap(c, ActionOf(Buttons()[^1], 1), decision: "q2");
+        Tap(c, ActionOf(Buttons()[^1], 1));
         await Pass(c);
         Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
     }
@@ -339,10 +446,10 @@ public sealed class NotifyTests : IDisposable
         var first = Buttons()[0];
         Ask(Form("q2", Release));
         await Pass(c);
-        Tap(c, ActionOf(first, 0), decision: "q1");
-        Tap(c, "BRIDGE_q2_0", decision: "q2", session: B);
-        Tap(c, "BRIDGE_q2_9", decision: "q2");
-        Tap(c, "SOMETHING", decision: "q2");
+        Tap(c, ActionOf(first, 0), decision: DecisionIn(first));
+        Tap(c, Act("0"), session: B);
+        Tap(c, Act("9"));
+        Tap(c, "SOMETHING");
         await Pass(c);
         Assert.Empty(answered);
         Assert.Contains(log, l => l.Contains("is for an earlier question", StringComparison.Ordinal));
@@ -499,6 +606,60 @@ public sealed class NotifyTests : IDisposable
         var done = Pushes()[^1];
         Assert.Equal("Copilot response: Copilot: Fix the relay", done["title"]!.GetValue<string>());
         Assert.Equal("Done: the release is cut.", done["message"]!.GetValue<string>());
+    }
+
+    // A phone may draw a push as HTML, decoding "&#x202E;" into the control it names, or as plain
+    // text; neither spelling is safe for both. Such an approval is answered at the machine, so its
+    // push says so and carries none of the prompt (#220).
+    [Theory]
+    [InlineData("Allow **shell**?\n\nTidy up &#x202E;sdrawkcab\n\n```\nls\n```")]
+    [InlineData("Allow **shell**?\n\n```\necho done #\u202E ;hs | p/x//:sptth lruc\n```")]
+    public async Task An_approval_drawn_other_than_as_it_runs_is_pushed_as_waiting_at_the_machine_without_its_text(string message)
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = message, AskedAt = FakeSessions.T0,
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal(HaDecision.MisleadingPush, pushed["message"]!.GetValue<string>());
+    }
+
+    // A delegate's name is in its push's title and text; one holding a reference a phone drawing
+    // HTML would decode is not used there at all, and its approval is pushed as waiting at the machine.
+    [Fact]
+    public async Task A_delegate_named_with_a_reference_to_a_bidi_control_is_pushed_as_a_delegate()
+    {
+        var notify = new HaNotifySettings { Enabled = true };
+        Ask(null, response: null);
+        await using var c = Connector(notify);
+        await Pass(c);
+        sessions.Set(sessions.Get(A)! with
+        {
+            Status = SessionStatus.Waiting,
+            WaitingOn = "agent-3a91",
+            Subagents = [new Subagent { Id = "agent-3a91", Kind = SubagentKind.Background, Name = "&#x202E;etius tset", Status = SubagentStatus.Waiting }],
+            Question = new Question
+            {
+                Id = "p1", Kind = QuestionKind.Approval, Message = "Allow dotnet test?", AskedAt = FakeSessions.T0, Agent = "agent-3a91",
+                Fields = [new Field { Name = "decision", Type = FieldType.Choice, Options = [new Option("approve", "Approve once"), new Option("deny", "Deny")] }],
+            },
+        });
+        await Pass(c);
+
+        var pushed = Assert.Single(Pushes());
+        Assert.Equal("A delegate asks · Copilot permission needed", pushed["title"]!.GetValue<string>());
+        Assert.Equal($"A delegate asks:\n\n{HaDecision.MisleadingPush}", pushed["message"]!.GetValue<string>());
     }
 
     // A delegate's question on the phones' answer buttons: titled with its name, and under the
@@ -793,13 +954,13 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector(Phones with { MaxButtons = 1 });
         await Pass(c);
-        Assert.Equal(["BRIDGE_q1_0", "BRIDGE_q1_text"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["action"]!.GetValue<string>()));
+        Assert.Equal([Act("0"), Act("text")], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["action"]!.GetValue<string>()));
         Tap(c, "SOMETHING_ELSE_0");
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("1"));
         Tap(c, "SOMETHING_ELSE", reply: "typed elsewhere");
         await Pass(c);
         Assert.Empty(answered);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal("cut_now", Assert.Single(answered).Fields!["release"].GetString());
     }
@@ -846,7 +1007,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         ha.PublishFailsFor = (topic, payload) => topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent";
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Single(answered);
         ha.PublishFailsFor = null;
@@ -939,7 +1100,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.Empty(Buttons()[0]["data"]!["actions"]!.AsArray());
-        Tap(c, "BRIDGE_q1_text", reply: "a, b");
+        Tap(c, Act("text"), reply: "a, b");
         await Pass(c);
         Assert.Empty(answered);
     }
@@ -957,8 +1118,8 @@ public sealed class NotifyTests : IDisposable
             if (failOnce && topic == HaContract.Topics(Node).ActivityState && payload == "Answer NOT sent") { failOnce = false; return true; }
             return false;
         };
-        Tap(c, "BRIDGE_q1_0");
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("0"));
+        Tap(c, Act("1"));
         await Pass(c);
         await Pass(c);
         await Pass(c);
@@ -977,7 +1138,7 @@ public sealed class NotifyTests : IDisposable
         await using var c = Connector();
         await Pass(c);
         Assert.Equal(["Same", "Same", "Other one"], Buttons()[0]["data"]!["actions"]!.AsArray().Select(a => a!["title"]!.GetValue<string>()).Take(3));
-        Tap(c, "BRIDGE_q1_1");
+        Tap(c, Act("1"));
         await Pass(c);
         Assert.Equal(["b"], Assert.Single(answered).Fields!["pick"].EnumerateArray().Select(e => e.GetString()));
     }
@@ -994,7 +1155,7 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal("Answer NOT sent", ha.Retained[HaContract.Topics(Node).ActivityState]);
 
@@ -1004,7 +1165,7 @@ public sealed class NotifyTests : IDisposable
         refuse = false;
         await Pass(c);
         Assert.Equal(2, Buttons().Count);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal(2, answered.Count);
         Assert.NotEqual(answered[0].Request, answered[1].Request);
@@ -1017,8 +1178,8 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0", id: "event-1");
-        Tap(c, "BRIDGE_q1_0", id: "event-1");
+        Tap(c, Act("0"), id: "event-1");
+        Tap(c, Act("0"), id: "event-1");
         await Pass(c);
         Assert.Single(answered);
 
@@ -1026,11 +1187,11 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q2", Release));
         await Pass(c);
         outcome = _ => new AnswerResult(AnswerOutcome.Refused, "busy");
-        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        Tap(c, Act("0"), id: "event-2");
         await Pass(c);
-        Tap(c, "BRIDGE_q2_1", decision: "q2", id: "event-3");
+        Tap(c, Act("1"), id: "event-3");
         await Pass(c);
-        Tap(c, "BRIDGE_q2_0", decision: "q2", id: "event-2");
+        Tap(c, Act("0"), id: "event-2");
         await Pass(c);
         Assert.Equal(3, answered.Count);
     }
@@ -1043,11 +1204,11 @@ public sealed class NotifyTests : IDisposable
         Ask(Form("q1", Release));
         await using var c = Connector();
         await Pass(c);
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Single(answered);
         Assert.Equal(0, Clears());
-        Tap(c, "BRIDGE_q1_0");
+        Tap(c, Act("0"));
         await Pass(c);
         Assert.Equal(2, answered.Count);
         Assert.Equal(1, Clears());
@@ -1068,7 +1229,7 @@ public sealed class NotifyTests : IDisposable
         ha.Fire(HaNotify.ActionEvent, new JsonObject
         {
             ["action"] = ActionOf(Buttons()[0], 0),
-            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = "q1" },
+            ["action_data"] = new JsonObject { ["bridge"] = "decision", ["session"] = A, ["decision"] = DecisionIn(Buttons()[0]) },
         });
         await Until(() => { lock (answered) { return answered.Count == 1; } });
         Assert.Equal("cut_now", answered[0].Fields!["release"].GetString());

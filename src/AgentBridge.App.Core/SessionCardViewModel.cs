@@ -276,13 +276,18 @@ public sealed partial class SessionCardViewModel : Observable
 
         var q = session.Question;
         QuestionViewModel? rebuilt = null;
-        if (question is not null && (q is null || q.Id != question.Id || capsChanged))
+        var carried = "";
+        // The same question can come back saying something else, or answerable differently: a host
+        // updated to refuse what it used to offer (#220). Its controls are rebuilt from what it says
+        // now, never kept from what it said.
+        var reworded = question is not null && q is not null && q.Id == question.Id && !QuestionViewModel.SaysTheSame(q, question.Question);
+        if (question is not null && (q is null || q.Id != question.Id || capsChanged || reworded))
         {
             // The question changed or went: text typed and not sent stays on the card, and an
             // answer that went keeps saying what became of it. The same question rebuilt for new
             // capabilities takes its draft along instead.
             var draft = question.UnsentText();
-            if (q is not null && q.Id == question.Id) { rebuilt = question; }
+            if (q is not null && q.Id == question.Id) { rebuilt = question; carried = draft; }
             else if (draft.Length > 0)
             {
                 OrphanText = draft;
@@ -295,7 +300,20 @@ public sealed partial class SessionCardViewModel : Observable
         if (q is not null && question is null)
         {
             var next = new QuestionViewModel(q, session.Id, session.Agent, caps, ctx.Deliveries, name, ctx.Current);
-            if (rebuilt is not null) { next.TakeDraft(rebuilt); }
+            // Only the same question rebuilt for new capabilities takes its draft along. One that came
+            // back saying something else takes nothing chosen for what it said: an option kept by its
+            // value could now be "Delete files" where it was "Keep files". What was typed stays on the
+            // card instead, and an answer that failed to go is not sent again (Reworded).
+            if (rebuilt is not null && !reworded) { next.TakeDraft(rebuilt); }
+            if (reworded)
+            {
+                next.Reworded();
+                if (carried.Length > 0)
+                {
+                    OrphanText = carried;
+                    OrphanNote = "The question changed while you were answering it. What you typed is kept here.";
+                }
+            }
             Question = next;
         }
         if (q is not null && receiptKey is not null && ctx.Deliveries.Get(receiptKey) is { State: DeliveryState.Done }) { receiptKey = null; }
