@@ -1006,7 +1006,7 @@ side may want to start a session on its own machine in response.
 | (F3) Cross-signing roster roots | A's roster includes B's genesis (or vice versa), so A's hosts trust B's whole roster | Simple verification | Transitive and unscoped: every approval mistake or compromise on B's side becomes A's, and #391's seniority and probation don't compose across people. Revocation of one B device needs A to track B's roster semantics | **Rejected** |
 | (R1) Relay-to-relay peering | RA and RB route frames to each other. Hosts talk through their own relay | Each host keeps one connection | Needs operator-to-operator trust and authentication, a server-to-server protocol, and abuse controls on both. Both operators see the metadata. Fails when either side is LAN-only or self-hosted without peering | **Rejected for v-full**; possible later optimization |
 | (R2) Host-to-host, **guest on the target's relay** | A's host connects to RB as a **guest** admitted by B's link (not by GitHub sign-in to B's account), and opens Noise channels to B's linked hosts | Only RB (the target side's operator) sees the cross-account metadata, and RA sees none. Works when RA == RB with the same mechanism. End to end, as today | A second outbound WSS per linked relay. RB must admit a narrowly scoped guest | **Recommended** |
-| **(F4) Repo-based contributor discovery** (owner direction, 17:19 PT) | Two contributors to the same GitHub repository who both use the bridge are **suggested** to each other in their apps. Identity is proven by the contributor's GitHub-registered signing key, and membership by GitHub's own access check. Both owners accept, and the result is an F1 link **scoped to that repository** | A natural scope (the repo's sessions), audit and revocation tied to repo membership. No out-of-band exchange. Discoverable | Trust is rooted in GitHub accounts, not in a voice-compared code. Needs a GitHub repo, push access and an SSH signing key. Publishing anything has privacy costs | **Recommended as the default way to establish an F1 link.** Every link is repo-scoped. Explicit invitation (F1 with a link code) remains the fallback. §7.11 |
+| **(F4) Repo-based contributor discovery** (owner direction, 17:19 PT) | Two contributors to the same GitHub repository who both use the bridge are **suggested** to each other in their apps. Identity is proven by the contributor's GitHub-registered signing key, and membership by GitHub's own access check. Only people with write access **and** recent activity in the repo are suggested (Q22). Both owners accept, and the result is an F1 link **scoped to that repository** | A natural scope (the repo's sessions), audit and revocation tied to repo membership. No out-of-band exchange. Discoverable | Trust is rooted in GitHub accounts, not in a voice-compared code. Needs a GitHub repo, push access and an SSH signing key. Publishing anything has privacy costs | **Recommended as the default way to establish an F1 link.** Every link is repo-scoped. Explicit invitation (F1 with a link code) remains the fallback. §7.11 |
 
 **How F1 and F4 fit together.** F4 changes how a link is *found and proven*. It doesn't change
 what a link *is*: the descriptor, statements, guest admission, scope and revocation of §7.3-§7.7
@@ -1323,9 +1323,10 @@ renamed and recycled.
 | **(D1)** A committed file per contributor, e.g. `.agent-bridge/contributors/<user id>.json` holding the descriptor (relay endpoint, link key) | Endpoint and key | Anyone with push. A drive-by contributor needs a merged PR | **Worst.** Permanent in history, copied to every fork and clone, and scrapeable in public repos (§7.11.7) | Yes | **Not recommended.** Allowed only as an explicit opt-in in a private repo |
 | **(D2)** GitHub's collaborator API, called by each app with its owner's own GitHub token | **Candidates**: logins and user ids with push access. No endpoint or key | GitHub | Nothing published. `GET /repos/{o}/{r}/collaborators` requires the caller to have write access, which is the membership being sought anyway | n/a | **Recommended**, for candidates |
 | **(D3)** A signed statement in the repo, or in the user's own GitHub space (a gist, or `<login>/<login>`) | Endpoint and key, with a proof | The user | Per-user rather than per-repo, but still public | Yes | Rejected as a discovery source. Its *signature* is §7.11.3's proof |
-| **(D4)** A **members-only directory on a relay**, keyed by the repo's immutable id: opted-in members' signed descriptors, visible only to callers who prove push access to that repo | Endpoint and key, for fellow members only | Members. **No GitHub token is ever sent to a directory** other than the owner's own sign-in relay (below) | Only the directory relay's operator and fellow members learn who uses the bridge on R, and where | Yes, with a **rendezvous relay** (below) | **Recommended**, for endpoints |
+| **(D4)** A **members-only directory on a relay**, keyed by the repo's immutable id: opted-in members' signed descriptors, visible only to callers who prove push access to that repo **and recent activity in it** (§7.11.4) | Endpoint and key, for fellow active members only | Members. **No GitHub token is ever sent to a directory** other than the owner's own sign-in relay (below) | Only the directory relay's operator and fellow members learn who uses the bridge on R, and where | Yes, with a **rendezvous relay** (below) | **Recommended**, for endpoints |
 
-**Recommended discovery: D2 for candidates, plus D4 for endpoints.**
+**Recommended discovery: D2 for candidates, plus D4 for endpoints**, with both narrowed to
+people active in the repository (§7.11.4, Q22).
 
 **A GitHub token never leaves the owner's devices**, except to the owner's own sign-in relay,
 during sign-in as today (design.md §5.4). It is never sent to a directory, a rendezvous relay, a
@@ -1344,16 +1345,22 @@ peer or a host. That way a rewritten pointer can't harvest bearer tokens (§7.11
 3. **Proving membership to a directory, without a token.** The directory checks
    `(user id, repo id)` itself, with **its own** GitHub App installation on that repository. That
    install is the repository's consent to the directory. A repository that hasn't installed it
-   gets no directory, and its members use invitations (§7.3) or client-side filtering (step 5).
+   gets **no directory**, and its members use invitations (§7.3). There is no fallback in which
+   any GitHub user can list entries.
+   * **The same filter as the apps** (§7.11.4, "Who is suggested"). With the same installation,
+     the directory also checks **recent activity**, so a dormant member with write access can't
+     list active members' descriptors, and a dormant member's own entry isn't revealed. It
+     answers a query only if the caller qualifies, and returns only entries whose users qualify.
+     What it can verify with an installation token is listed in §7.11.4. Where it can't verify
+     activity (a GitHub outage, a check it can't make), it gates on **write access only**, says so
+     in its answer, and the apps filter further.
 4. **Registration and query.** With identity and membership proven, the app publishes its owner's
    signed descriptor, keyed by `(repo id, user id)` and kept for at most 30 days, and reads the
    repo's entries. It then intersects them with its own step 1 candidates. An entry whose user
-   isn't a current collaborator in the app's **own** GitHub check is ignored, and every
-   descriptor's T2 proof is verified by the app, never trusted from the directory.
-5. **Client-side filtering** (a fallback for a directory without the GitHub App): entries are
-   gated by step 2's identity only, so any GitHub user can list them. Membership is then filtered
-   by each app. That is weaker privacy, so it is off unless the repo opts in.
-6. **The rendezvous relay** is the owner's **own** sign-in relay by default. When both owners use
+   isn't a current collaborator in the app's **own** GitHub check, or isn't **active** in the
+   app's own activity check (§7.11.4), is ignored. Every descriptor's T2 proof is verified by the
+   app, never trusted from the directory.
+5. **The rendezvous relay** is the owner's **own** sign-in relay by default. When both owners use
    the same relay, which is the common case on the project's production relay, nothing else is
    needed. For teams on different relays, a repo can name **one non-personal pointer**,
    `.agent-bridge/rendezvous`, holding only a relay origin (no user, key or endpoint):
@@ -1365,7 +1372,7 @@ peer or a host. That way a rewritten pointer can't harvest bearer tokens (§7.11
    * members on any relay register there **as directory guests**, using steps 2-3. That needs no
      account on that relay, and no token;
    * the repo then reveals only that someone in it uses Agent Bridge with that relay, not who.
-7. The directory is **untrusted for authenticity**. It can hide entries (denial of service), but
+6. The directory is **untrusted for authenticity**. It can hide entries (denial of service), but
    can't forge one: §7.11.3's proof is checked by the apps, never by the directory.
 
 #### 7.11.3 Identity: proving "this endpoint and key belong to GitHub user X"
@@ -1404,8 +1411,50 @@ SSH-host-key rule.
 * **Default: push (write) access now**, from GitHub's collaborator check (D2), by **each side's
   own app** with its own token. Organization members with team access count, as GitHub reports
   them. Commit authorship (`/contributors`) is **not** membership: it never shrinks, and includes
-  anyone whose PR was merged once. A per-repo "contributors" mode for open-source projects is
-  possible later (Q22).
+  anyone whose PR was merged once. Write access stays **the only membership test for a link**.
+* **Who is suggested** (owner decision, Q22): **write access now AND recent activity in that
+  repository by BOTH people**, within a per-repo window (`activityWindowDays`, default **90**).
+  Activity is a **suggestion filter only, never an authority grant**: it narrows who is shown and
+  who can list the directory, and nothing else.
+  * **Activity** is any of, in that repository, within the window: a commit on the default
+    branch **authored or co-authored** by the user, a **pull request opened**, or a **pull request
+    review submitted**.
+  * **Both sides.** Each app checks the **other** person's activity with its own GitHub token, as
+    with write access, and checks **its own owner's** too. While its own owner is dormant, the app
+    withdraws the owner's directory entry and shows no suggestions for that repo, so a dormant
+    member appears in nobody's list. Each app applies its own owner's window, so a suggestion
+    shows on a side only when both people are active by that side's setting.
+  * **Public repositories.** Read access, forks, stars and one-off past contributions never
+    qualify: none of them is write access now. A fork has a **different repository id**, so its
+    activity and its collaborators never match the upstream repo's.
+  * **How the app checks**, cheapest first:
+    1. **GraphQL** `user(login) { contributionsCollection(from, to) { commitContributionsByRepository,
+       pullRequestContributionsByRepository, pullRequestReviewContributionsByRepository } }`,
+       filtered to the repository id. One query per person covers all three kinds, and GitHub
+       credits co-authored default-branch commits there. It costs about one point of GraphQL's
+       5,000 points per hour. A user who hides private contributions shows only a
+       `restrictedContributionsCount` without the repository, so for a private repository the
+       answer may be "can't tell", and the app falls back to REST.
+    2. **REST**, per repository: `GET /repos/{o}/{r}/commits?author={login}&since={start}&per_page=1`
+       on the default branch; `GET /search/issues?q=repo:{o}/{r}+type:pr+author:{login}+created:>={start}`;
+       and `...+reviewed-by:{login}+updated:>={start}`, confirmed by the review's `submitted_at`.
+       Commits and reviews use the core limit (5,000 per hour); search is limited to **30
+       requests per minute**. REST can't see co-authorship directly, so it counts a commit whose
+       `Co-authored-by` trailer names the user's GitHub noreply address (`<id>+<login>@users.noreply.github.com`).
+  * **Caching.** Results are cached per `(repo id, user id)` for 24 h, positive and negative,
+    and refreshed by the daily re-check (below). Only people who are **already both** write
+    collaborators and opted-in directory entries are checked, so an organization with hundreds
+    of writers costs a handful of queries per repository per day. "Can't tell" counts as
+    **not active** for suggestions, never the reverse.
+  * **What the directory can verify** with its installation token: default-branch commits by
+    author id (GraphQL `history(author: {id}, since)`), pull requests opened and reviews
+    submitted (search, and the reviews API), and co-authorship by noreply address. Co-authorship
+    under another email is visible only to the apps' GraphQL check, so the apps filter further.
+  * **Activity lapsing on an existing link** keeps the link: membership is unchanged, so nothing
+    is suspended. It only stops new suggestions, and hides that user's entry in the directory.
+    The directory still carries tombstones and re-checks for existing links whatever the activity
+    (§7.3). The link shows "@alex: no activity in danswett/agent-bridge for 90 days" so the
+    person can revoke it if they want.
 * **Re-checked** at least every 24 h while the app runs, on every suggestion and acceptance, and
   before any statement version is signed. The **same check re-fetches the peer's GitHub signing
   keys** (`/users/{login}/ssh_signing_keys` by the pinned user id) and confirms the key behind
@@ -1428,12 +1477,14 @@ SSH-host-key rule.
 
 * **Opt-in per repository** (Settings → Collaboration → "Find collaborators who use Agent Bridge
   on danswett/agent-bridge"). Nothing is registered or queried for a repo until its owner opts in.
+  The same page sets the repo's **activity window** (default 90 days, §7.11.4).
 * **A suggestion**, shown only inside the app (a quiet badge on the Collaboration page, never a
   push or toast), reads:
 
   > **@alex** also uses Agent Bridge on **danswett/agent-bridge**. ✓ Identity signed with
-  > @alex's GitHub SSH key · write access confirmed today. Connect? Agents in this repo's sessions
-  > could read and reply to each other. [Review and connect] [Not now] [Never for this repo]
+  > @alex's GitHub SSH key · write access and active in the last 90 days, confirmed today.
+  > Connect? Agents in this repo's sessions could read and reply to each other.
+  > [Review and connect] [Not now] [Never for this repo]
 
 * **Accepting** opens §7.4's scope with the repo choices (below), shows the optional link code,
   and signs §7.3's link statement with presence. **Nothing connects until both owners have
@@ -1472,6 +1523,10 @@ SSH-host-key rule.
 | A compromised maintainer **adds an attacker as a collaborator** | The attacker becomes a *suggestion* | Consent is the gate. The suggestion names the account, and accepting is never automatic. Default scope is the repo only, launch off |
 | **Fork** | No effect | Descriptors and directory entries bind the **immutable repo id**. A fork has a different id, and its owner isn't a collaborator upstream. Renames and transfers keep the id |
 | **A contributor leaves** | Suspended within 24 h (their side's check) and 72 h at the latest (host freshness) | §7.11.4 |
+| **A dormant member with write access** (one of hundreds of org writers who never touch the repo) | Isn't suggested, and can't list the directory's entries: the directory answers only callers who are active (§7.11.2). Their own entry is withdrawn by their app and hidden by the directory | Activity is required of both people. Where the directory can't verify activity it gates on write access only and says so; the apps still filter |
+| **Read access, a fork, a star, or a one-off past contribution** to a public repo | Never qualifies | None is write access now, and a fork's repository id never matches (§7.11.4) |
+| **Faked activity**: a writer pushes a commit whose author or `Co-authored-by` names a dormant member, or opens a PR to look active | At most a **suggestion**, or a directory listing for a writer who could have been active anyway | Activity is a filter, never authority. Write access and both owners' consent still gate every link |
+| **Activity lapses on an existing link** | The link stays, and no new suggestions are shown | Membership is unchanged (§7.11.4) |
 | **@alex's GitHub account compromised** | A new key means a new identity, so a re-verify prompt, never silent. New links with @alex are possible for the attacker | The T2 residual. T4 per link mitigates it |
 | **A login renamed or recycled** | No effect | Bound to the numeric user id |
 | **The directory relay lies** | It can hide entries | It can't forge them (T2 is verified by the apps) |
@@ -1491,18 +1546,21 @@ public one:
 
 **Recommended form: indirect and members-only.** Nothing personal is ever committed. The only
 optional repo file is the non-personal `rendezvous` pointer. Descriptors live in the D4
-directory, visible only to callers who prove push access to that repo, and expire after 30
+directory, visible only to callers who prove push access to that repo and recent activity in
+it, and expire after 30
 days. Link keys are per-repo, so they don't link across repos. Hashing the repo id in the
 directory doesn't help, since repo ids are small sequential integers anyone can enumerate, so it
 isn't offered as a privacy measure. What the **directory operator** learns is that GitHub user X
 uses the bridge on repo R, through relay E. For the production relay, that is the project's
 operator. A team that won't accept that uses the invitation path (§7.3).
 
-**Large organizations.** Membership is "push access", so in a large organization's repository
-every member with write access can list every opted-in member's descriptor. That includes their
-relay endpoints, which for a self-hosted relay may be a home address. The opt-in dialog says so,
-and shows how many people can see the entry ("visible to the 214 people with write access to
-contoso/platform"). A member can opt in with **"discoverable, but share my endpoint only after
+**Large organizations.** Only members with write access **and** activity in the window can list
+the directory (§7.11.2), so a large organization's hundreds of dormant writers can't. The active
+ones can still see every opted-in active member's descriptor, including relay endpoints, which
+for a self-hosted relay may be a home address. The opt-in dialog says so, and shows the number of
+people who **can actually see the entry**, as the directory reports it ("visible to the 12 people
+with write access to contoso/platform who were active there in the last 90 days"). If the
+directory can't verify activity, the dialog shows the larger write-access count and says why. A member can opt in with **"discoverable, but share my endpoint only after
 we've both accepted"**. The directory entry then carries the descriptor without `relay`. The
 endpoint is left in the directory only after both have accepted, sealed for that one peer (to an
 ECDH key in the peer's descriptor), so the operator and other members never see it.
@@ -1519,8 +1577,8 @@ ECDH key in the peer's descriptor), so the operator and other members never see 
 way to establish a link.**
 * **Every link is scoped to exactly one repository.** There is no unscoped, ad-hoc pairing. That
   keeps everything F4 buys: scope, audit and the right default.
-* **Establishment** is F4 discovery when it can verify (a GitHub repo, push access on both sides,
-  and T2 available). Otherwise it is a **repo-scoped invitation**: F1 with the link code, naming
+* **Establishment** is F4 discovery when it can verify (a GitHub repo, push access and recent
+  activity on both sides, the directory's GitHub App installed, and T2 available). Otherwise it is a **repo-scoped invitation**: F1 with the link code, naming
   the repository by its normalized remote URL (`dev.azure.com/…`, `gitlab.com/…`). For those, the
   membership check is unavailable, so revocation is manual, and the dialog says so.
 * If the owner prefers a single *mechanism*, it is F4 only. That excludes Azure DevOps
@@ -2258,14 +2316,20 @@ Repo-based contributor discovery (§7.11):
     (T2). A relay's OAuth attestation is never sufficient alone. Offer the link code on every
     suggestion, and require it when T2 isn't available. A changed key is a new identity.
 21. **Q21. Where descriptors are published.** **Recommended:** nowhere public. A members-only
-    directory on a rendezvous relay (D4), gated by GitHub push access and expiring after 30
-    days. The only optional repo file is a non-personal `.agent-bridge/rendezvous` relay pointer.
+    directory on a rendezvous relay (D4), gated by GitHub push access and recent activity
+    (Q22), and expiring after 30 days. No directory, and so invitations, where the repository
+    hasn't installed the directory's GitHub App. The only optional repo file is a non-personal `.agent-bridge/rendezvous` relay pointer.
     Per-contributor files in the repo (D1) are offered only in private repos, as an explicit
     opt-in.
-22. **Q22. What counts as a contributor.** **Recommended:** push access now, checked by each
-    side's own app every 24 h and confirmed to its hosts within 72 h. Commit authorship never
-    counts. A per-repo "merged contributors" mode for open source is a later option, off by
-    default.
+22. **Q22. What counts as a contributor.** **Decided by the owner (2026-11-03, 19:47 PT).** A
+    collaborator is **suggested** only with **write access now AND recent activity in that
+    repository by both people**: authored or co-authored default-branch commits, pull requests
+    opened, or reviews submitted, within a per-repo window (default 90 days). Each app checks
+    both people with its own token; the directory applies the same filter where it can. Activity
+    is a suggestion filter only: **write access stays the membership test for the link**, and
+    lapsed activity keeps an existing link but stops new suggestions. No client-side directory
+    fallback: a repository without the directory's GitHub App uses invitations (§7.11.2,
+    §7.11.4).
 23. **Q23. Who operates the directory for the production relay, and is the operator learning
     "user X uses the bridge on repo R, through relay E" acceptable?** **Recommended:** yes, the
     production relay hosts it, and that disclosure is stated in the opt-in dialog. A team that
