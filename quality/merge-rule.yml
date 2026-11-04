@@ -76,6 +76,22 @@ sensitive_paths:
   - src/AgentBridge.Host/SessionService.cs
   - src/AgentBridge.Host/SessionTransfers.cs
   - src/AgentBridge.Host/Program.cs # builds the remote-authorization policy
+  - src/AgentBridge.Host/HostSettings.cs # authorization settings
+  - src/AgentBridge.App.Core/Transfers.cs # signs commands
+  - pwa/js/transfer.js # signs commands
+  # The PWA's build and its packages: what's served to every phone.
+  - pwa/tools/build-site.mjs
+  - pwa/package.json
+  - pwa/package-lock.json
+  # The native Apple client (#260, #548): Noise transport, Keychain, signed commands, trust
+  # questions and relay sign-in, and what builds it. Its tests change alongside the code they
+  # test, which is covered anyway.
+  - apple/Sources/**
+  - apple/State/**
+  - apple/Apps/**
+  - apple/project.yml
+  - apple/Package.swift
+  - apple/scripts/**
   - src/AgentBridge.Host.Delivery/**
   - tools/AgentBridge.RelaySmoke/**
   - pwa/js/host-client.js

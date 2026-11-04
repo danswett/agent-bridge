@@ -289,6 +289,11 @@ public class MergeRuleTests
     [InlineData("src/AgentBridge.Host/CallerGuard.cs", true)]
     [InlineData("src/AgentBridge.Host/SessionTransfers.cs", true)]
     [InlineData("src/AgentBridge.Host/Program.cs", true)]
+    [InlineData("src/AgentBridge.Host/HostSettings.cs", true)]
+    [InlineData("src/AgentBridge.App.Core/Transfers.cs", true)]
+    [InlineData("pwa/js/transfer.js", true)]
+    [InlineData("pwa/tools/build-site.mjs", true)]
+    [InlineData("pwa/package-lock.json", true)]
     [InlineData("src/AgentBridge.Host.Delivery/KeyPlan.cs", true)]
     [InlineData("src/AgentBridge.Host/AgentBridge.Host.csproj", true)]
     [InlineData("AgentBridge.slnx", true)]
@@ -299,6 +304,7 @@ public class MergeRuleTests
     [InlineData("docs/status.md", false)]
     [InlineData("src/AgentBridge.App/Design/DesignKeys.cs", false)]
     [InlineData("pwa/js/markdown.js", false)]
+    [InlineData("apple/Tests/AgentBridgeCoreTests/ProtocolTests.swift", false)]
     public void The_repositorys_sensitive_paths_take_in_authorization_delivery_and_the_build_but_not_docs_or_design(string path, bool sensitive)
     {
         var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
@@ -409,6 +415,23 @@ public class MergeRuleTests
             .Children[new YamlScalarNode("workflows")]).Children.Select(n => n.ToString()).Order(StringComparer.Ordinal);
 
         Assert.Equal(names, listed);
+    }
+
+    // The native Apple client (#260, #548) holds a transport, keys, signed commands and trust.
+    [Theory]
+    [InlineData("apple/Sources/AgentBridgeCore/NoiseChannel.swift")]
+    [InlineData("apple/State/Keychain.swift")]
+    [InlineData("apple/Apps/iOS/SignIn.swift")]
+    [InlineData("apple/project.yml")]
+    [InlineData("apple/Package.swift")]
+    [InlineData("apple/scripts/build.sh")]
+    public void An_apple_client_change_needs_the_independent_review(string path)
+    {
+        var config = MergeRuleConfig.Load(Path.Combine(ChangedFiles.RepoRoot(AppContext.BaseDirectory), "quality", "merge-rule.yml"));
+
+        var verdict = MergeRule.Evaluate(config, Pr([path]))!;
+
+        Assert.Equal(("failure", $"Needs an independent review of abcdef0: it touches {path}"), (verdict.State, verdict.Description));
     }
 
     // Reads the live repository, like CatalogTests: the ruleset must require only what something
