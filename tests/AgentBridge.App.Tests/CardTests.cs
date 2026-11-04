@@ -62,6 +62,27 @@ public sealed class CardTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_answer_whose_question_goes_while_it_is_on_its_way_keeps_its_quiet_window_and_stall_on_the_cards_receipt()
+    {
+        var gate = new TaskCompletionSource();
+        host.OnAsync(Ops.SessionAnswer, async _ => { await FakeHost.Until(gate.Task); return new AnswerResult(AnswerOutcome.Delivered); });
+        var card = new SessionCardViewModel(Make.Session(question: Make.Choice()), Context());
+        card.Question!.Choose(card.Question.Fields[0].Options[0]);
+        await Wait.UntilAsync(() => host.Sent(Ops.SessionAnswer).Count() == 1, "sent");
+        // The question goes (answered at the machine, say) before the answer's outcome comes.
+        card.Update(Make.Session());
+        Assert.Null(card.Question);
+        // The same request's timing as the form's: its line is there, saying nothing yet.
+        Assert.True(card.HasReceipt);
+        Assert.Equal("", card.ReceiptText);
+        clock.Advance(ReceiptTiming.StillSending);
+        Assert.Equal("Your answer: Still sending…", card.ReceiptText);
+        gate.SetResult();
+        await Wait.UntilAsync(() => card.ReceiptText == "You answered · PostgreSQL (Recommended)", "delivered");
+        card.Detach();
+    }
+
+    [Fact]
     public async Task Other_text_is_sent_as_other_and_a_refusal_lets_the_person_answer_again()
     {
         host.On(Ops.SessionAnswer, _ => new AnswerResult(AnswerOutcome.Refused, "the prompt changed"));

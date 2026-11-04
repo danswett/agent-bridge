@@ -25,8 +25,8 @@ public sealed class DemoTests
         var choice = main.Sessions.Single(c => c.Id == "demo-choice");
         choice.Question!.Choose(choice.Question.Fields[0].Options[0]);
 
-        await Wait.UntilAsync(() => choice.Question is null && choice.HasReceipt, "the question to be answered");
-        Assert.Equal("You answered · PostgreSQL (Recommended)", choice.ReceiptText);
+        // The card's receipt is there from the question going, and says the outcome once it comes.
+        await Wait.UntilAsync(() => choice.Question is null && choice.HasReceipt && choice.ReceiptText == "You answered · PostgreSQL (Recommended)", "the question to be answered");
     }
 
     // A completed setup moves the demo's readiness on as a real host's does (it saves intake with the

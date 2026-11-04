@@ -199,6 +199,25 @@ public sealed class ReceiptTests
     }
 
     [Fact]
+    public void An_outcome_still_waiting_out_the_one_second_limit_when_its_view_model_is_made_afresh_is_said_by_the_new_one_after_the_same_second()
+    {
+        var first = NewReceipt(answer: true);
+        Show(first, e => e with { Stage = DeliveryProgress.Received });
+        Tick(400);
+        Show(first, e => e with { State = DeliveryState.Done, Outcome = "delivered" });
+        Assert.Equal(["Answer sent"], said);
+        first.Dispose();
+        using var again = NewReceipt(answer: true);
+        Show(again);
+        Assert.Equal(["Answer sent"], said);
+        Tick(1000);
+        Assert.Equal(["Answer sent", "Answer delivered"], said);
+        Show(again);
+        Tick(1000);
+        Assert.Equal(["Answer sent", "Answer delivered"], said);
+    }
+
+    [Fact]
     public void An_answer_never_says_Up_next()
     {
         Assert.Equal("Passed to the agent", ReceiptWords.InFlight(true, entry with { Stage = Deliveries.Queued }, null, false).Whole);

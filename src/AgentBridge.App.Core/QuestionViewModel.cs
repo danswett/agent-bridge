@@ -55,6 +55,7 @@ public sealed partial class QuestionViewModel : Observable
         Fields = [.. question.Fields.Select(f => new FieldViewModel(f, question.Kind == QuestionKind.Approval))];
         Tap = question.Fields.Count == 1 && question.Fields[0].Type == FieldType.Choice;
         otherOpen = Tap && Fields[0].OtherChosen;
+        StatusRoom = ReceiptWords.Room(machineName);
         receipt = new Receipt(deliveries.Time, deliveries.Ui, (e, stalled) => Describe(e, machineName, stalled, question), Shown, Said);
         deliveries.Changed += OnDelivery;
         Refresh();
@@ -64,6 +65,16 @@ public sealed partial class QuestionViewModel : Observable
     {
         StatusMark = line.Mark;
         (StatusText, StatusTone) = (line.Whole, line.Tone);
+        Unsay();
+    }
+
+    // The words changed: the line is named by them again until their own announcement, so a reader
+    // moving to it never hears what an earlier state said.
+    void Unsay()
+    {
+        if (Announcement.Length == 0) { return; }
+        Announcement = "";
+        Raise(nameof(Announcement));
     }
 
     // Cleared first, so the same words said again (the next reply delivered) are a change too.
@@ -133,6 +144,8 @@ public sealed partial class QuestionViewModel : Observable
     // What a screen reader is to hear of the status line now: raised once for each, at most one a
     // second (Receipt); the view raises LiveRegionChanged with it.
     public string Announcement { get; private set; } = "";
+    // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
+    public string StatusRoom { get; }
 
     // Whether the person may answer (again): nothing sent yet, or what was sent was not typed.
     public bool CanAnswer

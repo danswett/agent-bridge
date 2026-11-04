@@ -653,10 +653,14 @@ with its ring still in text3 (`ReceiptTiming` holds the thresholds). In-flight w
 beside the 16 px ring; the check badge is a Bridge disc with the done glyph's check knocked out
 (`ReceiptMarkView`). The line is a polite live region: each change is said once, prefixed
 "Reply" or "Answer", at most one a second (the later of two), never "Sending…", always the
-outcome. Each answer and reply also writes one
+outcome; between announcements the line is named by its words, so it never reads as an earlier
+state. The timing and what was said are kept by request, so the question's line and the card's
+receipt after the question has gone share them. From Send the line keeps the room the longest
+outcome needs (`ReceiptWords.Room`, laid out unseen under it: two lines at phone width, one on a
+wide window), so no stage moves what is below. Each answer and reply also writes one
 line to `app.log` when it has its outcome: the request's first 8 hex digits (as the host's log
 names it), the outcome (one the protocol names, otherwise `other`), each mark in ms from the tap
-(`sent` once the request has gone, a resend's `sent 2`, `received`, `typed` or `queued`,
+(`sent` once the request is handed to the channel, a resend's `sent 2`, `received`, `typed` or `queued`,
 `result`), and the host's `typed`, `recorded` and `confirmed` timings (ms from its receipt), for
 example
 `reply 1a2b3c4d delivered: sent 3 ms, received 41 ms, typed 388 ms, result 1402 ms; host: typed 352 ms, recorded 1190 ms, confirmed 1361 ms`.

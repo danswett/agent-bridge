@@ -51,6 +51,12 @@ public static class ReceiptWords
 {
     const int ValueMax = 40;
 
+    // The room a receipt keeps from Send to the outcome (ui.md §6.5): the longest outcome's words,
+    // which the view lays out unseen under the line, so it wraps them as it would wrap the line
+    // (two lines at phone width, one on a wide window). A longer refusal may still grow it.
+    public static string Room(string? machineName) =>
+        $"Sent, but not confirmed. Check at the machine{(string.IsNullOrEmpty(machineName) ? "" : $" on {machineName}")} before sending it again.";
+
     static string? StageText(string? stage) => stage switch
     {
         DeliveryProgress.Received => "Sent",
@@ -134,7 +140,9 @@ public sealed class Receipt : IDisposable
 {
     // What a request's receipt has been through, kept apart from any one view model: a question's
     // is made afresh when its machine's capabilities change, and the quiet window, the dwell, the
-    // stalls and what was announced belong to the request.
+    // stalls and what was announced belong to the request: an announcement still waiting out the
+    // rate limit when its view model goes is said by the next one for the request, and the limit
+    // carries over.
     sealed class History
     {
         public TimeSpan Start;
@@ -144,7 +152,10 @@ public sealed class Receipt : IDisposable
         // The last wait was a resend meeting the first copy in flight (Tick).
         public bool Delivering;
         public ShownLine? Shown;
+        // What has been spoken, and what is to be once the limit allows (the later of two inside it).
         public readonly HashSet<string> Said = [];
+        public string? Pending;
+        public TimeSpan SaidAt = TimeSpan.MinValue;
     }
 
     sealed record ShownLine(string Key, TimeSpan At, ReceiptLine Line, bool InFlight);
@@ -164,8 +175,6 @@ public sealed class Receipt : IDisposable
     ITimer? timer;
     ITimer? sayTimer;
     string? drawn;
-    string? pending;
-    TimeSpan saidAt = TimeSpan.MinValue;
     bool disposed;
 
     public Receipt(TimeProvider time, IUiDispatcher ui, Func<Delivery, bool, ReceiptLine> describe, Action<ReceiptLine> show, Action<string> announce)
@@ -226,8 +235,8 @@ public sealed class Receipt : IDisposable
         if (disposed) { return; }
         timer?.Dispose();
         timer = null;
-        if (instead is not null) { Put(instead, null); return; }
-        if (entry is not { } e) { Put(ReceiptLine.None, null); return; }
+        if (instead is not null) { Put(instead); return; }
+        if (entry is not { } e) { Put(ReceiptLine.None); return; }
         var t = Now();
         var h = HistoryFor(e.Request, t);
         var inFlight = e.State is DeliveryState.Sending or DeliveryState.Waiting;
@@ -250,13 +259,15 @@ public sealed class Receipt : IDisposable
         TimeSpan? wake = due is { } d && t < d ? d : null;
         if (t < h.Start + ReceiptTiming.Quiet)
         {
-            Put(ReceiptLine.Quiet, null);
+            Put(ReceiptLine.Quiet);
+            Announce(h);
             wake = h.Start + ReceiptTiming.Quiet;
         }
         else if (h.Shown is { InFlight: true } s && s.Key != line.Key && t < s.At + ReceiptTiming.Dwell)
         {
             // The state showing hasn't been up long enough to read: it stays, then the furthest reached.
-            Put(s.Line, null);
+            Put(s.Line);
+            Announce(h);
             wake = wake is { } w && w < s.At + ReceiptTiming.Dwell ? w : s.At + ReceiptTiming.Dwell;
         }
         else
@@ -273,10 +284,13 @@ public sealed class Receipt : IDisposable
     void Shown(History h, ReceiptLine line, TimeSpan t, bool inFlight)
     {
         h.Shown = h.Shown is { } s && s.Key == line.Key ? s with { Line = line } : new ShownLine(line.Key, t, line, inFlight);
-        Put(line, h);
+        Put(line);
+        // Each change is said once for the request, however often its view model is made afresh.
+        if (line.Speech is { } speech && !h.Said.Contains(speech)) { h.Pending = speech; }
+        Announce(h);
     }
 
-    void Put(ReceiptLine line, History? h)
+    void Put(ReceiptLine line)
     {
         var signature = $"{line.Tone}|{line.Mark}|{line.Whole}";
         if (signature != drawn)
@@ -284,25 +298,25 @@ public sealed class Receipt : IDisposable
             drawn = signature;
             show(line);
         }
-        // Each change is said once for the request, however often its view model is made afresh.
-        if (h is not null && line.Speech is { } speech && h.Said.Add(speech)) { Announce(speech); }
     }
 
-    void Announce(string text)
+    void Announce(History h)
     {
-        pending = text;
-        var wait = saidAt == TimeSpan.MinValue ? TimeSpan.Zero : saidAt + ReceiptTiming.AnnounceGap - Now();
-        if (wait <= TimeSpan.Zero) { Flush(); }
-        else { sayTimer ??= time.CreateTimer(_ => ui.Post(Flush), null, wait, Timeout.InfiniteTimeSpan); }
+        if (h.Pending is null) { return; }
+        var wait = h.SaidAt == TimeSpan.MinValue ? TimeSpan.Zero : h.SaidAt + ReceiptTiming.AnnounceGap - Now();
+        if (wait <= TimeSpan.Zero) { Flush(h); }
+        else { sayTimer ??= time.CreateTimer(_ => ui.Post(() => Flush(h)), null, wait, Timeout.InfiniteTimeSpan); }
     }
 
-    void Flush()
+    // Marked said only once it is: a view model gone before its turn leaves it to the next.
+    void Flush(History h)
     {
         sayTimer?.Dispose();
         sayTimer = null;
-        if (disposed || pending is not { } text) { return; }
-        pending = null;
-        saidAt = Now();
+        if (disposed || h.Pending is not { } text) { return; }
+        h.Pending = null;
+        h.Said.Add(text);
+        h.SaidAt = Now();
         announce(text);
     }
 }

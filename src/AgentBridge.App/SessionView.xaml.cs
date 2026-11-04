@@ -173,12 +173,9 @@ public sealed partial class SessionView : UserControl
         if (c.ReceiptText != shownReceipt)
         {
             shownReceipt = c.ReceiptText;
-            if (c.HasReceipt)
-            {
-                Motion.Enter(Receipt, "Acknowledge");
-                // A polite live region (ui.md §9): a screen reader hears what became of the answer.
-                DispatcherQueue.TryEnqueue(() => Microsoft.UI.Xaml.Automation.Peers.FrameworkElementAutomationPeer.CreatePeerForElement(Receipt)?.RaiseAutomationEvent(Microsoft.UI.Xaml.Automation.Peers.AutomationEvents.LiveRegionChanged));
-            }
+            // What a screen reader hears of it is the view model's ReceiptAnnouncement, once a
+            // change and at most one a second (Receipt), bound on the line.
+            if (c.ReceiptText.Length > 0) { Motion.Enter(Receipt, "Acknowledge"); }
         }
     }
 
@@ -230,7 +227,7 @@ public sealed partial class SessionView : UserControl
         // Another session's answers: measured from where they are drawn, held as they appear.
         answers.Forget();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
         Settle();
         // Another session: nothing the last one was doing (a push, a tab's fade) carries over.
         Motion.Settle(ViewRoot);
@@ -249,7 +246,7 @@ public sealed partial class SessionView : UserControl
         if (Card is { } c) { c.PropertyChanged += OnCardChanged; c.Delegates.ReplyWanted += OnReplyWanted; }
         answers.Start();
         SyncQuestion();
-        Bindings.Update();
+        ReceiptMarkView.Hushed(Bindings.Update);
         ShowResponse(reset: false);
         Settle();
         words = null;

@@ -346,6 +346,16 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
+                        <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
+                        <TextBlock
+                            Grid.ColumnSpan="2"
+                            Margin="24,0,0,0"
+                            Style="{StaticResource AbTypeRow}"
+                            TextWrapping="Wrap"
+                            Opacity="0"
+                            IsHitTestVisible="False"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Text="{x:Bind Card.ReceiptRoom, Mode=OneWay}" />
                         <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,3,8,0" Mark="{x:Bind Card.ReceiptMark, Mode=OneWay}" />
                         <TextBlock
                             x:Name="Receipt"
@@ -355,6 +365,7 @@
                             IsTextSelectionEnabled="True"
                             AutomationProperties.AutomationId="Receipt"
                             AutomationProperties.LiveSetting="Polite"
+                            local:ReceiptMarkView.Announcement="{x:Bind Card.ReceiptAnnouncement, Mode=OneWay}"
                             Text="{x:Bind Card.ReceiptText, Mode=OneWay}"
                             Foreground="{x:Bind local:Ui.ReceiptBrush(Card.ReceiptTone), Mode=OneWay}"
                             Visibility="{x:Bind local:Ui.Show(Card.HasReceipt), Mode=OneWay}" />
@@ -785,6 +796,16 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
+                    <!-- The room the longest outcome needs, drawn clear and unheard (ReceiptWords.Room). -->
+                    <TextBlock
+                        Grid.ColumnSpan="2"
+                        Margin="24,0,0,0"
+                        Style="{StaticResource AbTypeMeta}"
+                        TextWrapping="Wrap"
+                        Opacity="0"
+                        IsHitTestVisible="False"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Text="{x:Bind Card.Reply.StatusRoom, Mode=OneWay}" />
                     <local:ReceiptMarkView VerticalAlignment="Top" Margin="0,2,8,0" Mark="{x:Bind Card.Reply.StatusMark, Mode=OneWay}" />
                     <TextBlock
                         Grid.Column="1"

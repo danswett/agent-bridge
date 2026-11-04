@@ -25,6 +25,9 @@ public sealed class QuestionView : StackPanel
     readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly ReceiptMarkView mark = new() { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 2, 8, 0) };
     readonly Grid receipt = new();
+    // Drawn clear and unheard under the words: the room the longest outcome needs at this width
+    // (ReceiptWords.Room), kept from Send so neither a stage nor the outcome moves what is below.
+    readonly TextBlock room = new() { TextWrapping = TextWrapping.Wrap, Opacity = 0, IsHitTestVisible = false, Margin = new Thickness(24, 0, 0, 0) };
     readonly TextBlock error = new() { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
     readonly Button resend = new() { Content = "Send again" };
     Button? send;
@@ -120,7 +123,11 @@ public sealed class QuestionView : StackPanel
             receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             receipt.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             Grid.SetColumn(status, 1);
+            Grid.SetColumnSpan(room, 2);
+            room.Text = vm.StatusRoom;
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetAccessibilityView(room, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetLiveSetting(status, Microsoft.UI.Xaml.Automation.Peers.AutomationLiveSetting.Polite);
+            receipt.Children.Add(room);
             receipt.Children.Add(mark);
             receipt.Children.Add(status);
             Children.Add(receipt);

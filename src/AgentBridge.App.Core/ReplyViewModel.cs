@@ -107,6 +107,16 @@ public sealed class ReplyViewModel : Observable
         StatusMark = line.Mark;
         (StatusText, StatusTone) = (line.Whole, line.Tone);
         Raise(nameof(ShowStatus));
+        Unsay();
+    }
+
+    // The words changed: the line is named by them again until their own announcement, so a reader
+    // moving to it never hears what an earlier state said (the last reply's Delivered, say).
+    void Unsay()
+    {
+        if (Announcement.Length == 0) { return; }
+        Announcement = "";
+        Raise(nameof(Announcement));
     }
 
     // Cleared first, so the same words said again (the next reply delivered) are a change too.
@@ -174,6 +184,8 @@ public sealed class ReplyViewModel : Observable
     // What a screen reader is to hear of the status line now: raised once for each, at most one a
     // second (Receipt); the view raises LiveRegionChanged with it.
     public string Announcement { get; private set; } = "";
+    // The longest outcome's words, which the view keeps room for (ReceiptWords.Room).
+    public string StatusRoom => ReceiptWords.Room(machineName);
 
     // Another machine's way to files over 256 KiB: the relay's blob store, and its device there.
     public IBlobStore? Blobs { get; init; }

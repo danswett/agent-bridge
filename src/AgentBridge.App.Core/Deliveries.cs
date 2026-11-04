@@ -218,8 +218,11 @@ public sealed class Deliveries
                 Action<JsonElement>? heard = kind is null ? null : p => Heard(entry.Key, entry.Request, attempt, p);
                 var call = host.CallAsync(op, request, entry.Timeout, knownHost: !entry.ReplayAfterRestart,
                     onlyTo: entry.ReplayAfterRestart ? null : sentTo, out var to, bound?.Token ?? default, heard);
-                // Marked once it has gone: a call refused before sending (not connected, still
-                // connecting) is no send, and while the host is away it is refused every couple of seconds.
+                // Marked once handed to the channel: a call refused before that (not connected, still
+                // connecting) is no send, and while the host is away it is refused every couple of
+                // seconds. The channel may still be writing it behind another message (its send lock,
+                // the relay's pacing): it has no hook for the moment the bytes go, so time queued on
+                // this device counts in sent → received, not before sent.
                 Mark(entry.Request, "sent");
                 if (to != sentTo) { sentTo = to; Update(entry.Key, e => e with { SentTo = to }); }
                 if (to is not null && firstSent is null)
